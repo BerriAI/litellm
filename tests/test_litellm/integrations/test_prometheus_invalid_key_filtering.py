@@ -5,14 +5,11 @@ Tests functionality that prevents invalid API key requests (401 status codes)
 from being recorded in Prometheus metrics.
 """
 
-import os
-import sys
 from unittest.mock import Mock, patch
 
 import pytest
 from prometheus_client import REGISTRY
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy._types import UserAPIKeyAuth

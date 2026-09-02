@@ -12,10 +12,13 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.shadow_eval_logger import (
     _MAX_CONCURRENT_SHADOW_TASKS,
+    _MAX_ERROR_CHARS,
     _MAX_JUDGE_PROMPT_CHARS,
     JUDGE_MAX_OUTPUT_TOKENS,
+    PAIRWISE_JUDGE_RESPONSE_FORMAT,
     ActiveShadowEvalJob,
     ShadowEvalLogger,
+    _failure_detail,
     _judge_user_prompt,
     _sample_hits,
     _unmask_preference,
@@ -37,34 +40,50 @@ def _job(**overrides) -> ActiveShadowEvalJob:
     return ActiveShadowEvalJob(**{**defaults, **overrides})
 
 
-def _prisma(jobs=(), attempt_counts=()) -> MagicMock:
+def _prisma(jobs=(), attempt_counts=(), attempt_costs=()) -> MagicMock:
+    costs = {job_id: {"judge_cost": judge, "shadow_cost": shadow} for job_id, judge, shadow in attempt_costs}
     prisma = MagicMock()
     prisma.db.litellm_shadowevaljob.find_many = AsyncMock(return_value=list(jobs))
     prisma.db.litellm_shadowevalattempt.group_by = AsyncMock(
-        return_value=[{"job_id": job_id, "_count": {"_all": count}} for job_id, count in attempt_counts]
+        return_value=[
+            {
+                "job_id": job_id,
+                "_count": {"_all": count},
+                "_sum": costs.get(job_id, {"judge_cost": 0.0, "shadow_cost": 0.0}),
+            }
+            for job_id, count in attempt_counts
+        ]
     )
     prisma.db.litellm_shadowevalattempt.create = AsyncMock()
     return prisma
 
 
-def _job_record(job: ActiveShadowEvalJob, api_key_id="key-hash") -> MagicMock:
+def _job_record(job: ActiveShadowEvalJob, target_type="key", target_id="key-hash") -> MagicMock:
     record = MagicMock()
     for field, value in dict(
         id=job.id,
-        api_key_id=api_key_id,
+        target_type=target_type,
+        target_id=target_id,
         router_name=job.router_name,
+        router_names=job.router_names,
         direction=job.direction,
         baseline_model=job.baseline_model,
         shadow_percentage=job.shadow_percentage,
         judge_model=job.judge_model,
         max_turns=job.max_turns,
+        max_budget=job.max_budget,
         ends_at=job.ends_at,
     ).items():
         setattr(record, field, value)
     return record
 
 
-def _router(shadow_text="shadow answer", judge_json='{"preference": "A", "confidence": 0.9, "reasoning": "x"}'):
+def _router(
+    shadow_text="shadow answer",
+    judge_json='{"preference": "A", "confidence": 0.9, "reasoning": "x"}',
+    classifier_cost=None,
+    sibling_router_texts=None,
+):
     """One mock router serving the shadow call first, the judge call second, told apart by
     the internal-origin stamp rather than the model, since a reverse job's shadow arm names
     a plain model. Only the auto-router writes a routing decision back, and only a plain
@@ -78,8 +97,20 @@ def _router(shadow_text="shadow answer", judge_json='{"preference": "A", "confid
         if kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN:
             return {"choices": [{"message": {"content": judge_json}}]}
         if kwargs["model"] == "my-router":
-            kwargs["metadata"]["routing_decision"] = {"tier_label": "SIMPLE", "routed_model": "cheap-model"}
+            decision = {"tier_label": "SIMPLE", "routed_model": "cheap-model"}
+            if classifier_cost is not None:
+                decision["classifier_cost"] = classifier_cost
+            kwargs["metadata"]["routing_decision"] = decision
             return {"choices": [{"message": {"content": shadow_text}}], "usage": {"completion_tokens": 5}}
+        if sibling_router_texts and kwargs["model"] in sibling_router_texts:
+            kwargs["metadata"]["routing_decision"] = {
+                "tier_label": "MEDIUM",
+                "routed_model": f"{kwargs['model']}-pick",
+            }
+            return {
+                "choices": [{"message": {"content": sibling_router_texts[kwargs["model"]]}}],
+                "usage": {"completion_tokens": 5},
+            }
         return ModelResponse(
             model=kwargs["model"],
             choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": shadow_text}}],
@@ -89,15 +120,38 @@ def _router(shadow_text="shadow answer", judge_json='{"preference": "A", "confid
     return router
 
 
-def _logger(router=None, prisma=None, jobs=()) -> ShadowEvalLogger:
+def _spend_counter(store=None):
+    """In-memory stand-in for the proxy's cross-pod spend counter: reads take the max of
+    the counter and the caller's fallback, exactly like get_current_spend does for a key
+    shape the reseed helpers do not know."""
+    counter = store if store is not None else {}
+
+    async def read(key, fallback_spend, max_budget):
+        return max(counter.get(key, 0.0), fallback_spend)
+
+    async def write(key, cost):
+        counter[key] = counter.get(key, 0.0) + cost
+
+    return counter, read, write
+
+
+def _logger(router=None, prisma=None, jobs=(), counter_store=None, jobs_by_target=None) -> ShadowEvalLogger:
     cache = InMemoryCache(max_size_in_memory=4, default_ttl=60)
+    counter, read, write = _spend_counter(counter_store)
+    funnel_events = []
     logger = ShadowEvalLogger(
         router_provider=lambda: router,
         prisma_provider=lambda: prisma,
         jobs_cache=cache,
+        job_spend_reader=read,
+        job_spend_writer=write,
+        funnel_recorder=lambda job_id, stage: funnel_events.append((job_id, stage)),
     )
-    if jobs:
-        cache.set_cache("shadow_eval:active_jobs", {"key-hash": tuple(jobs)})
+    logger._test_counter = counter
+    logger._test_funnel = funnel_events
+    seeded = jobs_by_target if jobs_by_target is not None else ({("key", "key-hash"): tuple(jobs)} if jobs else None)
+    if seeded is not None:
+        cache.set_cache("shadow_eval:active_jobs", seeded)
     return logger
 
 
@@ -107,7 +161,13 @@ def _routed_by(router_name="my-router", tier="COMPLEX"):
 
 
 def _success_kwargs(
-    request_id="req-1", api_key_hash="key-hash", request_metadata=None, call_type="acompletion", model="claude-opus"
+    request_id="req-1",
+    api_key_hash="key-hash",
+    request_metadata=None,
+    call_type="acompletion",
+    model="claude-opus",
+    response_cost=None,
+    cache_hit=None,
 ):
     return {
         "standard_logging_object": {
@@ -116,6 +176,8 @@ def _success_kwargs(
             "model": model,
             "metadata": {"user_api_key_hash": api_key_hash},
             "model_parameters": {"temperature": 0.5, "stream": True},
+            "response_cost": response_cost,
+            "cache_hit": cache_hit,
         },
         "litellm_params": {"metadata": request_metadata or {}},
         "messages": [{"role": "user", "content": "what is 2+2"}],
@@ -438,6 +500,91 @@ def test_unmask_preference(raw, real_is_a, expected):
     assert _unmask_preference(raw, real_is_a) == expected
 
 
+def test_failure_detail_names_the_raising_frame():
+    try:
+        raise TypeError("'tuple' object does not support item assignment")
+    except TypeError as e:
+        detail = _failure_detail(e)
+        lineno = e.__traceback__.tb_lineno
+    assert (
+        detail == f"TypeError at test_shadow_eval_logger.py:{lineno}: 'tuple' object does not support item assignment"
+    )
+
+    try:
+        raise ValueError("p" * 5 * _MAX_ERROR_CHARS)
+    except ValueError as long_e:
+        truncated_row_error = _failure_detail(long_e)[:_MAX_ERROR_CHARS]
+    assert "ValueError at test_shadow_eval_logger.py:" in truncated_row_error
+
+
+def test_call_cost_prefers_the_billed_figure_over_the_public_price_map(monkeypatch):
+    """The router client stamps _hidden_params.response_cost from the deployment's own
+    pricing; the public map reads 0 for deployment-priced models, so budgets gated on it
+    would never close. The map is only the fallback for responses with no stamp."""
+    import litellm as litellm_module
+    from litellm.integrations.shadow_eval_logger import _call_cost
+
+    monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+    stamped = MagicMock()
+    stamped._hidden_params = {"response_cost": 0.04}
+    assert _call_cost(stamped) == 0.04
+
+    from litellm.types.utils import HiddenParams
+
+    object_stamped = MagicMock()
+    object_stamped._hidden_params = HiddenParams(response_cost=0.03)
+    assert _call_cost(object_stamped) == 0.03
+
+    unstamped = MagicMock()
+    unstamped._hidden_params = {"response_cost": None}
+    assert _call_cost(unstamped) == 0.005
+    assert _call_cost({"choices": []}) == 0.005
+
+
+@pytest.mark.asyncio
+async def test_a_cold_or_reset_counter_degrades_to_the_fill_floor_not_zero(monkeypatch: pytest.MonkeyPatch):
+    """The design leans on one owner contract: for a spend:shadow_eval:* key (no DB
+    reseed by design), get_current_spend returns the caller's fill-sum fallback whenever
+    the counter reads lower. A reset counter therefore degrades to the <=10s-stale DB
+    sum, never to zero, so a Redis expiry cannot re-open a spent budget by a full cap."""
+    from litellm.proxy import proxy_server
+
+    counter_key = "spend:shadow_eval:job-cold-test"
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    proxy_server.spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.05)
+    try:
+        assert (
+            await proxy_server.get_current_spend(counter_key=counter_key, fallback_spend=0.42, max_budget=1.0) == 0.42
+        )
+        proxy_server.spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
+        assert (
+            await proxy_server.get_current_spend(counter_key=counter_key, fallback_spend=0.42, max_budget=1.0) == 0.42
+        )
+    finally:
+        proxy_server.spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
+
+
+@pytest.mark.asyncio
+async def test_an_unverifiable_budget_skips_the_sample_instead_of_spending():
+    """A raising spend read (fail-closed enforcement, or an owner bug) must skip the
+    sample before any provider call, never admit it on a guess."""
+
+    async def unverifiable(key, fallback_spend, max_budget):
+        raise RuntimeError("budget unverifiable")
+
+    prisma = _prisma()
+    router = _router()
+    logger = _logger(router=router, prisma=prisma, jobs=(_job(max_budget=1.0),))
+    logger._read_job_spend = unverifiable
+
+    await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+    await _drain(logger)
+
+    router.acompletion.assert_not_called()
+    prisma.db.litellm_shadowevalattempt.create.assert_not_called()
+    assert logger._test_funnel == [("job-1", "withheld")]
+
+
 def test_judge_prompt_is_bounded_however_large_the_inputs():
     prompt = _judge_user_prompt("c" * 200_000, "a" * 200_000, "b" * 200_000)
     assert len(prompt) < _MAX_JUDGE_PROMPT_CHARS + 100
@@ -473,8 +620,84 @@ class TestSuccessHookSkipChain:
         assert row["shadow_model"] == "cheap-model"
         assert row["confidence"] == 0.9
         assert row["judge_cost"] == 0.005
+        assert row["shadow_cost"] == 0.005
         assert row["error"] is None
         assert prisma.db.litellm_shadowevaljob.find_many.await_count == 0
+
+    async def test_judge_call_carries_the_verdict_schema(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        router = _router()
+        logger = _logger(router=router, prisma=_prisma(), jobs=(_job(),))
+
+        await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+        await _drain(logger)
+
+        judge_call = next(
+            c.kwargs
+            for c in router.acompletion.call_args_list
+            if c.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == SHADOW_EVAL_JUDGE_CALL_ORIGIN
+        )
+        assert judge_call["response_format"] == PAIRWISE_JUDGE_RESPONSE_FORMAT
+        schema = judge_call["response_format"]["json_schema"]["schema"]
+        assert schema["required"] == ["preference", "confidence"]
+        assert schema["properties"]["preference"]["enum"] == ["A", "B", "tie"]
+
+    async def test_shadow_call_messages_survive_in_place_provider_rewrites(self, monkeypatch: pytest.MonkeyPatch):
+        """Provider transforms (anthropic factory, cache-control hook) rewrite messages with
+        `messages[i] = ...`; the logger's immutable snapshot must never reach them directly."""
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        prisma = _prisma()
+        router = _router()
+        inner = router.acompletion.side_effect
+
+        async def mutating_acompletion(**kwargs):
+            kwargs["messages"][0] = dict(kwargs["messages"][0])
+            return await inner(**kwargs)
+
+        router.acompletion = MagicMock(side_effect=mutating_acompletion)
+        logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
+
+        await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+        await _drain(logger)
+
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["error"] is None
+        assert row["outcome"] in ("real", "shadow", "tie")
+
+    async def test_pipeline_continues_judging_after_a_failed_attempt(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        prisma = _prisma()
+        router = _router()
+        inner = router.acompletion.side_effect
+        shadow_calls = {"count": 0}
+
+        async def flaky_acompletion(**kwargs):
+            if kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == SHADOW_EVAL_ROUTER_CALL_ORIGIN:
+                shadow_calls["count"] += 1
+                if shadow_calls["count"] == 1:
+                    raise RuntimeError("provider exploded")
+            return await inner(**kwargs)
+
+        router.acompletion = MagicMock(side_effect=flaky_acompletion)
+        logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
+
+        await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+        await _drain(logger)
+        await logger.async_log_success_event(_success_kwargs(request_id="req-2"), RESPONSE, None, None)
+        await _drain(logger)
+
+        rows = [c.kwargs["data"] for c in prisma.db.litellm_shadowevalattempt.create.call_args_list]
+        assert [rows[0]["outcome"], rows[1]["outcome"] in ("real", "shadow")] == ["error", True]
+        assert "provider exploded" in rows[0]["error"]
+        assert rows[1]["request_id"] == "req-2"
+        assert rows[1]["error"] is None
+        assert logger._inflight_shadow_tasks == 0
 
     @pytest.mark.parametrize(
         "kwargs_mutation,job_mutation",
@@ -487,6 +710,7 @@ class TestSuccessHookSkipChain:
             ({}, {"ends_at": datetime.now(timezone.utc) - timedelta(seconds=1)}),
             ({}, {"attempts": 200}),
             ({}, {"attempts": 199, "max_turns": 200, "_starts": 1}),
+            ({}, {"max_budget": 0.10, "spend": 0.10}),
         ],
         ids=[
             "internal-origin",
@@ -497,6 +721,7 @@ class TestSuccessHookSkipChain:
             "past-end",
             "turn-budget-reached",
             "budget-consumed-by-started-tasks",
+            "spend-budget-reached",
         ],
     )
     async def test_skip_paths_store_nothing(self, kwargs_mutation, job_mutation):
@@ -520,6 +745,61 @@ class TestSuccessHookSkipChain:
         await logger.async_log_success_event(_success_kwargs(request_id="req-1"), RESPONSE, None, None)
         await _drain(logger)
         await logger.async_log_success_event(_success_kwargs(request_id="req-2"), RESPONSE, None, None)
+        await _drain(logger)
+
+        assert prisma.db.litellm_shadowevalattempt.create.await_count == 1
+
+    async def test_completed_pipelines_hold_spend_budget_within_a_cache_generation(self, monkeypatch):
+        """An attempt's recorded cost lands in the spend counter immediately, so the
+        second sample is skipped before any provider call even though the cached fill
+        still reads spend 0."""
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        prisma = _prisma()
+        logger = _logger(router=_router(), prisma=prisma, jobs=(_job(max_budget=0.009, spend=0.0),))
+
+        await logger.async_log_success_event(_success_kwargs(request_id="req-1"), RESPONSE, None, None)
+        await _drain(logger)
+        await logger.async_log_success_event(_success_kwargs(request_id="req-2"), RESPONSE, None, None)
+        await _drain(logger)
+
+        assert prisma.db.litellm_shadowevalattempt.create.await_count == 1
+        assert logger._test_counter["spend:shadow_eval:job-1"] == 0.01
+
+    async def test_a_sibling_pod_sees_spend_through_the_shared_counter(self, monkeypatch):
+        """Two pods share the cross-pod counter: once pod A's attempts spend the budget,
+        pod B skips before its shadow call even though pod B's cached fill reads 0."""
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        shared = {}
+        prisma_a = _prisma()
+        pod_a = _logger(
+            router=_router(), prisma=prisma_a, jobs=(_job(max_budget=0.009, spend=0.0),), counter_store=shared
+        )
+        router_b = _router()
+        prisma_b = _prisma()
+        pod_b = _logger(
+            router=router_b, prisma=prisma_b, jobs=(_job(max_budget=0.009, spend=0.0),), counter_store=shared
+        )
+
+        await pod_a.async_log_success_event(_success_kwargs(request_id="req-1"), RESPONSE, None, None)
+        await _drain(pod_a)
+        await pod_b.async_log_success_event(_success_kwargs(request_id="req-2"), RESPONSE, None, None)
+        await _drain(pod_b)
+
+        assert prisma_a.db.litellm_shadowevalattempt.create.await_count == 1
+        prisma_b.db.litellm_shadowevalattempt.create.assert_not_called()
+        router_b.acompletion.assert_not_called()
+
+    async def test_legacy_jobs_without_a_spend_budget_sample_on_turns_alone(self):
+        """A pre-migration job carries max_budget None: recorded spend must never gate it,
+        only its own max_turns can."""
+        prisma = _prisma()
+        logger = _logger(router=_router(), prisma=prisma, jobs=(_job(max_budget=None, spend=999.0, attempts=5),))
+
+        await logger.async_log_success_event(_success_kwargs(request_id="req-1"), RESPONSE, None, None)
         await _drain(logger)
 
         assert prisma.db.litellm_shadowevalattempt.create.await_count == 1
@@ -570,6 +850,86 @@ class TestSuccessHookSkipChain:
         prisma.db.litellm_shadowevalattempt.create.assert_not_called()
 
 
+JWT_IDENTITY = {"user_api_key_hash": None, "user_api_key_team_id": "team-eng", "user_api_key_user_id": "dev-alice"}
+
+
+@pytest.mark.asyncio
+class TestTargetMatching:
+    """A request qualifies for a job through ANY of its resolved identities: key hash,
+    team id, or user id. Team and user jobs must therefore sample JWT-authenticated
+    traffic, which carries no key hash at all."""
+
+    @pytest.mark.parametrize(
+        "target,sampled",
+        [
+            (("team", "team-eng"), True),
+            (("user", "dev-alice"), True),
+            (("key", "some-key"), False),
+        ],
+        ids=["team-job-samples-jwt-traffic", "user-job-samples-jwt-traffic", "key-jobs-never-match-keyless-traffic"],
+    )
+    async def test_jwt_shaped_traffic_matches_team_and_user_jobs_but_no_key_job(self, target, sampled):
+        prisma = _prisma()
+        router = _router()
+        logger = _logger(router=router, prisma=prisma, jobs_by_target={target: (_job(),)})
+        hook_kwargs = _success_kwargs()
+        hook_kwargs["standard_logging_object"]["metadata"] = dict(JWT_IDENTITY)
+
+        await logger.async_log_success_event(hook_kwargs, RESPONSE, None, None)
+        await _drain(logger)
+
+        if sampled:
+            prisma.db.litellm_shadowevalattempt.create.assert_awaited_once()
+            assert prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]["job_id"] == "job-1"
+        else:
+            router.acompletion.assert_not_called()
+            prisma.db.litellm_shadowevalattempt.create.assert_not_called()
+
+    async def test_an_event_with_no_identity_early_returns_without_a_cache_read(self):
+        prisma = _prisma()
+        router = _router()
+        cache = MagicMock(spec=InMemoryCache)
+        cache.async_get_cache = AsyncMock()
+        logger = ShadowEvalLogger(
+            router_provider=lambda: router,
+            prisma_provider=lambda: prisma,
+            jobs_cache=cache,
+        )
+        hook_kwargs = _success_kwargs()
+        hook_kwargs["standard_logging_object"]["metadata"] = {}
+
+        await logger.async_log_success_event(hook_kwargs, RESPONSE, None, None)
+
+        cache.async_get_cache.assert_not_awaited()
+        router.acompletion.assert_not_called()
+        prisma.db.litellm_shadowevalattempt.create.assert_not_called()
+
+    async def test_an_event_matching_a_key_job_and_a_team_job_fires_both(self):
+        """A request's key and its team can each hold a job; the two are separately
+        budgeted experiments, so both fire and each counts its own start."""
+        prisma = _prisma()
+        logger = _logger(
+            router=_router(),
+            prisma=prisma,
+            jobs_by_target={
+                ("key", "key-hash"): (_job(id="key-job"),),
+                ("team", "team-eng"): (_job(id="team-job"),),
+            },
+        )
+        hook_kwargs = _success_kwargs()
+        hook_kwargs["standard_logging_object"]["metadata"] = {
+            "user_api_key_hash": "key-hash",
+            "user_api_key_team_id": "team-eng",
+        }
+
+        await logger.async_log_success_event(hook_kwargs, RESPONSE, None, None)
+        await _drain(logger)
+
+        rows = [call.kwargs["data"] for call in prisma.db.litellm_shadowevalattempt.create.call_args_list]
+        assert sorted(row["job_id"] for row in rows) == ["key-job", "team-job"]
+        assert logger._job_starts == {"key-job": 1, "team-job": 1}
+
+
 @pytest.mark.asyncio
 class TestActiveJobsCache:
     async def test_cache_miss_reads_db_once_then_serves_from_cache(self):
@@ -584,8 +944,8 @@ class TestActiveJobsCache:
         first = await logger._active_jobs()
         second = await logger._active_jobs()
 
-        assert [job.id for job in first["key-hash"]] == ["job-1"]
-        assert second["key-hash"][0].attempts == 7
+        assert [job.id for job in first[("key", "key-hash")]] == ["job-1"]
+        assert second[("key", "key-hash")][0].attempts == 7
         assert prisma.db.litellm_shadowevaljob.find_many.await_count == 1
         where = prisma.db.litellm_shadowevaljob.find_many.call_args.kwargs["where"]
         assert where["stopped_at"] is None
@@ -621,7 +981,7 @@ class TestActiveJobsCache:
 
     async def test_cache_refill_resets_the_starts_counter(self):
         job = _job()
-        prisma = _prisma(jobs=[_job_record(job)], attempt_counts=[("job-1", 7)])
+        prisma = _prisma(jobs=[_job_record(job)], attempt_counts=[("job-1", 7)], attempt_costs=[("job-1", 0.02, 0.03)])
         logger = ShadowEvalLogger(
             router_provider=lambda: None,
             prisma_provider=lambda: prisma,
@@ -629,9 +989,11 @@ class TestActiveJobsCache:
         )
         logger._job_starts = {"job-1": 5}
 
-        await logger._active_jobs()
+        jobs = await logger._active_jobs()
 
         assert logger._job_starts == {}
+        assert jobs[("key", "key-hash")][0].attempts == 7
+        assert jobs[("key", "key-hash")][0].spend == 0.05
 
 
 @pytest.mark.asyncio
@@ -646,19 +1008,23 @@ class TestShadowPipeline:
             messages=({"role": "user", "content": "hi"},),
             real_text="real answer",
             real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
             control_tier=None,
             shadow_params={},
             parent_metadata={},
         )
 
         router.acompletion.assert_not_called()
+        assert logger._test_funnel == [("job-1", "withheld")]
 
     async def test_over_budget_key_skips_before_any_call(self, monkeypatch: pytest.MonkeyPatch):
         """The gate delegates to the auth path's own budget owner, so an over-budget
         verdict there (BudgetExceededError) skips the shadow before any provider call."""
-        import litellm.proxy.auth.auth_checks as auth_checks
         from litellm.exceptions import BudgetExceededError
         from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth import auth_checks
 
         monkeypatch.setattr(
             auth_checks,
@@ -675,6 +1041,9 @@ class TestShadowPipeline:
             messages=({"role": "user", "content": "hi"},),
             real_text="real answer",
             real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
             control_tier=None,
             shadow_params={},
             parent_metadata={"user_api_key_auth": UserAPIKeyAuth(api_key="sk-abc", max_budget=10.0)},
@@ -682,17 +1051,32 @@ class TestShadowPipeline:
 
         router.acompletion.assert_not_called()
         prisma.db.litellm_shadowevalattempt.create.assert_not_called()
+        assert logger._test_funnel == [("job-1", "withheld")]
 
     @pytest.mark.parametrize(
-        "router_factory,expected_error,expected_cost",
+        "router_factory,expected_error,expected_cost,expected_shadow_cost",
         [
-            (lambda: _failing_router(), "provider exploded", 0.0),
-            (lambda: _router(judge_json="I prefer response A, definitely"), "unparseable judge verdict", 0.007),
+            (lambda: _failing_router(), "provider exploded", 0.0, 0.0),
+            (lambda: _router(judge_json="I prefer response A, definitely"), "unparseable judge verdict", 0.007, 0.007),
+            (lambda: _router(judge_json='{"preference": "'), "unparseable judge verdict", 0.007, 0.007),
+            (lambda: _router(judge_json="{}"), "unparseable judge verdict", 0.007, 0.007),
+            (
+                lambda: _router(judge_json='{"preference": "A", "confidence": "0.8'),
+                "unparseable judge verdict",
+                0.007,
+                0.007,
+            ),
         ],
-        ids=["shadow-call-fails", "judge-verdict-unparseable"],
+        ids=[
+            "shadow-call-fails",
+            "judge-verdict-unparseable",
+            "verdict-truncated-before-fields",
+            "verdict-empty-object",
+            "verdict-truncated-inside-confidence",
+        ],
     )
     async def test_failures_become_error_rows_and_keep_billed_judge_cost(
-        self, router_factory, expected_error, expected_cost, monkeypatch: pytest.MonkeyPatch
+        self, router_factory, expected_error, expected_cost, expected_shadow_cost, monkeypatch: pytest.MonkeyPatch
     ):
         import litellm as litellm_module
 
@@ -706,6 +1090,9 @@ class TestShadowPipeline:
             messages=({"role": "user", "content": "hi"},),
             real_text="real answer",
             real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
             control_tier=None,
             shadow_params={},
             parent_metadata={},
@@ -716,6 +1103,72 @@ class TestShadowPipeline:
         assert expected_error in row["error"]
         assert row["confidence"] is None
         assert row["judge_cost"] == expected_cost
+        assert row["shadow_cost"] == expected_shadow_cost
+
+    async def test_an_empty_shadow_reply_still_bills_its_cost(self, monkeypatch: pytest.MonkeyPatch):
+        """A shadow call that returns no extractable text has still billed; pricing it at
+        zero would keep the dollar gate open while shadow calls keep charging the key."""
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.007)
+        prisma = _prisma()
+        logger = _logger(router=_router(shadow_text=""), prisma=prisma)
+
+        await logger._run_shadow_eval(
+            job=_job(),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["outcome"] == "error"
+        assert "empty response" in row["error"]
+        assert row["shadow_cost"] == 0.007
+        assert logger._test_counter["spend:shadow_eval:job-1"] == 0.007
+
+    async def test_a_pipeline_error_after_the_shadow_call_keeps_its_billed_cost(self, monkeypatch: pytest.MonkeyPatch):
+        """An unexpected error between the billed shadow call and the attempt write must
+        still record the shadow cost, or the per-key dollar gate undercounts forever."""
+        import litellm as litellm_module
+        import litellm.integrations.shadow_eval_logger as shadow_eval_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.007)
+
+        def explode(conversation, response_a, response_b):
+            raise RuntimeError("judge prompt build failed")
+
+        monkeypatch.setattr(shadow_eval_module, "_judge_user_prompt", explode)
+        prisma = _prisma()
+        logger = _logger(router=_router(), prisma=prisma)
+
+        await logger._run_shadow_eval(
+            job=_job(),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["outcome"] == "error"
+        assert "pipeline error" in row["error"]
+        assert row["shadow_cost"] == 0.007
+        assert row["judge_cost"] == 0.0
+        assert logger._test_counter["spend:shadow_eval:job-1"] == 0.007
 
     async def test_sub_calls_carry_identity_and_origin_but_never_parent_request_state(self):
         prisma = _prisma()
@@ -734,6 +1187,9 @@ class TestShadowPipeline:
             messages=({"role": "user", "content": "hi"},),
             real_text="real answer",
             real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
             control_tier=None,
             shadow_params={"temperature": 0.2},
             parent_metadata=parent_metadata,
@@ -765,29 +1221,36 @@ class TestJobValidation:
             {"direction": "reverse"},
             {"baseline_model": "baseline-model"},
             {"direction": "sideways", "baseline_model": "baseline-model"},
+            {"direction": "reverse", "baseline_model": "baseline-model", "router_names": ("a", "b")},
         ],
-        ids=["reverse-without-baseline", "forward-with-baseline", "unknown-direction"],
+        ids=["reverse-without-baseline", "forward-with-baseline", "unknown-direction", "reverse-with-router-set"],
     )
     def test_unsamplable_shapes_are_rejected(self, overrides):
         with pytest.raises(ValidationError):
             _job(**overrides)
 
-    def test_shadow_target_follows_direction(self):
-        assert _job().shadow_target == "my-router"
-        assert _reverse_job().shadow_target == "baseline-model"
+    def test_arm_target_follows_direction(self):
+        assert _job().arm_target("my-router") == "my-router"
+        assert _reverse_job().arm_target("my-router") == "baseline-model"
+
+    def test_rows_from_before_router_names_carry_their_set_in_router_name(self):
+        assert _job().arm_router_names == ("my-router",)
+        assert _job(router_names=("my-router", "alt-router")).arm_router_names == ("my-router", "alt-router")
 
 
 @pytest.mark.asyncio
 class TestDirection:
     @pytest.mark.parametrize(
-        "job,routed_by,sampled",
+        "job,routed_by,attempt_rows",
         [
-            (_job(), None, True),
-            (_job(), "my-router", False),
-            (_job(), "other-router", True),
-            (_reverse_job(), "my-router", True),
-            (_reverse_job(), None, False),
-            (_reverse_job(), "other-router", False),
+            (_job(), None, 1),
+            (_job(), "my-router", 0),
+            (_job(), "other-router", 1),
+            (_reverse_job(), "my-router", 1),
+            (_reverse_job(), None, 0),
+            (_reverse_job(), "other-router", 0),
+            (_job(router_names=("my-router", "alt-router")), "alt-router", 0),
+            (_job(router_names=("my-router", "alt-router")), "other-router", 2),
         ],
         ids=[
             "forward-samples-unrouted",
@@ -796,29 +1259,31 @@ class TestDirection:
             "reverse-samples-its-own-router",
             "reverse-skips-unrouted",
             "reverse-skips-another-router",
+            "forward-skips-any-candidates-own-traffic",
+            "forward-multi-samples-once-per-arm",
         ],
     )
-    async def test_direction_decides_which_traffic_is_sampled(self, job, routed_by, sampled):
+    async def test_direction_decides_which_traffic_is_sampled(self, job, routed_by, attempt_rows):
         """The two directions partition the key's traffic: whatever one samples, the other
-        skips, so a key running both never judges the same turn twice for the same reason."""
+        skips, so a key running both never judges the same turn twice for the same reason.
+        A multi-router job extends the forward skip to every candidate: a request one
+        candidate served must not be judged as the incumbent against another candidate."""
         prisma = _prisma()
-        logger = _logger(router=_router(), prisma=prisma, jobs=(job,))
+        logger = _logger(router=_router(sibling_router_texts={"alt-router": "alt answer"}), prisma=prisma, jobs=(job,))
 
         await logger.async_log_success_event(
             _success_kwargs(request_metadata=_routed_by(routed_by) if routed_by else {}), RESPONSE, None, None
         )
         await _drain(logger)
 
-        assert prisma.db.litellm_shadowevalattempt.create.await_count == int(sampled)
+        assert prisma.db.litellm_shadowevalattempt.create.await_count == attempt_rows
 
     async def test_reverse_duplicates_against_the_baseline_model(self):
         prisma = _prisma()
         router = _router()
         logger = _logger(router=router, prisma=prisma, jobs=(_reverse_job(),))
 
-        await logger.async_log_success_event(
-            _success_kwargs(request_metadata=_routed_by()), RESPONSE, None, None
-        )
+        await logger.async_log_success_event(_success_kwargs(request_metadata=_routed_by()), RESPONSE, None, None)
         await _drain(logger)
 
         assert router.acompletion.call_args_list[0].kwargs["model"] == "baseline-model"
@@ -865,14 +1330,140 @@ class TestDirection:
             jobs=(_job(id="forward-job", router_name="other-router"), _reverse_job(id="reverse-job")),
         )
 
-        await logger.async_log_success_event(
-            _success_kwargs(request_metadata=_routed_by()), RESPONSE, None, None
-        )
+        await logger.async_log_success_event(_success_kwargs(request_metadata=_routed_by()), RESPONSE, None, None)
         await _drain(logger)
 
         rows = [call.kwargs["data"] for call in prisma.db.litellm_shadowevalattempt.create.call_args_list]
         assert sorted(row["job_id"] for row in rows) == ["forward-job", "reverse-job"]
         assert logger._job_starts == {"forward-job": 1, "reverse-job": 1}
+
+
+@pytest.mark.asyncio
+class TestMultiRouterArms:
+    async def test_every_arm_judges_the_same_request_and_stamps_its_own_row(self):
+        """One sampled request, one row per candidate router, both judged against the same
+        real response: the paired comparison that makes multi-router win rates comparable."""
+        prisma = _prisma()
+        router = _router(sibling_router_texts={"alt-router": "alt answer"})
+        logger = _logger(router=router, prisma=prisma)
+
+        await logger._run_shadow_eval(
+            job=_job(router_names=("my-router", "alt-router")),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.001,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+
+        rows = [call.kwargs["data"] for call in prisma.db.litellm_shadowevalattempt.create.await_args_list]
+        assert [row["router_name"] for row in rows] == ["my-router", "alt-router"]
+        assert {row["request_id"] for row in rows} == {"req-1"}
+        assert [row["shadow_model"] for row in rows] == ["cheap-model", "alt-router-pick"]
+        assert all(row["outcome"] in ("real", "shadow", "tie") for row in rows)
+        assert all(row["real_cost"] == 0.001 for row in rows)
+
+    async def test_a_single_router_job_stamps_its_router_on_the_row(self):
+        prisma = _prisma()
+        logger = _logger(router=_router(), prisma=prisma)
+
+        await logger._run_shadow_eval(
+            job=_job(),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["router_name"] == "my-router"
+
+    async def test_one_arms_failure_never_silences_the_sibling(self):
+        prisma = _prisma()
+        router = _router(sibling_router_texts={"alt-router": "alt answer"})
+        healthy = router.acompletion.side_effect
+
+        async def first_arm_explodes(**kwargs):
+            if kwargs["model"] == "my-router":
+                raise RuntimeError("provider exploded")
+            return await healthy(**kwargs)
+
+        router.acompletion.side_effect = first_arm_explodes
+        logger = _logger(router=router, prisma=prisma)
+
+        await logger._run_shadow_eval(
+            job=_job(router_names=("my-router", "alt-router")),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+
+        rows = [call.kwargs["data"] for call in prisma.db.litellm_shadowevalattempt.create.await_args_list]
+        assert [row["router_name"] for row in rows] == ["my-router", "alt-router"]
+        assert rows[0]["outcome"] == "error"
+        assert "provider exploded" in rows[0]["error"]
+        assert rows[1]["outcome"] in ("real", "shadow", "tie")
+
+    async def test_the_turn_valve_counts_every_arm_a_start_will_write(self):
+        """max_turns is a row ceiling and one sampled request writes one row per arm, so
+        admission pre-counts the arms: a two-arm job with two turns of budget admits one
+        request, not two."""
+        prisma = _prisma()
+        router = _router(sibling_router_texts={"alt-router": "alt answer"})
+        logger = _logger(
+            router=router, prisma=prisma, jobs=(_job(router_names=("my-router", "alt-router"), max_turns=2),)
+        )
+
+        await logger.async_log_success_event(_success_kwargs(request_id="req-1"), RESPONSE, None, None)
+        await logger.async_log_success_event(_success_kwargs(request_id="req-2"), RESPONSE, None, None)
+        await _drain(logger)
+
+        rows = [call.kwargs["data"] for call in prisma.db.litellm_shadowevalattempt.create.await_args_list]
+        assert {row["request_id"] for row in rows} == {"req-1"}
+        assert len(rows) == 2
+
+    async def test_a_withheld_request_runs_no_arm_and_counts_once(self):
+        """The budget gates run once per sampled request, before any arm: funnel counters
+        stay per-request, so coverage math is arm-count independent."""
+        prisma = _prisma()
+        router = _router(sibling_router_texts={"alt-router": "alt answer"})
+        logger = _logger(router=router, prisma=prisma)
+
+        await logger._run_shadow_eval(
+            job=_job(router_names=("my-router", "alt-router"), max_budget=1.0, spend=2.0),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+
+        router.acompletion.assert_not_called()
+        prisma.db.litellm_shadowevalattempt.create.assert_not_called()
+        assert logger._test_funnel == [("job-1", "withheld")]
 
 
 @pytest.mark.asyncio
@@ -890,13 +1481,14 @@ class TestActiveJobsFailClosed:
             jobs_cache=InMemoryCache(max_size_in_memory=4, default_ttl=60),
         )
 
-        assert [job.id for job in (await logger._active_jobs())["key-hash"]] == ["job-ok"]
+        assert [job.id for job in (await logger._active_jobs())[("key", "key-hash")]] == ["job-ok"]
 
-    async def test_both_of_a_key_s_jobs_survive_the_lookup(self):
+    async def test_every_targets_jobs_survive_the_lookup_keyed_by_type_and_id(self):
         records = [
             _job_record(_job(id="job-forward")),
             _job_record(_reverse_job(id="job-reverse")),
-            _job_record(_job(id="job-other"), api_key_id="other-key"),
+            _job_record(_job(id="job-other"), target_id="other-key"),
+            _job_record(_job(id="job-team"), target_type="team", target_id="team-eng"),
         ]
         prisma = _prisma(jobs=records, attempt_counts=[("job-reverse", 3)])
         logger = ShadowEvalLogger(
@@ -907,9 +1499,11 @@ class TestActiveJobsFailClosed:
 
         jobs = await logger._active_jobs()
 
-        assert sorted(job.id for job in jobs["key-hash"]) == ["job-forward", "job-reverse"]
-        assert [job.id for job in jobs["other-key"]] == ["job-other"]
-        assert {job.id: job.attempts for job in jobs["key-hash"]}["job-reverse"] == 3
+        assert sorted(job.id for job in jobs[("key", "key-hash")]) == ["job-forward", "job-reverse"]
+        assert [job.id for job in jobs[("key", "other-key")]] == ["job-other"]
+        assert [job.id for job in jobs[("team", "team-eng")]] == ["job-team"]
+        assert ("team-eng",) not in jobs and "team-eng" not in jobs
+        assert {job.id: job.attempts for job in jobs[("key", "key-hash")]}["job-reverse"] == 3
 
 
 def _failing_router():
@@ -918,3 +1512,215 @@ def _failing_router():
     router.get_model_list = MagicMock(return_value=None)
     router.acompletion = AsyncMock(side_effect=RuntimeError("provider exploded"))
     return router
+
+
+@pytest.mark.asyncio
+async def test_judge_call_resolves_its_arm_under_the_shadowed_keys_team(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start-time validation resolves the judge under the key's team, so the dispatch has to
+    as well or the two disagree about the same name.
+
+    A team-public judge resolves to a real deployment for its own team and to nothing for
+    anybody else. Choosing the arm without the team sends the literal name to the SDK, which
+    has never heard of it, so every judge call fails on a job validation just accepted.
+    """
+    import litellm
+    from litellm.litellm_core_utils.llm_judge import judge_acompletion
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "row_team_a",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "fake"},
+                "model_info": {"team_id": "team-a", "team_public_model_name": "house-judge"},
+            }
+        ]
+    )
+    router.acompletion = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]  # fake the call, not the resolution
+        return_value={"choices": [{"message": {"content": "router answer"}}]}
+    )
+    sdk = AsyncMock(return_value={"choices": [{"message": {"content": "sdk answer"}}]})
+    monkeypatch.setattr(litellm, "acompletion", sdk)
+
+    await judge_acompletion(router, "house-judge", [{"role": "user", "content": "hi"}], team_id="team-a")
+
+    router.acompletion.assert_awaited_once()
+    sdk.assert_not_called()
+
+
+@pytest.mark.asyncio
+class TestCostComparison:
+    """The attempt row prices BOTH arms with what each actually billed: the real arm's
+    payload cost plus its own classifier when it routed, the shadow arm's completion plus
+    its write-back classifier cost, and the exact-cache flag that voids the comparison."""
+
+    async def test_success_row_records_both_arms_and_the_classifier(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        router = _router(classifier_cost=0.0007)
+        prisma = _prisma()
+        logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
+
+        await logger.async_log_success_event(_success_kwargs(response_cost=0.002), RESPONSE, None, None)
+        await _drain(logger)
+
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["real_cost"] == 0.002
+        assert row["real_classifier_cost"] == 0.0
+        assert row["shadow_classifier_cost"] == 0.0007
+        assert row["real_cache_hit"] is False
+        assert logger._test_funnel == []
+
+    async def test_reverse_job_prices_the_real_arms_classifier(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        router = _router()
+        prisma = _prisma()
+        job = _job(direction="reverse", baseline_model="gpt-4o-mini")
+        logger = _logger(router=router, prisma=prisma, jobs=(job,))
+        metadata = _routed_by()
+        metadata["routing_decision"]["classifier_cost"] = 0.0004
+
+        await logger.async_log_success_event(
+            _success_kwargs(request_metadata=metadata, response_cost=0.003), RESPONSE, None, None
+        )
+        await _drain(logger)
+
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["real_cost"] == 0.003
+        assert row["real_classifier_cost"] == 0.0004
+        assert row["shadow_classifier_cost"] == 0.0
+
+    async def test_shadow_classifier_cost_charges_the_eval_budget_counter(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        logger = _logger(router=_router(classifier_cost=0.0007), prisma=_prisma(), jobs=(_job(),))
+
+        await logger.async_log_success_event(_success_kwargs(response_cost=0.002), RESPONSE, None, None)
+        await _drain(logger)
+
+        assert logger._test_counter["spend:shadow_eval:job-1"] == pytest.approx(0.005 + 0.005 + 0.0007)
+
+    async def test_real_cost_never_charges_the_eval_budget_counter(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        logger = _logger(router=_router(), prisma=_prisma(), jobs=(_job(),))
+
+        await logger.async_log_success_event(_success_kwargs(response_cost=99.0), RESPONSE, None, None)
+        await _drain(logger)
+
+        assert logger._test_counter["spend:shadow_eval:job-1"] == pytest.approx(0.005 + 0.005)
+
+    async def test_cache_served_turn_is_flagged_on_the_row(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        prisma = _prisma()
+        logger = _logger(router=_router(), prisma=prisma, jobs=(_job(),))
+
+        await logger.async_log_success_event(_success_kwargs(response_cost=0.0, cache_hit=True), RESPONSE, None, None)
+        await _drain(logger)
+
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["real_cache_hit"] is True
+        assert row["real_cost"] == 0.0
+
+    async def test_failed_shadow_call_still_records_its_classifier_cost(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        router = _router(classifier_cost=0.0007)
+
+        async def failing_acompletion(**kwargs):
+            if kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == SHADOW_EVAL_ROUTER_CALL_ORIGIN:
+                kwargs["metadata"]["routing_decision"] = {"tier_label": "SIMPLE", "classifier_cost": 0.0007}
+                raise RuntimeError("provider down")
+            return {"choices": [{"message": {"content": "unused"}}]}
+
+        router.acompletion = MagicMock(side_effect=failing_acompletion)
+        prisma = _prisma()
+        logger = _logger(router=router, prisma=prisma, jobs=(_job(),))
+
+        await logger.async_log_success_event(_success_kwargs(response_cost=0.002), RESPONSE, None, None)
+        await _drain(logger)
+
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["outcome"] == "error"
+        assert row["shadow_classifier_cost"] == 0.0007
+        assert row["real_cost"] == 0.002
+        assert logger._test_counter["spend:shadow_eval:job-1"] == pytest.approx(0.0007)
+
+
+@pytest.mark.asyncio
+class TestSamplingFunnel:
+    async def test_a_budget_reached_admission_counts_withheld_not_nothing(self):
+        """The in-flight burst as a job crosses max_budget must stay in the coverage
+        identity: admitted samples the budget gate holds land in withheld."""
+        counter = {"spend:shadow_eval:job-1": 5.0}
+        prisma = _prisma()
+        router = _router()
+        logger = _logger(router=router, prisma=prisma, jobs=(_job(max_budget=1.0, spend=0.0),), counter_store=counter)
+
+        await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+        await _drain(logger)
+
+        router.acompletion.assert_not_called()
+        prisma.db.litellm_shadowevalattempt.create.assert_not_called()
+        assert logger._test_funnel == [("job-1", "withheld")]
+
+    """Skips an admitting job cannot derive from attempt rows are counted per leg, so the
+    judged rows can be weighed against the eligible traffic they stand for."""
+
+    async def test_a_lost_sampling_dice_roll_counts_not_sampled(self):
+        from litellm.integrations.shadow_eval_logger import _sample_hits
+
+        job = _job(shadow_percentage=1.0)
+        missing_id = next(
+            f"req-miss-{n}" for n in range(10_000) if not _sample_hits(f"req-miss-{n}", job.id, job.shadow_percentage)
+        )
+        prisma = _prisma()
+        logger = _logger(router=_router(), prisma=prisma, jobs=(job,))
+
+        await logger.async_log_success_event(_success_kwargs(request_id=missing_id), RESPONSE, None, None)
+        await _drain(logger)
+
+        assert logger._test_funnel == [("job-1", "not_sampled")]
+        prisma.db.litellm_shadowevalattempt.create.assert_not_awaited()
+
+    async def test_an_unjudgeable_sampled_request_counts_unjudgeable(self):
+        prisma = _prisma()
+        logger = _logger(router=_router(), prisma=prisma, jobs=(_job(),))
+        tool_final = {"choices": [{"message": {"content": None, "tool_calls": [{"type": "function", "function": {}}]}}]}
+
+        await logger.async_log_success_event(_success_kwargs(), tool_final, None, None)
+        await _drain(logger)
+
+        assert logger._test_funnel == [("job-1", "unjudgeable")]
+        prisma.db.litellm_shadowevalattempt.create.assert_not_awaited()
+
+    async def test_a_concurrency_shed_counts_shed_and_starts_nothing(self):
+        prisma = _prisma()
+        logger = _logger(router=_router(), prisma=prisma, jobs=(_job(),))
+        logger._inflight_shadow_tasks = 16
+
+        await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+
+        assert logger._test_funnel == [("job-1", "shed")]
+        assert logger._job_starts == {}
+        prisma.db.litellm_shadowevalattempt.create.assert_not_awaited()
+        logger._inflight_shadow_tasks = 0
+
+    async def test_direction_mismatch_and_saturated_jobs_count_nothing(self):
+        prisma = _prisma()
+        saturated = _job(id="job-full", max_turns=1, attempts=1)
+        wrong_direction = _job(id="job-rev", direction="reverse", baseline_model="gpt-4o-mini")
+        logger = _logger(router=_router(), prisma=prisma, jobs=(saturated, wrong_direction))
+
+        await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+        await _drain(logger)
+
+        assert logger._test_funnel == []
+        prisma.db.litellm_shadowevalattempt.create.assert_not_awaited()

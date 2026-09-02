@@ -1,7 +1,4 @@
-import sys
-import os
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     initialize_standard_callback_dynamic_params,

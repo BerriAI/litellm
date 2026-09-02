@@ -1,7 +1,6 @@
 # stdlib imports
 import json
 import os
-import sys
 import time
 from unittest.mock import patch
 
@@ -10,9 +9,6 @@ import pytest
 # third party imports
 from click.testing import CliRunner
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 # local imports

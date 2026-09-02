@@ -8,11 +8,14 @@ from typing import Final
 import click
 import requests
 
-from .auth import get_stored_api_key, login
+from .auth import context_secret_vault, get_stored_api_key, login
+from .cmd_quoting import quote_for_cmd
 
 ANTHROPIC_BASE_URL_ENV: Final = "ANTHROPIC_BASE_URL"
 ANTHROPIC_AUTH_TOKEN_ENV: Final = "ANTHROPIC_AUTH_TOKEN"
 ANTHROPIC_API_KEY_ENV: Final = "ANTHROPIC_API_KEY"
+ENABLE_TOOL_SEARCH_ENV: Final = "ENABLE_TOOL_SEARCH"
+ENABLE_TOOL_SEARCH_VALUE: Final = "true"
 OPENAI_BASE_URL_ENV: Final = "OPENAI_BASE_URL"
 OPENAI_API_KEY_ENV: Final = "OPENAI_API_KEY"
 
@@ -61,7 +64,10 @@ def build_agent_env(
     Anthropic clients (Claude Code) append /v1/messages to ANTHROPIC_BASE_URL,
     so it stays the bare proxy root; OpenAI clients (Codex, OpenCode) expect the
     /v1 suffix on OPENAI_BASE_URL. ANTHROPIC_API_KEY is dropped so a stray
-    Anthropic key cannot win over the bearer token we set.
+    Anthropic key cannot win over the bearer token we set. ENABLE_TOOL_SEARCH
+    defaults to true because Claude Code turns tool search off when
+    ANTHROPIC_BASE_URL is not a first-party Anthropic host; a value already in
+    the environment is left alone.
     """
     env: Final = dict(base_env)
     root: Final = base_url.rstrip("/")
@@ -69,6 +75,8 @@ def build_agent_env(
         env[ANTHROPIC_BASE_URL_ENV] = root
         env[ANTHROPIC_AUTH_TOKEN_ENV] = api_key
         env.pop(ANTHROPIC_API_KEY_ENV, None)
+        if ENABLE_TOOL_SEARCH_ENV not in env:
+            env[ENABLE_TOOL_SEARCH_ENV] = ENABLE_TOOL_SEARCH_VALUE
     if PROFILE_OPENAI in profiles:
         env[OPENAI_BASE_URL_ENV] = root + "/v1"
         env[OPENAI_API_KEY_ENV] = api_key
@@ -144,29 +152,7 @@ def verify_proxy_key(
 
 
 _WINDOWS_SHIM_SUFFIXES: Final[frozenset[str]] = frozenset({".cmd", ".bat"})
-_CMD_PERCENT_GUARD: Final = "%%cd:~,%"
 _CMD_LINE_BREAKS: Final = ("\r", "\n")
-
-
-def _double_trailing_backslashes(segment: str) -> str:
-    bare: Final = segment.rstrip("\\")
-    return bare + "\\" * 2 * (len(segment) - len(bare))
-
-
-def _quote_for_cmd(token: str) -> str:
-    """Quote one token so both parsers that read it see the original text.
-
-    Follows the algorithm the Rust standard library settled on for batch files
-    after CVE-2024-24576. Two parsers see this token: cmd.exe, which ends a
-    quoted string on a lone `"` and so wants an embedded one doubled, and the
-    shim's own interpreter, which re-splits `%*` under C runtime rules where a
-    backslash escapes the quote that follows it, so every backslash run standing
-    before a quote is doubled. Quoting cannot stop cmd expanding `%VAR%`, so each
-    `%` is prefixed with `%%cd:~,`: the zero-length substring of the always
-    defined `cd` expands to nothing and leaves no `%` pair for cmd to match.
-    """
-    escaped: Final = '""'.join(_double_trailing_backslashes(part) for part in token.split('"'))
-    return '"' + escaped.replace("%", _CMD_PERCENT_GUARD) + '"'
 
 
 def _windows_command(path: str, args: Sequence[str]) -> str | tuple[str, ...]:
@@ -195,7 +181,7 @@ def _windows_command(path: str, args: Sequence[str]) -> str | tuple[str, ...]:
             f"Cannot pass an argument containing a line break to `{os.path.basename(path)}` on "
             "Windows: cmd.exe ends the command line there, so the agent would silently lose it."
         )
-    inner: Final = " ".join(_quote_for_cmd(token) for token in (path, *rest))
+    inner: Final = " ".join(quote_for_cmd(token) for token in (path, *rest))
     return f'cmd.exe /d /e:on /v:off /s /c "{inner}"'
 
 
@@ -316,7 +302,7 @@ def resolve_api_key(ctx: click.Context) -> str:
 
     click.echo("No LiteLLM credentials found; starting login...")
     ctx.invoke(login)
-    api_key = get_stored_api_key(expected_base_url=base_url)
+    api_key = get_stored_api_key(expected_base_url=base_url, vault=context_secret_vault(ctx))
     if not api_key:
         raise click.ClickException("Login did not produce an API key; cannot start the agent.")
     return api_key

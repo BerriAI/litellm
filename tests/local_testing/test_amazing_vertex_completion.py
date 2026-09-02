@@ -1,21 +1,15 @@
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
 from test_streaming import streaming_format_tests
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import json
-import os
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 from respx import MockRouter
@@ -4208,13 +4202,7 @@ def test_gemini_google_maps_tool_simple():
             )
         print(f"Response: {response.model_dump_json(indent=4)}")
         assert response.choices[0].message.content is not None
-    except (litellm.RateLimitError, litellm.InternalServerError):
-        # Transient Vertex-side failures (rate limiting, 500 INTERNAL from the
-        # Google Maps grounding backend) are not LiteLLM bugs — don't fail CI.
-        pass
-    except litellm.InternalServerError:
-        pytest.skip(
-            "Google Maps Platform returned a transient 500 (upstream flake); skipping."
-        )
+    except (litellm.RateLimitError, litellm.InternalServerError) as e:
+        pytest.skip(f"Transient Vertex-side failure, not a LiteLLM bug: {e}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

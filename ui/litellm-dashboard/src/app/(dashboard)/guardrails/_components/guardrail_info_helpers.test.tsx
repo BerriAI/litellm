@@ -14,6 +14,7 @@ import {
   choiceToSkipSystemForCreate,
   skipToolMessageToChoice,
   choiceToSkipToolForCreate,
+  formatGuardrailMode,
 } from "./guardrail_info_helpers";
 
 describe("guardrail_info_helpers", () => {
@@ -221,6 +222,34 @@ describe("guardrail_info_helpers", () => {
 
       expect(result.displayName).toBe("RepelloAI Argus");
       expect(result.logo).toContain("repelloai.png");
+    });
+  });
+
+  describe("formatGuardrailMode", () => {
+    it("renders a single mode and a list of modes", () => {
+      expect(formatGuardrailMode("pre_call")).toBe("pre_call");
+      expect(formatGuardrailMode(["pre_call", "post_call"])).toBe("pre_call, post_call");
+    });
+
+    it("flattens a tag-based mode object into deduped modes instead of returning it verbatim", () => {
+      const mode = {
+        tags: { "Service-Type: internal-service": "post_call", "Service-Type: batch": ["during_call", "post_call"] },
+        default: ["pre_call", "post_call"],
+      };
+
+      expect(formatGuardrailMode(mode)).toBe("pre_call, post_call, during_call (tag-based)");
+    });
+
+    it("handles a tag-based mode with no default and with no tags", () => {
+      expect(formatGuardrailMode({ tags: { "team: a": "post_call" } })).toBe("post_call (tag-based)");
+      expect(formatGuardrailMode({ default: "pre_call" })).toBe("pre_call (tag-based)");
+    });
+
+    it("returns an empty string for missing or unusable modes", () => {
+      expect(formatGuardrailMode(undefined)).toBe("");
+      expect(formatGuardrailMode(null)).toBe("");
+      expect(formatGuardrailMode({})).toBe("");
+      expect(formatGuardrailMode({ tags: {}, default: null })).toBe("");
     });
   });
 

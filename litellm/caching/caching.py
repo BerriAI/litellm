@@ -12,6 +12,7 @@ import hashlib
 import json
 import time
 import traceback
+from collections.abc import Mapping
 from enum import Enum
 from typing import Any, Final
 
@@ -97,6 +98,8 @@ class Cache:
         qdrant_quantization_config: str | None = None,
         qdrant_semantic_cache_embedding_model: str = "text-embedding-ada-002",
         qdrant_semantic_cache_vector_size: int | None = None,
+        semantic_cache_embedding_max_input_tokens: int | None = None,
+        semantic_cache_embedding_timeout: float | None = None,
         # GCP IAM authentication parameters
         gcp_service_account: str | None = None,
         gcp_ssl_ca_certs: str | None = None,
@@ -122,6 +125,8 @@ class Cache:
             qdrant_api_key (str, optional): The api_key for the local or cloud qdrant cluster.
             qdrant_collection_name (str, optional): The name for your qdrant collection. Required if type is "qdrant-semantic".
             similarity_threshold (float, optional): The similarity threshold for semantic-caching, Required if type is "redis-semantic" or "qdrant-semantic".
+            semantic_cache_embedding_max_input_tokens (int, optional): Truncate prompts to this many tokens before embedding them for semantic caching. Defaults to the embedding deployment's configured max_input_tokens.
+            semantic_cache_embedding_timeout (float, optional): Seconds a semantic-cache lookup may spend embedding the prompt before it gives up and lets the request continue to the LLM. Defaults to SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS.
 
             # Disk Cache Args
             disk_cache_dir (str, optional): The directory for the disk cache. Defaults to None.
@@ -192,6 +197,8 @@ class Cache:
                 similarity_threshold=similarity_threshold,
                 embedding_model=redis_semantic_cache_embedding_model,
                 index_name=redis_semantic_cache_index_name,
+                embedding_max_input_tokens=semantic_cache_embedding_max_input_tokens,
+                embedding_timeout=semantic_cache_embedding_timeout,
                 **kwargs,
             )
         elif type == LiteLLMCacheType.VALKEY_SEMANTIC:
@@ -207,6 +214,8 @@ class Cache:
                 embedding_model=valkey_semantic_cache_embedding_model,
                 index_name=valkey_semantic_cache_index_name,
                 startup_nodes=redis_startup_nodes,
+                embedding_max_input_tokens=semantic_cache_embedding_max_input_tokens,
+                embedding_timeout=semantic_cache_embedding_timeout,
                 **kwargs,
             )
         elif type == LiteLLMCacheType.QDRANT_SEMANTIC:
@@ -218,6 +227,8 @@ class Cache:
                 quantization_config=qdrant_quantization_config,
                 embedding_model=qdrant_semantic_cache_embedding_model,
                 vector_size=qdrant_semantic_cache_vector_size,
+                embedding_max_input_tokens=semantic_cache_embedding_max_input_tokens,
+                embedding_timeout=semantic_cache_embedding_timeout,
             )
         elif type == LiteLLMCacheType.LOCAL:
             self.cache = InMemoryCache()
@@ -496,7 +507,7 @@ class Cache:
 
     def _get_cache_logic(
         self,
-        cached_result: Any | None,
+        cached_result: object | None,
         max_age: float | None,
     ):
         """
@@ -528,8 +539,8 @@ class Cache:
         return cached_result
 
     @staticmethod
-    def _get_safe_cache_lookup_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
-        cache_lookup_kwargs: Final[dict[str, Any]] = {}
+    def _get_safe_cache_lookup_kwargs(kwargs: Mapping[str, object]) -> dict[str, object]:
+        cache_lookup_kwargs: Final[dict[str, object]] = {}
         for prompt_kwarg in ("messages", "input"):
             if prompt_kwarg in kwargs:
                 cache_lookup_kwargs[prompt_kwarg] = kwargs[prompt_kwarg]
@@ -542,7 +553,7 @@ class Cache:
 
     @staticmethod
     def _update_metadata_from_cache_lookup_kwargs(
-        original_kwargs: dict[str, Any], cache_lookup_kwargs: dict[str, Any]
+        original_kwargs: Mapping[str, object], cache_lookup_kwargs: Mapping[str, object]
     ) -> None:
         original_metadata: Final = original_kwargs.get("metadata")
         cache_lookup_metadata: Final = cache_lookup_kwargs.get("metadata")

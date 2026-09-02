@@ -1,5 +1,6 @@
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 
@@ -154,3 +155,75 @@ class BaseVectorStoreConfig:
         response: VectorStoreSearchResponse,
     ) -> tuple[float, float]:
         return 0.0, 0.0
+
+
+class BaseDirectVectorStoreConfig(BaseVectorStoreConfig):
+    """
+    Base config for vector store providers whose datastore has no HTTP API
+    (e.g. Valkey over RESP). Instead of transforming to an httpx request, the
+    config executes the search itself via (a)execute_search_vector_store_request.
+    """
+
+    @abstractmethod
+    def execute_search_vector_store_request(
+        self,
+        vector_store_id: str,
+        query: str | Sequence[str],
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
+    ) -> VectorStoreSearchResponse:
+        pass
+
+    @abstractmethod
+    async def aexecute_search_vector_store_request(
+        self,
+        vector_store_id: str,
+        query: str | Sequence[str],
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
+    ) -> VectorStoreSearchResponse:
+        pass
+
+    def transform_search_vector_store_request(
+        self,
+        vector_store_id: str,
+        query: str | Sequence[str],
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        api_base: str,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_params: Mapping[str, object],
+        extra_body: Mapping[str, object] | None = None,
+    ) -> NoReturn:
+        raise NotImplementedError("Direct vector store providers execute the search themselves; no HTTP request shape")
+
+    def transform_search_vector_store_response(
+        self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
+    ) -> NoReturn:
+        raise NotImplementedError("Direct vector store providers execute the search themselves; no HTTP response shape")
+
+    def transform_create_vector_store_request(
+        self,
+        vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
+        api_base: str,
+    ) -> NoReturn:
+        raise NotImplementedError
+
+    def transform_create_vector_store_response(self, response: httpx.Response) -> NoReturn:
+        raise NotImplementedError
+
+    def get_complete_url(
+        self,
+        api_base: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> str:
+        return api_base or ""
+
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
+        return BaseVectorStoreAuthCredentials()
+
+    def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
+        return VectorStoreIndexEndpoints(read=[], write=[])  # mutable-ok: the TypedDict declares list fields

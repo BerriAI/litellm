@@ -1,15 +1,13 @@
 import asyncio
-import os
-import sys
 from typing import Optional
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 import json
 
 import litellm
+from litellm.types.llms.openai import HttpxBinaryResponseContent
 
 
 def test_generic_event():
@@ -453,3 +451,106 @@ def test_openai_file_object_accepts_pending_status():
         status="pending",
     )
     assert file_obj.status == "pending"
+
+
+class TestOpenAIFileObjectBatchGuardrailSerialization:
+    """The proxy-only `litellm_batch_guardrail` key must reach the wire only when something set it."""
+
+    @staticmethod
+    def _file_object(**overrides):
+        from litellm.types.llms.openai import OpenAIFileObject
+
+        return OpenAIFileObject(
+            id="file-123",
+            object="file",
+            bytes=1024,
+            created_at=1677610602,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+            **overrides,
+        )
+
+    @staticmethod
+    def _report():
+        from litellm.types.llms.openai import BatchGuardrailRecord, BatchGuardrailReport
+
+        return BatchGuardrailReport(
+            submitted_records=3,
+            modified_records=(BatchGuardrailRecord(line=2, custom_id="dirty", action="redacted"),),
+        )
+
+    @pytest.mark.parametrize("mode", ["python", "json"])
+    def test_key_absent_when_unset(self, mode):
+        assert "litellm_batch_guardrail" not in self._file_object().model_dump(mode=mode)
+
+    @pytest.mark.parametrize("mode", ["python", "json"])
+    def test_key_present_when_set(self, mode):
+        dumped = self._file_object(litellm_batch_guardrail=self._report()).model_dump(mode=mode)
+        assert dumped["litellm_batch_guardrail"]["submitted_records"] == 3
+
+    def test_nested_nulls_of_a_set_report_survive(self):
+        """`exclude_none=True` was rejected as the fix because it would strip these."""
+        dumped = self._file_object(litellm_batch_guardrail=self._report()).model_dump(mode="json")
+        assert dumped["litellm_batch_guardrail"]["modified_records"] == [
+            {"line": 2, "custom_id": "dirty", "action": "redacted", "guardrail": None}
+        ]
+
+    def test_by_alias_dump_also_omits_the_key(self):
+        """Tripwire: the serializer filters a literal key name, which an added alias would bypass."""
+        assert "litellm_batch_guardrail" not in self._file_object().model_dump(mode="json", by_alias=True)
+
+    def test_other_optional_fields_still_serialize_as_null(self):
+        dumped = self._file_object().model_dump(mode="json")
+        assert dumped["expires_at"] is None
+        assert dumped["status_details"] is None
+
+    def test_round_trip_of_a_set_report_is_lossless(self):
+        from litellm.types.llms.openai import OpenAIFileObject
+
+        original = self._file_object(litellm_batch_guardrail=self._report())
+        assert OpenAIFileObject(**original.model_dump()) == original
+
+    def test_serialization_json_schema_still_describes_the_model(self):
+        """A return annotation on the wrap serializer would collapse this to a bare object."""
+        from litellm.types.llms.openai import OpenAIFileObject
+
+        schema = OpenAIFileObject.model_json_schema(mode="serialization")
+        assert "litellm_batch_guardrail" in schema["properties"]
+
+    def test_key_omitted_inside_a_file_list_page(self):
+        from litellm.types.llms.openai import FileListPage
+
+        page = FileListPage(object="list", data=[self._file_object()], has_more=False)
+        assert "litellm_batch_guardrail" not in page.model_dump(mode="json")["data"][0]
+
+
+def _binary_content(payload: bytes) -> HttpxBinaryResponseContent:
+    import httpx
+
+    return HttpxBinaryResponseContent(httpx.Response(200, content=payload))
+
+
+def test_httpx_binary_response_content_hidden_params_are_per_instance():
+    first = _binary_content(b"first")
+    second = _binary_content(b"second")
+
+    first._hidden_params["response_cost"] = 0.5
+
+    assert second._hidden_params == {}
+
+
+def test_set_response_cost_none_leaves_hidden_params_empty():
+    binary_response = _binary_content(b"audio")
+
+    binary_response.set_response_cost(None)
+
+    assert "response_cost" not in binary_response._hidden_params
+
+    binary_response.set_response_cost(0.25)
+
+    assert binary_response._hidden_params["response_cost"] == 0.25
+
+    binary_response.set_response_cost(None)
+
+    assert "response_cost" not in binary_response._hidden_params

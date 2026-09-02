@@ -14,13 +14,15 @@ import json
 import math
 import traceback
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Annotated, Final, Protocol, TypedDict, TypeVar, cast
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, NoReturn, Protocol, TypeVar, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, JsonValue
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -33,21 +35,17 @@ from litellm.proxy._types import (
     BudgetNewRequest,
     CommonProxyErrors,
     DeleteTeamRequest,
-    LiteLLM_AccessGroupTable,
     LiteLLM_AuditLogs,
-    LiteLLM_BudgetTableFull,
     LiteLLM_DeletedTeamTable,
     LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_ModelTable,
-    LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
     LiteLLM_OrganizationTableWithMembers,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
-    LiteLLM_VerificationToken,
     LitellmTableNames,
     LitellmUserRoles,
     Member,
@@ -56,6 +54,7 @@ from litellm.proxy._types import (
     PatchTeamRequest,
     ProxyErrorTypes,
     ProxyException,
+    ResetSpendRequest,
     SpecialManagementEndpointEnums,
     SpecialModelNames,
     SpecialProxyStrings,
@@ -84,12 +83,19 @@ from litellm.proxy.auth.auth_checks import (
     get_team_membership,
     get_team_object,
     get_user_object,
+    invalidate_team_member_spend_state,
 )
-from litellm.proxy.auth.auth_utils import enforce_output_token_estimates_are_admin_only
+from litellm.proxy.auth.auth_utils import (
+    enforce_batch_enqueued_token_limit_is_admin_only,
+    enforce_output_token_estimates_are_admin_only,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.management_endpoints.common_daily_activity import (
+    get_daily_activity_aggregated,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _check_passthrough_routes_caller_permission,
     _is_user_org_admin_for_team,
@@ -108,6 +114,7 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
 )
 from litellm.proxy.management_helpers.access_group_team_sync import (
+    TEAM_ADVISORY_LOCK_SQL,
     AccessGroupSyncTx,
     invalidate_access_group_caches,
     reconcile_team_access_group_membership,
@@ -126,12 +133,14 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
     validate_team_metadata_if_configured,
 )
 from litellm.proxy.management_helpers.utils import (
+    MemberWriteTx,
     add_new_member,
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
     AccessGroupRepository,
     DeletedTeamRepository,
@@ -163,6 +172,10 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     UpdateTeamMemberPermissionsRequest,
 )
 
+if TYPE_CHECKING:
+    from prisma import Prisma
+    from prisma import models as prisma_models
+
 router: Final = APIRouter()
 
 _DbRecordT = TypeVar("_DbRecordT")
@@ -177,95 +190,14 @@ class _TeamIdGroupRow(TypedDict):
     _count: _TeamIdKeyCount
 
 
-class _PrismaTableActions(Protocol[_DbRecordT]):
-    async def find_unique(
-        self,
-        where: Mapping[str, object],
-        include: Mapping[str, bool] | None = None,
-    ) -> _DbRecordT | None: ...
-
-    async def find_first(
-        self,
-        where: Mapping[str, object] | None = None,
-        order: Mapping[str, str] | None = None,
-    ) -> _DbRecordT | None: ...
-
-    async def find_many(
-        self,
-        where: Mapping[str, object] | None = None,
-        include: Mapping[str, bool] | None = None,
-        order: Mapping[str, str] | None = None,
-        skip: int | None = None,
-        take: int | None = None,
-        cursor: Mapping[str, object] | None = None,
-    ) -> list[_DbRecordT]: ...
-
-    async def create(
-        self,
-        data: Mapping[str, object],
-        include: Mapping[str, bool] | None = None,
-    ) -> _DbRecordT: ...
-
-    async def create_many(
-        self,
-        data: Sequence[Mapping[str, object]],
-        skip_duplicates: bool | None = None,
-    ) -> int: ...
-
-    async def update(
-        self,
-        where: Mapping[str, object],
-        data: Mapping[str, object],
-        include: Mapping[str, bool] | None = None,
-    ) -> _DbRecordT: ...
-
-    async def update_many(
-        self,
-        where: Mapping[str, object],
-        data: Mapping[str, object],
-    ) -> int: ...
-
-    async def upsert(
-        self,
-        where: Mapping[str, object],
-        data: Mapping[str, Mapping[str, object]],
-    ) -> _DbRecordT: ...
-
-    async def delete_many(
-        self,
-        where: Mapping[str, object] | None = None,
-    ) -> int: ...
-
-    async def count(
-        self,
-        where: Mapping[str, object] | None = None,
-    ) -> int: ...
-
-    async def group_by(
-        self,
-        by: Sequence[str],
-        where: Mapping[str, object] | None = None,
-        count: Mapping[str, bool] | None = None,
-    ) -> Sequence[_TeamIdGroupRow]: ...
-
-
-class _HasTableActions(Protocol[_DbRecordT]):
-    @property
-    def table(self) -> "_PrismaTableActions[_DbRecordT]": ...
-
-
-def _typed_table(
-    repo: "_HasTableActions[_DbRecordT]", record_type: type[_DbRecordT]
-) -> "_PrismaTableActions[_DbRecordT]":
-    return repo.table
-
-
 def _as_object(value: object) -> object:
     return value
 
 
-def _nullable(value: _DbRecordT | None) -> _DbRecordT | None:
-    return value
+def _as_list(rows: Sequence[_DbRecordT]) -> list[_DbRecordT]:  # mutable-ok: pydantic list[...] fields reject Sequence
+    return cast(  # cast-ok: prisma-client-py find_many returns a list; TableActions only widens it to Sequence
+        "list[_DbRecordT]", rows
+    )
 
 
 class _UserIdRow(Protocol):
@@ -273,33 +205,75 @@ class _UserIdRow(Protocol):
     def user_id(self) -> str | None: ...
 
 
-class _HasUserIdTable(Protocol):
-    @property
-    def table(self) -> "_PrismaTableActions[_UserIdRow]": ...
-
-
-def _user_id_rows_db(repo: "_HasUserIdTable") -> "_PrismaTableActions[_UserIdRow]":
+def _user_id_rows_db(repo: UserRepository) -> "TableActions[_UserIdRow]":
     return repo.table
 
 
-class _RawTeamRow(Protocol):
+class _ModelDumpRow(Protocol):
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+class _TeamIdRow(Protocol):
     @property
-    def members_with_roles(self) -> Sequence[Mapping[str, object]] | None: ...
+    def team_id(self) -> str: ...
 
 
-class _HasRawTeamTable(Protocol):
+class _CacheableTeamRow(_TeamIdRow, _ModelDumpRow, Protocol): ...
+
+
+class _ObjectPermissionRow(Protocol):
     @property
-    def table(self) -> "_PrismaTableActions[_RawTeamRow]": ...
+    def object_permission_id(self) -> str | None: ...
 
 
-def _raw_team_db(repo: "_HasRawTeamTable") -> "_PrismaTableActions[_RawTeamRow]":
-    return repo.table
+class _TeamAliasBudgetRow(Protocol):
+    @property
+    def team_alias(self) -> str | None: ...
+
+    @property
+    def budget_duration(self) -> str | None: ...
+
+
+class _TeamBudgetRow(_TeamAliasBudgetRow, Protocol):
+    metadata: Mapping[str, JsonValue] | None
+
+
+class _AuditableTeamRow(Protocol):
+    def json(self, *, exclude_none: bool = False) -> str: ...
+
+
+class _RawTeamRow(_TeamIdRow, _ModelDumpRow, _ObjectPermissionRow, _TeamBudgetRow, _AuditableTeamRow, Protocol):
+    @property
+    def members_with_roles(
+        self,
+    ) -> Sequence[dict[str, object]] | None: ...  # mutable-ok: prisma deserializes this JSON column into plain dicts
+
+    @property
+    def organization_id(self) -> str | None: ...
+
+    @property
+    def max_budget(self) -> float | None: ...
+
+    @property
+    def soft_budget(self) -> float | None: ...
+
+    @property
+    def model_id(self) -> int | None: ...
+
+
+def _raw_team_db(repo: TeamRepository) -> "TableActions[_RawTeamRow]":
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
+        "TableActions[_RawTeamRow]", repo.table
+    )
+
+
+class _BudgetIdRow(Protocol):
+    @property
+    def budget_id(self) -> str: ...
 
 
 class _BudgetWriteCall(Protocol):
-    async def __call__(
-        self, budget_obj: BudgetNewRequest, user_api_key_dict: UserAPIKeyAuth
-    ) -> LiteLLM_BudgetTableFull: ...
+    async def __call__(self, budget_obj: BudgetNewRequest, user_api_key_dict: UserAPIKeyAuth) -> _BudgetIdRow: ...
 
 
 def _as_budget_write(fn: "_BudgetWriteCall") -> "_BudgetWriteCall":
@@ -322,9 +296,42 @@ class _TeamIdInFilter(TypedDict, total=False):
     team_id: Mapping[str, Sequence[str]]
 
 
+class _DeletedTeamsResult(TypedDict):
+    deleted_teams: ReadOnly[Sequence[str]]
+
+
+class _ErrorDetail(TypedDict):
+    error: ReadOnly[str]
+
+
 class _TeamCreateTx(AccessGroupSyncTx, Protocol):
     @property
-    def litellm_teamtable(self) -> "_PrismaTableActions[LiteLLM_TeamTable]": ...
+    def litellm_teamtable(self) -> "TableActions[prisma_models.LiteLLM_TeamTable]": ...
+
+
+class _MemberDeleteTx(Protocol):
+    """The tables `/team/member_delete` reads while it holds the team's advisory lock.
+
+    Reading them off the transaction keeps the whole endpoint on the one pooled connection
+    it already checked out: a request that has the lock but still needs another connection
+    can be starved by the lock waiters, which is a deadlock rather than a wait when enough
+    of them hold the rest of the pool."""
+
+    @property
+    def litellm_usertable(self) -> "TableActions[prisma_models.LiteLLM_UserTable]": ...
+
+    @property
+    def litellm_verificationtoken(self) -> "TableActions[prisma_models.LiteLLM_VerificationToken]": ...
+
+
+class _TeamDeleteTx(AccessGroupSyncTx, Protocol):
+    async def execute_raw(self, query: str, *args: object) -> int: ...
+
+    @property
+    def litellm_teamtable(self) -> "TableActions[prisma_models.LiteLLM_TeamTable]": ...
+
+    @property
+    def litellm_teammembership(self) -> "TableActions[prisma_models.LiteLLM_TeamMembership]": ...
 
 
 _STRIP_DELETED_TEAM_FROM_USERS_SQL: Final = """
@@ -334,46 +341,52 @@ UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, $1) WHERE $1 = ANY(te
 _INCLUDE_MODEL_TABLE: Final = MappingProxyType({"litellm_model_table": True})
 
 
-def _team_db(prisma_client: PrismaClient | None) -> "_PrismaTableActions[LiteLLM_TeamTable]":
-    return _typed_table(TeamRepository(prisma_client), LiteLLM_TeamTable)
+def _team_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_TeamTable]":
+    return TeamRepository(prisma_client).table
 
 
-def _team_membership_db(prisma_client: PrismaClient | None) -> "_PrismaTableActions[LiteLLM_TeamMembership]":
-    return _typed_table(TeamMembershipRepository(prisma_client), LiteLLM_TeamMembership)
+def _team_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
+    return cast(  # cast-ok: generated actions type Json columns as str; TableActions widens inputs to Mapping
+        "TableActions[prisma_models.LiteLLM_TeamTable]", tx.litellm_teamtable
+    )
 
 
-def _user_db(prisma_client: PrismaClient | None) -> "_PrismaTableActions[LiteLLM_UserTable]":
-    return _typed_table(UserRepository(prisma_client), LiteLLM_UserTable)
+def _team_membership_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_TeamMembership]":
+    return TeamMembershipRepository(prisma_client).table
 
 
-def _model_db(prisma_client: PrismaClient | None) -> "_PrismaTableActions[LiteLLM_ModelTable]":
-    return _typed_table(ModelTableRepository(prisma_client), LiteLLM_ModelTable)
+def _user_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_UserTable]":
+    return UserRepository(prisma_client).table
 
 
-def _org_db(prisma_client: PrismaClient | None) -> "_PrismaTableActions[LiteLLM_OrganizationTable]":
-    return _typed_table(OrganizationRepository(prisma_client), LiteLLM_OrganizationTable)
+def _model_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_ModelTable]":
+    return ModelTableRepository(prisma_client).table
+
+
+def _org_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_OrganizationTable]":
+    return OrganizationRepository(prisma_client).table
 
 
 def _org_membership_db(
     prisma_client: PrismaClient | None,
-) -> "_PrismaTableActions[LiteLLM_OrganizationMembershipTable]":
-    return _typed_table(OrganizationMembershipRepository(prisma_client), LiteLLM_OrganizationMembershipTable)
+) -> "TableActions[prisma_models.LiteLLM_OrganizationMembership]":
+    return OrganizationMembershipRepository(prisma_client).table
 
 
-def _budget_db(prisma_client: PrismaClient | None) -> "_PrismaTableActions[LiteLLM_BudgetTableFull]":
-    return _typed_table(BudgetRepository(prisma_client), LiteLLM_BudgetTableFull)
+def _budget_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_BudgetTable]":
+    return BudgetRepository(prisma_client).table
 
 
-def _deleted_team_db(prisma_client: PrismaClient | None) -> "_PrismaTableActions[LiteLLM_DeletedTeamTable]":
-    return _typed_table(DeletedTeamRepository(prisma_client), LiteLLM_DeletedTeamTable)
+def _deleted_team_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_DeletedTeamTable]":
+    return DeletedTeamRepository(prisma_client).table
 
 
-def _access_group_db(prisma_client: PrismaClient | None) -> "_PrismaTableActions[LiteLLM_AccessGroupTable]":
-    return _typed_table(AccessGroupRepository(prisma_client), LiteLLM_AccessGroupTable)
+def _access_group_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_AccessGroupTable]":
+    return AccessGroupRepository(prisma_client).table
 
 
-def _tokens_db(prisma_client: PrismaClient | None) -> "_PrismaTableActions[LiteLLM_VerificationToken]":
-    return _typed_table(VerificationTokenRepository(prisma_client), LiteLLM_VerificationToken)
+def _tokens_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_VerificationToken]":
+    return VerificationTokenRepository(prisma_client).table
 
 
 def _sanitize_for_log(value: object) -> str:
@@ -386,7 +399,7 @@ def _sanitize_for_log(value: object) -> str:
 
 
 async def _refresh_cached_team(
-    team_row: LiteLLM_TeamTable,
+    team_row: _CacheableTeamRow,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> None:
@@ -475,15 +488,20 @@ class TeamMemberBudgetHandler:
 
     @staticmethod
     async def create_team_member_budget_table(
-        data: NewTeamRequest | LiteLLM_TeamTable,
+        data: NewTeamRequest | _TeamAliasBudgetRow,
         new_team_data_json: dict,
         user_api_key_dict: UserAPIKeyAuth,
         team_member_budget: float | None = None,
         team_member_rpm_limit: int | None = None,
         team_member_tpm_limit: int | None = None,
         team_member_budget_duration: str | None = None,
+        explicitly_set_fields: AbstractSet[str] = frozenset(),
     ) -> dict:
-        """Create team member budget table with provided limits"""
+        """Create team member budget table with provided limits.
+
+        The team's own reset period is only inherited when the caller left the
+        member duration out, so an explicit null means "never resets".
+        """
         from litellm.proxy._types import BudgetNewRequest
         from litellm.proxy.management_endpoints.budget_management_endpoints import (
             new_budget,
@@ -497,7 +515,11 @@ class TeamMemberBudgetHandler:
         # Create budget request with all provided limits
         budget_request: Final = BudgetNewRequest(
             budget_id=budget_id,
-            budget_duration=data.budget_duration or team_member_budget_duration,
+            budget_duration=(
+                team_member_budget_duration
+                if "team_member_budget_duration" in explicitly_set_fields
+                else data.budget_duration or team_member_budget_duration
+            ),
         )
 
         if team_member_budget is not None:
@@ -526,15 +548,20 @@ class TeamMemberBudgetHandler:
 
     @staticmethod
     async def upsert_team_member_budget_table(
-        team_table: LiteLLM_TeamTable,
+        team_table: _TeamBudgetRow,
         user_api_key_dict: UserAPIKeyAuth,
         updated_kv: dict,
         team_member_budget: float | None = None,
         team_member_rpm_limit: int | None = None,
         team_member_tpm_limit: int | None = None,
         team_member_budget_duration: str | None = None,
+        explicitly_set_fields: AbstractSet[str] = frozenset(),
     ) -> dict:
-        """Upsert team member budget table with provided limits"""
+        """Upsert team member budget table with provided limits.
+
+        A field the caller explicitly sent as null is written as null, so a
+        team can keep a member budget while dropping its reset period.
+        """
         from litellm.proxy._types import BudgetNewRequest
         from litellm.proxy.management_endpoints.budget_management_endpoints import (
             update_budget,
@@ -548,14 +575,16 @@ class TeamMemberBudgetHandler:
             # Budget exists - create update request with only provided values
             budget_request: Final = BudgetNewRequest(budget_id=team_member_budget_id)
 
-            if team_member_budget is not None:
+            if team_member_budget is not None or "team_member_budget" in explicitly_set_fields:
                 budget_request.max_budget = team_member_budget
-            if team_member_rpm_limit is not None:
+            if team_member_rpm_limit is not None or "team_member_rpm_limit" in explicitly_set_fields:
                 budget_request.rpm_limit = team_member_rpm_limit
-            if team_member_tpm_limit is not None:
+            if team_member_tpm_limit is not None or "team_member_tpm_limit" in explicitly_set_fields:
                 budget_request.tpm_limit = team_member_tpm_limit
-            if team_member_budget_duration is not None:
+            if team_member_budget_duration is not None or "team_member_budget_duration" in explicitly_set_fields:
                 budget_request.budget_duration = team_member_budget_duration
+                if team_member_budget_duration is None:
+                    budget_request.budget_reset_at = None
 
             budget_row: Final = await _as_budget_write(update_budget)(
                 budget_obj=budget_request,
@@ -581,6 +610,7 @@ class TeamMemberBudgetHandler:
                 team_member_rpm_limit=team_member_rpm_limit,
                 team_member_tpm_limit=team_member_tpm_limit,
                 team_member_budget_duration=team_member_budget_duration,
+                explicitly_set_fields=explicitly_set_fields,
             )
 
         # Remove team member fields from updated_kv
@@ -597,7 +627,7 @@ class TeamMemberBudgetHandler:
 
     @staticmethod
     async def clear_team_member_budget_fields(
-        team_table: LiteLLM_TeamTable,
+        team_table: _TeamBudgetRow,
         user_api_key_dict: "UserAPIKeyAuth",
         updated_kv: dict,
         explicitly_set_fields: set,
@@ -1246,6 +1276,7 @@ async def new_team(
     try:
         from litellm.proxy.management_helpers.audit_logs import (
             get_audit_log_changed_by,
+            is_audit_logging_enabled,
         )
         from litellm.proxy.proxy_server import (
             _license_check,
@@ -1295,6 +1326,12 @@ async def new_team(
                     )
 
         enforce_output_token_estimates_are_admin_only(
+            data=data,
+            existing_metadata=None,
+            user_api_key_dict=user_api_key_dict,
+            entity="team",
+        )
+        enforce_batch_enqueued_token_limit_is_admin_only(
             data=data,
             existing_metadata=None,
             user_api_key_dict=user_api_key_dict,
@@ -1460,6 +1497,7 @@ async def new_team(
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
                 team_member_budget_duration=data.team_member_budget_duration,
+                explicitly_set_fields=data.model_fields_set,
             )
 
         ## ADD TO TEAM TABLE
@@ -1527,7 +1565,7 @@ async def new_team(
 
         tx: _TeamCreateTx
         async with prisma_client.db.tx() as tx:
-            team_row: Final[LiteLLM_TeamTable] = await tx.litellm_teamtable.create(
+            team_row: Final[prisma_models.LiteLLM_TeamTable] = await tx.litellm_teamtable.create(
                 data=team_creation_data,
                 include=_INCLUDE_MODEL_TABLE,
             )
@@ -1548,8 +1586,7 @@ async def new_team(
             litellm_proxy_admin_name=litellm_proxy_admin_name,
         )
 
-        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-        if litellm.store_audit_logs is True:
+        if is_audit_logging_enabled():
             _updated_values = complete_team_data.json(exclude_none=True)
 
             _updated_values = json.dumps(_updated_values, default=str)
@@ -1583,7 +1620,7 @@ async def new_team(
 
 
 async def _create_team_update_audit_log(
-    existing_team_row: LiteLLM_TeamTable,
+    existing_team_row: _AuditableTeamRow,
     updated_kv: dict,
     team_id: str,
     litellm_changed_by: str | None,
@@ -1706,11 +1743,11 @@ async def _auto_add_team_members_to_organization(
 
 async def fetch_and_validate_organization(
     organization_id: str,
-    existing_team_row: LiteLLM_TeamTable,
+    existing_team_row: _ModelDumpRow,
     llm_router: Router | None,
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth | None = None,
-) -> LiteLLM_OrganizationTable:
+) -> "prisma_models.LiteLLM_OrganizationTable":
     """
     Fetch and validate an organization for team update operations.
 
@@ -1941,6 +1978,7 @@ async def update_team(
     ```
     """
     try:
+        from litellm.proxy.management_helpers.audit_logs import is_audit_logging_enabled
         from litellm.proxy.proxy_server import (
             litellm_proxy_admin_name,
             llm_router,
@@ -1983,7 +2021,9 @@ async def update_team(
         validate_budget_duration(data.budget_duration)
         validate_budget_duration(data.team_member_budget_duration)
 
-        existing_team_row = await _team_db(prisma_client).find_unique(where={"team_id": data.team_id})
+        existing_team_row = await _raw_team_db(TeamRepository(prisma_client)).find_unique(
+            where={"team_id": data.team_id}
+        )
 
         if existing_team_row is None:
             raise HTTPException(
@@ -1999,6 +2039,12 @@ async def update_team(
 
         _existing_team_metadata: Final[object] = getattr(existing_team_row, "metadata", None)
         enforce_output_token_estimates_are_admin_only(
+            data=data,
+            existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
+            user_api_key_dict=user_api_key_dict,
+            entity="team",
+        )
+        enforce_batch_enqueued_token_limit_is_admin_only(
             data=data,
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
             user_api_key_dict=user_api_key_dict,
@@ -2157,6 +2203,7 @@ async def update_team(
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
                 team_member_budget_duration=data.team_member_budget_duration,
+                explicitly_set_fields=_team_member_fields_in_request,
             )
             # Backfill team_memberships for members who joined before the
             # budget was configured — they won't have a membership row yet.
@@ -2215,18 +2262,16 @@ async def update_team(
 
         updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
         team_update_data: Final[Mapping[str, object]] = updated_kv
-        team_row: Final[LiteLLM_TeamTable | None] = _nullable(
-            await _team_db(prisma_client).update(
-                where={"team_id": data.team_id},
-                data=team_update_data,
-                # `object_permission` is included so `_refresh_cached_team`
-                # doesn't write a cached team with the relation nulled out —
-                # see team_model_add for the full rationale.
-                include={
-                    "litellm_model_table": True,
-                    "object_permission": True,
-                },
-            )
+        team_row: Final = await _team_db(prisma_client).update(
+            where={"team_id": data.team_id},
+            data=team_update_data,
+            # `object_permission` is included so `_refresh_cached_team`
+            # doesn't write a cached team with the relation nulled out.
+            # See team_model_add for the full rationale.
+            include={
+                "litellm_model_table": True,
+                "object_permission": True,
+            },
         )
 
         if team_row is None or team_row.team_id is None:
@@ -2243,8 +2288,7 @@ async def update_team(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-        # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
-        if litellm.store_audit_logs is True:
+        if is_audit_logging_enabled():
             await _create_team_update_audit_log(
                 existing_team_row=existing_team_row,
                 updated_kv=updated_kv,
@@ -2357,7 +2401,7 @@ def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
         updated_kv["budget_limits"] = json.dumps(initialized_windows)
 
 
-async def handle_update_object_permission(data_json: dict, existing_team_row: LiteLLM_TeamTable) -> dict:
+async def handle_update_object_permission(data_json: dict, existing_team_row: _ObjectPermissionRow) -> dict:
     """
     Handle the update of object permission for a team.
 
@@ -2560,8 +2604,13 @@ async def _process_team_members(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
+    tx: MemberWriteTx | None = None,
 ) -> tuple[list[LiteLLM_UserTable], list[LiteLLM_TeamMembership]]:
-    """Process and add new team members."""
+    """Process and add new team members.
+
+    ``tx`` is the caller's open transaction, when it has one, so the member writes run on the
+    connection it already holds instead of checking out a second one.
+    """
     updated_users: Final[list[LiteLLM_UserTable]] = []
     updated_team_memberships: Final[list[LiteLLM_TeamMembership]] = []
 
@@ -2587,6 +2636,7 @@ async def _process_team_members(
                 default_team_budget_id=default_team_budget_id,
                 allowed_models=member_allowed_models,
                 budget_duration=data.budget_duration,
+                tx=tx,
             )
         except Exception as e:
             raise HTTPException(
@@ -2609,6 +2659,7 @@ async def _process_team_members(
                     default_team_budget_id=default_team_budget_id,
                     allowed_models=member_allowed_models,
                     budget_duration=data.budget_duration,
+                    tx=tx,
                 )
             except Exception as e:
                 raise HTTPException(
@@ -2622,51 +2673,63 @@ async def _process_team_members(
     return updated_users, updated_team_memberships
 
 
+def _resolve_member_identity(member: Member, updated_users: Sequence[LiteLLM_UserTable]) -> Member:
+    """Return ``member`` with whichever of ``user_id`` / ``user_email`` the caller left out filled in.
+
+    The roster entry is a snapshot, so whatever is missing here is missing for good.
+    Resolution runs both ways off the user rows the add just touched: added by email
+    -> stamp the user_id, added by user_id -> stamp the email. A value the caller
+    supplied is never overwritten.
+    """
+    resolved_user_id: Final = member.user_id or next(
+        (
+            user.user_id
+            for user in updated_users
+            if member.user_email is not None and user.user_email == member.user_email
+        ),
+        None,
+    )
+    resolved_user_email: Final = member.user_email or next(
+        (
+            user.user_email
+            for user in updated_users
+            if resolved_user_id is not None and user.user_id == resolved_user_id and user.user_email is not None
+        ),
+        None,
+    )
+    return member.model_copy(
+        update={  # mutable-ok: pydantic update payload
+            "user_id": resolved_user_id,
+            "user_email": resolved_user_email,
+        }
+    )
+
+
+def _member_already_in_team(member: Member, complete_team_data: LiteLLM_TeamTable) -> bool:
+    return any(
+        (member.user_id is not None and existing_member.user_id == member.user_id)
+        or (member.user_email is not None and existing_member.user_email == member.user_email)
+        for existing_member in complete_team_data.members_with_roles
+    )
+
+
 async def _update_team_members_list(
     data: TeamMemberAddRequest,
     complete_team_data: LiteLLM_TeamTable,
     updated_users: list[LiteLLM_UserTable],
 ) -> None:
     """Update the team's members_with_roles list."""
-    if isinstance(data.member, Member):
-        new_member: Final = data.member.model_copy()
+    requested_members: Final[Sequence[Member]] = (
+        (data.member,) if isinstance(data.member, Member) else tuple(data.member)
+    )
+    resolved_members: Final = tuple(_resolve_member_identity(m, updated_users) for m in requested_members)
 
-        # get user id
-        if new_member.user_id is None and new_member.user_email is not None:
-            for user in updated_users:
-                if user.user_email is not None and user.user_email == new_member.user_email:
-                    new_member.user_id = user.user_id
-
-        # Check if member already exists in team before adding
-        member_already_exists = False
-        for existing_member in complete_team_data.members_with_roles:
-            if (new_member.user_id is not None and existing_member.user_id == new_member.user_id) or (
-                new_member.user_email is not None and existing_member.user_email == new_member.user_email
-            ):
-                member_already_exists = True
-                break
-
-        if not member_already_exists:
-            complete_team_data.members_with_roles.append(new_member)
-
-    elif isinstance(data.member, list):
-        for nm in data.member:
-            if nm.user_id is None and nm.user_email is not None:
-                for user in updated_users:
-                    if user.user_email is not None and user.user_email == nm.user_email:
-                        nm.user_id = user.user_id
-
-            # Check if member already exists in team before adding
-            member_already_exists = False
-            for existing_member in complete_team_data.members_with_roles:
-                if (nm.user_id is not None and existing_member.user_id == nm.user_id) or (
-                    nm.user_email is not None and existing_member.user_email == nm.user_email
-                ):
-                    member_already_exists = True
-                    break
-
-            if not member_already_exists:
-                complete_team_data.members_with_roles.append(nm)
+    # extend() consumes the generator as it appends, so a member already added by this
+    # same call is seen by the next _member_already_in_team check - the batch dedupes
+    # against itself exactly as the append-one-at-a-time loop this replaced did.
+    complete_team_data.members_with_roles.extend(  # rebind-ok: this helper's contract is to grow the caller's roster in place
+        m for m in resolved_members if not _member_already_in_team(m, complete_team_data)
+    )
 
 
 async def _add_team_members_to_team(
@@ -2675,65 +2738,38 @@ async def _add_team_members_to_team(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
-) -> tuple[LiteLLM_TeamTable, list[LiteLLM_UserTable], list[LiteLLM_TeamMembership]]:
-    """Add team members to the team.
+) -> tuple["prisma_models.LiteLLM_TeamTable", list[LiteLLM_UserTable], list[LiteLLM_TeamMembership]]:
+    """Add team members to the team, under the team's advisory lock.
 
-    The members_with_roles reconciliation runs inside a transaction that locks
-    the team row with ``SELECT ... FOR UPDATE`` before reading the current
-    membership. Concurrent /team/member_add calls for the same team therefore
-    serialize on the row lock and each appends onto the other's committed
-    result, instead of both rewriting the whole JSON array from a stale
-    snapshot (which silently drops one member on the losing write).
+    The lock (``TEAM_ADVISORY_LOCK_SQL``, keyed on the team id) is taken first, and the
+    team is re-read under it before any write, so a delete that already committed is
+    visible here before this call writes anything: the user and membership writes only
+    happen once the re-read proves the team is still live. /team/delete takes the same
+    lock around its own sweep-and-delete, so the two can never interleave; whichever
+    acquires the lock first runs to completion before the other's re-read can proceed.
 
-    The same lock serializes this against /team/delete: the delete cannot remove
-    the row while the reconcile holds it, and a reconcile that finds the row
-    already gone cleans up after itself rather than leaving the member pointing
-    at a deleted team id.
+    The user and membership writes run on this transaction too, not on a second
+    connection from the pool: a lock waiter that needs a connection it hasn't got yet is
+    a waiter that can deadlock the pool, since enough concurrent adds for one team would
+    hold every connection waiting on the lock while the holder waits for a free one.
     """
-    # Process and add new members
-    updated_users, updated_team_memberships = await _process_team_members(
-        data=data,
-        complete_team_data=complete_team_data,
-        prisma_client=prisma_client,
-        user_api_key_dict=user_api_key_dict,
-        litellm_proxy_admin_name=litellm_proxy_admin_name,
-    )
-
-    updated_team: Final = await _write_members_with_roles_locked(
-        data=data,
-        complete_team_data=complete_team_data,
-        prisma_client=prisma_client,
-        updated_users=updated_users,
-    )
-    if updated_team is None:
-        await _sweep_deleted_team_references(team_ids=(data.team_id,), prisma_client=prisma_client)
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Team={data.team_id} was deleted while this member add was running"},
-        )
-
-    return updated_team, updated_users, updated_team_memberships
-
-
-async def _write_members_with_roles_locked(
-    data: TeamMemberAddRequest,
-    complete_team_data: LiteLLM_TeamTable,
-    prisma_client: PrismaClient,
-    updated_users: list[LiteLLM_UserTable],
-) -> LiteLLM_TeamTable | None:
-    """Reconcile members_with_roles under the team row lock. None when the team row is gone.
-
-    That read is at least as recent as the user and membership writes the caller
-    already made, so a missing row means /team/delete committed after them. Its
-    post-delete sweep can have run before those writes landed, which is why the
-    caller sweeps this team id again rather than only reporting the 404.
-    """
+    gone_detail: Final[_ErrorDetail] = {"error": f"Team={data.team_id} was deleted while this member add was running"}
     async with prisma_client.tx() as tx:
+        await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, data.team_id)
+
         locked_members: Final = await TeamRepository(prisma_client).get_members_with_roles_locked(tx, data.team_id)
         if locked_members is None:
-            return None
-
+            raise HTTPException(status_code=404, detail=gone_detail)
         complete_team_data.members_with_roles = locked_members
+
+        updated_users, updated_team_memberships = await _process_team_members(
+            data=data,
+            complete_team_data=complete_team_data,
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+            tx=tx,
+        )
 
         await _update_team_members_list(
             data=data,
@@ -2742,10 +2778,14 @@ async def _write_members_with_roles_locked(
         )
 
         _db_team_members: Final = [m.model_dump() for m in complete_team_data.members_with_roles]
-        return await tx.litellm_teamtable.update(
+        updated_team: Final = await _team_tx_db(tx).update(
             where={"team_id": data.team_id},
             data={"members_with_roles": json.dumps(_db_team_members)},
         )
+        if updated_team is None:
+            raise HTTPException(status_code=404, detail=gone_detail)
+
+    return updated_team, updated_users, updated_team_memberships
 
 
 def _emit_team_members_metric(team: LiteLLM_TeamTable) -> None:
@@ -3127,10 +3167,6 @@ async def team_member_add(
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
-    # Check if updated_team is None
-    if updated_team is None:
-        raise HTTPException(status_code=404, detail={"error": f"Team with id {data.team_id} not found"})
-
     _emit_team_members_metric(complete_team_data)
 
     await _create_team_member_add_audit_logs(
@@ -3244,81 +3280,98 @@ async def team_member_delete(
         )
 
     ## DELETE MEMBER FROM TEAM
-    removed_team_members, new_team_members = _cleanup_members_with_roles(
-        existing_team_row=existing_team_row,
-        data=data,
-    )
+    # Everything from here on runs under the team's advisory lock, the same one
+    # /team/member_add and /team/delete take: without it, this endpoint's own row-level
+    # update lock used to be the only thing serializing it against a concurrent member_add,
+    # and only by accident (their SELECT ... FOR UPDATE contended for the same row lock this
+    # UPDATE takes). Now that member_add reads under the advisory lock instead, this has to
+    # take it too, and re-read the roster under it rather than off the snapshot validated
+    # above, or a member_add that commits in between can have its addition silently
+    # overwritten by this delete computing from stale data.
+    async with prisma_client.tx() as tx:
+        await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, data.team_id)
 
-    if not removed_team_members:
-        raise HTTPException(status_code=400, detail={"error": "User not found in team"})
+        fresh_members: Final = await TeamRepository(prisma_client).get_members_with_roles_locked(tx, data.team_id)
+        if fresh_members is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"Team id={data.team_id} does not exist in db"},
+            )
 
-    existing_team_row.members_with_roles = new_team_members
+        removed_team_members, new_team_members = _cleanup_members_with_roles(
+            existing_team_row=LiteLLM_TeamTable(team_id=data.team_id, members_with_roles=fresh_members),
+            data=data,
+        )
 
-    _db_new_team_members: Final[list[dict]] = [m.model_dump() for m in new_team_members]
+        if not removed_team_members:
+            raise HTTPException(status_code=400, detail={"error": "User not found in team"})
 
-    _ = await _team_db(prisma_client).update(
-        where={
-            "team_id": data.team_id,
-        },
-        data={"members_with_roles": json.dumps(_db_new_team_members)},
-    )
+        existing_team_row.members_with_roles = new_team_members
+
+        _db_new_team_members: Final[list[dict]] = [m.model_dump() for m in new_team_members]
+
+        ## DELETE TEAM ID from USER ROW, IF EXISTS ##
+        # get user row
+        removed_user_ids: Final = frozenset(m.user_id for m in removed_team_members if m.user_id is not None)
+        key_val: Final[Mapping[str, object]] = (
+            {"user_id": {"in": sorted(removed_user_ids)}} if removed_user_ids else {"user_email": data.user_email}
+        )
+        member_tx: Final[_MemberDeleteTx] = tx
+        existing_user_rows: Final = await member_tx.litellm_usertable.find_many(where=key_val)
+
+        # Also clean up any existing team membership rows for this user and team
+        user_ids_to_delete: Final = removed_user_ids.union(
+            (data.user_id,) if data.user_id is not None else (),
+            (user.user_id for user in existing_user_rows if user.user_id),
+        )
+
+        ## DELETE KEYS CREATED BY USER FOR THIS TEAM
+        # Fetch keys before deletion so their audit records can be persisted alongside the delete.
+        # An empty user_ids_to_delete still resolves cleanly: prisma's "in": [] matches no rows.
+        keys_to_delete: Final = await member_tx.litellm_verificationtoken.find_many(
+            where={
+                "user_id": {"in": sorted(user_ids_to_delete)},
+                "team_id": data.team_id,
+            }
+        )
+
+        await _team_tx_db(tx).update(
+            where={"team_id": data.team_id},
+            data={"members_with_roles": json.dumps(_db_new_team_members)},
+        )
+
+        for existing_user in existing_user_rows:
+            if data.team_id in existing_user.teams:
+                await tx.litellm_usertable.update(
+                    where={"user_id": existing_user.user_id},
+                    data={"teams": {"set": [team for team in existing_user.teams if team != data.team_id]}},
+                )
+
+        for _uid in sorted(user_ids_to_delete):
+            await tx.litellm_teammembership.delete_many(where={"team_id": data.team_id, "user_id": _uid})
+
+        if user_ids_to_delete:
+            if keys_to_delete:
+                from litellm.proxy.management_endpoints.key_management_endpoints import (
+                    _persist_deleted_verification_tokens,
+                )
+
+                await _persist_deleted_verification_tokens(
+                    keys=keys_to_delete,
+                    prisma_client=prisma_client,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_changed_by=None,
+                    tx=tx,
+                )
+
+            await tx.litellm_verificationtoken.delete_many(
+                where={
+                    "user_id": {"in": sorted(user_ids_to_delete)},
+                    "team_id": data.team_id,
+                }
+            )
 
     _emit_team_members_metric(existing_team_row)
-
-    ## DELETE TEAM ID from USER ROW, IF EXISTS ##
-    # get user row
-    removed_user_ids: Final = frozenset(m.user_id for m in removed_team_members if m.user_id is not None)
-    key_val: Final[Mapping[str, object]] = (
-        {"user_id": {"in": sorted(removed_user_ids)}} if removed_user_ids else {"user_email": data.user_email}
-    )
-    existing_user_rows: Final[Sequence[LiteLLM_UserTable]] = await _user_db(prisma_client).find_many(where=key_val)
-
-    for existing_user in existing_user_rows:
-        if data.team_id in existing_user.teams:
-            await _user_db(prisma_client).update(
-                where={
-                    "user_id": existing_user.user_id,
-                },
-                data={"teams": {"set": [team for team in existing_user.teams if team != data.team_id]}},
-            )
-
-    # Also clean up any existing team membership rows for this user and team
-    user_ids_to_delete: Final = removed_user_ids.union(
-        (data.user_id,) if data.user_id is not None else (),
-        (user.user_id for user in existing_user_rows if user.user_id),
-    )
-
-    for _uid in sorted(user_ids_to_delete):
-        await _team_membership_db(prisma_client).delete_many(where={"team_id": data.team_id, "user_id": _uid})
-
-    ## DELETE KEYS CREATED BY USER FOR THIS TEAM
-    if user_ids_to_delete:
-        from litellm.proxy.management_endpoints.key_management_endpoints import (
-            _persist_deleted_verification_tokens,
-        )
-
-        # Fetch keys before deletion to persist them
-        keys_to_delete: Final[list[LiteLLM_VerificationToken]] = await _tokens_db(prisma_client).find_many(
-            where={
-                "user_id": {"in": sorted(user_ids_to_delete)},
-                "team_id": data.team_id,
-            }
-        )
-
-        if keys_to_delete:
-            await _persist_deleted_verification_tokens(
-                keys=keys_to_delete,
-                prisma_client=prisma_client,
-                user_api_key_dict=user_api_key_dict,
-                litellm_changed_by=None,
-            )
-
-        await _tokens_db(prisma_client).delete_many(
-            where={
-                "user_id": {"in": sorted(user_ids_to_delete)},
-                "team_id": data.team_id,
-            }
-        )
 
     return existing_team_row
 
@@ -3361,7 +3414,7 @@ async def team_member_update(
 
     Update team member budgets and team member role
     """
-    from litellm.proxy.proxy_server import premium_user, prisma_client
+    from litellm.proxy.proxy_server import premium_user, prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -3460,6 +3513,12 @@ async def team_member_update(
             budget_patch=budget_patch,
             team_default_budget_id=team_default_budget_id,
         )
+    if budget_patch:
+        await invalidate_team_member_spend_state(
+            user_id=received_user_id,
+            team_id=data.team_id,
+            user_api_key_cache=user_api_key_cache,
+        )
 
     ### update team member role
     if data.role is not None:
@@ -3494,6 +3553,125 @@ async def team_member_update(
         budget_duration=data.budget_duration,
         allowed_models=data.allowed_models,
     )
+
+
+def _check_not_resetting_own_spend(user_id: str, user_api_key_dict: UserAPIKeyAuth) -> None:
+    """
+    _verify_team_access authorizes a team admin (or org admin) over their own
+    team, with no check that the target user_id differs from the caller. Left
+    unchecked, that admin could target their own LiteLLM_TeamMembership row and
+    repeatedly reset it to 0 right before it crosses their per-member cap,
+    consuming the shared team budget without the configured limit ever binding.
+    Only a proxy admin may reset an admin's own spend.
+    """
+    if user_id == user_api_key_dict.user_id and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        _raise_reset_spend_error(status.HTTP_403_FORBIDDEN, "Cannot reset your own spend. Ask a proxy admin.")
+
+
+def _raise_reset_spend_error(status_code: int, message: str) -> NoReturn:
+    detail: Final = {"error": message}  # mutable-ok: HTTPException.detail takes a dict
+    raise HTTPException(status_code=status_code, detail=detail)
+
+
+def _validate_team_member_reset_spend_value(
+    reset_to: object,
+    membership: LiteLLM_TeamMembership,
+) -> float:
+    if not isinstance(reset_to, (int, float)):
+        _raise_reset_spend_error(status.HTTP_400_BAD_REQUEST, "reset_to must be a float")
+
+    reset_to_float: Final = float(reset_to)
+    if not math.isfinite(reset_to_float) or reset_to_float < 0:
+        _raise_reset_spend_error(status.HTTP_400_BAD_REQUEST, "reset_to must be a finite number >= 0")
+
+    current_spend: Final = membership.spend or 0.0
+    if reset_to_float > current_spend:
+        _raise_reset_spend_error(
+            status.HTTP_400_BAD_REQUEST,
+            f"reset_to ({reset_to_float}) must be <= current spend ({current_spend})",
+        )
+
+    max_budget: Final = membership.litellm_budget_table.max_budget if membership.litellm_budget_table else None
+    if max_budget is not None and reset_to_float > max_budget:
+        _raise_reset_spend_error(
+            status.HTTP_400_BAD_REQUEST,
+            f"reset_to ({reset_to_float}) must be <= budget ({max_budget})",
+        )
+
+    return reset_to_float
+
+
+@router.post(
+    "/team/{team_id}/member/{user_id}/reset_spend",
+    tags=["team management"],  # mutable-ok: FastAPI's `tags` param is typed as list[str], not Sequence
+    dependencies=(Depends(user_api_key_auth),),
+)
+@management_endpoint_wrapper
+async def reset_team_member_spend_fn(
+    team_id: str,
+    user_id: str,
+    data: ResetSpendRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    Reset a team member's tracked spend against their per-member budget.
+
+    A member's spend is tracked separately from both their own personal
+    budget and the team's own budget (LiteLLM_TeamMembership.spend), so
+    neither /user/update nor /team/update can clear it: this is the only
+    endpoint that does. The cross-pod spend counter and cached membership
+    reads are invalidated so the reset takes effect on the member's next
+    request rather than waiting on the membership cache's TTL.
+    """
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    if prisma_client is None:
+        _raise_reset_spend_error(status.HTTP_500_INTERNAL_SERVER_ERROR, "DB not connected. prisma_client is None")
+
+    team_obj: Final = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+        check_db_only=True,
+    )
+    await _verify_team_access(team_obj=team_obj, user_api_key_dict=user_api_key_dict)
+    _check_not_resetting_own_spend(user_id=user_id, user_api_key_dict=user_api_key_dict)
+
+    membership_where: Final = {  # mutable-ok: prisma client requires a plain dict where= argument
+        "user_id_team_id": {"user_id": user_id, "team_id": team_id}  # mutable-ok: same prisma where= argument
+    }
+    _membership_row: Final = await _team_membership_db(prisma_client).find_unique(
+        where=membership_where,
+        include={"litellm_budget_table": True},  # mutable-ok: prisma client requires a plain dict include= argument
+    )
+    if _membership_row is None:
+        _raise_reset_spend_error(status.HTTP_404_NOT_FOUND, f"User {user_id} is not a member of team {team_id}.")
+    membership: Final = LiteLLM_TeamMembership.model_validate(_membership_row.model_dump())
+
+    current_spend: Final = membership.spend or 0.0
+    reset_to: Final = _validate_team_member_reset_spend_value(data.reset_to, membership)
+
+    await _team_membership_db(prisma_client).update(
+        where=membership_where,
+        data={"spend": reset_to},  # mutable-ok: prisma client requires a plain dict data= argument
+    )
+
+    await invalidate_team_member_spend_state(
+        user_id=user_id,
+        team_id=team_id,
+        user_api_key_cache=user_api_key_cache,
+        new_spend=reset_to,
+    )
+
+    return {  # mutable-ok: matches this router's established untyped-response-dict convention
+        "team_id": team_id,
+        "user_id": user_id,
+        "spend": reset_to,
+        "previous_spend": current_spend,
+        "max_budget": membership.litellm_budget_table.max_budget if membership.litellm_budget_table else None,
+    }
 
 
 def _create_results_from_response(
@@ -3709,6 +3887,7 @@ async def delete_team(
     """
     from litellm.proxy.management_helpers.audit_logs import (
         get_audit_log_changed_by,
+        is_audit_logging_enabled,
     )
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -3753,9 +3932,8 @@ async def delete_team(
         litellm_changed_by=litellm_changed_by,
     )
 
-    # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
     # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
-    if litellm.store_audit_logs is True:
+    if is_audit_logging_enabled():
         # make an audit log for each team deleted
         for team_id in data.team_ids:
             team_row: LiteLLM_TeamTable | None = await prisma_client.get_data(
@@ -3795,9 +3973,7 @@ async def delete_team(
         _persist_deleted_verification_tokens,
     )
 
-    keys_to_delete: list[LiteLLM_VerificationToken] = await _tokens_db(prisma_client).find_many(
-        where={"team_id": {"in": data.team_ids}}
-    )
+    keys_to_delete: Final = await _tokens_db(prisma_client).find_many(where={"team_id": {"in": data.team_ids}})
 
     if keys_to_delete:
         await _persist_deleted_verification_tokens(
@@ -3851,7 +4027,21 @@ async def delete_team(
     await _sweep_deleted_team_references(team_ids=data.team_ids, prisma_client=prisma_client)
 
     ## DELETE TEAMS
-    deleted_teams: Final = await prisma_client.delete_data(team_id_list=data.team_ids, table_name="team")
+    # Both the delete and the reconcile sweep run under every team's advisory lock
+    # (TEAM_ADVISORY_LOCK_SQL, the same one /team/member_add takes before its own writes),
+    # sorted so two overlapping batch deletes always request their locks in the same order.
+    # A member_add mid-flight for one of these teams either finishes its write and releases
+    # the lock before this transaction starts, in which case this sweep reaches what it wrote,
+    # or is still waiting on the lock, in which case its own re-read happens after this commits
+    # and sees the row gone before it writes anything.
+    delete_filter: Final[_TeamIdInFilter] = {"team_id": {"in": data.team_ids}}
+    async with prisma_client.tx() as tx:
+        for team_id in sorted(data.team_ids):
+            await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
+        await tx.litellm_teamtable.delete_many(where=delete_filter)
+        await _sweep_deleted_team_references_tx(team_ids=data.team_ids, tx=tx)
+
+    deleted_teams: Final[_DeletedTeamsResult] = {"deleted_teams": data.team_ids}
 
     # Evict AFTER the rows are gone. Both writers of these keys (`_cache_team_object` and
     # `get_team_object_by_alias`) hydrate from the db, so evicting first leaves a window where a
@@ -3863,12 +4053,6 @@ async def delete_team(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
-
-    # Sweep again now the team is gone. A `/team/member_add` that landed between the first sweep
-    # and the delete would have re-appended the reference; an add still in flight sees the row
-    # missing under its own row lock and sweeps what it wrote. Both passes are idempotent, and
-    # keeping the first one means a failure here still leaves a team the admin can retry deleting.
-    await _sweep_deleted_team_references(team_ids=data.team_ids, prisma_client=prisma_client)
 
     for deleted_team in team_rows:
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=deleted_team.team_id)
@@ -3898,8 +4082,18 @@ async def _sweep_deleted_team_references(team_ids: Sequence[str], prisma_client:
     _ = await _team_membership_db(prisma_client).delete_many(where=_TeamIdInFilter(team_id={"in": tuple(team_ids)}))
 
 
+async def _sweep_deleted_team_references_tx(team_ids: Sequence[str], tx: _TeamDeleteTx) -> None:
+    """Same sweep as `_sweep_deleted_team_references`, run on the transaction that holds
+    every id's advisory lock and deletes the team rows, so it commits or rolls back with them."""
+    for team_id in team_ids:
+        _ = await tx.execute_raw(_STRIP_DELETED_TEAM_FROM_USERS_SQL, team_id)
+
+    membership_filter: Final[_TeamIdInFilter] = {"team_id": {"in": tuple(team_ids)}}
+    _ = await tx.litellm_teammembership.delete_many(where=membership_filter)
+
+
 async def _invalidate_deleted_key_cache(
-    keys: Sequence[LiteLLM_VerificationToken],
+    keys: "Sequence[prisma_models.LiteLLM_VerificationToken]",
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> None:
@@ -4068,6 +4262,39 @@ async def _add_team_member_budget_table(
     return team_info_response_object
 
 
+async def _hydrate_member_emails(
+    prisma_client: PrismaClient,
+    members: Sequence[Member],
+) -> tuple[Member, ...]:
+    """Fill in ``user_email`` for roster entries that were stored without one.
+
+    ``members_with_roles`` is a denormalized snapshot written at add-time, so an entry
+    stored with ``user_email=None`` keeps that null even once the user row has an email.
+    Look the missing ones up in ``LiteLLM_UserTable`` (one indexed query) and fill them
+    in. A stored email is never overwritten - the snapshot stays the source of truth
+    wherever it has a value.
+    """
+    missing_user_ids: Final = frozenset(m.user_id for m in members if not m.user_email and m.user_id is not None)
+    if not missing_user_ids:
+        return tuple(members)
+
+    user_rows: Final[Sequence[prisma_models.LiteLLM_UserTable]] = await _user_db(prisma_client).find_many(
+        where={  # mutable-ok: Prisma query filters are dict-shaped
+            "user_id": {  # mutable-ok: Prisma query filters are dict-shaped
+                "in": sorted(missing_user_ids)
+            }
+        }
+    )
+    email_by_user_id: Final = MappingProxyType({u.user_id: u.user_email for u in user_rows if u.user_email})
+
+    return tuple(
+        m.model_copy(update={"user_email": email_by_user_id[m.user_id]})  # mutable-ok: pydantic update payload
+        if not m.user_email and m.user_id is not None and m.user_id in email_by_user_id
+        else m
+        for m in members
+    )
+
+
 async def _resolve_team_access_group_resources(
     _team_info: TeamInfoResponseObjectTeamTable,
 ) -> TeamInfoResponseObjectTeamTable:
@@ -4203,9 +4430,22 @@ async def team_info(
         # Resolve resources inherited from access groups
         resolved_team_info: Final = await _resolve_team_access_group_resources(_team_info)
 
+        # Fill in emails the add-time roster snapshot never captured
+        hydrated_members: Final = await _hydrate_member_emails(
+            prisma_client=prisma_client,
+            members=resolved_team_info.members_with_roles,
+        )
+        hydrated_team_info: Final = resolved_team_info.model_copy(
+            update={  # mutable-ok: pydantic update payload
+                # list(), not the tuple: model_copy skips validation, so the field has
+                # to be handed the list[Member] the response model declares.
+                "members_with_roles": list(hydrated_members)  # mutable-ok: declared list[Member]
+            }
+        )
+
         response_object: Final = TeamInfoResponseObject(
             team_id=team_id,
-            team_info=resolved_team_info,
+            team_info=hydrated_team_info,
             keys=keys,
             team_memberships=returned_tm,
         )
@@ -4634,7 +4874,7 @@ async def _build_team_list_where_conditions(
 
 async def _batch_resolve_access_group_resources(
     all_access_group_ids: list[str],
-) -> dict[str, LiteLLM_AccessGroupTable]:
+) -> "dict[str, prisma_models.LiteLLM_AccessGroupTable]":
     """
     Batch-fetch access groups in a single DB query and return them keyed by
     access_group_id. Missing/invalid groups are silently omitted.
@@ -4652,7 +4892,7 @@ async def _batch_resolve_access_group_resources(
 
 
 def _convert_teams_to_response_models(
-    teams: list,
+    teams: Sequence,
     use_deleted_table: bool,
     keys_count_by_team: dict[str, int] | None = None,
 ) -> list[TeamListItem | LiteLLM_TeamTable | LiteLLM_DeletedTeamTable]:
@@ -4686,7 +4926,7 @@ def _convert_teams_to_response_models(
 
 async def _get_keys_count_by_team(
     prisma_client: PrismaClient,
-    teams: Sequence[LiteLLM_TeamTable],
+    teams: Sequence[_TeamIdRow],
 ) -> dict[str, int]:
     """Aggregate virtual-key counts per team for the given page of teams.
 
@@ -4698,10 +4938,13 @@ async def _get_keys_count_by_team(
     if not page_team_ids:
         return {}
 
-    grouped: Final = await _tokens_db(prisma_client).group_by(
-        by=["team_id"],
-        where={"team_id": {"in": page_team_ids}},
-        count={"team_id": True},
+    grouped: Final = cast(  # cast-ok: prisma group_by returns one row per `by` key with `count=` nested under "_count"
+        "Sequence[_TeamIdGroupRow]",
+        await _tokens_db(prisma_client).group_by(
+            by=["team_id"],
+            where={"team_id": {"in": page_team_ids}},
+            count={"team_id": True},
+        ),
     )
     return {row["team_id"]: row.get("_count", {}).get("team_id", 0) for row in grouped if row.get("team_id")}
 
@@ -4905,6 +5148,7 @@ async def list_team_v2(
 
     # Get teams with pagination
     if use_deleted_table:
+        # LiteLLM_DeletedTeamTable has no litellm_model_table relation, unlike below
         teams = await _deleted_team_db(prisma_client).find_many(
             where=where_conditions,
             skip=skip,
@@ -4919,6 +5163,7 @@ async def list_team_v2(
             skip=skip,
             take=page_size,
             order=order_by if order_by else {"created_at": "desc"},  # Default sort
+            include=_INCLUDE_MODEL_TABLE,
         )
         # Get total count for pagination
         total_count = await _team_db(prisma_client).count(where=where_conditions)
@@ -5091,7 +5336,7 @@ async def list_team(
                 _team_memberships.append(tm)
 
         # add all keys that belong to the team
-        keys = await _tokens_db(prisma_client).find_many(where={"team_id": team.team_id})
+        keys = _as_list(await _tokens_db(prisma_client).find_many(where={"team_id": team.team_id}))
 
         try:
             returned_responses.append(
@@ -5326,6 +5571,11 @@ async def team_model_add(
         data={"updated_at": datetime.now(timezone.utc)},
         include={"object_permission": True},
     )
+    if updated_team is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={data.team_id}"},
+        )
 
     await _refresh_cached_team(
         team_row=updated_team,
@@ -5408,6 +5658,11 @@ async def team_model_delete(
         data={"models": updated_models},
         include={"object_permission": True},
     )
+    if updated_team is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={data.team_id}"},
+        )
 
     await _refresh_cached_team(
         team_row=updated_team,
@@ -5542,8 +5797,13 @@ async def update_team_member_permissions(
         where={"team_id": data.team_id},
         data={"team_member_permissions": data.team_member_permissions},
     )
+    if updated_team is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team not found, passed team_id={data.team_id}"},
+        )
 
-    return updated_team
+    return updated_team  # pyright: ignore[reportReturnType]  # prisma row, coerced by this route's response_model
 
 
 @router.post(
@@ -5608,7 +5868,9 @@ async def bulk_update_team_member_permissions(
     }
 
 
-async def _compute_and_batch_updates(prisma_client, teams: Sequence[LiteLLM_TeamTable], permissions_to_add: set) -> int:
+async def _compute_and_batch_updates(
+    prisma_client, teams: "Sequence[prisma_models.LiteLLM_TeamTable]", permissions_to_add: set
+) -> int:
     """Compute merged permissions and batch-write updates. Returns count of teams updated."""
     updates: Final = []
     for team in teams:
@@ -5679,49 +5941,32 @@ async def _append_permissions_to_all_teams(prisma_client: PrismaClient, permissi
     return teams_updated
 
 
-@router.get(
-    "/team/daily/activity",
-    response_model=SpendAnalyticsPaginatedResponse,
-    tags=["team management"],
-)
-async def get_team_daily_activity(
-    team_ids: str | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    model: str | None = None,
-    api_key: str | None = None,
-    page: int = 1,
-    page_size: int = 10,
-    exclude_team_ids: str | None = None,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
-    """
-    Get daily activity for specific teams or all teams.
+def _daily_activity_error(*, status_code: int, message: str) -> HTTPException:
+    """Single construction site for the `{"error": ...}` detail shape the
+    /team/daily/activity endpoints have always returned."""
+    return HTTPException(status_code=status_code, detail={"error": message})  # mutable-ok: FastAPI JSON detail
 
-    Args:
-        team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
-        start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
-        end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
-        model (Optional[str]): Filter by model name.
-        api_key (Optional[str]): Filter by API key.
-        page (int): Page number for pagination.
-        page_size (int): Number of items per page.
-        exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
-    Returns:
-        SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
-    """
-    from litellm.proxy.proxy_server import (
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
 
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
-        )
+class _TeamDailyActivityScope(NamedTuple):
+    team_ids: list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
+    exclude_team_ids: list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
+    team_alias_metadata: dict[str, dict[str, object]]  # mutable-ok: entity_metadata_field shape
+    api_key_filter: str | list[str] | None  # mutable-ok: downstream daily-activity signatures take str | list unions
 
+
+async def _resolve_team_daily_activity_scope(
+    *,
+    team_ids: str | None,
+    exclude_team_ids: str | None,
+    api_key: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> _TeamDailyActivityScope:
+    """Resolve which teams the caller may see and whether results must be
+    narrowed to their own API keys. Shared by the paginated and aggregated
+    /team/daily/activity endpoints so both enforce identical permissions."""
     # Convert comma-separated tags string to list if provided
     team_ids_list = team_ids.split(",") if team_ids else None
     exclude_team_ids_list: list[str] | None = None
@@ -5740,10 +5985,7 @@ async def get_team_daily_activity(
             check_db_only=True,
         )
         if user_info is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"User= {user_api_key_dict.user_id} not found"},
-            )
+            raise _daily_activity_error(status_code=404, message=f"User= {user_api_key_dict.user_id} not found")
 
         if team_ids_list is None:
             team_ids_list = user_info.teams
@@ -5751,11 +5993,9 @@ async def get_team_daily_activity(
             # check if all team_ids are in user_info.teams
             for team_id in team_ids_list:
                 if team_id not in user_info.teams:
-                    raise HTTPException(
+                    raise _daily_activity_error(
                         status_code=404,
-                        detail={
-                            "error": f"User does not belong to Team= {team_id}. Call `/user/info` to see user's teams"
-                        },
+                        message=f"User does not belong to Team= {team_id}. Call `/user/info` to see user's teams",
                     )
 
     ## Fetch team aliases and check team admin status
@@ -5804,17 +6044,167 @@ async def get_team_daily_activity(
     if final_api_key_filter is None and user_api_keys is not None:
         final_api_key_filter = user_api_keys
 
+    return _TeamDailyActivityScope(
+        team_ids=team_ids_list,
+        exclude_team_ids=exclude_team_ids_list,
+        team_alias_metadata=team_alias_metadata,
+        api_key_filter=final_api_key_filter,
+    )
+
+
+@router.get(
+    "/team/daily/activity",
+    response_model=SpendAnalyticsPaginatedResponse,
+    tags=["team management"],
+)
+async def get_team_daily_activity(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    team_ids: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    page: int = 1,
+    page_size: int = 10,
+    exclude_team_ids: str | None = None,
+):
+    """
+    Get daily activity for specific teams or all teams.
+
+    Args:
+        team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
+        start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
+        end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
+        model (Optional[str]): Filter by model name.
+        api_key (Optional[str]): Filter by API key.
+        page (int): Page number for pagination.
+        page_size (int): Number of items per page.
+        exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
+    Returns:
+        SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    scope: Final = await _resolve_team_daily_activity_scope(
+        team_ids=team_ids,
+        exclude_team_ids=exclude_team_ids,
+        api_key=api_key,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
     return await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailyteamspend",
         entity_id_field="team_id",
-        entity_id=team_ids_list,
-        entity_metadata_field=team_alias_metadata,
-        exclude_entity_ids=exclude_team_ids_list,
+        entity_id=scope.team_ids,
+        entity_metadata_field=scope.team_alias_metadata,
+        exclude_entity_ids=scope.exclude_team_ids,
         start_date=start_date,
         end_date=end_date,
         model=model,
-        api_key=final_api_key_filter,
+        api_key=scope.api_key_filter,
         page=page,
         page_size=page_size,
+    )
+
+
+_MAX_AGGREGATED_RANGE_DAYS: Final = 400
+
+
+def _aggregated_date_range_error(start_date: str | None, end_date: str | None) -> str | None:
+    """The aggregated endpoint has no pagination to bound its work, so malformed
+    dates and ranges wider than the UI ever requests are rejected before querying."""
+    if start_date is None or end_date is None:
+        return "Please provide start_date and end_date"
+    try:
+        parsed_start: Final = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        parsed_end: Final = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return "start_date and end_date must be valid YYYY-MM-DD dates"
+    if parsed_end < parsed_start:
+        return "end_date must be on or after start_date"
+    if (parsed_end - parsed_start).days > _MAX_AGGREGATED_RANGE_DAYS:
+        return f"Date range must be at most {_MAX_AGGREGATED_RANGE_DAYS} days"
+    return None
+
+
+@router.get(
+    "/team/daily/activity/aggregated",
+    response_model=SpendAnalyticsPaginatedResponse,
+    tags=["team management"],
+)
+async def get_team_daily_activity_aggregated(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    team_ids: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    exclude_team_ids: str | None = None,
+    timezone: int | None = None,
+):
+    """
+    Aggregated daily activity for teams without pagination, including per-team breakdown.
+
+    One SQL GROUPING SETS pass returns every day in the range regardless of row
+    volume, so callers never reassemble pages. Same response shape as the
+    paginated endpoint with page metadata pinned to a single page.
+
+    Args:
+        team_ids (Optional[str]): Comma-separated list of team IDs to filter by. If not provided, returns data for all teams.
+        start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
+        end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
+        model (Optional[str]): Filter by model name.
+        api_key (Optional[str]): Filter by API key.
+        exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
+        timezone (Optional[int]): Timezone offset in minutes from UTC, matching JavaScript's Date.getTimezoneOffset() convention.
+    Returns:
+        SpendAnalyticsPaginatedResponse: Response containing all daily activity data for the range.
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None:
+        raise _daily_activity_error(status_code=400, message=range_error)
+
+    scope: Final = await _resolve_team_daily_activity_scope(
+        team_ids=team_ids,
+        exclude_team_ids=exclude_team_ids,
+        api_key=api_key,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    return await get_daily_activity_aggregated(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=scope.team_ids,
+        entity_metadata_field=scope.team_alias_metadata,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=scope.api_key_filter,
+        exclude_entity_ids=scope.exclude_team_ids,
+        timezone_offset_minutes=timezone,
+        include_entity_breakdown=True,
     )

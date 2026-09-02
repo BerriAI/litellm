@@ -21,6 +21,14 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     }
 )
 
+# The per-deployment Rust opt-in.
+RUST_KWARG_KEY: Final = "rust"
+
+# Keys `completion()` forwards from its own kwargs into `get_litellm_params`,
+# which are otherwise invisible to it because that call site passes explicit
+# named arguments rather than `**kwargs`.
+FORWARDED_KWARGS_KEYS: Final = AWS_CREDENTIAL_KWARGS_KEYS | frozenset({RUST_KWARG_KEY})
+
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
 OPTIONAL_KWARGS_KEYS: Final = (
@@ -42,11 +50,18 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "vertex_ai_project",
             "vertex_ai_location",
             "vertex_ai_credentials",
+            "gigachat_scope",
+            "gigachat_auth_url",
+            "gigachat_access_token",
             "tpm",
             "rpm",
             "itpm",
             "otpm",
             "use_xai_oauth",
+            # The per-deployment Rust opt-in. `all_litellm_params` keeps it out
+            # of the provider body; this keeps it *in* litellm_params, which is
+            # where the chat completions handlers read it from.
+            RUST_KWARG_KEY,
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS

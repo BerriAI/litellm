@@ -19,6 +19,7 @@ import secrets
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from html import escape
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -28,7 +29,6 @@ from typing import (
     NoReturn,
     Optional,
     Protocol,
-    TypeVar,
     Union,
     cast,
     overload,
@@ -121,6 +121,7 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_server_root_path,
 )
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SSOConfigRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
@@ -170,51 +171,16 @@ _CLI_SSO_SECRET_KEY_FRAGMENTS: Final = frozenset(
     }
 )
 
-_DbRecordT: Final = TypeVar("_DbRecordT", covariant=True)
-
-
-class _PrismaTableActions(Protocol[_DbRecordT]):
-    async def find_unique(
-        self,
-        where: Mapping[str, object],
-    ) -> _DbRecordT | None: ...
-
-    async def find_first(
-        self,
-        where: Mapping[str, object] | None = None,
-    ) -> _DbRecordT | None: ...
-
-    async def find_many(
-        self,
-        where: Mapping[str, object] | None = None,
-        include: Mapping[str, bool] | None = None,
-    ) -> Sequence[_DbRecordT]: ...
-
-    async def update(
-        self,
-        where: Mapping[str, object],
-        data: Mapping[str, object],
-    ) -> _DbRecordT: ...
-
-    async def update_many(
-        self,
-        where: Mapping[str, object],
-        data: Mapping[str, object],
-    ) -> int: ...
-
 
 class _UserMetadataRow(Protocol):
     @property
     def metadata(self) -> Mapping[str, object] | None: ...
 
 
-class _HasUserMetadataTable(Protocol):
-    @property
-    def table(self) -> "_PrismaTableActions[_UserMetadataRow]": ...
-
-
-def _user_meta_db(repo: "_HasUserMetadataTable") -> "_PrismaTableActions[_UserMetadataRow]":
-    return repo.table
+def _user_meta_db(repo: UserRepository) -> "TableActions[_UserMetadataRow]":
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
+        "TableActions[_UserMetadataRow]", repo.table
+    )
 
 
 class _SsoConfigRow(Protocol):
@@ -222,29 +188,22 @@ class _SsoConfigRow(Protocol):
     def sso_settings(self) -> Mapping[str, object] | None: ...
 
 
-class _HasSsoConfigTable(Protocol):
-    @property
-    def table(self) -> "_PrismaTableActions[_SsoConfigRow]": ...
-
-
-def _sso_config_db(repo: "_HasSsoConfigTable") -> "_PrismaTableActions[_SsoConfigRow]":
-    return repo.table
+def _sso_config_db(repo: SSOConfigRepository) -> "TableActions[_SsoConfigRow]":
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
+        "TableActions[_SsoConfigRow]", repo.table
+    )
 
 
 class _TeamDetailRow(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
 
 
-class _HasTeamDetailTable(Protocol):
-    @property
-    def table(self) -> "_PrismaTableActions[_TeamDetailRow]": ...
-
-
-def _team_detail_db(repo: "_HasTeamDetailTable") -> "_PrismaTableActions[_TeamDetailRow]":
+def _team_detail_db(repo: TeamRepository) -> "TableActions[_TeamDetailRow]":
     return repo.table
 
 
 _MODEL_ALIASES_ADAPTER: Final = TypeAdapter(dict[str, str])
+_SSO_TOKEN_CLAIMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def _decode_model_aliases(value: object) -> object:
@@ -270,7 +229,7 @@ class _TeamRowGrants(BaseModel):
     litellm_model_table: _TeamModelAliasTable | None = None
 
 
-class _CliSsoTeamDetail(BaseModel):
+class CliSsoTeamDetail(BaseModel):
     """The per-team snapshot cached in the CLI SSO flow and echoed to the CLI on poll."""
 
     team_id: str | None = None
@@ -279,8 +238,8 @@ class _CliSsoTeamDetail(BaseModel):
     team_model_aliases: Mapping[str, str] | None = None
 
 
-_CLI_SSO_TEAM_DETAILS_ADAPTER: Final = TypeAdapter(tuple[_CliSsoTeamDetail, ...])
-_TEAMLESS_CLI_SSO_TEAM_DETAIL: Final = _CliSsoTeamDetail(team_models=())
+_CLI_SSO_TEAM_DETAILS_ADAPTER: Final = TypeAdapter(tuple[CliSsoTeamDetail, ...])
+_TEAMLESS_CLI_SSO_TEAM_DETAIL: Final = CliSsoTeamDetail(team_models=())
 
 
 class _CustomSsoCall(Protocol):
@@ -479,7 +438,7 @@ def _is_safe_cli_sso_metadata_dest_key(dest_key: str) -> bool:
     return not any(fragment in lowered for fragment in _CLI_SSO_SECRET_KEY_FRAGMENTS)
 
 
-def _is_safe_cli_sso_scalar_claim_value(value: Any) -> bool:
+def _is_safe_cli_sso_scalar_claim_value(value: object) -> bool:
     if not isinstance(value, _CLI_SSO_SCALAR_TYPES):
         return False
     if isinstance(value, str):
@@ -490,17 +449,17 @@ def _is_safe_cli_sso_scalar_claim_value(value: Any) -> bool:
     return True
 
 
-def _sso_result_to_dict(result: CustomOpenID | OpenID | dict) -> dict[str, Any]:
+def _sso_result_to_dict(result: CustomOpenID | OpenID | dict[str, object]) -> dict[str, object]:
     if isinstance(result, dict):
         return result
     if hasattr(result, "model_dump"):
         dumped: Final = result.model_dump()
         if isinstance(dumped, dict):
-            return cast(dict[str, Any], dumped)
+            return dumped
     return {}
 
 
-def _get_nested_claim_value(data: dict[str, Any], claim_path: str) -> Any:
+def _get_nested_claim_value(data: Mapping[str, object], claim_path: str) -> object:
     """Resolve a dot-notation claim path against an SSO result dict.
 
     Unlike ``get_nested_value``, this does not strip a leading ``metadata.``
@@ -514,7 +473,7 @@ def _get_nested_claim_value(data: dict[str, Any], claim_path: str) -> Any:
     placeholder: Final = "\x00"
     parts = claim_path.replace("\\.", placeholder).split(".")
     parts = [p.replace(placeholder, ".") for p in parts]
-    current: Any = data
+    current: object = data
     for part in parts:
         if isinstance(current, dict) and part in current:
             current = current[part]
@@ -523,7 +482,7 @@ def _get_nested_claim_value(data: dict[str, Any], claim_path: str) -> Any:
     return current
 
 
-def _extract_sso_claim_value(result: CustomOpenID | OpenID | dict, claim_path: str) -> Any:
+def _extract_sso_claim_value(result: CustomOpenID | OpenID | dict[str, object], claim_path: str) -> object:
     extra_fields: Final = getattr(result, "extra_fields", None)
     if isinstance(extra_fields, dict):
         if claim_path in extra_fields:
@@ -539,11 +498,11 @@ def _extract_sso_claim_value(result: CustomOpenID | OpenID | dict, claim_path: s
     return _get_nested_claim_value(result_dict, claim_path)
 
 
-def _set_nested_metadata_value(metadata: dict[str, Any], key_path: str, value: Any) -> None:
+def _set_nested_metadata_value(metadata: dict[str, object], key_path: str, value: object) -> None:
     placeholder: Final = "\x00"
     parts = key_path.replace("\\.", placeholder).split(".")
     parts = [p.replace(placeholder, ".") for p in parts]
-    current: Any = metadata
+    current: dict[str, object] = metadata
     for part in parts[:-1]:
         existing = current.get(part)
         if not isinstance(existing, dict):
@@ -554,24 +513,25 @@ def _set_nested_metadata_value(metadata: dict[str, Any], key_path: str, value: A
 
 
 def _flatten_cli_sso_metadata_for_poll(
-    metadata: dict[str, Any],
+    metadata: Mapping[str, object],
 ) -> dict[str, str | int | float | bool]:
     """Expose scalar attribution metadata as a flat dict for CLI poll responses."""
     flattened: Final[dict[str, str | int | float | bool]] = {}
-    stack: Final[list[tuple[str, Any]]] = [("", metadata)]
+    stack: Final[list[tuple[str, object]]] = [("", metadata)]
     while stack:
         prefix, value = stack.pop()
         if isinstance(value, dict):
-            for key, nested in value.items():
+            nested_items: Mapping[str, object] = value
+            for key, nested in nested_items.items():
                 nested_prefix = f"{prefix}.{key}" if prefix else key
                 stack.append((nested_prefix, nested))
-        elif _is_safe_cli_sso_scalar_claim_value(value):
+        elif isinstance(value, (str, int, float, bool)) and _is_safe_cli_sso_scalar_claim_value(value):
             flattened[prefix] = value
     return flattened
 
 
 def build_cli_sso_attribution_metadata(
-    result: CustomOpenID | OpenID | dict,
+    result: CustomOpenID | OpenID | dict[str, object],
 ) -> dict[str, object]:
     """
     Build allowlisted, non-secret scalar attribution metadata from an SSO result.
@@ -599,8 +559,8 @@ def build_cli_sso_attribution_metadata(
 
 
 def _merge_cli_sso_attribution_metadata(
-    existing_metadata: dict[str, Any], attribution_metadata: dict[str, Any]
-) -> dict[str, Any]:
+    existing_metadata: dict[str, object], attribution_metadata: dict[str, object]
+) -> dict[str, object]:
     """Merge attribution metadata into existing user metadata in-place.
 
     Preserves original value types (in particular, string claim values that
@@ -608,7 +568,7 @@ def _merge_cli_sso_attribution_metadata(
     are merged iteratively so attribution claims do not clobber unrelated keys
     under the same parent.
     """
-    pending: Final[list[tuple[dict[str, Any], dict[str, Any]]]] = [(existing_metadata, attribution_metadata)]
+    pending: Final[list[tuple[dict[str, object], dict[str, object]]]] = [(existing_metadata, attribution_metadata)]
     while pending:
         target, source = pending.pop()
         for key, value in source.items():
@@ -656,7 +616,7 @@ async def _persist_cli_sso_user_metadata(
 
 
 def _cli_poll_attribution_metadata_from_session(
-    session_data: dict[str, Any],
+    session_data: Mapping[str, object],
 ) -> dict[str, str | int | float | bool]:
     stored: Final = session_data.get("attribution_metadata")
     if isinstance(stored, dict):
@@ -848,6 +808,15 @@ def normalize_email(email: str | None) -> str | None:
     return email.lower() if isinstance(email, str) else email
 
 
+# Ordered highest to lowest privilege
+LITELLM_USER_ROLE_HIERARCHY: Final = (
+    LitellmUserRoles.PROXY_ADMIN,
+    LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    LitellmUserRoles.INTERNAL_USER,
+    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+)
+
+
 def determine_role_from_groups(
     user_groups: list[str],
     role_mappings: "RoleMappings",
@@ -872,19 +841,11 @@ def determine_role_from_groups(
         # No role mappings configured, return default_role
         return role_mappings.default_role
 
-    # Role hierarchy (highest to lowest)
-    role_hierarchy: Final = [
-        LitellmUserRoles.PROXY_ADMIN,
-        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-        LitellmUserRoles.INTERNAL_USER,
-        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-    ]
-
     # Convert user_groups to a set for efficient lookup
     user_groups_set: Final = set(user_groups) if isinstance(user_groups, list) else set()
 
     # Find the highest privilege role the user belongs to
-    for role in role_hierarchy:
+    for role in LITELLM_USER_ROLE_HIERARCHY:
         if role in role_mappings.roles:
             role_groups = role_mappings.roles[role]
             if isinstance(role_groups, list) and user_groups_set.intersection(set(role_groups)):
@@ -960,11 +921,12 @@ def process_sso_jwt_access_token(
             # Try role_mappings first (group-based role determination)
             if role_mappings is not None and role_mappings.roles:
                 group_claim: Final = role_mappings.group_claim
-                user_groups_raw: Final[Any] = get_nested_value(access_token_payload, group_claim)
+                user_groups_raw: Final[object] = get_nested_value(access_token_payload, group_claim)
 
                 user_groups: list[str] = []
                 if isinstance(user_groups_raw, list):
-                    user_groups = [str(g) for g in user_groups_raw]
+                    raw_groups: Final[Sequence[object]] = user_groups_raw
+                    user_groups = [str(g) for g in raw_groups]
                 elif isinstance(user_groups_raw, str):
                     user_groups = [g.strip() for g in user_groups_raw.split(",") if g.strip()]
                 elif user_groups_raw is not None:
@@ -998,6 +960,30 @@ def process_sso_jwt_access_token(
         return access_token_payload
 
     return None
+
+
+def _decode_sso_token_claims(token: str | None) -> Mapping[str, object]:
+    if not token:
+        return MappingProxyType({})
+    try:
+        return MappingProxyType(
+            _SSO_TOKEN_CLAIMS_ADAPTER.validate_python(jwt.decode(token, options={"verify_signature": False}))
+        )
+    except (jwt.exceptions.InvalidTokenError, ValidationError):
+        verbose_proxy_logger.debug("SSO token is not a decodable JWT, skipping token claims")
+        return MappingProxyType({})
+
+
+def _merge_sso_token_claims(
+    userinfo: Mapping[str, object],
+    id_token: str | None,
+    access_token: str | None,
+) -> Mapping[str, object]:
+    sources: Final = (userinfo, _decode_sso_token_claims(id_token), _decode_sso_token_claims(access_token))
+    claim_names: Final = frozenset(key for source in sources for key in source)
+    return MappingProxyType(
+        {key: next((source[key] for source in sources if source.get(key) is not None), None) for key in claim_names}
+    )
 
 
 async def _raise_if_sso_exceeds_free_user_limit(premium_user: bool, prisma_client: PrismaClient | None) -> None:
@@ -1214,12 +1200,13 @@ def generic_response_convertor(
     ]:
         # Use role_mappings to determine role from groups
         group_claim: Final = role_mappings.group_claim
-        user_groups_raw: Final[Any] = get_nested_value(response, group_claim)
+        user_groups_raw: Final[object] = get_nested_value(response, group_claim)
 
         # Handle different formats: could be a list, string (comma-separated), or single value
         user_groups: list[str] = []
         if isinstance(user_groups_raw, list):
-            user_groups = [str(g) for g in user_groups_raw]
+            raw_groups: Final[Sequence[object]] = user_groups_raw
+            user_groups = [str(g) for g in raw_groups]
         elif isinstance(user_groups_raw, str):
             # Handle comma-separated string
             user_groups = [g.strip() for g in user_groups_raw.split(",") if g.strip()]
@@ -1531,12 +1518,34 @@ async def get_generic_sso_response(
 
     role_mappings: Final = await _setup_role_mappings()
     team_mappings: Final = await _setup_team_mappings()
+    generic_include_token_claims: Final = os.getenv("GENERIC_INCLUDE_TOKEN_CLAIMS", "false").lower() == "true"
 
-    def response_convertor(response, client):
+    def response_convertor(response: Mapping[str, object], httpx_session: object):
         nonlocal received_response  # return for user debugging
-        received_response = response
+        response_id_token: Final = response.get("id_token")
+        response_access_token: Final = response.get("access_token")
+        id_token: Final = (
+            response_id_token if isinstance(response_id_token, str) and response_id_token else generic_sso.id_token
+        )
+        access_token: Final = (
+            response_access_token
+            if isinstance(response_access_token, str) and response_access_token
+            else generic_sso.access_token
+        )
+        claims: Final = (
+            _merge_sso_token_claims(
+                userinfo=response,
+                id_token=id_token,
+                access_token=access_token,
+            )
+            if generic_include_token_claims
+            else response
+        )
+        received_response = {  # mutable-ok: preserve the existing dict return contract
+            key: value for key, value in claims.items() if key not in _OAUTH_TOKEN_FIELDS
+        }
         return generic_response_convertor(
-            response=response,
+            response=claims,
             jwt_handler=jwt_handler,
             sso_jwt_handler=sso_jwt_handler,
             role_mappings=role_mappings,
@@ -1638,13 +1647,6 @@ async def get_generic_sso_response(
             # Pass the full response so custom response_convertor implementations
             # can access all fields (including id_token for claim extraction).
             result = response_convertor(combined_response, generic_sso)
-            # Strip bearer credentials from combined_response before storing in
-            # received_response. received_response may appear in restricted-group
-            # error messages — bearer tokens (access_token, id_token, refresh_token)
-            # must not be exposed to callers.
-            # Assign directly rather than relying on nonlocal mutation so that Pyright
-            # can track that received_response is non-None from this point on.
-            received_response = {k: v for k, v in combined_response.items() if k not in _OAUTH_TOKEN_FIELDS}
             sso_assertion = assertion_from_sso_login(
                 combined_response.get("id_token"), combined_response.get("refresh_token")
             )
@@ -2189,10 +2191,10 @@ async def _build_cli_sso_user_defined_values(
     )
 
 
-def _cli_sso_team_detail(team_row: Mapping[str, object]) -> _CliSsoTeamDetail:
+def _cli_sso_team_detail(team_row: Mapping[str, object]) -> CliSsoTeamDetail:
     team: Final = _TeamRowGrants.model_validate(team_row)
     alias_table: Final = team.litellm_model_table
-    return _CliSsoTeamDetail(
+    return CliSsoTeamDetail(
         team_id=team.team_id,
         team_alias=team.team_alias,
         team_models=team.models,
@@ -2200,10 +2202,10 @@ def _cli_sso_team_detail(team_row: Mapping[str, object]) -> _CliSsoTeamDetail:
     )
 
 
-async def _fetch_cli_sso_team_details(
+async def fetch_cli_sso_team_details(
     prisma_client: PrismaClient,
     teams: Sequence[str],
-) -> tuple[_CliSsoTeamDetail, ...] | None:
+) -> tuple[CliSsoTeamDetail, ...] | None:
     """``None`` means the lookup itself failed, which is not the same as the user having no teams."""
     if not teams:
         return ()
@@ -2218,7 +2220,7 @@ async def _fetch_cli_sso_team_details(
     return tuple(_cli_sso_team_detail(team_row.model_dump()) for team_row in prisma_teams)
 
 
-def _cli_sso_session_teams(team_details: Sequence[_CliSsoTeamDetail]) -> list[str]:
+def _cli_sso_session_teams(team_details: Sequence[CliSsoTeamDetail]) -> list[str]:
     """The teams a login may bind to: only those whose row still exists.
 
     A team deleted out from under a membership, which is what deleting an organization
@@ -2228,7 +2230,7 @@ def _cli_sso_session_teams(team_details: Sequence[_CliSsoTeamDetail]) -> list[st
     return [detail.team_id for detail in team_details if detail.team_id is not None]
 
 
-def _selected_cli_sso_team_detail(team_details: object, team_id: str | None) -> _CliSsoTeamDetail | None:
+def selected_cli_sso_team_detail(team_details: object, team_id: str | None) -> CliSsoTeamDetail | None:
     """``None`` means the team's grants are unknown. An empty grant is a real value meaning unrestricted,
     so an unknown one must not be minted as empty."""
     if team_id is None:
@@ -2279,7 +2281,7 @@ async def _complete_cli_sso_callback_session(
     if hasattr(user_info, "teams") and user_info.teams:
         teams = user_info.teams if isinstance(user_info.teams, list) else []
 
-    team_details: Final = await _fetch_cli_sso_team_details(prisma_client=prisma_client, teams=teams)
+    team_details: Final = await fetch_cli_sso_team_details(prisma_client=prisma_client, teams=teams)
     if team_details is None:
         raise HTTPException(
             status_code=500,
@@ -2480,7 +2482,7 @@ async def cli_poll_key(
                 # If no team_id provided and user has 0 or 1 team, use first team (or None)
                 team_id = user_teams[0] if len(user_teams) > 0 else None
 
-            selected_team: Final = _selected_cli_sso_team_detail(
+            selected_team: Final = selected_cli_sso_team_detail(
                 team_details=user_team_details,
                 team_id=team_id,
             )
@@ -3093,7 +3095,7 @@ class SSOAuthenticationHandler:
     def _get_generic_sso_redirect_params(
         state: str | None = None,
         generic_authorization_endpoint: str | None = None,
-    ) -> tuple[dict, str | None]:
+    ) -> tuple[dict[str, str], str | None]:
         """
         Get redirect parameters for Generic SSO with proper state priority handling.
         Optionally generates PKCE parameters if GENERIC_CLIENT_USE_PKCE is enabled.
@@ -4074,7 +4076,7 @@ class SSOAuthenticationHandler:
                 )
                 if resp.status_code == 200:
                     try:
-                        userinfo_raw: Final = resp.json()
+                        userinfo_raw: Final[dict[str, object] | None] = resp.json()
                         if not userinfo_raw:
                             # JSON null (None) or empty dict ({}) — no identity claims.
                             # Treat as failure so id_token fallback can be attempted.
@@ -4235,15 +4237,7 @@ class MicrosoftSSOHandler:
         verbose_proxy_logger.debug("Extracted app roles from id_token: %s", app_roles)
 
         # Combine groups and app roles
-        user_role: LitellmUserRoles | None = None
-        if app_roles:
-            # Check if any app role is a valid LitellmUserRoles
-            for role_str in app_roles:
-                role = get_litellm_user_role(role_str)
-                if role is not None:
-                    user_role = role
-                    verbose_proxy_logger.debug("Found valid LitellmUserRoles '%s' in app_roles", role.value)
-                    break
+        user_role: Final = MicrosoftSSOHandler.get_user_role_from_app_roles(app_roles)
 
         verbose_proxy_logger.debug("Combined team_ids (groups + app roles): %s", user_team_ids)
 
@@ -4280,6 +4274,27 @@ class MicrosoftSSOHandler:
         )
         verbose_proxy_logger.debug("Microsoft SSO OpenID Response: %s", openid_response)
         return openid_response
+
+    @staticmethod
+    def get_user_role_from_app_roles(
+        app_roles: Sequence[str] | None,
+    ) -> LitellmUserRoles | None:
+        """
+        Resolve the one role LiteLLM stores for a user from their Entra app roles.
+
+        Entra does not guarantee `roles` claim ordering, so a user holding several app
+        roles resolves to the highest privilege one rather than whichever the claim
+        listed first. Roles the hierarchy does not rank (org_admin, team, customer)
+        resolve by name to stay deterministic
+        """
+        resolved: Final = frozenset(
+            role for role in (get_litellm_user_role(role_str) for role_str in app_roles or ()) if role is not None
+        )
+        if not resolved:
+            return None
+
+        ranked: Final = next((role for role in LITELLM_USER_ROLE_HIERARCHY if role in resolved), None)
+        return ranked if ranked is not None else min(resolved, key=lambda role: role.value)
 
     @staticmethod
     def get_app_roles_from_id_token(id_token: str | None) -> list[str]:
@@ -4391,7 +4406,7 @@ class MicrosoftSSOHandler:
     ) -> tuple[list[str], str | None]:
         """Helper function to fetch and parse group data from a URL"""
         response: Final = await async_client.get(url, headers=headers)
-        response_json: Final = response.json()
+        response_json: Final[dict[str, object]] = response.json()
         response_typed: Final = await MicrosoftSSOHandler._cast_graph_api_response_dict(response=response_json)
         group_ids: Final = MicrosoftSSOHandler._get_group_ids_from_graph_api_response(response=response_typed)
         return group_ids, response_typed.get("odata_nextLink")
