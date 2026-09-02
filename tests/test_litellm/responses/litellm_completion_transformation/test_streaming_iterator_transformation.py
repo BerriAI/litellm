@@ -804,7 +804,7 @@ def test_completed_snapshot_correlates_function_after_server_tool_replacement():
     assert function_call.arguments == '{"city":"Paris"}'
 
 
-def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
+def test_reused_index_with_new_call_id_preserves_first_streamed_identity():
     iterator = LiteLLMCompletionStreamingIterator(
         model="test-model",
         litellm_custom_stream_wrapper=AsyncMock(),
@@ -828,39 +828,77 @@ def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
                 "index": 0,
                 "id": "call_b",
                 "type": "function",
-                "function": {"name": "tool_b", "arguments": '{"b":'},
+                "function": {"name": "tool_a", "arguments": "1"},
             }
         ]
     )
-    # Ambiguous chunk: index reused and id missing. We should skip fallback rather than misroute.
     iterator._queue_tool_call_delta_events(
         [
             {
                 "index": 0,
                 "type": "function",
-                "function": {"arguments": "1}"},
+                "function": {"arguments": "}"},
             }
         ]
     )
+    streamed_argument_events = [
+        event
+        for event in iterator._pending_tool_events
+        if event.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
+    ]
+
+    terminal_response = ModelResponse(
+        id="chatcmpl-terminal",
+        created=123,
+        model="test-model",
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_b",
+                            "type": "function",
+                            "function": {"name": "tool_a", "arguments": '{"a":1}'},
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+    iterator._queue_final_tool_call_done_events(terminal_response)
+    completed = iterator._emit_response_completed_event(terminal_response)
 
     all_events = []
     while iterator._pending_tool_events:
         all_events.append(iterator._pending_tool_events.pop(0))
 
-    delta_events = [
-        evt
-        for evt in all_events
-        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
+    added_items = [event.item for event in all_events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
+    argument_events = [
+        event
+        for event in all_events
+        if event.type
+        in {
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+        }
     ]
-    arguments_by_call_id = {}
-    for evt in delta_events:
-        arguments_by_call_id.setdefault(evt.item_id, "")
-        arguments_by_call_id[evt.item_id] += evt.delta
+    done_item = next(event.item for event in all_events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
 
-    assert arguments_by_call_id["fc_call_a"] == '{"a":'
-    assert arguments_by_call_id["fc_call_b"] == '{"b":'
-    assert arguments_by_call_id["fc_call_a"] != '{"a":1}'
-    assert arguments_by_call_id["fc_call_b"] != '{"b":1}'
+    assert completed is not None
+    assert [(item.id, item.call_id) for item in added_items] == [("fc_call_a", "call_a")]
+    assert {event.item_id for event in streamed_argument_events} == {"fc_call_a"}
+    assert "".join(event.delta for event in streamed_argument_events) == '{"a":1}'
+    assert {event.item_id for event in argument_events} == {"fc_call_a"}
+    assert argument_events[-1].arguments == '{"a":1}'
+    assert (done_item.id, done_item.call_id) == ("fc_call_a", "call_a")
+    completed_call = next(item for item in completed.response.output if item.type == "function_call")
+    assert (completed_call.id, completed_call.call_id) == ("fc_call_a", "call_a")
 
 
 @pytest.mark.asyncio

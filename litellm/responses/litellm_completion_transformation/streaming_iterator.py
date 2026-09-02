@@ -119,8 +119,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._tool_call_id_by_index: dict[int, str] = {}
         self._streamed_tool_call_ids_in_order: list[str] = []  # mutable-ok: accumulates call ids across stream chunks
         self._resolved_tool_call_id_by_position: dict[int, str] = {}  # mutable-ok: terminal correlation state
-        self._streamed_call_id_by_terminal_id: dict[str, str] = {}  # mutable-ok: terminal identity correlation
-        self._ambiguous_tool_call_indexes: set[int] = set()
+        self._streamed_call_id_by_provider_id: dict[str, str] = {}  # mutable-ok: provider identity correlation
         self._next_tool_output_index: int = 1  # output_index=0 reserved for the message item
         self._final_tool_events_queued: bool = False
         self._sequence_number: int = 0
@@ -159,8 +158,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return None
 
     def _streamed_tool_call_id_at_position(self, position: int) -> str | None:
-        if position in self._ambiguous_tool_call_indexes:
-            return None
         indexed_call_id: Final = self._tool_call_id_by_index.get(position)
         if indexed_call_id is not None:
             return indexed_call_id
@@ -177,14 +174,29 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         """Match a terminal aggregate tool call to the identity emitted while streaming."""
         tool_call_index: Final = self._normalize_tool_call_index(tool_call)
         if tool_call_index is not None:
-            if tool_call_index in self._ambiguous_tool_call_indexes:
-                return None
             indexed_call_id: Final = self._tool_call_id_by_index.get(tool_call_index)
             if indexed_call_id is not None:
                 return indexed_call_id
             if self._tool_call_id_by_index:
                 return None
         return self._streamed_tool_call_id_at_position(position)
+
+    def _resolve_streamed_tool_call_id(self, tool_call_index: int | None, call_id_raw: object) -> str | None:
+        if tool_call_index is None:
+            return str(call_id_raw) if call_id_raw else None
+
+        indexed_call_id: Final = self._tool_call_id_by_index.get(tool_call_index)
+        if indexed_call_id is not None:
+            if call_id_raw:
+                self._streamed_call_id_by_provider_id[str(call_id_raw)] = indexed_call_id
+            return indexed_call_id
+
+        if not call_id_raw:
+            return None
+
+        call_id: Final = str(call_id_raw)
+        self._tool_call_id_by_index[tool_call_index] = call_id
+        return call_id
 
     def _responses_namespace_tool_call_fields(self, fn_name: str) -> tuple[str, str | None]:
         mapped: Final = self._namespace_tool_names.get(fn_name)
@@ -255,25 +267,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         for tc in tool_calls:
             tc_index = self._normalize_tool_call_index(tc)
             call_id_raw = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
-            call_id = ""
-
-            if call_id_raw:
-                call_id = str(call_id_raw)
-                if tc_index is not None:
-                    existing_call_id = self._tool_call_id_by_index.get(tc_index)
-                    if existing_call_id is not None and existing_call_id != call_id:
-                        # Reusing the same index for multiple call_ids is ambiguous for id-less deltas.
-                        # Guard against silent misrouting by disabling index fallback for this index.
-                        self._ambiguous_tool_call_indexes.add(tc_index)
-                    self._tool_call_id_by_index[tc_index] = call_id
-            elif tc_index is not None:
-                if tc_index in self._ambiguous_tool_call_indexes:
-                    continue
-                mapped_call_id = self._tool_call_id_by_index.get(tc_index)
-                if mapped_call_id:
-                    call_id = mapped_call_id
-
-            if not call_id:
+            call_id = self._resolve_streamed_tool_call_id(tc_index, call_id_raw)
+            if call_id is None:
                 continue
 
             fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
@@ -338,7 +333,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             terminal_call_id = str(call_id_raw)
             call_id = self._streamed_tool_call_id_for_terminal_call(tc, position) or terminal_call_id
             self._resolved_tool_call_id_by_position[position] = call_id
-            self._streamed_call_id_by_terminal_id[terminal_call_id] = call_id
+            self._streamed_call_id_by_provider_id[terminal_call_id] = call_id
             output_index = self._get_or_assign_tool_output_index(call_id)
 
             fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
@@ -1216,7 +1211,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _output_item_with_streamed_tool_identity(self, item: object, tool_position: int) -> object:
         terminal_call_id: Final = getattr(item, "call_id", None)
         resolved_by_call_id: Final = (
-            self._streamed_call_id_by_terminal_id.get(terminal_call_id) if isinstance(terminal_call_id, str) else None
+            self._streamed_call_id_by_provider_id.get(terminal_call_id) if isinstance(terminal_call_id, str) else None
         )
         resolved_by_position: Final = self._resolved_tool_call_id_by_position.get(tool_position)
         streamed_call_id: Final = (
