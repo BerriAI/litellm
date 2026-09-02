@@ -4744,6 +4744,63 @@ class ProxyConfig:
         )
         return coordination_redis_cache
 
+    @staticmethod
+    async def _init_coordination_redis_env_fallback(litellm_settings: Mapping[str, object]) -> RedisCache | None:
+        """
+        Last-resort coordination Redis, tried after an explicit
+        `general_settings.coordination_redis` block and `litellm_settings.cache`
+        have both had a chance to resolve one. Without this, a deployment that
+        only exports REDIS_HOST/REDIS_PORT (no cache block, no coordination_redis
+        block) gets NO cross-pod coordination at all: spend counters, budget-window
+        enforcement, and the reset_spend cache-eviction broadcast all silently stay
+        per-pod local, so a key reset on one pod never clears another pod's stale
+        enforcement.
+
+        Unlike the explicit block and cache-backend paths (a deliberate opt-in, so a
+        bad connection target or a malformed REDIS_CLUSTER_NODES/REDIS_SENTINEL_NODES
+        value should fail loudly), this one is inferred from bare env vars that may be
+        set for an unrelated reason -- e.g. a REDIS_HOST left over from a different
+        job/service, or a REDIS_CLUSTER_NODES value nothing here ever asked to be
+        parsed. Wrongly guessing "coordination available" must not turn a previously
+        harmless in-memory-only proxy into one that fails to boot or raises on every
+        cache write, so a malformed value or a failed/slow ping are both treated the
+        same as no REDIS_* vars at all.
+        """
+        try:
+            env_coordination_redis_cache: Final = _build_redis_usage_cache_from_environment()
+        except Exception as e:  # noqa: BLE001  # a malformed inferred Redis env var must not block startup
+            verbose_proxy_logger.warning(
+                "coordination_redis: could not build a Redis client from REDIS_* environment variables "
+                "(%s); cross-pod coordination stays in-memory. Set general_settings.coordination_redis "
+                "explicitly to require it.",
+                e,
+            )
+            return None
+        if env_coordination_redis_cache is None:
+            return None
+        try:
+            reachable: Final = await asyncio.wait_for(env_coordination_redis_cache.ping(), timeout=2.0)
+        except Exception as e:  # noqa: BLE001  # an unreachable inferred Redis must not block startup or writes
+            verbose_proxy_logger.warning(
+                "coordination_redis: REDIS_* environment variables named a Redis that is not reachable "
+                "(%s); cross-pod coordination stays in-memory. Set general_settings.coordination_redis "
+                "explicitly to require it.",
+                e,
+            )
+            return None
+        if not reachable:
+            return None
+        _attach_redis_usage_cache(
+            env_coordination_redis_cache,
+            enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
+        )
+        verbose_proxy_logger.info(
+            "coordination_redis: using a standalone Redis built from REDIS_* "
+            "environment variables for usage tracking, rate limiting, and "
+            "cross-pod coordination."
+        )
+        return env_coordination_redis_cache
+
     def _init_cache(
         self,
         cache_params: dict,
@@ -5411,6 +5468,13 @@ class ProxyConfig:
 
                         reset_audit_log_callback_cache()
                         _in_memory_loggers[:] = [cb for cb in _in_memory_loggers if not isinstance(cb, S3V2Logger)]
+
+        if redis_usage_cache is None:
+            env_coordination_redis_cache: Final = await self._init_coordination_redis_env_fallback(
+                litellm_settings=litellm_settings
+            )
+            if env_coordination_redis_cache is not None:
+                _set_redis_usage_cache(env_coordination_redis_cache)
 
         ## GENERAL SERVER SETTINGS (e.g. master key,..) # do this after initializing litellm, to ensure sentry logging works for proxylogging
         general_settings = config.get("general_settings", {})
