@@ -141,7 +141,6 @@ from litellm.utils import (
     convert_to_model_response_object,
     create_pretrained_tokenizer,
     create_tokenizer,
-    get_api_key,
     get_llm_provider,
     get_model_info,
     get_non_default_completion_params,
