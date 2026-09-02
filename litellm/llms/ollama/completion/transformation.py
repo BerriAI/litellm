@@ -103,6 +103,7 @@ class OllamaConfig(BaseConfig):
     top_p: float | None = None
     system: str | None = None
     template: str | None = None
+    json_output_requested: bool = False
 
     def __init__(
         self,
@@ -380,6 +381,7 @@ class OllamaConfig(BaseConfig):
                 ollama_prompt = modified_prompt
         stream: Final = optional_params.pop("stream", False)
         format: Final = optional_params.pop("format", None)
+        self.json_output_requested = format == "json"
         images = optional_params.pop("images", None)
         think: Final = optional_params.pop("think", None)
         data: Final = {
@@ -444,7 +446,7 @@ class OllamaConfig(BaseConfig):
         return OllamaTextCompletionResponseIterator(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
-            json_mode=json_mode,
+            json_mode=json_mode or self.json_output_requested,
         )
 
 
@@ -454,7 +456,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
         self.started_reasoning_content: bool = False
         self.finished_reasoning_content: bool = False
         self.buffered_json_content: str | None = None
-        self.function_call_buffering_disabled: bool = False
+        self.function_call_buffering_enabled: bool = bool(json_mode)
 
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
         return self.chunk_parser(json.loads(str_line))
@@ -463,6 +465,23 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
         normalized: Final = "".join(buffered.split())
         prefix: Final = '{"name"'
         return normalized.startswith(prefix) or prefix.startswith(normalized)
+
+    def _released_text(self, response_text: str) -> str | None:
+        """None while a fragment is held back because it may still complete a prompted function call."""
+        if self.buffered_json_content is None and not (
+            self.function_call_buffering_enabled
+            and not self.started_reasoning_content
+            and response_text.lstrip().startswith("{")
+        ):
+            self.function_call_buffering_enabled = False
+            return response_text
+        candidate: Final = (self.buffered_json_content or "") + response_text
+        if self._could_be_function_call(candidate):
+            self.buffered_json_content = candidate
+            return None
+        self.buffered_json_content = None
+        self.function_call_buffering_enabled = False
+        return candidate
 
     def _parse_buffered_function_call(self) -> ChatCompletionDeltaToolCall | None:
         if self.buffered_json_content is None:
@@ -537,26 +556,14 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                     usage=usage,
                 )
             elif chunk["response"]:
-                text = chunk["response"]
-                if self.buffered_json_content is not None or (
-                    not self.function_call_buffering_disabled
-                    and not self.started_reasoning_content
-                    and text.lstrip().startswith("{")
-                ):
-                    candidate: Final = (self.buffered_json_content or "") + text
-                    if self._could_be_function_call(candidate):
-                        self.buffered_json_content = candidate
-                        return ModelResponseStream(
-                            choices=[  # mutable-ok: ModelResponseStream only accepts a list of choices
-                                StreamingChoices(index=0, delta=Delta())
-                            ],
-                            usage=None,
-                        )
-                    self.buffered_json_content = None
-                    self.function_call_buffering_disabled = True
-                    text = candidate
-                else:
-                    self.function_call_buffering_disabled = True
+                text = self._released_text(chunk["response"])
+                if text is None:
+                    return ModelResponseStream(
+                        choices=[  # mutable-ok: ModelResponseStream only accepts a list of choices
+                            StreamingChoices(index=0, delta=Delta())
+                        ],
+                        usage=None,
+                    )
                 reasoning_content: str | None = None
                 content: str | None = None
                 if text is not None:

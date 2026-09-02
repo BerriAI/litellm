@@ -507,8 +507,10 @@ class TestOllamaTextCompletionResponseIterator:
 class TestOllamaTextCompletionStreamingToolCalls:
     """Regression tests for https://github.com/BerriAI/litellm/issues/35711"""
 
-    def _stream(self, responses):
-        iterator = OllamaTextCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+    def _stream(self, responses, json_mode=True):
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=json_mode
+        )
         chunks = [
             iterator.chunk_parser({"model": "qwen3", "created_at": "t", "done": False, "response": r})
             for r in responses
@@ -571,3 +573,60 @@ class TestOllamaTextCompletionStreamingToolCalls:
         assert chunks[0].choices[0].delta.content == "Hello"
         assert chunks[1].choices[0].delta.content == " world"
         assert done["finish_reason"] == "stop"
+
+    @pytest.mark.parametrize(
+        "arguments_fragment",
+        [' "arguments": {"location": "Paris"}}', ' "arguments": "{\\"location\\": \\"Paris\\"}"}'],
+    )
+    def test_no_tool_call_reconstruction_when_json_was_not_requested(self, arguments_fragment):
+        """A caller that sent no tools and no response_format must never get a synthesized tool call,
+        and must never lose the content it did ask for."""
+        chunks, done = self._stream(['{"name": "get_weather",', arguments_fragment], json_mode=False)
+
+        streamed = "".join(c.choices[0].delta.content or "" for c in chunks)
+        assert streamed == '{"name": "get_weather",' + arguments_fragment
+        for chunk in chunks:
+            assert chunk.choices[0].delta.tool_calls is None
+        assert done["finish_reason"] == "stop"
+
+
+class TestOllamaStreamGating:
+    """`utils.py` sets format=json for ollama whenever tools are passed, and the prompted function call
+    only makes sense for those requests. The iterator learns about it from the request transform."""
+
+    def _iterator_for(self, optional_params):
+        config = OllamaConfig()
+        config.transform_request(
+            model="qwen3",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        return config.get_model_response_iterator(streaming_response=iter([]), sync_stream=True, json_mode=False)
+
+    def test_json_format_request_buffers_a_possible_function_call(self):
+        iterator = self._iterator_for({"format": "json"})
+
+        assert iterator.function_call_buffering_enabled is True
+
+    def test_plain_request_never_buffers(self):
+        iterator = self._iterator_for({"temperature": 0.5})
+
+        assert iterator.function_call_buffering_enabled is False
+
+    @pytest.mark.parametrize("sync_stream", [True, False])
+    def test_gate_survives_both_sync_and_async_streaming(self, sync_stream):
+        """The async handler builds the iterator without forwarding json_mode, so the flag has to ride
+        on the config rather than on that argument."""
+        config = OllamaConfig()
+        config.transform_request(
+            model="qwen3",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"format": "json"},
+            litellm_params={},
+            headers={},
+        )
+        iterator = config.get_model_response_iterator(streaming_response=iter([]), sync_stream=sync_stream)
+
+        assert iterator.function_call_buffering_enabled is True
