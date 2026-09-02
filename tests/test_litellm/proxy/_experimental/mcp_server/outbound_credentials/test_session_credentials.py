@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from jwt.utils import base64url_decode, base64url_encode
 from pydantic import SecretStr
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
@@ -50,6 +51,12 @@ def _refresh_token() -> str:
     minted = mint_session_refresh_token(PRINCIPAL, KEYS, NOW)
     assert isinstance(minted, MintedSessionToken)
     return minted.token.get_secret_value()
+
+
+def _corrupt_signature(token: str) -> str:
+    unsigned, signature = token.rsplit(".", 1)
+    raw = base64url_decode(signature)
+    return f"{unsigned}.{base64url_encode(bytes((raw[0] ^ 0x01,)) + raw[1:]).decode()}"
 
 
 def test_kdf_is_deterministic_and_key_length_is_256_bit():
@@ -109,8 +116,7 @@ def test_resolve_fails_expired_token_closed_and_flags_expiry():
 
 def test_resolve_fails_tampered_token_closed_without_expiry_flag():
     token = _access_token()
-    tampered = token[:-2] + ("aa" if not token.endswith("aa") else "bb")
-    result = resolve_session_bearer(f"Bearer {tampered}", KEYS, NOW)
+    result = resolve_session_bearer(f"Bearer {_corrupt_signature(token)}", KEYS, NOW)
     assert isinstance(result, SessionBearerInvalid)
     assert result.expired is False
 
