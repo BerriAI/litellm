@@ -298,7 +298,8 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
             })?;
         let usage = response.get("usage").cloned();
         let content = first_choice_content(&response_json)?;
-        let mut ocr_data = ocr_data_from_content(content.clone(), usage.clone(), model);
+        let provider_model = deepseek_model_name(model);
+        let mut ocr_data = ocr_data_from_content(content.clone(), usage.clone(), &provider_model);
 
         if !ocr_data.get("pages").is_some_and(Value::is_array) {
             ocr_data = json!({
@@ -309,7 +310,7 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
                         other => other.to_string(),
                     }
                 }],
-                "model": ocr_data.get("model").and_then(Value::as_str).unwrap_or(model),
+                "model": ocr_data.get("model").and_then(Value::as_str).unwrap_or(&provider_model),
                 "usage_info": ocr_data.get("usage_info").cloned().or(usage).unwrap_or_else(|| json!({})),
             });
         }
@@ -332,7 +333,7 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
             model: object
                 .get("model")
                 .and_then(Value::as_str)
-                .unwrap_or(model)
+                .unwrap_or(&provider_model)
                 .to_string(),
             document_annotation: object.get("document_annotation").cloned(),
             usage_info,
@@ -429,7 +430,7 @@ mod tests {
             response.pages,
             vec![json!({"index": 0, "markdown": "# OCR text"})]
         );
-        assert_eq!(response.model, "deepseek-ocr-maas");
+        assert_eq!(response.model, "deepseek-ai/deepseek-ocr-maas");
         assert_eq!(response.usage_info, Some(json!({"prompt_tokens": 1})));
     }
 }

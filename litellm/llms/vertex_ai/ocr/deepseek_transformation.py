@@ -26,6 +26,10 @@ else:
     LiteLLMLoggingObj = Any
 
 
+def _provider_model_name(model: str) -> str:
+    return model if model.startswith("deepseek-ai/") else f"deepseek-ai/{model}"
+
+
 class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
     """
     Vertex AI DeepSeek OCR transformation configuration.
@@ -177,7 +181,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
             content_item = {"type": "image_url", "image_url": document_url}
 
         # Build DeepSeek OCR request
-        provider_model: Final = model if model.startswith("deepseek-ai/") else f"deepseek-ai/{model}"
+        provider_model: Final = _provider_model_name(model)
         data: Final = {
             "model": provider_model,
             "messages": [{"role": "user", "content": [content_item]}],
@@ -261,6 +265,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         """
         verbose_logger.debug("Vertex AI DeepSeek OCR transform_ocr_response called")
         verbose_logger.debug("Raw response: %s", raw_response.text)
+        provider_model: Final = _provider_model_name(model)
 
         try:
             response_json: Final = raw_response.json()
@@ -288,14 +293,14 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
                     # If content is markdown text, create a single page with the markdown
                     ocr_data = {
                         "pages": [{"index": 0, "markdown": content}],
-                        "model": model,
+                        "model": provider_model,
                         "usage_info": response_json.get("usage", {}),
                     }
             except json.JSONDecodeError:
                 # If JSON parsing fails, treat content as markdown
                 ocr_data = {
                     "pages": [{"index": 0, "markdown": content}],
-                    "model": model,
+                    "model": provider_model,
                     "usage_info": response_json.get("usage", {}),
                 }
 
@@ -309,7 +314,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
                             "markdown": (content if isinstance(content, str) else json.dumps(content)),
                         }
                     ],
-                    "model": ocr_data.get("model", model),
+                    "model": ocr_data.get("model", provider_model),
                     "usage_info": ocr_data.get("usage_info", response_json.get("usage", {})),
                 }
 
@@ -339,7 +344,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
 
             return OCRResponse(
                 pages=pages,
-                model=ocr_data.get("model", model),
+                model=ocr_data.get("model", provider_model),
                 document_annotation=ocr_data.get("document_annotation"),
                 usage_info=usage_info,
                 object="ocr",

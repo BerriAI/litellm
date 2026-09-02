@@ -133,6 +133,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LitellmLoggingObject,
     )
+    from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 else:
     LitellmLoggingObject = Any
 
@@ -1871,6 +1872,23 @@ def response_cost_calculator(
         raise e
 
 
+def _ocr_token_cost(usage_info: "OCRUsageInfo", model_info: ModelInfo | None) -> tuple[float, float] | None:
+    if model_info is None:
+        return None
+    input_cost_per_token: Final = model_info.get("input_cost_per_token") or 0.0
+    output_cost_per_token: Final = model_info.get("output_cost_per_token") or 0.0
+    if input_cost_per_token == 0.0 and output_cost_per_token == 0.0:
+        return None
+    token_counts: Final = usage_info.model_extra
+    if token_counts is None:
+        return None
+    prompt_tokens: Final = token_counts.get("prompt_tokens")
+    completion_tokens: Final = token_counts.get("completion_tokens")
+    if not isinstance(prompt_tokens, int) or not isinstance(completion_tokens, int):
+        return None
+    return prompt_tokens * input_cost_per_token, completion_tokens * output_cost_per_token
+
+
 def ocr_cost(
     model: str,
     custom_llm_provider: str | None,
@@ -1883,9 +1901,7 @@ def ocr_cost(
         response: Optional[Any] - response object
 
     Returns:
-        Tuple[float, float]: cost of OCR processing
-
-        (Parent function requires a tuple, so we return a tuple. Cost is only in the first element.)
+        Tuple[float, float]: (prompt cost, completion cost) when priced per token, otherwise the page cost in the first element
     """
     from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
@@ -1917,6 +1933,12 @@ def ocr_cost(
     pages_processed: Final = response.usage_info.pages_processed
     annotation_pages: Final = response.usage_info.pages_processed_annotation or 0
     has_billable_annotation_pages: Final = annotation_rate is not None and annotation_pages > 0
+    has_page_pricing: Final = (
+        pages_processed is not None and ocr_cost_per_page is not None
+    ) or has_billable_annotation_pages
+    token_cost: Final = _ocr_token_cost(response.usage_info, model_info)
+    if not has_page_pricing and token_cost is not None:
+        return token_cost
 
     if pages_processed is None and not has_billable_annotation_pages:
         if cost_per_credit is not None or ocr_cost_per_page is None:
