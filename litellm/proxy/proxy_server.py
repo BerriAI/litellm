@@ -352,7 +352,10 @@ from litellm.proxy.common_utils.load_config_utils import (
     get_file_contents_from_s3,
 )
 from litellm.proxy.common_utils.model_deprecation import collect_model_deprecations
-from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslator
+from litellm.proxy.common_utils.model_listing_utils import (
+    TeamModelNameTranslator,
+    configured_display_names,
+)
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
@@ -10223,7 +10226,8 @@ async def model_list(
         # The internal routing key drives the metadata/fallback lookup, while the
         # public name is what the client sees as the model id.
         model_data = []
-        for response_id, lookup_id in TeamModelNameTranslator.listing_entries(all_models, llm_router, settings):
+        admin_entries: Final = TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
+        for response_id, lookup_id in admin_entries:
             model_info = create_model_info_response(
                 model_id=lookup_id,
                 provider="openai",
@@ -10236,7 +10240,10 @@ async def model_list(
 
         if wants_anthropic_format:
             admin_listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
-            return create_anthropic_model_list_response(admin_listing)
+            return create_anthropic_model_list_response(
+                admin_listing,
+                display_names=configured_display_names(admin_entries, llm_router),
+            )
 
         return dict(
             data=model_data,
@@ -10267,7 +10274,8 @@ async def model_list(
     # The internal routing key drives the metadata/fallback lookup, while the
     # public name is what the client sees as the model id.
     model_data = []
-    for response_id, lookup_id in TeamModelNameTranslator.listing_entries(all_models, llm_router, settings):
+    entries: Final = TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
+    for response_id, lookup_id in entries:
         model_info = create_model_info_response(
             model_id=lookup_id,
             provider="openai",
@@ -10280,7 +10288,10 @@ async def model_list(
 
     if wants_anthropic_format:
         listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
-        return create_anthropic_model_list_response(listing)
+        return create_anthropic_model_list_response(
+            listing,
+            display_names=configured_display_names(entries, llm_router),
+        )
 
     return dict(
         data=model_data,
