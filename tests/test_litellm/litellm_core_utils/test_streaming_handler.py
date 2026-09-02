@@ -4773,6 +4773,19 @@ class TestStableStreamingResponseId:
         assert wrapper.model_response_creator().id == "chatcmpl-from-provider"
 
 
+def _chunk_with_provider_usage(usage) -> ModelResponseStream:
+    """A chunk that carries usage AND a choice, the shape that skips the usage-only path."""
+    chunk = ModelResponseStream(
+        id="chatcmpl-1",
+        object="chat.completion.chunk",
+        created=1000000,
+        model="openai/some-model",
+        choices=[StreamingChoices(index=0, delta=Delta(), finish_reason=None)],
+    )
+    chunk.usage = usage
+    return chunk
+
+
 def test_provider_usage_model_is_coerced_to_litellm_usage(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
@@ -4792,22 +4805,16 @@ def test_provider_usage_model_is_coerced_to_litellm_usage(
     wrapper.received_finish_reason = "stop"
     wrapper.sent_last_chunk = True
 
-    chunk = ModelResponseStream(
-        id="chatcmpl-1",
-        object="chat.completion.chunk",
-        created=1000000,
-        model="openai/some-model",
-        choices=[StreamingChoices(index=0, delta=Delta(), finish_reason=None)],
+    result = wrapper.chunk_creator(
+        chunk=_chunk_with_provider_usage(
+            CompletionUsage(
+                prompt_tokens=1000,
+                completion_tokens=5,
+                total_tokens=1005,
+                prompt_tokens_details=PromptTokensDetails(cached_tokens=900),
+            )
+        )
     )
-    # what a provider SDK hands over: not a litellm Usage
-    chunk.usage = CompletionUsage(
-        prompt_tokens=1000,
-        completion_tokens=5,
-        total_tokens=1005,
-        prompt_tokens_details=PromptTokensDetails(cached_tokens=900),
-    )
-
-    result = wrapper.chunk_creator(chunk=chunk)
 
     assert result is not None, "the usage-bearing chunk must not be dropped"
     assert isinstance(result.usage, Usage), (
@@ -4816,3 +4823,42 @@ def test_provider_usage_model_is_coerced_to_litellm_usage(
     assert result.usage.prompt_tokens == 1000
     assert result.usage.prompt_tokens_details is not None
     assert result.usage.prompt_tokens_details.cached_tokens == 900
+
+
+def test_provider_reported_cost_is_not_adopted_when_coercing(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """Coercing must not adopt a provider-reported cost.
+
+    `cost` is a declared field on litellm `Usage` and cost tracking bills it as
+    the response cost -- but providers report it in their own unit. One gateway
+    sends an integer that is neither dollars nor cents, so carrying it over
+    recorded 555533 for a request costing 0.008.
+    """
+    from pydantic import BaseModel
+
+    class _ProviderUsage(BaseModel):
+        prompt_tokens: int
+        completion_tokens: int
+        total_tokens: int
+        cost: float
+
+    wrapper = initialized_custom_stream_wrapper
+    wrapper.custom_llm_provider = "openai"
+    wrapper.received_finish_reason = "stop"
+    wrapper.sent_last_chunk = True
+
+    result = wrapper.chunk_creator(
+        chunk=_chunk_with_provider_usage(
+            _ProviderUsage(
+                prompt_tokens=1000, completion_tokens=5, total_tokens=1005, cost=555533
+            )
+        )
+    )
+
+    assert result is not None
+    assert isinstance(result.usage, Usage)
+    assert result.usage.prompt_tokens == 1000
+    assert not getattr(result.usage, "cost", None), (
+        "a provider-reported cost must not be adopted: it is in the provider's own unit"
+    )
