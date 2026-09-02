@@ -185,6 +185,50 @@ async def test_download_file_drops_query_string_from_the_stored_url(mock_env_var
 
 
 @pytest.mark.parametrize(
+    "malicious_filename",
+    [
+        "report.jsonl/../../etc/cron.d/evil",
+        "a.b/../../../root/.ssh/authorized_keys",
+    ],
+)
+@pytest.mark.parametrize("strategy", ["uuid", "timestamp"])
+@pytest.mark.asyncio
+async def test_generate_file_name_strips_path_traversal_from_extension(mock_env_vars, malicious_filename, strategy):
+    """
+    original_filename.split(".")[-1] does not parse path structure, so a filename whose
+    last "." is followed by a directory traversal sequence used to put that sequence
+    straight into the blob path built from this name. The mutant this pins is reverting
+    _safe_extension() back to that bare split.
+    """
+    backend = _make_backend()
+    generated = backend._generate_file_name(malicious_filename, strategy)
+    assert "/" not in generated
+    assert ".." not in generated
+
+
+@pytest.mark.asyncio
+async def test_generate_file_name_uuid_strategy_preserves_ordinary_extension(mock_env_vars):
+    backend = _make_backend()
+    generated = backend._generate_file_name("data.jsonl", "uuid")
+    assert generated.endswith(".jsonl")
+
+
+@pytest.mark.asyncio
+async def test_generate_file_name_original_filename_strategy_strips_directory_components(mock_env_vars):
+    """The blob name must never carry a directory the caller supplied, traversal or not."""
+    backend = _make_backend()
+    generated = backend._generate_file_name("../../etc/passwd", "original_filename")
+    assert generated == "passwd"
+
+
+@pytest.mark.asyncio
+async def test_generate_file_name_null_byte_filename_falls_back_to_safe_default(mock_env_vars):
+    backend = _make_backend()
+    generated = backend._generate_file_name("report.pdf\x00.exe", "uuid")
+    assert "\x00" not in generated
+
+
+@pytest.mark.parametrize(
     "env_fixture, expected_suffix",
     [("mock_env_vars", "core.windows.net"), ("mock_gov_env_vars", GOV_SUFFIX)],
 )

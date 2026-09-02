@@ -89,7 +89,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
 from litellm.proxy.auth.auth_utils import (
     _get_request_ip_address,
-    _has_user_setup_sso,
+    has_user_setup_sso,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -2617,7 +2617,7 @@ async def get_ui_settings(request: Request):
     _proxy_base_url: Final = os.getenv("PROXY_BASE_URL", None)
     _logout_url: Final = os.getenv("PROXY_LOGOUT_URL", None)
     _api_doc_base_url: Final = os.getenv("LITELLM_UI_API_DOC_BASE_URL", None)
-    _is_sso_enabled: Final = _has_user_setup_sso()
+    _is_sso_enabled: Final = has_user_setup_sso()
     disable_expensive_db_queries: Final = (
         proxy_state.get_proxy_state_variable("spend_logs_row_count") > MAX_SPENDLOG_ROWS_TO_QUERY
     )
