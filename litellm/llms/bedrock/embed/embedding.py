@@ -6,7 +6,7 @@ import copy
 import json
 import urllib.parse
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Final, get_args
+from typing import TYPE_CHECKING, Final, get_args, overload
 
 import httpx
 
@@ -42,6 +42,20 @@ if TYPE_CHECKING:
 
 
 class BedrockEmbedding(BaseAWSLLM):
+    @overload
+    def _load_credentials(
+        self,
+        optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
+        bearer_token: None = None,
+    ) -> tuple[Credentials, str]: ...
+
+    @overload
+    def _load_credentials(
+        self,
+        optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
+        bearer_token: str,
+    ) -> tuple[None, str]: ...
+
     def _load_credentials(
         self,
         optional_params: dict,
@@ -598,11 +612,8 @@ class BedrockEmbedding(BaseAWSLLM):
         try:
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.exceptions import NoCredentialsError
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-        if credentials is None:
-            raise NoCredentialsError()
 
         # Create AWSRequest with GET method and encoded URL
         request: Final = AWSRequest(

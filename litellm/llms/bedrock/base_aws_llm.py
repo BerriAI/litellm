@@ -7,7 +7,7 @@ import urllib.parse
 from collections.abc import Callable
 from datetime import datetime
 from threading import Lock
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast, get_args, overload
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -48,10 +48,17 @@ _STS_REGION_FROM_ENDPOINT_PATTERN: Final = re.compile(
 SIGV4_COMPUTED_HEADERS: Final = frozenset({"authorization", "x-amz-date", "x-amz-security-token", "date"})
 
 
-class Boto3CredentialsInfo(BaseModel):
-    credentials: Credentials | None
+class BedrockRequestTarget(BaseModel):
     aws_region_name: str
     aws_bedrock_runtime_endpoint: str | None
+
+
+class Boto3CredentialsInfo(BedrockRequestTarget):
+    credentials: Credentials
+
+
+class BearerRequestTarget(BedrockRequestTarget):
+    credentials: None = None
 
 
 def bedrock_bearer_token(api_key: str | None) -> str | None:
@@ -1392,9 +1399,26 @@ class BaseAWSLLM:
         else:
             return f"https://bedrock-runtime.{aws_region_name}.{dns_suffix}"
 
+    @overload
+    def _get_boto_credentials_from_optional_params(
+        self,
+        optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
+        model: str | None = None,
+        bearer_token: None = None,
+    ) -> Boto3CredentialsInfo: ...
+
+    @overload
+    def _get_boto_credentials_from_optional_params(
+        self,
+        optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
+        model: str | None = None,
+        *,
+        bearer_token: str,
+    ) -> BearerRequestTarget: ...
+
     def _get_boto_credentials_from_optional_params(
         self, optional_params: dict, model: str | None = None, bearer_token: str | None = None
-    ) -> Boto3CredentialsInfo:
+    ) -> Boto3CredentialsInfo | BearerRequestTarget:
         """
         Get boto3 credentials from optional params
 
@@ -1425,23 +1449,24 @@ class BaseAWSLLM:
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_external_id: Final = optional_params.pop("aws_external_id", None)
 
-        credentials: Final[Credentials | None] = (
-            None
-            if bearer_token is not None
-            else self.get_credentials(
-                aws_access_key_id=aws_access_key_id,
-                aws_secret_access_key=aws_secret_access_key,
-                aws_session_token=aws_session_token,
+        if bearer_token is not None:
+            return BearerRequestTarget(
                 aws_region_name=aws_region_name,
-                aws_session_name=aws_session_name,
-                aws_profile_name=aws_profile_name,
-                aws_role_name=aws_role_name,
-                aws_web_identity_token=aws_web_identity_token,
-                aws_sts_endpoint=aws_sts_endpoint,
-                aws_external_id=aws_external_id,
+                aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             )
-        )
 
+        credentials: Final[Credentials] = self.get_credentials(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            aws_region_name=aws_region_name,
+            aws_session_name=aws_session_name,
+            aws_profile_name=aws_profile_name,
+            aws_role_name=aws_role_name,
+            aws_web_identity_token=aws_web_identity_token,
+            aws_sts_endpoint=aws_sts_endpoint,
+            aws_external_id=aws_external_id,
+        )
         return Boto3CredentialsInfo(
             credentials=credentials,
             aws_region_name=aws_region_name,
