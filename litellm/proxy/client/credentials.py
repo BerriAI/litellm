@@ -6,16 +6,18 @@ from .exceptions import UnauthorizedError
 
 
 class CredentialsManagementClient:
-    def __init__(self, base_url: str, api_key: str | None = None):
+    def __init__(self, base_url: str, api_key: str | None = None, timeout: int = 30):
         """
         Initialize the CredentialsManagementClient.
 
         Args:
             base_url (str): The base URL of the LiteLLM proxy server (e.g., "http://localhost:8000")
             api_key (Optional[str]): API key for authentication. If provided, it will be sent as a Bearer token.
+            timeout (int): Request timeout in seconds (default: 30)
         """
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
+        self._timeout = timeout
 
     def _get_headers(self) -> dict[str, str]:
         """
@@ -56,7 +58,7 @@ class CredentialsManagementClient:
 
         session: Final = requests.Session()
         try:
-            response: Final = session.send(request.prepare())
+            response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -103,7 +105,7 @@ class CredentialsManagementClient:
 
         session: Final = requests.Session()
         try:
-            response: Final = session.send(request.prepare())
+            response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -140,7 +142,7 @@ class CredentialsManagementClient:
 
         session: Final = requests.Session()
         try:
-            response: Final = session.send(request.prepare())
+            response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -177,7 +179,7 @@ class CredentialsManagementClient:
 
         session: Final = requests.Session()
         try:
-            response: Final = session.send(request.prepare())
+            response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:

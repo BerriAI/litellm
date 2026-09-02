@@ -1266,13 +1266,14 @@ class TestCreateSmtpConnection:
             patch("smtplib.SMTP_SSL") as mock_smtp_ssl,
             patch("smtplib.SMTP") as mock_smtp,
         ):
-            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=465)
+            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=465, timeout=30.0)
 
         mock_smtp.assert_not_called()
         assert result is mock_smtp_ssl.return_value
         _, kwargs = mock_smtp_ssl.call_args
         assert kwargs["host"] == "mail.example.com"
         assert kwargs["port"] == 465
+        assert kwargs["timeout"] == 30.0
         context = kwargs["context"]
         assert isinstance(context, ssl.SSLContext)
         assert context.verify_mode == ssl.CERT_REQUIRED
@@ -1286,11 +1287,11 @@ class TestCreateSmtpConnection:
             patch("smtplib.SMTP_SSL") as mock_smtp_ssl,
             patch("smtplib.SMTP") as mock_smtp,
         ):
-            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=587)
+            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=587, timeout=30.0)
 
         mock_smtp_ssl.assert_not_called()
         assert result is mock_smtp.return_value
-        mock_smtp.assert_called_once_with(host="mail.example.com", port=587)
+        mock_smtp.assert_called_once_with(host="mail.example.com", port=587, timeout=30.0)
 
 
 class TestSendEmailStartTls:

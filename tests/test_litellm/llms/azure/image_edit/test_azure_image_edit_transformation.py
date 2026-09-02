@@ -233,3 +233,62 @@ def test_api_version_in_api_base_query_is_preserved(monkeypatch):
     )
 
     assert _query_params(url) == {"api-version": "2024-05-01-preview"}
+
+
+def test_v1_api_version_uses_v1_route_and_keeps_model(monkeypatch):
+    monkeypatch.setattr(litellm, "api_version", None, raising=False)
+    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
+    config = AzureImageEditConfig()
+
+    for api_version in ("v1", "preview", "latest"):
+        url = config.get_complete_url(
+            model=_FALLBACK_MODEL,
+            api_base=_FALLBACK_API_BASE,
+            litellm_params={"api_version": api_version},
+        )
+        assert urllib.parse.urlparse(url).path == "/openai/v1/images/edits"
+        assert _query_params(url) == {"api-version": api_version}
+        assert config.finalize_image_edit_request_data({"model": _FALLBACK_MODEL, "prompt": "x"}, url) == {
+            "model": _FALLBACK_MODEL,
+            "prompt": "x",
+        }
+
+
+def test_v1_api_version_from_global_uses_v1_route(monkeypatch):
+    monkeypatch.setattr(litellm, "api_version", "preview", raising=False)
+    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
+
+    url = AzureImageEditConfig().get_complete_url(
+        model=_FALLBACK_MODEL,
+        api_base=_FALLBACK_API_BASE,
+        litellm_params={},
+    )
+
+    assert urllib.parse.urlparse(url).path == "/openai/v1/images/edits"
+
+
+def test_dated_api_version_still_uses_deployment_route(monkeypatch):
+    monkeypatch.setattr(litellm, "api_version", None, raising=False)
+    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
+
+    url = AzureImageEditConfig().get_complete_url(
+        model=_FALLBACK_MODEL,
+        api_base=_FALLBACK_API_BASE,
+        litellm_params={"api_version": "2024-10-21"},
+    )
+
+    assert urllib.parse.urlparse(url).path == f"/openai/deployments/{_FALLBACK_MODEL}/images/edits"
+
+
+def test_v1_api_version_replaces_deployment_scoped_api_base(monkeypatch):
+    monkeypatch.setattr(litellm, "api_version", None, raising=False)
+    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
+
+    url = AzureImageEditConfig().get_complete_url(
+        model=_FALLBACK_MODEL,
+        api_base=f"{_FALLBACK_API_BASE}/openai/deployments/{_FALLBACK_MODEL}/images/edits?api-version=2024-10-21",
+        litellm_params={"api_version": "preview"},
+    )
+
+    assert urllib.parse.urlparse(url).path == "/openai/v1/images/edits"
+    assert _query_params(url) == {"api-version": "preview"}

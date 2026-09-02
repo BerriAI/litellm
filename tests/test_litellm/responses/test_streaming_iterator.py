@@ -305,3 +305,76 @@ def test_stream_cache_write_completes_when_asyncio_run_closes_the_loop(monkeypat
     asyncio.run(_short_lived_script())
 
     assert len(writes) == 1
+
+
+def test_run_post_success_hooks_does_not_report_generation_time_as_overhead():
+    """LIT-5466: the provider call is timed to first byte, so at stream completion the total minus
+    that duration is token generation, not LiteLLM overhead."""
+    logging_obj = _logging_obj_stub()
+    logging_obj.model_call_details = {"litellm_params": {}, "llm_api_duration_ms": 200.0}
+    logging_obj.caching_details = None
+
+    class _CompletedEvent:
+        def __init__(self) -> None:
+            self._hidden_params: dict = {}
+
+    iterator = _make_iterator(sse_events=[], logging_obj=logging_obj)
+    iterator.completed_response = _CompletedEvent()
+    iterator.start_time = datetime(2025, 1, 1, 0, 0, 0)
+
+    iterator._run_post_success_hooks(datetime(2025, 1, 1, 0, 0, 10))
+
+    assert iterator.completed_response._hidden_params["_response_ms"] == 10000.0
+    assert "litellm_overhead_time_ms" not in iterator.completed_response._hidden_params
+
+
+def _responses_api_response_with_usage() -> ResponsesAPIResponse:
+    from litellm.types.llms.openai import ResponseAPIUsage
+
+    return ResponsesAPIResponse(
+        id="resp_lit6427",
+        created_at=int(datetime(2025, 1, 1).timestamp()),
+        status="completed",
+        model="mantle-claude",
+        object="response",
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=20, output_tokens=60, total_tokens=80),
+    )
+
+
+def test_stamp_responses_usage_cost_stamps_computed_cost():
+    from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+
+    response = _responses_api_response_with_usage()
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj._response_cost_calculator.return_value = 0.000704
+
+    _stamp_responses_usage_cost(response, logging_obj)
+
+    assert getattr(response.usage, "cost", None) == pytest.approx(0.000704)
+    logging_obj._response_cost_calculator.assert_called_once_with(result=response)
+
+
+def test_stamp_responses_usage_cost_keeps_provider_reported_cost():
+    from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+
+    response = _responses_api_response_with_usage()
+    setattr(response.usage, "cost", 0.5)
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+
+    _stamp_responses_usage_cost(response, logging_obj)
+
+    assert getattr(response.usage, "cost", None) == pytest.approx(0.5)
+    logging_obj._response_cost_calculator.assert_not_called()
+
+
+def test_stamp_responses_usage_cost_survives_calculator_failure():
+    from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+
+    response = _responses_api_response_with_usage()
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj._response_cost_calculator.side_effect = RuntimeError("cost map unavailable")
+
+    _stamp_responses_usage_cost(response, logging_obj)
+
+    assert getattr(response.usage, "cost", None) is None

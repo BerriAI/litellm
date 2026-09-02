@@ -11,7 +11,10 @@ A2A Protocol Format:
 """
 
 import json
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -21,6 +24,13 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
+
+
+class _A2ATextPart(TypedDict, total=False):
+    """The subset of an A2A message part this handler reads text from."""
+
+    kind: ReadOnly[str]
+    text: ReadOnly[str]
 
 
 class A2AGuardrailHandler(BaseTranslation):
@@ -41,7 +51,7 @@ class A2AGuardrailHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> Any:
+    ) -> dict:
         """
         Process A2A input messages by applying guardrails to text content.
 
@@ -214,12 +224,12 @@ class A2AGuardrailHandler(BaseTranslation):
 
     async def process_output_streaming_response(
         self,
-        responses_so_far: list[Any],
+        responses_so_far: list[object],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         request_data: dict | None = None,
-    ) -> list[Any]:
+    ) -> list[object]:
         """
         Process A2A streaming output by applying guardrails to accumulated text.
 
@@ -305,11 +315,12 @@ class A2AGuardrailHandler(BaseTranslation):
 
     def _parse_streaming_responses(
         self,
-        responses_so_far: list[Any],
-    ) -> tuple[list[dict[str, Any] | None], list[tuple[int, dict[str, Any]]]]:
+        responses_so_far: list[object],
+    ) -> tuple[list[dict[str, object] | None], list[tuple[int, dict[str, object]]]]:
         """Parse JSON-RPC items, returning aligned parsed list and valid entries."""
-        parsed: Final[list[dict[str, Any] | None]] = [None] * len(responses_so_far)
+        parsed: Final[list[dict[str, object] | None]] = [None] * len(responses_so_far)
         for i, item in enumerate(responses_so_far):
+            obj: dict[str, object]
             if isinstance(item, dict):
                 obj = item
             elif isinstance(item, str):
@@ -326,7 +337,7 @@ class A2AGuardrailHandler(BaseTranslation):
 
     def _collect_text_from_parsed_chunks(
         self,
-        valid_parsed: list[tuple[int, dict[str, Any]]],
+        valid_parsed: list[tuple[int, dict[str, object]]],
     ) -> tuple[str, list[int]]:
         """Collect text from parsed chunks, returning combined text and indices."""
         from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
@@ -411,7 +422,7 @@ class A2AGuardrailHandler(BaseTranslation):
 
     def _extract_texts_from_parts(
         self,
-        parts: list[dict[str, Any]],
+        parts: Sequence[_A2ATextPart],
         path: tuple[str, ...],
         texts_to_check: list[str],
         task_mappings: list[tuple[tuple[str, ...], int]],
