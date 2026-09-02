@@ -105,6 +105,24 @@ def _index_hint(index_name: str, database: str, collection: str) -> str:
     )
 
 
+def missing_index_error(index_name: str, database: str, collection: str) -> ValueError:
+    """$vectorSearch against a missing index, database or collection returns zero documents
+    instead of failing, so an empty result set is checked against the index catalogue and
+    turned into this rather than being reported as 'no matches'."""
+    return ValueError(
+        f"{_index_hint(index_name, database, collection)} A vector search against a database, "
+        "collection or index that does not exist returns no results rather than an error, so this "
+        "was reported as an empty result set by MongoDB."
+    )
+
+
+def index_not_ready_error(index_name: str, database: str, collection: str, status: str) -> ValueError:
+    return ValueError(
+        f"The Atlas Vector Search index '{index_name}' on '{database}.{collection}' is not queryable "
+        f"yet; its status is {status}. Searches against it return no results until the build finishes."
+    )
+
+
 def translate_mongo_error(error: Exception, index_name: str, database: str, collection: str) -> Exception:
     """Turn a driver failure into a message that names the misconfiguration, never a silent empty result.
 
@@ -136,14 +154,19 @@ def translate_mongo_error(error: Exception, index_name: str, database: str, coll
                 f"lacks read access to '{database}.{collection}'. Driver detail: {error.details}"
             )
         detail: Final = str(error).lower()
-        if "index" in detail and ("not found" in detail or "does not exist" in detail or "unknown" in detail):
-            return ValueError(f"{_index_hint(index_name, database, collection)} Driver detail: {error}")
-        if "dimension" in detail or "numdimensions" in detail or "queryvector" in detail:
+        if "dimension" in detail:
             return ValueError(
                 "The query embedding does not match the vector dimensions the Atlas index was built for. "
                 "litellm_embedding_model must be the same model that produced the stored vectors. "
                 f"Driver detail: {error}"
             )
+        if "is not indexed as vector" in detail:
+            return ValueError(
+                "mongodb_embedding_field names a field the Atlas Vector Search index does not cover. "
+                f"It must match the 'path' the index '{index_name}' was created on. Driver detail: {error}"
+            )
+        if "index" in detail and ("not found" in detail or "does not exist" in detail or "unknown" in detail):
+            return ValueError(f"{_index_hint(index_name, database, collection)} Driver detail: {error}")
         return ValueError(
             f"MongoDB rejected the vector search against '{database}.{collection}' using index "
             f"'{index_name}'. Driver detail: {error}"

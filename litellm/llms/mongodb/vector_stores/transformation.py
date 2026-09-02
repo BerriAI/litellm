@@ -26,6 +26,8 @@ from litellm.llms.mongodb.common_utils import (
     MongoClientKey,
     get_async_client,
     get_sync_client,
+    index_not_ready_error,
+    missing_index_error,
     translate_mongo_error,
 )
 from litellm.types.utils import EmbeddingResponse
@@ -250,6 +252,19 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         )
 
     @staticmethod
+    def _raise_for_unusable_index(
+        catalogue: Sequence[Mapping[str, object]], index_name: str, database: str, collection: str
+    ) -> None:
+        """An empty result set is ambiguous: Atlas returns zero documents both for a query that
+        genuinely matched nothing and for a missing database, collection or index. Only the second
+        is a misconfiguration, so the index catalogue decides which one happened."""
+        if not catalogue:
+            raise missing_index_error(index_name, database, collection)
+        entry: Final = catalogue[0]
+        if not entry.get("queryable"):
+            raise index_not_ready_error(index_name, database, collection, str(entry.get("status") or "unknown"))
+
+    @staticmethod
     def _embedding_vector(embedding_response: EmbeddingResponse) -> Sequence[float]:
         data: Final = embedding_response.data
         if not data:
@@ -284,12 +299,21 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         )
 
         client: Final = self.sync_client_factory(key)
+        target: Final = client[database][collection]  # pyright: ignore[reportIndexIssue]  # factory is typed as returning object so injected doubles are accepted
         try:
-            documents: Final = list(client[database][collection].aggregate(pipeline))  # pyright: ignore[reportIndexIssue]  # factory is typed as returning object so injected doubles are accepted
+            documents: Final = list(target.aggregate(pipeline))
         except Exception as e:
             raise translate_mongo_error(
                 e, index_name=vector_store_id, database=database, collection=collection
             ) from e
+        if not documents:
+            try:
+                catalogue: Final = list(target.list_search_indexes(vector_store_id))
+            except Exception as e:
+                raise translate_mongo_error(
+                    e, index_name=vector_store_id, database=database, collection=collection
+                ) from e
+            self._raise_for_unusable_index(catalogue, vector_store_id, database, collection)
         return self._to_response(documents, query_text, params.text_field)
 
     async def aexecute_search_vector_store_request(
@@ -317,13 +341,23 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         )
 
         client: Final = self.async_client_factory(key)
+        target: Final = client[database][collection]  # pyright: ignore[reportIndexIssue]  # factory is typed as returning object so injected doubles are accepted
         try:
-            cursor: Final = await client[database][collection].aggregate(pipeline)  # pyright: ignore[reportIndexIssue]  # factory is typed as returning object so injected doubles are accepted
+            cursor: Final = await target.aggregate(pipeline)
             documents: Final = [document async for document in cursor]
         except Exception as e:
             raise translate_mongo_error(
                 e, index_name=vector_store_id, database=database, collection=collection
             ) from e
+        if not documents:
+            try:
+                index_cursor: Final = await target.list_search_indexes(vector_store_id)
+                catalogue: Final = [entry async for entry in index_cursor]
+            except Exception as e:
+                raise translate_mongo_error(
+                    e, index_name=vector_store_id, database=database, collection=collection
+                ) from e
+            self._raise_for_unusable_index(catalogue, vector_store_id, database, collection)
         return self._to_response(documents, query_text, params.text_field)
 
     def transform_create_vector_store_request(
