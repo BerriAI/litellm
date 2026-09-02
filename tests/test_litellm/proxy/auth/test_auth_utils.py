@@ -3110,10 +3110,8 @@ class TestHasUserSetupSso:
     def test_true_for_saml_metadata_url(self, monkeypatch):
         from litellm.proxy.auth.auth_utils import has_user_setup_sso
 
-        monkeypatch.setenv(
-            "SAML_IDP_METADATA_URL", "https://idp.example.com/metadata.xml"
-        )
-        assert _has_user_setup_sso() is True
+        monkeypatch.setenv("SAML_IDP_METADATA_URL", "https://idp.example.com/metadata.xml")
+        assert has_user_setup_sso() is True
 
     def test_true_for_saml_metadata_xml(self, monkeypatch):
         from litellm.proxy.auth.auth_utils import has_user_setup_sso
