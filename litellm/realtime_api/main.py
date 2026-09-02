@@ -4,7 +4,7 @@ import asyncio
 import os
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import litellm
 from litellm.constants import (
@@ -41,6 +41,9 @@ from ..llms.vertex_ai.vertex_llm_base import VertexBase
 from ..llms.xai.realtime.handler import XAIRealtime
 from ..utils import client as wrapper_client
 
+if TYPE_CHECKING:
+    from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
+
 azure_realtime: Final = AzureOpenAIRealtime()
 openai_realtime: Final = OpenAIRealtime()
 bedrock_realtime: Final = BedrockRealtime()
@@ -50,7 +53,7 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 _EMPTY_MODEL_PARAMS: Final[Mapping[str, Any]] = MappingProxyType({})
 
 
-def _with_resolved_session_model(session: dict[str, Any], model_name: str) -> dict[str, Any]:
+def _with_resolved_session_model(session: dict[str, object], model_name: str) -> dict[str, object]:
     if "model" not in session:
         return session
     return {**session, "model": model_name}
@@ -70,7 +73,7 @@ def _get_realtime_http_provider_config(
     dynamic_api_base: str | None,
     dynamic_api_key: str | None,
     litellm_params: GenericLiteLLMParams,
-) -> tuple[Any, str, str]:
+) -> tuple["BaseRealtimeHTTPConfig | None", str, str]:
     """
     Return (provider_config, resolved_api_base, resolved_api_key) for the
     realtime HTTP endpoints (client_secrets / realtime_calls).

@@ -2,7 +2,7 @@ import json
 import traceback
 from collections.abc import Coroutine
 from datetime import datetime
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 import httpx
 
@@ -207,7 +207,7 @@ class VertexFineTuningAPI(VertexLLM):
         timeout: float | httpx.Timeout,
         kwargs: dict | None = None,
         original_hyperparameters: dict | None = {},
-    ) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
+    ) -> LiteLLMFineTuningJob | Coroutine[object, object, LiteLLMFineTuningJob]:
         verbose_logger.debug("creating fine tuning job, args= %s", create_fine_tuning_job_data)
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,

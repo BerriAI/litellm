@@ -35,7 +35,7 @@ async def create_eval(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Create a new evaluation.
 
@@ -131,7 +131,7 @@ async def list_evals(
     order_by: str | None = None,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     List evaluations with pagination.
 
@@ -228,7 +228,7 @@ async def get_eval(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Get a specific evaluation by ID.
 
@@ -316,7 +316,7 @@ async def update_eval(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Update an evaluation.
 
@@ -406,7 +406,7 @@ async def delete_eval(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Delete an evaluation.
 
@@ -494,7 +494,7 @@ async def cancel_eval(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Cancel a running evaluation.
 
@@ -587,7 +587,7 @@ async def create_run(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Create a new run for an evaluation.
 
@@ -690,7 +690,7 @@ async def list_runs(
     order: str | None = None,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     List all runs for an evaluation with pagination.
 
@@ -780,7 +780,7 @@ async def get_run(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Get a specific run by ID.
 
@@ -867,7 +867,7 @@ async def cancel_run(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Cancel a running run.
 
@@ -956,7 +956,7 @@ async def delete_run(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Delete a run.
 

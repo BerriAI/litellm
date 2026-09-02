@@ -2607,7 +2607,7 @@ class PrometheusLogger(CustomLogger):
         for all successful requests (both streaming and non-streaming).
         """
 
-    def _safe_get(self, obj: Any, key: str, default: object = None) -> Any:
+    def _safe_get(self, obj: object, key: str, default: object = None) -> Any:
         """Get value from dict or Pydantic model."""
         if obj is None:
             return default
@@ -4215,8 +4215,8 @@ class PrometheusLogger(CustomLogger):
 
     def _safe_duration_seconds(
         self,
-        start_time: Any,
-        end_time: Any,
+        start_time: object,
+        end_time: object,
     ) -> float | None:
         """
         Compute the duration in seconds between two objects.

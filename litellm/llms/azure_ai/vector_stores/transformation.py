@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -114,8 +115,8 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: dict[str, Any] | None = None,
-    ) -> tuple[str, dict[str, Any]]:
+        extra_body: Mapping[str, object] | None = None,
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform search request for Azure AI Search API
 
@@ -162,7 +163,7 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
         url: Final = f"{api_base}/indexes/{index_name}/docs/search?api-version=2024-07-01"
 
         # Build the request body for Azure AI Search with vector search
-        request_body: Final = {
+        request_body: Final[dict[str, object]] = {
             "search": "*",  # Get all documents (filtered by vector similarity)
             "vectorQueries": [
                 {

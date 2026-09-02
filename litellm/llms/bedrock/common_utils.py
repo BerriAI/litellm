@@ -52,8 +52,8 @@ _BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (
 
 
 def merge_bedrock_aws_request_params(
-    litellm_params: Mapping[str, Any],
-    optional_params: Mapping[str, Any],
+    litellm_params: Mapping[str, object],
+    optional_params: Mapping[str, object],
 ) -> dict[str, Any]:
     """Merge deployment and request parameters without allowing auth escalation.
 
@@ -303,7 +303,7 @@ def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
 
     Uses an explicit stack (not recursion) to satisfy recursive-function guards in CI.
     """
-    stack: Final[list[Any]] = [schema]
+    stack: Final[list[object]] = [schema]
     seen: Final[set[int]] = set()
     while stack:
         node = stack.pop()
@@ -901,7 +901,7 @@ def _get_bedrock_converse_strict_tools_flag(base_model: str) -> bool | None:
     return None
 
 
-def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) -> None:
+def normalize_bedrock_opus_output_config_effort(model: str, output_config: object) -> None:
     """
     Normalize Anthropic ``output_config.effort`` values for Bedrock Opus ids.
 
@@ -1424,6 +1424,11 @@ class BedrockEventStreamDecoderBase:
             return chunk.decode()
 
 
+def _decoded_json_value(raw: str) -> object:
+    """Decode a JSON document into an opaque value for isinstance narrowing."""
+    return json.loads(raw)
+
+
 def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
     """
     Extract anthropic-beta header values and convert them to a list.
@@ -1451,7 +1456,7 @@ def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
         anthropic_beta_header = anthropic_beta_header.strip()
         if anthropic_beta_header.startswith("[") and anthropic_beta_header.endswith("]"):
             try:
-                parsed: Final = json.loads(anthropic_beta_header)
+                parsed: Final = _decoded_json_value(anthropic_beta_header)
                 if isinstance(parsed, list):
                     return [str(beta).strip() for beta in parsed]
             except json.JSONDecodeError:
@@ -1464,8 +1469,8 @@ def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
 
 
 def resolve_s3_encryption_key_id(
-    litellm_params: Mapping[str, Any],
-    optional_params: Mapping[str, Any] | None = None,
+    litellm_params: Mapping[str, object],
+    optional_params: Mapping[str, object] | None = None,
 ) -> str | None:
     """
     Resolve the SSE-KMS key configured for Bedrock batch/file S3 objects.

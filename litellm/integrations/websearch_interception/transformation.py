@@ -24,7 +24,7 @@ class WebSearchTransformation:
 
     @staticmethod
     def transform_request(
-        response: Any,
+        response: object,
         stream: bool,
         response_format: str = "anthropic",
     ) -> tuple[bool, list[dict]]:
@@ -66,7 +66,7 @@ class WebSearchTransformation:
 
     @staticmethod
     def _detect_from_responses_response(
-        response: Any,
+        response: object,
     ) -> tuple[bool, list[dict]]:
         """Parse a Responses API response for ``litellm_web_search`` function calls.
 
@@ -399,7 +399,7 @@ class WebSearchTransformation:
     def build_web_search_tool_result_block(
         tool_use_id: str,
         search_response: SearchResponse | None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Build an Anthropic-native ``web_search_tool_result`` content block.
 
@@ -433,7 +433,7 @@ class WebSearchTransformation:
                 emitted with an empty result list (signals "search ran, no
                 results" rather than "search did not run").
         """
-        items: Final[list[dict[str, Any]]] = []
+        items: Final[list[dict[str, object]]] = []
         if search_response is not None:
             results: Final = getattr(search_response, "results", None) or []
             for r in results:

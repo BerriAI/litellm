@@ -5,6 +5,7 @@ Maps OpenAI TTS spec to MiniMax TTS API (WebSocket-based HTTP API)
 Reference: https://platform.minimax.io/docs
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -86,8 +87,8 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
 
     def _resolve_voice_id(
         self,
-        voice: str | dict[str, Any] | None,
-        params: dict[str, Any],
+        voice: str | Mapping[str, object] | None,
+        params: dict[str, object],
     ) -> str:
         """
         Determine the MiniMax voice_id based on provided voice input or parameters.
@@ -127,7 +128,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Map OpenAI parameters to MiniMax TTS parameters
         """
-        mapped_params: Final[dict[str, Any]] = {}
+        mapped_params: Final[dict[str, object]] = {}
 
         # Work on a copy so we don't mutate the caller's dictionary
         params: Final = dict(optional_params) if optional_params else {}
@@ -242,7 +243,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         # Output format: 'url' or 'hex' (default is 'hex')
         output_format: Final = params.pop("output_format", "hex")
 
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "model": model,
             "text": input,
             "stream": False,  # HTTP endpoint doesn't support streaming
