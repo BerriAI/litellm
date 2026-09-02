@@ -3181,3 +3181,43 @@ def test_stream_chunk_builder_defers_cost_to_logging_obj_when_usage_cost_absent(
 
     assert response is not None
     assert response._hidden_params.get("response_cost") is None
+
+
+FOUNDRY_HOST: Final = "https://my-project.services.ai.azure.com"
+
+
+def test_azure_ai_transcription_on_a_foundry_host_uses_the_azure_openai_deployment_route(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(
+        url__regex=r"https://my-project\.services\.ai\.azure\.com/openai/deployments/whisper-1/audio/transcriptions\?api-version=.+"
+    ).mock(return_value=httpx.Response(200, json={"text": "hello"}))
+
+    response: Final = litellm.transcription(
+        model="azure_ai/whisper-1",
+        file=("tone.wav", b"RIFF\x00\x00\x00\x00WAVE", "audio/wav"),
+        api_base=FOUNDRY_HOST,
+        api_key="fake-key",
+    )
+
+    assert route.called
+    assert response.text == "hello"
+
+
+def test_azure_ai_speech_on_a_foundry_host_uses_the_azure_openai_deployment_route(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(
+        url__regex=r"https://my-project\.services\.ai\.azure\.com/openai/deployments/tts-1/audio/speech\?api-version=.+"
+    ).mock(return_value=httpx.Response(200, content=b"mp3-bytes"))
+
+    response: Final = litellm.speech(
+        model="azure_ai/tts-1",
+        input="hello",
+        voice="alloy",
+        api_base=FOUNDRY_HOST,
+        api_key="fake-key",
+    )
+
+    assert route.called
+    assert response.content == b"mp3-bytes"
