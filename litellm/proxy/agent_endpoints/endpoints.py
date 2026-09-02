@@ -12,6 +12,7 @@ import asyncio
 import os
 import uuid
 from collections.abc import Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import Annotated, Final, TypedDict, assert_never
 
@@ -139,6 +140,68 @@ async def _attach_keys_to_agents(agents: Sequence[AgentResponse], prisma_client)
         agent.keys = matched_keys or None
 
 
+_SECRET_PARAMS_MAX_DEPTH: Final = 10
+
+
+def _mask_secret_params(params: dict[str, object], _depth: int = 0) -> dict[str, object]:  # mutable-ok: dict field
+    """Masks credential-like keys at every depth, not only under a credential-like parent; masks all past the cap."""
+    if _depth >= _SECRET_PARAMS_MAX_DEPTH:
+        return {key: "*****" for key in params}  # mutable-ok: litellm_params is a dict field
+    masked: Final = _get_masked_values(params, unmasked_length=4, number_of_asterisks=4)
+    return {  # mutable-ok: litellm_params is a dict field
+        key: _mask_secret_params(value, _depth + 1) if isinstance(value, dict) else masked[key]
+        for key, value in params.items()
+    }
+
+
+def _mask_agent_secrets(agent: AgentResponse) -> AgentResponse:
+    if not agent.litellm_params:
+        return agent
+    return agent.model_copy(update=MappingProxyType({"litellm_params": _mask_secret_params(agent.litellm_params)}))
+
+
+def _restore_stored_value(existing: object, masked: object, incoming: object, depth: int) -> object:
+    if isinstance(existing, dict) and isinstance(incoming, dict):
+        return _restore_stored_secrets(existing, incoming, depth)
+    return existing if incoming == masked else incoming
+
+
+def _restore_stored_secrets(
+    existing_params: object,
+    incoming_params: Mapping[str, object] | None,
+    _depth: int = 0,
+) -> dict[str, object]:  # mutable-ok: AgentConfig.litellm_params is a dict field
+    """A secret the client only ever saw masked (omitted, or echoed back masked) keeps its stored value."""
+    incoming: Final = incoming_params or MappingProxyType({})
+    if not isinstance(existing_params, dict) or _depth >= _SECRET_PARAMS_MAX_DEPTH:
+        return dict(incoming)  # mutable-ok: AgentConfig.litellm_params is a dict field
+    masked_existing: Final = _mask_secret_params(existing_params, _depth)
+    restored: Final = (
+        (
+            key,
+            _restore_stored_value(existing_params[key], masked_existing[key], value, _depth + 1)
+            if key in existing_params
+            else value,
+        )
+        for key, value in incoming.items()
+    )
+    preserved: Final = (
+        (key, value) for key, value in existing_params.items() if key not in incoming and masked_existing[key] != value
+    )
+    return dict(chain(restored, preserved))  # mutable-ok: AgentConfig.litellm_params is a dict field
+
+
+def _patch_with_stored_secrets(request: PatchAgentRequest, existing_params: object) -> PatchAgentRequest:
+    incoming: Final = request.get("litellm_params")
+    if incoming is None:
+        return request
+    patched: Final[PatchAgentRequest] = {
+        **request,
+        "litellm_params": _restore_stored_secrets(existing_params, incoming),
+    }
+    return patched
+
+
 def _redact_sensitive_agent_fields(
     agents: Sequence[AgentResponse],
 ) -> list[AgentResponse]:
@@ -152,12 +215,6 @@ def _redact_sensitive_agent_fields(
         copy.static_headers = None
         copy.extra_headers = None
         copy.keys = None
-        if copy.litellm_params:
-            copy.litellm_params = _get_masked_values(
-                copy.litellm_params,
-                unmasked_length=4,
-                number_of_asterisks=4,
-            )
         redacted.append(copy)
     return redacted
 
@@ -345,13 +402,12 @@ async def get_agents(
                 global_agent_registry.ids_for_agent(agent.agent_id).isdisjoint(litellm.public_agent_groups)
             )
 
-        # Redact sensitive fields for non-admin users
+        masked_agents: Final = tuple(_mask_agent_secrets(agent) for agent in returned_agents)
         is_admin: Final = (
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
         )
-        if not is_admin:
-            returned_agents = _redact_sensitive_agent_fields(returned_agents)
+        returned_agents = masked_agents if is_admin else _redact_sensitive_agent_fields(masked_agents)
 
         if health_check:
             agents_with_url: Final = [agent for agent in returned_agents if (agent.agent_card_params or {}).get("url")]
@@ -505,7 +561,7 @@ async def create_agent(
                 "Failed to register agent '%s' (ID: %s) in memory: %s", agent_name, agent_id, reg_error
             )
 
-        return result
+        return _mask_agent_secrets(result)
 
     except HTTPException:
         raise
@@ -578,15 +634,12 @@ async def get_agent_by_id(
 
         await _attach_keys_to_agents([agent], prisma_client)
 
-        # Redact sensitive fields for non-admin users
-        is_admin = (
+        masked_agent: Final = _mask_agent_secrets(agent)
+        is_admin: Final = (
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
         )
-        if not is_admin:
-            agent = _redact_sensitive_agent_fields([agent])[0]
-
-        return agent
+        return masked_agent if is_admin else _redact_sensitive_agent_fields([masked_agent])[0]
     except HTTPException:
         raise
     except Exception as e:
@@ -662,7 +715,12 @@ async def update_agent(
         # ``agent_card_params`` skip the merge so we don't synthesise an A2A
         # card for them.
         upstream_card: Final = request.get("agent_card_params")
-        agent_to_update: AgentConfig = request
+        agent_to_update: AgentConfig = {
+            **request,
+            "litellm_params": _restore_stored_secrets(
+                existing_agent.get("litellm_params"), request.get("litellm_params")
+            ),
+        }
         if upstream_card is not None:
             merged_card: Final = _build_merged_agent_card(
                 upstream_card,
@@ -670,7 +728,7 @@ async def update_agent(
                 http_request=http_request,
                 agent_name=request.get("agent_name"),
             )
-            agent_to_update = {**request, "agent_card_params": merged_card}
+            agent_to_update = {**agent_to_update, "agent_card_params": merged_card}
 
         result: Final = await AGENT_REGISTRY.update_agent_in_db(
             agent_id=agent_id,
@@ -688,7 +746,7 @@ async def update_agent(
             "Successfully updated agent '%s' (ID: %s) in memory", existing_agent.get("agent_name"), agent_id
         )
 
-        return result
+        return _mask_agent_secrets(result)
     except HTTPException:
         raise
     except Exception as e:
@@ -764,7 +822,7 @@ async def patch_agent(
         # ``agent_card_params`` — even an empty dict — still goes through the
         # merge so LiteLLM applies its security schemes and supported
         # interfaces instead of storing a bare card.
-        patch_payload: PatchAgentRequest = request
+        patch_payload: PatchAgentRequest = _patch_with_stored_secrets(request, existing_agent.get("litellm_params"))
         upstream_card: Final = request.get("agent_card_params")
         if upstream_card is not None:
             merged_card: Final = _build_merged_agent_card(
@@ -773,7 +831,7 @@ async def patch_agent(
                 http_request=http_request,
                 agent_name=request.get("agent_name"),
             )
-            patch_payload = {**request, "agent_card_params": merged_card}
+            patch_payload = {**patch_payload, "agent_card_params": merged_card}
 
         result: Final = await AGENT_REGISTRY.patch_agent_in_db(
             agent_id=agent_id,
@@ -791,7 +849,7 @@ async def patch_agent(
             "Successfully updated agent '%s' (ID: %s) in memory", existing_agent.get("agent_name"), agent_id
         )
 
-        return result
+        return _mask_agent_secrets(result)
     except HTTPException:
         raise
     except Exception as e:

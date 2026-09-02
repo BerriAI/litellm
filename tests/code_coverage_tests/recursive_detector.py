@@ -64,6 +64,7 @@ IGNORE_FUNCTIONS = [
     "_flatten_form_field",  # bounded by the nesting depth of the already-parsed request body (a finite JSON tree, no cycles possible).
     "_flatten_form_data_field",  # bounded by the nesting depth of the already-parsed request body (a finite JSON tree, no cycles possible).
     "_json_safe",  # max depth set (_MAX_DEPTH) plus a seen-ids cycle guard for self-referential input.
+    "_mask_secret_params",  # max depth set (_SECRET_PARAMS_MAX_DEPTH=10); fails closed by masking every value at the cap.
 ]
 
 

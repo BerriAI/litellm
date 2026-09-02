@@ -5,6 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { FieldGroup } from "@/components/ui/field";
 import { AgentCreateInfo, AgentCredentialFieldMetadata } from "@/components/networking";
 import { PasswordInput } from "@/components/shared/PasswordInput";
+import { stripMaskedSecrets } from "@/utils/maskedSecretUtils";
 import { AGENT_FORM_CONFIG } from "./agent_config";
 import CostConfigFields, { COST_FIELD_NAMES } from "./cost_config_fields";
 import {
@@ -199,7 +200,7 @@ export const buildDynamicAgentData = (values: AgentFormValues, agentTypeInfo: Ag
         },
       ],
     },
-    litellm_params: litellmParams,
+    litellm_params: stripMaskedSecrets(litellmParams),
   };
 
   if (values.tpm_limit != null) agentData.tpm_limit = values.tpm_limit;
