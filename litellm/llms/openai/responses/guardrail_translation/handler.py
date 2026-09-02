@@ -118,9 +118,13 @@ _TOOL_TYPES_NOT_SENT_TO_GUARDRAIL: Final = frozenset(
 _NAMESPACE_MEMBERS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
-def _namespace_members(tool: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+def _namespace_members(tool: Mapping[str, object]) -> tuple[Mapping[str, object], ...] | None:
+    """``None`` when the namespace has no member list and is flattened to one function named after it."""
+    raw_members: Final = tool.get("tools")
+    if not isinstance(raw_members, Sequence) or isinstance(raw_members, (str, bytes)):
+        return None
     try:
-        return _NAMESPACE_MEMBERS.validate_python(tool.get("tools") or ())
+        return _NAMESPACE_MEMBERS.validate_python(raw_members)
     except ValidationError:
         return ()
 
@@ -133,17 +137,21 @@ def _qualified_member_name(namespace: str, member: Mapping[str, object]) -> str:
     return f"{namespace}__{member.get('name') or ''}"
 
 
+def _namespace_function_names(tool: Mapping[str, object]) -> tuple[str, ...]:
+    namespace: Final = str(tool.get("name") or "")
+    members: Final = _namespace_members(tool)
+    if members is None:
+        return (namespace,)
+    return tuple(_qualified_member_name(namespace, member) for member in members if _is_function_member(member))
+
+
 def _flattened_function_names(tools: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
     """Names the guardrail sees for ``tools`` once flattened to Chat Completions format."""
     top_level: Final = tuple(
         str(tool.get("name") or "") for tool in tools if tool.get("type") in ("function", "custom")
     )
     nested: Final = tuple(
-        _qualified_member_name(str(tool.get("name") or ""), member)
-        for tool in tools
-        if tool.get("type") == "namespace"
-        for member in _namespace_members(tool)
-        if _is_function_member(member)
+        name for tool in tools if tool.get("type") == "namespace" for name in _namespace_function_names(tool)
     )
     return top_level + nested
 
@@ -153,6 +161,8 @@ def _merge_namespace_tool(
 ) -> Mapping[str, object] | None:
     namespace: Final = str(tool.get("name") or "")
     members: Final = _namespace_members(tool)
+    if members is None:
+        return tool if namespace in remapped_functions else None
     surviving: Final = tuple(
         member
         for member in members

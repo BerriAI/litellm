@@ -123,7 +123,7 @@
     "limit": 5
   },
   "reportUnnecessaryIsInstance": {
-    "limit": 824
+    "limit": 823
   },
   "reportUntypedBaseClass": {
     "limit": 0

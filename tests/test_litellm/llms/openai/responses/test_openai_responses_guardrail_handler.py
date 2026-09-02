@@ -1389,6 +1389,24 @@ class TestOpenAIResponsesHandlerNamespaceTools:
         assert not any(t["name"].startswith("mcp__confluence__") for t in result["tools"])
 
     @pytest.mark.asyncio
+    async def test_unchanged_guardrail_leaves_custom_mcp_and_memberless_namespace_tools_as_is(self):
+        handler = OpenAIResponsesHandler()
+        tools = [
+            {"type": "custom", "name": "apply_patch", "description": "Apply a patch"},
+            {"type": "mcp", "server_label": "docs", "server_url": "https://mcp.example.com"},
+            {"type": "namespace", "name": "mcp__flat", "description": "Flattened to one function"},
+        ]
+        data = {
+            "input": [{"role": "user", "content": "fetch page 1", "type": "message"}],
+            "tools": [dict(t) for t in tools],
+            "model": "gpt-5.3-codex",
+        }
+
+        result = await handler.process_input_messages(data, MockPassThroughGuardrail(guardrail_name="test"))
+
+        assert result["tools"] == tools
+
+    @pytest.mark.asyncio
     async def test_guardrail_can_still_drop_a_single_namespace_member(self):
         handler = OpenAIResponsesHandler()
         data = {
