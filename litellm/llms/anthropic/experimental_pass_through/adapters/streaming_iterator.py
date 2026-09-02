@@ -4,7 +4,7 @@ import copy
 import json
 import traceback
 from collections import deque
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -418,7 +418,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         augmented["usage"] = augmented_usage
         return augmented
 
-    def _next_compaction_event(self) -> dict[str, Any] | None:
+    def _next_compaction_event(self) -> dict[str, object] | None:
         """Return the next compaction content-block SSE event, or ``None``.
 
         Anthropic delivers compaction as a single delta (no token-by-token
@@ -457,7 +457,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 "delta": {"type": "compaction_delta", "content": summary_content},
             }
 
-        stop_event: Final = {
+        stop_event: Final[dict[str, object]] = {
             "type": "content_block_stop",
             "index": compaction_index,
         }
@@ -989,7 +989,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         self.current_content_block_index += 1
 
     @staticmethod
-    def _delta_has_content(processed_chunk: dict[str, Any]) -> bool:
+    def _delta_has_content(processed_chunk: Mapping[str, object]) -> bool:
         """Return True if a translated chunk carries a non-empty
         ``content_block_delta`` payload.
 

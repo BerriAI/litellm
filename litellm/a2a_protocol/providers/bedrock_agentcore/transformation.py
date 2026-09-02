@@ -7,7 +7,7 @@ and signs requests via AmazonAgentCoreConfig (SigV4 or JWT).
 
 import json
 from collections.abc import AsyncIterator, Mapping
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
@@ -33,6 +33,12 @@ _RESERVED_PREFIX_HEADERS: Final[tuple[str, ...]] = (
     "x-amzn-bedrock-agentcore-runtime-",
     "x-amz-",
 )
+
+
+class _SSELineSource(Protocol):
+    """Minimal streaming-response surface used to read SSE lines."""
+
+    def aiter_lines(self) -> AsyncIterator[str]: ...
 
 
 def _filter_reserved_headers(
@@ -77,7 +83,7 @@ class BedrockAgentCoreA2ATransformation:
     @staticmethod
     def get_url_and_signed_request(
         request_id: str,
-        params: dict[str, Any],
+        params: Mapping[str, object],
         litellm_params: dict[str, Any],
         method: str = "message/send",
         stream: bool = False,
@@ -170,7 +176,7 @@ class BedrockAgentCoreA2ATransformation:
         return url, signed_headers, signed_body
 
     @staticmethod
-    async def parse_sse_events(response: Any) -> AsyncIterator[dict[str, Any]]:
+    async def parse_sse_events(response: _SSELineSource) -> AsyncIterator[dict[str, Any]]:
         """
         Parse SSE events from an httpx streaming response.
 

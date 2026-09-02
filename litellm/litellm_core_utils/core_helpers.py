@@ -419,7 +419,7 @@ def safe_deep_copy(data):
     if litellm.safe_memory_mode is True:
         return data
 
-    litellm_parent_otel_span: Any | None = None
+    litellm_parent_otel_span: object | None = None
     # Step 1: Remove the litellm_parent_otel_span
     litellm_parent_otel_span = None
     if isinstance(data, dict):
@@ -510,7 +510,7 @@ def independent_snapshot(
     }
 
 
-def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
+def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
     """
     Recursively filter out Exception objects and callable objects from dicts/lists.
 
@@ -542,7 +542,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
         return None
 
     if isinstance(data, dict):
-        result: Final[dict[str, Any]] = {}
+        result: Final[dict[str, object]] = {}
         for k, v in data.items():
             # Skip exception and callable values
             if isinstance(v, Exception) or (callable(v) and not isinstance(v, type)):
@@ -556,7 +556,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
                 continue
         return result
     elif isinstance(data, list):
-        result_list: Final[list[Any]] = []
+        result_list: Final[list[object]] = []
         for item in data:
             # Skip exception and callable items
             if isinstance(item, Exception) or (callable(item) and not isinstance(item, type)):
@@ -624,7 +624,7 @@ def redact_nested_match_and_regex_keys(
     # Iterative traversal; `seen` guards against cyclic refs preserved by deepcopy.
     try:
         seen: Final[set] = set()
-        stack: Final[list[Any]] = [redacted]
+        stack: Final[list[object]] = [redacted]
         while stack:
             node = stack.pop()
             node_id = id(node)

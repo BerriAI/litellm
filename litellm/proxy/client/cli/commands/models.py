@@ -17,8 +17,8 @@ from ... import Client
 @dataclass
 class ModelYamlInfo:
     model_name: str
-    model_params: dict[str, Any]
-    model_info: dict[str, Any]
+    model_params: dict[str, object]
+    model_info: dict[str, object]
     model_id: str
     access_groups: list[str]
     provider: str

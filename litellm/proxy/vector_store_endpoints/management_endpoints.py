@@ -87,7 +87,7 @@ def _get_embedding_config_cache() -> InMemoryCache:
     return _embedding_config_cache
 
 
-def _redact_sensitive_litellm_params(litellm_params: Any, _depth: int = 0) -> Any:
+def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) -> Any:
     """
     Replace credential-bearing values in ``litellm_params`` with
     ``REDACTED_BY_LITELM`` while preserving non-secret keys (``api_base``,
@@ -119,7 +119,7 @@ def _redact_sensitive_litellm_params(litellm_params: Any, _depth: int = 0) -> An
         return json.dumps(_redact_sensitive_litellm_params(parsed, _depth + 1))
     if not isinstance(litellm_params, dict):
         return litellm_params
-    out: Final[dict[str, Any]] = {}
+    out: Final[dict[str, object]] = {}
     for k, v in litellm_params.items():
         if _LITELLM_PARAMS_MASKER.is_sensitive_key(k):
             out[k] = REDACTED_BY_LITELM_STRING

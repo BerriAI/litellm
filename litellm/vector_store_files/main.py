@@ -39,7 +39,7 @@ def _ensure_provider(custom_llm_provider: str | None) -> str:
 def _prepare_registry_credentials(
     *,
     vector_store_id: str,
-    kwargs: dict[str, Any],
+    kwargs: dict[str, object],
 ) -> None:
     if litellm.vector_store_registry is None:
         return
@@ -116,7 +116,7 @@ def create(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> VectorStoreFileObject | Coroutine[Any, Any, VectorStoreFileObject]:
+) -> VectorStoreFileObject | Coroutine[object, object, VectorStoreFileObject]:
     local_vars: Final = locals()
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
@@ -245,7 +245,7 @@ def list(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> VectorStoreFileListResponse | Coroutine[Any, Any, VectorStoreFileListResponse]:
+) -> VectorStoreFileListResponse | Coroutine[object, object, VectorStoreFileListResponse]:
     local_vars: Final = locals()
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
@@ -355,7 +355,7 @@ def retrieve(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> VectorStoreFileObject | Coroutine[Any, Any, VectorStoreFileObject]:
+) -> VectorStoreFileObject | Coroutine[object, object, VectorStoreFileObject]:
     local_vars: Final = locals()
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
@@ -463,7 +463,7 @@ def retrieve_content(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> VectorStoreFileContentResponse | Coroutine[Any, Any, VectorStoreFileContentResponse]:
+) -> VectorStoreFileContentResponse | Coroutine[object, object, VectorStoreFileContentResponse]:
     local_vars: Final = locals()
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
@@ -577,7 +577,7 @@ def update(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> VectorStoreFileObject | Coroutine[Any, Any, VectorStoreFileObject]:
+) -> VectorStoreFileObject | Coroutine[object, object, VectorStoreFileObject]:
     local_vars: Final = locals()
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
@@ -692,7 +692,7 @@ def delete(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> VectorStoreFileDeleteResponse | Coroutine[Any, Any, VectorStoreFileDeleteResponse]:
+) -> VectorStoreFileDeleteResponse | Coroutine[object, object, VectorStoreFileDeleteResponse]:
     local_vars: Final = locals()
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")

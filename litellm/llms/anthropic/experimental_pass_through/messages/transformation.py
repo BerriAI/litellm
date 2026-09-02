@@ -87,7 +87,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         Processes both `system` and `messages` content blocks.
         """
 
-        def _sanitize(cache_control: Any) -> None:
+        def _sanitize(cache_control: object) -> None:
             if isinstance(cache_control, dict):
                 cache_control.pop("scope", None)
 
@@ -152,7 +152,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return system_param
 
     @staticmethod
-    def _as_system_content_blocks(value: Any) -> list:
+    def _as_system_content_blocks(value: object) -> list:
         if value is None:
             return []
         if isinstance(value, list):
@@ -162,7 +162,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return [value]
 
     @staticmethod
-    def _is_system_role_message(message: Any) -> bool:
+    def _is_system_role_message(message: object) -> bool:
         return isinstance(message, dict) and message.get("role") == "system"
 
     _CONVERTED_SYSTEM_NOTE: Final = (

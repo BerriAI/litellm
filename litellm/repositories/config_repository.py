@@ -17,6 +17,11 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 
 
+def _decoded_json(raw: str) -> object:
+    """Decode a JSON-encoded config row value into an opaque object."""
+    return json.loads(raw)
+
+
 class _ConfigRow(Protocol):
     @property
     def param_name(self) -> str: ...
@@ -48,7 +53,7 @@ class _PrismaHandle(Protocol):
 class ConfigParam:
     """Simple wrapper for config parameter from DB."""
 
-    def __init__(self, param_name: str, param_value: Any):
+    def __init__(self, param_name: str, param_value: object):
         self.param_name = param_name
         self.param_value = param_value
 
@@ -85,12 +90,12 @@ class ConfigRepository:
         record: Final = await self._config_table.find_unique(where={"param_name": param_name})
         if record is None:
             return None
-        param_value = record.param_value
+        param_value: object = record.param_value
         if isinstance(param_value, str):
-            param_value = json.loads(param_value)
+            param_value = _decoded_json(param_value)
         return ConfigParam(param_name=param_name, param_value=param_value)
 
-    async def set_param(self, param_name: str, param_value: Any) -> ConfigParam:
+    async def set_param(self, param_name: str, param_value: object) -> ConfigParam:
         """Set a config parameter in the database."""
         value_json: Final = json.dumps(param_value) if not isinstance(param_value, str) else param_value
         await self._config_table.upsert(
@@ -115,9 +120,9 @@ class ConfigRepository:
         records: Final = await self._config_table.find_many()
         result: Final[dict[str, object]] = {}
         for record in records:
-            param_value = record.param_value
+            param_value: object = record.param_value
             if isinstance(param_value, str):
-                param_value = json.loads(param_value)
+                param_value = _decoded_json(param_value)
             result[record.param_name] = param_value
         return result
 

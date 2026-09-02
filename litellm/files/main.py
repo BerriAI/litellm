@@ -431,7 +431,7 @@ async def afile_delete(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     **kwargs,
-) -> Coroutine[Any, Any, FileObject]:
+) -> Coroutine[object, object, FileObject]:
     """
     Async: Delete file
 
@@ -1003,7 +1003,7 @@ def file_content_streaming(
     logging_obj: LiteLLMLoggingObj | None,
     _is_async: bool,
     client: Any | None,
-) -> FileContentStreamingResult | Coroutine[Any, Any, FileContentStreamingResult]:
+) -> FileContentStreamingResult | Coroutine[object, object, FileContentStreamingResult]:
     if logging_obj is not None:
         logging_obj.model = model or ""
         logging_obj.model_call_details["model"] = model or ""
@@ -1028,8 +1028,8 @@ def file_content_streaming(
             headers=response.headers,
         )
 
-    response: FileContentStreamingResult | Coroutine[Any, Any, FileContentStreamingResult] = FileContentStreamingResult(
-        stream_iterator=iter(()), headers={}
+    response: FileContentStreamingResult | Coroutine[object, object, FileContentStreamingResult] = (
+        FileContentStreamingResult(stream_iterator=iter(()), headers={})
     )
     if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
         openai_creds: Final = get_openai_credentials(

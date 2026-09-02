@@ -97,7 +97,7 @@ class SingulrGuardrail(CustomGuardrail):
         request_data: dict[str, Any],
         inputs: GenericGuardrailAPIInputs,
         input_type: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         if not request_data:
             texts: Final = inputs.get("texts", [])
 
@@ -138,7 +138,7 @@ class SingulrGuardrail(CustomGuardrail):
             if value
         )
 
-    async def _call_api(self, payload: dict[str, Any]) -> SingulrGuardrailResponse | None:
+    async def _call_api(self, payload: dict[str, object]) -> SingulrGuardrailResponse | None:
         endpoint: Final = f"{self.singulr_api_base}{_GUARD_ENDPOINT}"
         verbose_proxy_logger.debug("Singulr: %s", endpoint)
 

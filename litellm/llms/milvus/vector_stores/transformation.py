@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -122,8 +123,8 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: dict[str, Any] | None = None,
-    ) -> tuple[str, dict[str, Any]]:
+        extra_body: Mapping[str, object] | None = None,
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform search request for Azure AI Search API
 
@@ -165,7 +166,7 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
         url: Final = f"{api_base}/v2/vectordb/entities/search"
 
         # Build the request body for Azure AI Search with vector search
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "collectionName": index_name,
             "data": [query_vector],
             "annsField": "book_intro_vector",

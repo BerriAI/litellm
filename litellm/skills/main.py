@@ -5,7 +5,7 @@ Provides create, list, get, and delete operations for skills
 
 import asyncio
 import contextvars
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from functools import partial
 from typing import Any, Final
 
@@ -35,7 +35,7 @@ DEFAULT_ANTHROPIC_API_BASE: Final = "https://api.anthropic.com/v1"
 _litellm_skills_handler = None
 
 
-def _get_user_api_key_auth_from_kwargs(kwargs: dict[str, Any]) -> Any | None:
+def _get_user_api_key_auth_from_kwargs(kwargs: Mapping[str, object]) -> Any | None:
     for metadata_key in ("metadata", "litellm_metadata"):
         metadata = kwargs.get(metadata_key)
         if isinstance(metadata, dict) and metadata.get("user_api_key_auth") is not None:
@@ -44,7 +44,7 @@ def _get_user_api_key_auth_from_kwargs(kwargs: dict[str, Any]) -> Any | None:
 
 
 def _get_skill_request_metadata(
-    kwargs: dict[str, Any],
+    kwargs: Mapping[str, object],
     extra_body: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     if extra_body and isinstance(extra_body.get("metadata"), dict):
@@ -73,7 +73,7 @@ async def acreate_skill(
     files: list[Any] | None = None,
     display_title: str | None = None,
     extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     extra_body: dict[str, Any] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
@@ -136,12 +136,12 @@ def create_skill(
     files: list[Any] | None = None,
     display_title: str | None = None,
     extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     extra_body: dict[str, Any] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Skill | Coroutine[Any, Any, Skill]:
+) -> Skill | Coroutine[object, object, Skill]:
     """
     Create a new skill
 
@@ -330,7 +330,7 @@ def list_skills(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> ListSkillsResponse | Coroutine[Any, Any, ListSkillsResponse]:
+) -> ListSkillsResponse | Coroutine[object, object, ListSkillsResponse]:
     """
     List all skills
 
@@ -444,7 +444,7 @@ def list_skills(
 async def aget_skill(
     skill_id: str,
     extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -501,11 +501,11 @@ async def aget_skill(
 def get_skill(
     skill_id: str,
     extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Skill | Coroutine[Any, Any, Skill]:
+) -> Skill | Coroutine[object, object, Skill]:
     """
     Get a skill by ID
 
@@ -608,7 +608,7 @@ def get_skill(
 async def adelete_skill(
     skill_id: str,
     extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -665,11 +665,11 @@ async def adelete_skill(
 def delete_skill(
     skill_id: str,
     extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> DeleteSkillResponse | Coroutine[Any, Any, DeleteSkillResponse]:
+) -> DeleteSkillResponse | Coroutine[object, object, DeleteSkillResponse]:
     """
     Delete a skill by ID
 

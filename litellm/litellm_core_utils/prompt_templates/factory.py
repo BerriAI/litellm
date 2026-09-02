@@ -1708,8 +1708,8 @@ def _find_server_tool_result(
 
 def convert_to_anthropic_tool_invoke(
     tool_calls: list[ChatCompletionAssistantToolCall],
-    web_search_results: list[Any] | None = None,
-    tool_results: list[Any] | None = None,
+    web_search_results: Sequence[object] | None = None,
+    tool_results: Sequence[object] | None = None,
 ) -> list[AnthropicMessagesToolUseParam | dict[str, Any]]:
     """
     OpenAI tool invokes:
@@ -5349,7 +5349,7 @@ class NormalizedToolCall(TypedDict):
     arguments: dict[str, object]
 
 
-def _parse_tool_call_arguments(raw: Any, tool_name: str | None, context: str) -> dict[str, object]:
+def _parse_tool_call_arguments(raw: object, tool_name: str | None, context: str) -> dict[str, object]:
     # Anthropic's tool_use blocks already carry a parsed dict in "input";
     # chat completions and the Responses API carry a JSON string that may be
     # truncated by the model, so route those through the repair-aware parser.

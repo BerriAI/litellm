@@ -503,7 +503,7 @@ class PrismaWrapper:
     async def recreate_prisma_client(
         self,
         new_db_url: str,
-        http_client: Any | None = None,
+        http_client: object | None = None,
         *,
         expected_generation: int | None = None,
     ) -> bool:
@@ -541,7 +541,7 @@ class PrismaWrapper:
     async def _recreate_prisma_client_locked(
         self,
         new_db_url: str,
-        http_client: Any | None = None,
+        http_client: object | None = None,
         *,
         expected_generation: int | None = None,
     ) -> bool:

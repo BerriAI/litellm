@@ -430,7 +430,7 @@ def _clear_oauth_state_cookie(response: Response, request: Request, state: str) 
     )
 
 
-def _get_validated_client_redirect_uri(request: Request, state_data: dict[str, Any]) -> str:
+def _get_validated_client_redirect_uri(request: Request, state_data: Mapping[str, object]) -> str:
     """Return a trusted (same-origin, loopback, or ops-allowlisted)
     client redirect URI from OAuth state.
     """
@@ -469,7 +469,7 @@ def _resolve_oauth2_server_for_root_endpoints(
     return None
 
 
-def _normalize_for_token_comparison(value: Any) -> str:
+def _normalize_for_token_comparison(value: object) -> str:
     """Stringify ``value`` for token-rule comparison.
 
     Booleans are lower-cased so Python's ``True`` / ``False`` line up with
@@ -481,8 +481,8 @@ def _normalize_for_token_comparison(value: Any) -> str:
 
 
 def _validate_token_response(
-    token_response: dict[str, Any],
-    validation_rules: dict[str, Any],
+    token_response: Mapping[str, object],
+    validation_rules: Mapping[str, object],
     server_id: str,
 ) -> None:
     """Raise HTTPException 403 if any validation rule doesn't match the token response.
@@ -496,10 +496,10 @@ def _validate_token_response(
     responses of ``{"verified": true}``.
     """
     for key, expected in validation_rules.items():
-        actual: Any = token_response.get(key)
+        actual: object | None = token_response.get(key)
         # Try dot-notation traversal when top-level lookup returns None
         if actual is None and "." in key:
-            obj: Any = token_response
+            obj: object = token_response
             for part in key.split("."):
                 if isinstance(obj, dict):
                     obj = obj.get(part)

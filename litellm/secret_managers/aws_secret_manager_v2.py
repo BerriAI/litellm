@@ -266,7 +266,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         """
         from litellm._uuid import uuid
 
-        data: Final[dict[str, Any]] = {
+        data: Final[dict[str, object]] = {
             "Name": secret_name,
             "SecretString": secret_value,
             "ClientRequestToken": str(uuid.uuid4()),
@@ -415,7 +415,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         """
         from litellm._uuid import uuid
 
-        data: Final[dict[str, Any]] = {
+        data: Final[dict[str, object]] = {
             "SecretId": secret_name,
             "SecretString": secret_value,
             "ClientRequestToken": str(uuid.uuid4()),

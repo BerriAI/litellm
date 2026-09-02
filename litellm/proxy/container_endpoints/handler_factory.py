@@ -7,7 +7,7 @@ FastAPI route handlers for ALL container file endpoints.
 
 import json
 from pathlib import Path
-from typing import Any, Final
+from typing import Final
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse
@@ -194,7 +194,7 @@ async def _process_binary_request(
         user_api_key_dict=user_api_key_dict,
         custom_llm_provider=custom_llm_provider,
     )
-    data: Final[dict[str, Any]] = {
+    data: Final[dict[str, object]] = {
         "file_id": file_id,
         **(
             await get_container_forwarding_params(
@@ -374,7 +374,7 @@ async def _process_request(
     )
 
     query_params: Final = dict(request.query_params)
-    data: Final[dict[str, Any]] = {
+    data: Final[dict[str, object]] = {
         "query_params": query_params,
         **path_params,
     }

@@ -152,7 +152,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> tuple[dict, RequestFiles]:
-        content_parts: Final[list[dict[str, Any]]] = []
+        content_parts: Final[list[dict[str, object]]] = []
 
         # Add source image(s) as base64 data URLs
         if image is not None:
@@ -174,7 +174,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         if prompt:
             content_parts.append({"type": "text", "text": prompt})
 
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "model": model,
             "messages": [
                 {
