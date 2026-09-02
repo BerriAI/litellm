@@ -182,8 +182,8 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         if conflicting:
             raise _conflicting_rewrite(conflicting)
         masked_arguments: Final = with_json_string_leaves(current_arguments, replacements)
-        data["mcp_arguments"] = masked_arguments
-        data["modified_arguments"] = masked_arguments
+        data["mcp_arguments"] = masked_arguments  # rebind-ok: preserve the mask for the outbound MCP call
+        data["modified_arguments"] = masked_arguments  # rebind-ok: expose the applied mask to the caller
         return data
 
     async def process_output_response(
