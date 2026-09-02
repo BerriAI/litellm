@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { listMCPTools } from "../networking";
 import { MCPTool } from "../mcp_tools/types";
-import { Text } from "@tremor/react";
-import { Spin, Radio } from "antd";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "../../app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import McpCrudPermissionPanel from "../mcp_tools/McpCrudPermissionPanel";
@@ -176,27 +176,27 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     <div className="space-y-4">
       {serversFailed && (
         <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-          <Text className="text-yellow-800 font-medium">Unable to load MCP servers</Text>
-          <Text className="text-sm text-yellow-700 mt-1">
+          <p className="text-sm text-yellow-800 font-medium">Unable to load MCP servers</p>
+          <p className="text-sm text-yellow-700 mt-1">
             This list is incomplete; servers granted directly or through an access group may be missing. Reload before
             changing tool permissions
-          </Text>
+          </p>
         </div>
       )}
 
       {toolsetsFailed && selectedToolsets.length > 0 && (
         <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-          <Text className="text-yellow-800 font-medium">Unable to load toolsets</Text>
-          <Text className="text-sm text-yellow-700 mt-1">
+          <p className="text-sm text-yellow-800 font-medium">Unable to load toolsets</p>
+          <p className="text-sm text-yellow-700 mt-1">
             Servers reached through the selected toolsets are not listed below
-          </Text>
+          </p>
         </div>
       )}
 
       {serversLoading && (
         <div className="flex items-center justify-center py-6">
-          <Spin />
-          <Text className="ml-3 text-gray-500">Loading MCP servers...</Text>
+          <UiLoadingSpinner />
+          <p className="ml-3 text-sm text-muted-foreground">Loading MCP servers...</p>
         </div>
       )}
 
@@ -215,12 +215,12 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         const toolsetTools = entry.toolsetTools ?? [];
 
         return (
-          <div key={serverId} className={`border rounded-lg bg-gray-50 ${inherited ? "border-dashed" : ""}`}>
+          <div key={serverId} className={`border rounded-lg bg-muted ${inherited ? "border-dashed" : ""}`}>
             {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b bg-white rounded-t-lg">
+            <div className="flex items-center justify-between p-4 border-b bg-card rounded-t-lg">
               <div>
                 <div className="flex items-center gap-2">
-                  <Text className="font-semibold text-gray-900">{serverName}</Text>
+                  <p className="text-sm font-semibold text-foreground">{serverName}</p>
                   {inherited && (
                     <span
                       className={`px-1.5 py-0.5 text-[10px] font-semibold border rounded-sm uppercase tracking-wide ${inherited.className}`}
@@ -229,39 +229,42 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                     </span>
                   )}
                 </div>
-                {server.description && <Text className="text-sm text-gray-500">{server.description}</Text>}
+                {server.description && <p className="text-sm text-muted-foreground">{server.description}</p>}
                 {entry.ambiguousKeys.length > 0 && (
-                  <Text className="text-sm text-amber-700 mt-1">
+                  <p className="text-sm text-amber-700 mt-1">
                     {`Also granted by ${entry.ambiguousKeys.map((key) => `"${key}"`).join(", ")}, which names another server too. Those tools stay allowed here until the servers no longer share that name`}
-                  </Text>
+                  </p>
                 )}
                 {toolsetTools.length > 0 && (
-                  <Text className="text-sm text-purple-700 mt-1">
+                  <p className="text-sm text-purple-700 mt-1">
                     {toolsetTools.length === 1
                       ? `${toolsetTools[0]} is granted by a selected toolset, so it stays allowed here; edit the toolset to revoke it`
                       : `${toolsetTools.join(", ")} are granted by a selected toolset, so they stay allowed here; edit the toolset to revoke them`}
-                  </Text>
+                  </p>
                 )}
               </div>
               <div className="flex items-center gap-3">
                 {!disabled && tools.length > 0 && (
-                  <Radio.Group
+                  <RadioGroup
                     value={viewMode}
-                    onChange={(e) => setViewModes((prev) => ({ ...prev, [serverId]: e.target.value }))}
-                    size="small"
-                    optionType="button"
-                    buttonStyle="solid"
-                    options={[
-                      { label: "Risk Groups", value: "crud" },
-                      { label: "Flat List", value: "flat" },
-                    ]}
-                  />
+                    onValueChange={(next) => setViewModes((prev) => ({ ...prev, [serverId]: next as "crud" | "flat" }))}
+                    className="flex w-auto items-center gap-4"
+                  >
+                    <label className="flex items-center gap-2 text-sm">
+                      <RadioGroupItem value="crud" />
+                      Risk Groups
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <RadioGroupItem value="flat" />
+                      Flat List
+                    </label>
+                  </RadioGroup>
                 )}
                 {!disabled && (
                   <>
                     <button
                       type="button"
-                      className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                      className="text-sm text-info hover:text-info/80 font-medium"
                       onClick={() => handleSelectAll(entry)}
                       disabled={isLoading}
                     >
@@ -269,7 +272,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                     </button>
                     <button
                       type="button"
-                      className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                      className="text-sm text-info hover:text-info/80 font-medium"
                       onClick={() => writeAllowedTools(entry, [])}
                       disabled={isLoading}
                     >
@@ -285,16 +288,16 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               {/* Loading */}
               {isLoading && (
                 <div className="flex items-center justify-center py-8">
-                  <Spin size="large" />
-                  <Text className="ml-3 text-gray-500">Loading tools...</Text>
+                  <UiLoadingSpinner />
+                  <p className="ml-3 text-sm text-muted-foreground">Loading tools...</p>
                 </div>
               )}
 
               {/* Error */}
               {error && !isLoading && (
-                <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-center">
-                  <Text className="text-red-600 font-medium">Unable to load tools</Text>
-                  <Text className="text-sm text-red-500 mt-1">{error}</Text>
+                <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg text-center">
+                  <p className="text-sm text-destructive font-medium">Unable to load tools</p>
+                  <p className="text-sm text-destructive mt-1">{error}</p>
                 </div>
               )}
 
@@ -319,6 +322,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                       <div key={tool.name} className="flex items-start gap-2">
                         <input
                           type="checkbox"
+                          aria-label={tool.name}
                           checked={isSelected}
                           onChange={() => {
                             if (disabled || isLocked) return;
@@ -332,8 +336,8 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                         />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <Text className="font-medium text-gray-900">{tool.name}</Text>
-                            <Text className="text-sm text-gray-500">- {tool.description || "No description"}</Text>
+                            <p className="text-sm font-medium text-foreground">{tool.name}</p>
+                            <p className="text-sm text-muted-foreground">- {tool.description || "No description"}</p>
                           </div>
                         </div>
                       </div>
@@ -345,7 +349,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               {/* Empty State */}
               {!isLoading && !error && tools.length === 0 && (
                 <div className="text-center py-6">
-                  <Text className="text-gray-500">No tools available</Text>
+                  <p className="text-sm text-muted-foreground">No tools available</p>
                 </div>
               )}
             </div>

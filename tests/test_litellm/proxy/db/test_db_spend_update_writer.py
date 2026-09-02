@@ -1,16 +1,11 @@
 import asyncio
 import copy
 import json
-import os
 import re
-import sys
-
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -20,6 +15,9 @@ from redis.exceptions import DataError
 import litellm
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
+    build_window_spend_transaction,
+)
 
 
 @pytest.mark.asyncio
@@ -69,9 +67,7 @@ async def test_daily_spend_tracking_with_disabled_spend_logs():
         assert db_writer.add_spend_log_transaction_to_daily_user_transaction.called
 
         # Verify the payload passed to add_spend_log_transaction_to_daily_user_transaction
-        call_args = (
-            db_writer.add_spend_log_transaction_to_daily_user_transaction.call_args[1]
-        )
+        call_args = db_writer.add_spend_log_transaction_to_daily_user_transaction.call_args[1]
         assert "payload" in call_args
         assert call_args["payload"]["spend"] == 0.1
         assert call_args["payload"]["model"] == "gpt-4"
@@ -197,7 +193,7 @@ def test_enqueue_tool_registry_upsert_reads_every_choice():
 
     db_writer._enqueue_tool_registry_upsert(kwargs={}, completion_response=response)
 
-    enqueued = [call.args[0]["tool_name"] for call in db_writer.tool_discovery_queue.add_update.call_args_list]
+    enqueued = [c.args[0]["tool_name"] for c in db_writer.tool_discovery_queue.add_update.call_args_list]
     assert enqueued == ["tool_alpha", "tool_beta"]
 
 
@@ -411,7 +407,7 @@ async def test_update_daily_spend_sorting():
     # fields, but entity_id is sufficient to test sorting.
     daily_spend_transactions = {
         f"test_key_{i}": {
-            "user_id": f"user{60-i}",  # user60 ... user11, reverse order
+            "user_id": f"user{60 - i}",  # user60 ... user11, reverse order
             "date": "2024-01-01",
             "api_key": "test-api-key",
             "model": "gpt-4",
@@ -990,9 +986,9 @@ async def test_add_spend_log_transaction_to_daily_tag_transaction_with_request_i
         transaction_dict = call[1]["update"]
         # Each transaction should have one key with the format tag_date_api_key_model_provider
         for key, transaction in transaction_dict.items():
-            assert (
-                transaction["request_id"] == request_id
-            ), f"request_id should be {request_id} but got {transaction.get('request_id')}"
+            assert transaction["request_id"] == request_id, (
+                f"request_id should be {request_id} but got {transaction.get('request_id')}"
+            )
 
 
 @pytest.mark.asyncio
@@ -1218,21 +1214,15 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_calls_common
     }
 
     writer.daily_agent_spend_update_queue.add_update = AsyncMock()
-    original_common_helper = (
-        writer._common_add_spend_log_transaction_to_daily_transaction
-    )
-    writer._common_add_spend_log_transaction_to_daily_transaction = AsyncMock(
-        wraps=original_common_helper
-    )
+    original_common_helper = writer._common_add_spend_log_transaction_to_daily_transaction
+    writer._common_add_spend_log_transaction_to_daily_transaction = AsyncMock(wraps=original_common_helper)
 
     await writer.add_spend_log_transaction_to_daily_agent_transaction(
         payload=payload,
         prisma_client=mock_prisma,
     )
 
-    assert (
-        writer._common_add_spend_log_transaction_to_daily_transaction.await_count == 1
-    )
+    assert writer._common_add_spend_log_transaction_to_daily_transaction.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -1387,6 +1377,7 @@ async def test_update_daily_spend_re_raises_exception_after_logging():
     Test that when batch upsert fails, the exception is properly re-raised after logging.
     This ensures that error handling continues to work correctly upstream.
     """
+
     def raise_connection_lost():
         raise ValueError("Database connection lost")
 
@@ -1423,6 +1414,52 @@ async def test_update_daily_spend_re_raises_exception_after_logging():
             entity_type="user",
             entity_id_field="user_id",
         )
+
+
+@pytest.mark.asyncio
+async def test_update_daily_spend_keeps_failed_transactions_for_retry():
+    """
+    A failed batch must stay in the caller's transaction dict, otherwise the
+    Redis re-queue in _commit_spend_updates_to_db_with_redis has nothing left to
+    push back and the spend is lost permanently.
+    """
+
+    def raise_outage():
+        raise ValueError("simulated database outage")
+
+    prisma_client = _RecordingPrisma(execute_raw=raise_outage)
+
+    daily_spend_transactions = {
+        "test_key": {
+            "user_id": "test-user",
+            "date": "2024-01-01",
+            "api_key": "test-api-key",
+            "model": "gpt-4",
+            "custom_llm_provider": "openai",
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "spend": 0.1,
+            "api_requests": 1,
+            "successful_requests": 1,
+            "failed_requests": 0,
+        }
+    }
+    expected = dict(daily_spend_transactions)
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.failure_handler = AsyncMock()
+
+    with pytest.raises(ValueError, match="simulated database outage"):
+        await DBSpendUpdateWriter._update_daily_spend(
+            n_retry_times=0,
+            prisma_client=prisma_client,
+            proxy_logging_obj=mock_proxy_logging,
+            daily_spend_transactions=daily_spend_transactions,
+            entity_type="user",
+            entity_id_field="user_id",
+        )
+
+    assert daily_spend_transactions == expected
 
 
 @pytest.mark.asyncio
@@ -1521,9 +1558,7 @@ async def test_update_database_creates_single_task():
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
-        patch(
-            "litellm.proxy.db.db_spend_update_writer.asyncio.create_task"
-        ) as mock_create_task,
+        patch("litellm.proxy.db.db_spend_update_writer.asyncio.create_task") as mock_create_task,
     ):
         await db_writer.update_database(
             token="test-token",
@@ -1622,9 +1657,7 @@ async def test_daily_agent_receives_deepcopied_payload():
     db_writer._update_agent_db = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_end_user_transaction = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock(
-        side_effect=capture_agent_payload
-    )
+    db_writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock(side_effect=capture_agent_payload)
     db_writer.add_spend_log_transaction_to_daily_team_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_org_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_tag_transaction = AsyncMock()
@@ -1685,9 +1718,9 @@ async def test_commit_spend_updates_uses_pipeline():
 
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.store_in_memory_spend_updates_in_redis = AsyncMock()
-    # Return all-None tuple (no data to commit)
-    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = (
-        AsyncMock(return_value=(None, None, None, None, None, None, None))
+    # Return all-None tuple (no data to commit); the pipeline yields 6 slots
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(None, None, None, None, None, None, None)
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
 
@@ -1716,6 +1749,225 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer.get_all_daily_end_user_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_agent_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_commit_with_redis_requeues_all_on_db_failure():
+    """
+    Regression for #33872: if the DB commit fails after the leader has already
+    popped transactions from Redis, the popped transactions must be re-queued to
+    Redis so a later tick can retry them, instead of being silently lost.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    db_spend = {
+        "user_list_transactions": {"user1": 1.5},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {"key1": 1.5},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+    daily_user = {"user_key1": {"spend": 1.5, "api_requests": 1}}
+
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(db_spend, daily_user, None, None, None, None, None)
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+
+    mock_pod_lock_manager = AsyncMock()
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+    db_writer.pod_lock_manager = mock_pod_lock_manager
+
+    # Every DB write raises -> simulates a full database outage
+    db_writer._commit_spend_updates_to_db = AsyncMock(side_effect=Exception("db down"))
+
+    with patch.object(
+        DBSpendUpdateWriter,
+        "update_daily_user_spend",
+        new=AsyncMock(side_effect=Exception("db down")),
+    ):
+        await db_writer._commit_spend_updates_to_db_with_redis(
+            prisma_client=MagicMock(),
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    # Both failed categories must be re-queued to Redis, nothing lost
+    mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once()
+    _, kwargs = mock_redis_update_buffer.restore_transactions_to_redis.call_args
+    assert kwargs["db_spend_update_transactions"] == db_spend
+    assert kwargs["daily_spend_update_transactions"] == daily_user
+    # The lock must still be released
+    mock_pod_lock_manager.release_lock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_commit_with_redis_only_requeues_failed_category():
+    """
+    A partial DB failure must not re-queue categories that already committed,
+    otherwise their spend would be double-counted on the next tick.
+    """
+    db_writer = DBSpendUpdateWriter()
+
+    db_spend = {
+        "user_list_transactions": {"user1": 1.5},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+    daily_user = {"user_key1": {"spend": 1.5, "api_requests": 1}}
+
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(db_spend, daily_user, None, None, None, None, None)
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+
+    mock_pod_lock_manager = AsyncMock()
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+    db_writer.pod_lock_manager = mock_pod_lock_manager
+
+    # db_spend commits fine; only the daily user commit fails
+    db_writer._commit_spend_updates_to_db = AsyncMock()
+
+    with patch.object(
+        DBSpendUpdateWriter,
+        "update_daily_user_spend",
+        new=AsyncMock(side_effect=Exception("db down")),
+    ):
+        await db_writer._commit_spend_updates_to_db_with_redis(
+            prisma_client=MagicMock(),
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once()
+    _, kwargs = mock_redis_update_buffer.restore_transactions_to_redis.call_args
+    # Only the failed daily category is requeued; the committed db_spend is not
+    assert kwargs == {"daily_spend_update_transactions": daily_user}
+
+
+@pytest.mark.asyncio
+async def test_commit_with_redis_no_requeue_on_success():
+    """When all commits succeed, nothing should be re-queued to Redis."""
+    db_writer = DBSpendUpdateWriter()
+
+    db_spend = {
+        "user_list_transactions": {"user1": 1.5},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(db_spend, None, None, None, None, None, None)
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+
+    mock_pod_lock_manager = AsyncMock()
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+    db_writer.pod_lock_manager = mock_pod_lock_manager
+
+    db_writer._commit_spend_updates_to_db = AsyncMock()
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=MagicMock(),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    mock_redis_update_buffer.restore_transactions_to_redis.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_commit_daily_tag_spend_requeues_on_db_failure():
+    """A failed daily tag commit must re-queue the popped tag transactions and release the lock."""
+    db_writer = DBSpendUpdateWriter()
+
+    daily_tag = {"tag_key1": {"spend": 1.5, "api_requests": 1}}
+
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.store_in_memory_daily_tag_spend_updates_in_redis = AsyncMock()
+    mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer = AsyncMock(
+        return_value=daily_tag
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+
+    mock_pod_lock_manager = AsyncMock()
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+    db_writer.pod_lock_manager = mock_pod_lock_manager
+
+    with patch.object(
+        DBSpendUpdateWriter,
+        "update_daily_tag_spend",
+        new=AsyncMock(side_effect=Exception("db down")),
+    ):
+        await db_writer._commit_daily_tag_spend_to_db_with_redis(
+            prisma_client=MagicMock(),
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once_with(
+        daily_tag_spend_update_transactions=daily_tag,
+    )
+    mock_pod_lock_manager.release_lock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_commit_daily_tag_spend_no_requeue_on_success():
+    """A successful daily tag commit must not re-queue anything."""
+    db_writer = DBSpendUpdateWriter()
+
+    daily_tag = {"tag_key1": {"spend": 1.5, "api_requests": 1}}
+
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.store_in_memory_daily_tag_spend_updates_in_redis = AsyncMock()
+    mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer = AsyncMock(
+        return_value=daily_tag
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+
+    mock_pod_lock_manager = AsyncMock()
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+    db_writer.pod_lock_manager = mock_pod_lock_manager
+
+    with patch.object(
+        DBSpendUpdateWriter,
+        "update_daily_tag_spend",
+        new=AsyncMock(),
+    ):
+        await db_writer._commit_daily_tag_spend_to_db_with_redis(
+            prisma_client=MagicMock(),
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    mock_redis_update_buffer.restore_transactions_to_redis.assert_not_awaited()
+    mock_pod_lock_manager.release_lock.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
@@ -1896,9 +2148,7 @@ async def test_update_database_does_not_deepcopy_on_request_path():
     db_writer._update_org_db = AsyncMock()
     db_writer._update_tag_db = AsyncMock()
     db_writer._update_agent_db = AsyncMock()
-    db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock(
-        side_effect=capture_batch_payload
-    )
+    db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock(side_effect=capture_batch_payload)
     db_writer.add_spend_log_transaction_to_daily_end_user_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_agent_transaction = AsyncMock()
     db_writer.add_spend_log_transaction_to_daily_team_transaction = AsyncMock()
@@ -1990,9 +2240,7 @@ async def test_spend_update_path_never_queries_user_cache_with_none_user_id():
     db_writer = DBSpendUpdateWriter()
 
     strict_redis_backed_cache = MagicMock()
-    strict_redis_backed_cache.async_get_cache = AsyncMock(
-        side_effect=DataError("Invalid input of type: 'NoneType'")
-    )
+    strict_redis_backed_cache.async_get_cache = AsyncMock(side_effect=DataError("Invalid input of type: 'NoneType'"))
 
     with (
         patch.object(litellm, "max_budget", 0),
@@ -2071,6 +2319,7 @@ async def test_daily_transaction_carries_compression_saved_tokens():
 
     metadata = {
         "usage_object": {"cache_read_input_tokens": 40, "cache_creation_input_tokens": 15},
+        "litellm_gateway_injected_cache": "dep-of-the-compression-row",
         "compression_savings": {
             "tokens_before": 12000,
             "tokens_after": 5000,
@@ -2094,6 +2343,7 @@ async def test_daily_transaction_carries_compression_saved_tokens():
         "model": "claude-sonnet-5",
         "custom_llm_provider": "anthropic",
         "model_group": "claude-sonnet-5",
+        "model_id": "dep-of-the-compression-row",
         "call_type": "anthropic_messages",
         "prompt_tokens": 5000,
         "completion_tokens": 10,
@@ -2118,8 +2368,7 @@ async def test_daily_transaction_carries_compression_saved_tokens():
     cache_write_cost = model_info.get("cache_creation_input_token_cost") or input_cost
     assert transaction["compression_savings_spend"] == pytest.approx(7600 * input_cost)
     assert transaction["prompt_caching_savings_spend"] == pytest.approx(
-        40 * max(input_cost - cache_read_cost, 0.0)
-        - 15 * (cache_write_cost - input_cost)
+        40 * max(input_cost - cache_read_cost, 0.0) - 15 * (cache_write_cost - input_cost)
     )
     assert transaction["compression_savings_spend"] > 0
     assert transaction["prompt_caching_savings_spend"] > 0
@@ -2157,6 +2406,234 @@ async def test_daily_transaction_compression_saved_tokens_zero_when_absent():
     assert transaction["compression_saved_tokens"] == 0
     assert transaction["compression_savings_spend"] == 0
     assert transaction["prompt_caching_savings_spend"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Budget window spend flush (LiteLLM_BudgetWindowSpend)
+# ---------------------------------------------------------------------------
+
+
+class _WindowSpendFakeBatcher:
+    def __init__(self):
+        self.calls = []
+
+    def execute_raw(self, query, *args):
+        self.calls.append((query, args))
+
+
+class _WindowSpendFakeDB:
+    """Minimal prisma_client.db that records the raw statements it is handed."""
+
+    def __init__(self, existing_rows=None):
+        self.existing_rows = existing_rows or []
+        self.query_raw_calls = []
+        self.batcher = _WindowSpendFakeBatcher()
+
+    async def query_raw(self, query, *args):
+        self.query_raw_calls.append((query, args))
+        if "LiteLLM_BudgetWindowSpend" in query:
+            return self.existing_rows
+        return []
+
+    @asynccontextmanager
+    async def _tx(self):
+        yield self
+
+    def tx(self, timeout=None):
+        return self._tx()
+
+    @asynccontextmanager
+    async def _batch(self):
+        yield self.batcher
+
+    def batch_(self):
+        return self._batch()
+
+
+class _WindowSpendFakePrisma:
+    def __init__(self, db):
+        self.db = db
+
+
+def _window_spend_upserts(db):
+    return [params for query, params in db.batcher.calls if "LiteLLM_BudgetWindowSpend" in query]
+
+
+@pytest.mark.asyncio
+async def test_window_spend_queue_is_flushed_without_redis_buffer():
+    """The in-memory window queue must reach the DB on the same scheduler tick
+    as the other spend queues when the Redis buffer is off."""
+    db_writer = DBSpendUpdateWriter()
+    await db_writer.window_spend_update_queue.add_update(
+        build_window_spend_transaction(
+            entity_type="key",
+            entity_id="hashed-token",
+            window_duration="30d",
+            window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
+            spend=0.5,
+        )
+    )
+    db = _WindowSpendFakeDB(
+        existing_rows=[{"entity_type": "key", "entity_id": "hashed-token", "window_duration": "30d"}]
+    )
+
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    upserts = _window_spend_upserts(db)
+    assert len(upserts) == 1
+    assert upserts[0][0] == "key"
+    assert upserts[0][1] == "hashed-token"
+    assert upserts[0][2] == "30d"
+    assert upserts[0][5] == pytest.approx(0.5)
+    assert db_writer.window_spend_update_queue.update_queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_window_spend_queue_is_handed_to_the_redis_buffer():
+    """Multi-pod deployments buffer through Redis, so the window queue has to
+    ride the same rpush path as the daily queues."""
+    db_writer = DBSpendUpdateWriter()
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(None, None, None, None, None, None, None)
+    )
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+    db_writer.pod_lock_manager = AsyncMock()
+    db_writer.pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=MagicMock(),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    stored = mock_redis_update_buffer.store_in_memory_spend_updates_in_redis.call_args[1]
+    assert stored["window_spend_update_queue"] is db_writer.window_spend_update_queue
+
+
+@pytest.mark.asyncio
+async def test_window_spend_transactions_from_redis_are_committed_by_the_lock_winner():
+    db_writer = DBSpendUpdateWriter()
+    window_transactions = (
+        build_window_spend_transaction(
+            entity_type="team",
+            entity_id="team-1",
+            window_duration="7d",
+            window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
+            spend=2.0,
+        ),
+    )
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(None, None, None, None, None, None, window_transactions)
+    )
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+    db_writer.pod_lock_manager = AsyncMock()
+    db_writer.pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    db = _WindowSpendFakeDB(existing_rows=[{"entity_type": "team", "entity_id": "team-1", "window_duration": "7d"}])
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=_WindowSpendFakePrisma(db),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    upserts = _window_spend_upserts(db)
+    assert len(upserts) == 1
+    assert upserts[0][:3] == ("team", "team-1", "7d")
+    assert upserts[0][5] == pytest.approx(2.0)
+
+
+@pytest.mark.asyncio
+async def test_window_spend_transactions_are_not_committed_without_the_pod_lock():
+    """Every pod buffers to Redis but only the lock winner may drain it."""
+    db_writer = DBSpendUpdateWriter()
+    mock_redis_update_buffer = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+    db_writer.pod_lock_manager = AsyncMock()
+    db_writer.pod_lock_manager.acquire_lock = AsyncMock(return_value=False)
+    db = _WindowSpendFakeDB()
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=_WindowSpendFakePrisma(db),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline.assert_not_called()
+    assert _window_spend_upserts(db) == []
+
+
+@pytest.mark.asyncio
+async def test_failed_window_spend_commit_requeues_the_increments_and_continues_the_flush():
+    """Budget enforcement trusts a current window row without reconciling it
+    against LiteLLM_SpendLogs, so a dropped increment would let the key spend
+    past its limit after the next reseed. The increments must go back on the
+    queue, and the tool registry flush must still run."""
+    db_writer = DBSpendUpdateWriter()
+    transaction = build_window_spend_transaction(
+        entity_type="key",
+        entity_id="hashed-token",
+        window_duration="30d",
+        window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        spend=0.5,
+    )
+    await db_writer.window_spend_update_queue.add_update(transaction)
+    db = _WindowSpendFakeDB()
+    db.query_raw = AsyncMock(side_effect=Exception("connection reset"))
+    db_writer._flush_tool_discovery_queue = AsyncMock()
+
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    db_writer._flush_tool_discovery_queue.assert_called_once()
+    requeued = await db_writer.window_spend_update_queue.flush_and_get_aggregated_window_spend_transactions()
+    assert requeued == (transaction,)
+
+
+@pytest.mark.asyncio
+async def test_failed_window_spend_commit_from_redis_is_restored_to_redis():
+    """The Redis drain is destructive, so a failed window commit has to push
+    the popped increments back exactly like the other spend categories."""
+    db_writer = DBSpendUpdateWriter()
+    window_transactions = (
+        build_window_spend_transaction(
+            entity_type="team",
+            entity_id="team-1",
+            window_duration="7d",
+            window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
+            spend=2.0,
+        ),
+    )
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(None, None, None, None, None, None, window_transactions)
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+    db_writer.pod_lock_manager = AsyncMock()
+    db_writer.pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    db = _WindowSpendFakeDB()
+    db.query_raw = AsyncMock(side_effect=Exception("connection reset"))
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=_WindowSpendFakePrisma(db),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert _window_spend_upserts(db) == []
+    mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once_with(
+        window_spend_update_transactions=window_transactions
+    )
+    db_writer.pod_lock_manager.release_lock.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -2268,3 +2745,313 @@ async def test_daily_transaction_internal_call_keeps_spend_but_not_request_count
     assert internal["autorouter_savings_spend"] == 0.0
     assert user_sent["api_requests"] == 1
     assert user_sent["successful_requests"] == 1
+
+
+def _deadlock_error():
+    from prisma.errors import RawQueryError
+
+    return RawQueryError(
+        data={"user_facing_error": {"error_code": "P2034", "meta": {"table": "LiteLLM_VerificationToken"}}}
+    )
+
+
+def _empty_spend_transactions(**overrides):
+    base = {
+        "user_list_transactions": {},
+        "end_user_list_transactions": {},
+        "key_list_transactions": {},
+        "team_list_transactions": {},
+        "team_member_list_transactions": {},
+        "org_list_transactions": {},
+        "tag_list_transactions": {},
+        "agent_list_transactions": {},
+    }
+    return {**base, **overrides}
+
+
+def _good_tx(mock_batcher):
+    tx = AsyncMock()
+    tx.__aenter__ = AsyncMock(return_value=tx)
+    tx.__aexit__ = AsyncMock(return_value=False)
+    tx.batch_ = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_batcher),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    return tx
+
+
+def _failing_tx(error):
+    tx = MagicMock()
+    tx.__aenter__ = AsyncMock(side_effect=error)
+    tx.__aexit__ = AsyncMock(return_value=False)
+    return tx
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_retries_deadlock_then_commits(monkeypatch):
+    """Regression: a deadlock on the key-spend UPDATE is retried and commits the increment exactly once."""
+    slept = []
+    monkeypatch.setattr(
+        "litellm.proxy.db.db_spend_update_writer.asyncio.sleep",
+        AsyncMock(side_effect=lambda s: slept.append(s)),
+    )
+
+    mock_batcher = MagicMock()
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(side_effect=[_failing_tx(_deadlock_error()), _good_tx(mock_batcher)])
+
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    await DBSpendUpdateWriter()._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=3,
+        proxy_logging_obj=proxy_logging,
+        db_spend_update_transactions=_empty_spend_transactions(key_list_transactions={"sk-abc": 0.5}),
+    )
+
+    assert mock_prisma_client.db.tx.call_count == 2
+    mock_batcher.litellm_verificationtoken.update_many.assert_called_once()
+    call_kwargs = mock_batcher.litellm_verificationtoken.update_many.call_args[1]
+    assert call_kwargs["where"] == {"token": "sk-abc"}
+    assert call_kwargs["data"]["spend"] == {"increment": 0.5}
+    assert len(slept) == 1
+    proxy_logging.failure_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_raises_after_exhausting_deadlock_retries(monkeypatch):
+    """A deadlock that never clears must surface after the retry budget is spent, not loop or swallow."""
+    monkeypatch.setattr("litellm.proxy.db.db_spend_update_writer.asyncio.sleep", AsyncMock(return_value=None))
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(side_effect=lambda *a, **k: _failing_tx(_deadlock_error()))
+
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    from prisma.errors import RawQueryError
+
+    with pytest.raises(RawQueryError):
+        await DBSpendUpdateWriter()._commit_spend_updates_to_db(
+            prisma_client=mock_prisma_client,
+            n_retry_times=2,
+            proxy_logging_obj=proxy_logging,
+            db_spend_update_transactions=_empty_spend_transactions(key_list_transactions={"sk-abc": 0.5}),
+        )
+
+    assert mock_prisma_client.db.tx.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_does_not_retry_non_deadlock_data_error(monkeypatch):
+    """A non-retryable data-layer error raises on the first attempt, never retried against the increment."""
+    monkeypatch.setattr("litellm.proxy.db.db_spend_update_writer.asyncio.sleep", AsyncMock(return_value=None))
+
+    from prisma.errors import UniqueViolationError
+
+    non_deadlock = UniqueViolationError(
+        data={"user_facing_error": {"error_code": "P2002", "meta": {"table": "LiteLLM_VerificationToken"}}}
+    )
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(side_effect=lambda *a, **k: _failing_tx(non_deadlock))
+
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    with pytest.raises(UniqueViolationError):
+        await DBSpendUpdateWriter()._commit_spend_updates_to_db(
+            prisma_client=mock_prisma_client,
+            n_retry_times=3,
+            proxy_logging_obj=proxy_logging,
+            db_spend_update_transactions=_empty_spend_transactions(key_list_transactions={"sk-abc": 0.5}),
+        )
+
+    mock_prisma_client.db.tx.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_update_daily_spend_retries_deadlock(monkeypatch):
+    """The daily-spend upsert path retries a deadlock on the bulk upsert and then drains successfully."""
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[_deadlock_error(), None])
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    monkeypatch.setattr("litellm.proxy.db.db_spend_update_writer.asyncio.sleep", AsyncMock(return_value=None))
+    daily_spend_transactions = {"k1": _daily_txn()}
+    await DBSpendUpdateWriter._update_daily_spend(
+        n_retry_times=3,
+        prisma_client=mock_prisma_client,
+        proxy_logging_obj=proxy_logging,
+        daily_spend_transactions=daily_spend_transactions,
+        entity_type="user",
+        entity_id_field="user_id",
+    )
+
+    assert mock_prisma_client.db.execute_raw.call_count == 2
+    assert daily_spend_transactions == {}
+    proxy_logging.failure_handler.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "transactions_key, sample_key",
+    [
+        ("user_list_transactions", "user-1"),
+        ("team_list_transactions", "team-1"),
+        ("team_member_list_transactions", "team_id::team-1::user_id::user-1"),
+        ("org_list_transactions", "org-1"),
+        ("tag_list_transactions", "tag-1"),
+        ("agent_list_transactions", "agent-1"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_commit_spend_updates_retries_deadlock_on_every_entity_path(monkeypatch, transactions_key, sample_key):
+    """Every per-entity spend path, not just keys, retries a deadlock instead of dropping the increment."""
+    monkeypatch.setattr("litellm.proxy.db.db_spend_update_writer.asyncio.sleep", AsyncMock(return_value=None))
+
+    mock_batcher = MagicMock()
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(side_effect=[_failing_tx(_deadlock_error()), _good_tx(mock_batcher)])
+
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    proxy_logging.call_details = {}
+
+    await DBSpendUpdateWriter()._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=3,
+        proxy_logging_obj=proxy_logging,
+        db_spend_update_transactions=_empty_spend_transactions(**{transactions_key: {sample_key: 0.5}}),
+    )
+
+    assert mock_prisma_client.db.tx.call_count == 2
+    proxy_logging.failure_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_type, expects_flush",
+    [("aresponses", True), ("responses", True), ("acompletion", False)],
+)
+async def test_insert_spend_log_asks_for_an_immediate_flush_on_responses_calls(call_type: str, expects_flush: bool):
+    """
+    A `previous_response_id` chained straight off the previous turn reads the DB, so a
+    Responses row cannot sit in this worker's queue until the monitor's next poll.
+    """
+    from litellm.proxy.utils import PrismaClient
+
+    db_writer = DBSpendUpdateWriter()
+    prisma = _tool_usage_prisma()
+    PrismaClient.spend_log_flush_requested.clear()
+
+    await db_writer._insert_spend_log_to_db(
+        payload={"request_id": "req-1", "call_type": call_type},
+        prisma_client=prisma,
+    )
+
+    assert prisma.spend_log_transactions == [{"request_id": "req-1", "call_type": call_type}]
+    assert PrismaClient.spend_log_flush_requested.is_set() is expects_flush
+    PrismaClient.spend_log_flush_requested.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "injected_deployment, attributed",
+    [
+        pytest.param("dep-of-this-row", True, id="this-deployment-injected"),
+        pytest.param("dep-of-a-sibling-leg", False, id="a-sibling-deployment-injected"),
+        pytest.param("", True, id="injected-before-a-deployment-was-chosen"),
+    ],
+)
+async def test_caching_savings_are_attributed_to_the_deployment_that_was_injected(injected_deployment, attributed):
+    """Retries, same-group failover and cross-model-group fallbacks all reuse one metadata
+    bucket and one litellm_call_id, so a marker written by the leg that injected is
+    visible to every sibling and nothing request-scoped can tell them apart.
+
+    Naming the deployment it injected for is what keeps the credit on that leg: a row
+    billed for a different deployment reads it as no injection, so no seam has to strip
+    it and a deployment that injected nothing is never credited for the one that did.
+
+    An injection that ran before any deployment was chosen, which is what the proxy does
+    for prompt templates, is written into the payload every leg goes on to send, so it
+    marks the request for all of them and each leg keeps the credit.
+    """
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    payload = {
+        "request_id": "req-fallback-leg",
+        "user": "test-user",
+        "startTime": "2026-07-17T00:00:00",
+        "api_key": "test-key",
+        "model": "claude-sonnet-5",
+        "custom_llm_provider": "anthropic",
+        "model_group": "claude-sonnet-5",
+        "model_id": "dep-of-this-row",
+        "call_type": "anthropic_messages",
+        "prompt_tokens": 5000,
+        "completion_tokens": 10,
+        "spend": 0.05,
+        "metadata": json.dumps(
+            {
+                "usage_object": {"cache_read_input_tokens": 4242, "cache_creation_input_tokens": 1111},
+                "litellm_gateway_injected_cache": injected_deployment,
+            }
+        ),
+    }
+
+    transaction = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+        type="user",
+    )
+
+    assert transaction is not None
+    assert transaction["prompt_caching_savings_spend"] != 0.0
+    assert (transaction["gateway_injected_caching_savings_spend"] != 0.0) is attributed
+
+
+@pytest.mark.asyncio
+async def test_daily_transaction_attributes_caching_savings_only_with_an_injection_marker():
+    """Cached usage with no litellm_gateway_injected_cache marker is still a real saving.
+
+    Client-sent cache_control and implicit provider caching leave no marker, so the row
+    keeps the total the customer actually got while the gateway-attributed column stays
+    empty, which is what separates what caching saved from what litellm can claim.
+    """
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    payload = {
+        "request_id": "req-ungated-caching",
+        "user": "test-user",
+        "startTime": "2026-07-17T00:00:00",
+        "api_key": "test-key",
+        "model": "claude-sonnet-5",
+        "custom_llm_provider": "anthropic",
+        "model_group": "claude-sonnet-5",
+        "call_type": "anthropic_messages",
+        "prompt_tokens": 5000,
+        "completion_tokens": 10,
+        "spend": 0.05,
+        "metadata": json.dumps(
+            {"usage_object": {"cache_read_input_tokens": 4242, "cache_creation_input_tokens": 1111}}
+        ),
+    }
+
+    transaction = await writer._common_add_spend_log_transaction_to_daily_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+        type="user",
+    )
+
+    assert transaction is not None
+    assert transaction["cache_read_input_tokens"] == 4242
+    assert transaction["cache_creation_input_tokens"] == 1111
+    assert transaction["prompt_caching_savings_spend"] != 0.0
+    assert transaction["gateway_injected_caching_savings_spend"] == 0.0

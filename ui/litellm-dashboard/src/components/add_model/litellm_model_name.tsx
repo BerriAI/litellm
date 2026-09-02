@@ -1,7 +1,10 @@
 import React from "react";
-import { Form, Select as AntSelect } from "antd";
-import { TextInput, Text } from "@tremor/react";
-import { Row, Col } from "antd";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { useFormContext, useWatch } from "react-hook-form";
+import { Input } from "@/components/ui/input";
+import { requiredRule } from "../common_components/formRules";
+import { labelWithHint } from "@/components/shared/form/LabelWithHint";
+import { MountedFormField, type MountedFormValues } from "../common_components/MountedFormField";
 import { Providers } from "../provider_info_helpers";
 
 interface LiteLLMModelNameFieldProps {
@@ -15,7 +18,9 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
   providerModels,
   getPlaceholder,
 }) => {
-  const form = Form.useFormInstance();
+  const form = useFormContext<MountedFormValues>();
+  const modelValue = useWatch({ control: form.control, name: "model" });
+  const selectedModels = Array.isArray(modelValue) ? modelValue : [modelValue];
 
   const handleModelChange = (value: string | string[]) => {
     // Ensure value is always treated as an array
@@ -23,10 +28,11 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
 
     // If "all-wildcard" is selected, clear the model_name field
     if (values.includes("all-wildcard")) {
-      form.setFieldsValue({ model_name: undefined, model_mappings: [] });
+      form.setValue("model_name", undefined);
+      form.setValue("model_mappings", []);
     } else {
       // Get current model value to check if we need to update
-      const currentModel = form.getFieldValue("model");
+      const currentModel = form.getValues("model");
 
       // Only update if the value has actually changed
       if (JSON.stringify(currentModel) !== JSON.stringify(values)) {
@@ -45,10 +51,8 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
         });
 
         // Update both fields in one call to reduce re-renders
-        form.setFieldsValue({
-          model: values,
-          model_mappings: mappings,
-        });
+        form.setValue("model", values);
+        form.setValue("model_mappings", mappings);
       }
     }
   };
@@ -67,10 +71,8 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
       : [];
 
     // Update both fields
-    form.setFieldsValue({
-      model: deploymentName,
-      model_mappings: mappings,
-    });
+    form.setValue("model", deploymentName);
+    form.setValue("model_mappings", mappings);
   };
 
   // Handle custom model name changes
@@ -78,7 +80,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
     const customName = e.target.value;
 
     // Immediately update the model mappings
-    const currentMappings = form.getFieldValue("model_mappings") || [];
+    const currentMappings = (form.getValues("model_mappings") as any[]) || [];
     const updatedMappings = currentMappings.map((mapping: any) => {
       if (mapping.public_name === "custom" || mapping.litellm_model === "custom") {
         if (selectedProvider === Providers.Azure) {
@@ -95,45 +97,50 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
       return mapping;
     });
 
-    form.setFieldsValue({ model_mappings: updatedMappings });
+    form.setValue("model_mappings", updatedMappings);
   };
 
   return (
     <>
-      <Form.Item
-        label="LiteLLM Model Name(s)"
-        tooltip="The model name LiteLLM will send to the LLM API"
+      <MountedFormField
+        name="model"
+        label={labelWithHint("LiteLLM Model Name(s)", "The model name LiteLLM will send to the LLM API")}
+        required
+        rules={{
+          validate: {
+            required: requiredRule(
+              `Please enter ${selectedProvider === Providers.Azure ? "a deployment name" : "at least one model"}.`,
+            ),
+          },
+        }}
         className="mb-0"
       >
-        <Form.Item
-          name="model"
-          rules={[
-            {
-              required: true,
-              message: `Please enter ${selectedProvider === Providers.Azure ? "a deployment name" : "at least one model"}.`,
-            },
-          ]}
-          noStyle
-        >
-          {selectedProvider === Providers.Azure ||
+        {(control) =>
+          selectedProvider === Providers.Azure ||
           selectedProvider === Providers.OpenAI_Compatible ||
           selectedProvider === Providers.Ollama ? (
-            <>
-              <TextInput
-                placeholder={getPlaceholder(selectedProvider)}
-                onChange={selectedProvider === Providers.Azure ? handleAzureDeploymentNameChange : undefined}
-              />
-            </>
+            <Input
+              id={control.id}
+              value={(control.value as string | undefined) ?? ""}
+              onBlur={control.onBlur}
+              placeholder={getPlaceholder(selectedProvider)}
+              onChange={(event) => {
+                control.onChange(event);
+                if (selectedProvider === Providers.Azure) {
+                  handleAzureDeploymentNameChange(event);
+                }
+              }}
+            />
           ) : providerModels.length > 0 ? (
-            <AntSelect
-              data-testid="model-name-select"
-              mode="multiple"
-              allowClear
-              showSearch
+            <MultiSelect
+              id={control.id}
               placeholder="Select models"
-              onChange={handleModelChange}
-              optionFilterProp="children"
-              filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
+              emptyText="No models found"
+              value={(control.value as string[] | undefined) ?? []}
+              onValueChange={(value: string[]) => {
+                control.onChange(value);
+                handleModelChange(value);
+              }}
               options={[
                 {
                   label: "Custom Model Name (Enter below)",
@@ -148,47 +155,50 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
                   value: model,
                 })),
               ]}
-              style={{ width: "100%" }}
+              className="w-full"
             />
           ) : (
-            <TextInput placeholder={getPlaceholder(selectedProvider)} />
-          )}
-        </Form.Item>
+            <Input
+              id={control.id}
+              value={(control.value as string | undefined) ?? ""}
+              onChange={control.onChange}
+              onBlur={control.onBlur}
+              placeholder={getPlaceholder(selectedProvider)}
+            />
+          )
+        }
+      </MountedFormField>
 
-        {/* Custom Model Name field */}
-        <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.model !== currentValues.model}>
-          {({ getFieldValue }) => {
-            const selectedModels = getFieldValue("model") || [];
-            const modelArray = Array.isArray(selectedModels) ? selectedModels : [selectedModels];
-            return (
-              modelArray.includes("custom") && (
-                <Form.Item
-                  name="custom_model_name"
-                  rules={[{ required: true, message: "Please enter a custom model name." }]}
-                  className="mt-2"
-                >
-                  <TextInput
-                    placeholder={
-                      selectedProvider === Providers.Azure ? "Enter Azure deployment name" : "Enter custom model name"
-                    }
-                    onChange={handleCustomModelNameChange}
-                  />
-                </Form.Item>
-              )
-            );
-          }}
-        </Form.Item>
-      </Form.Item>
-      <Row>
-        <Col span={10}></Col>
-        <Col span={14}>
-          <Text className="mb-3 mt-1">
-            {selectedProvider === Providers.Azure
-              ? "Your deployment name will be saved as the public model name, and LiteLLM will use 'azure/deployment-name' internally"
-              : "The model name LiteLLM will send to the LLM API"}
-          </Text>
-        </Col>
-      </Row>
+      {selectedModels.includes("custom") && (
+        <MountedFormField
+          name="custom_model_name"
+          required
+          rules={{ validate: { required: requiredRule("Please enter a custom model name.") } }}
+          className="mt-2"
+        >
+          {(control) => (
+            <Input
+              id={control.id}
+              value={(control.value as string | undefined) ?? ""}
+              onBlur={control.onBlur}
+              placeholder={
+                selectedProvider === Providers.Azure ? "Enter Azure deployment name" : "Enter custom model name"
+              }
+              onChange={(event) => {
+                control.onChange(event);
+                handleCustomModelNameChange(event);
+              }}
+            />
+          )}
+        </MountedFormField>
+      )}
+      <div className="grid grid-cols-24">
+        <p className="col-start-11 col-span-14 text-sm mb-3 mt-1">
+          {selectedProvider === Providers.Azure
+            ? "Your deployment name will be saved as the public model name, and LiteLLM will use 'azure/deployment-name' internally"
+            : "The model name LiteLLM will send to the LLM API"}
+        </p>
+      </div>
     </>
   );
 };

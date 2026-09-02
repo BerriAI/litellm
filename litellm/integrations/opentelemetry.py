@@ -1,5 +1,8 @@
 import os
-from collections.abc import Mapping
+import threading
+from collections import OrderedDict
+from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
@@ -17,7 +20,9 @@ from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
     OTELSemconvCategory,
     parse_semconv_opt_in,
 )
+from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.semconv import Metric
+from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.service_tier_utils import (
@@ -38,6 +43,7 @@ from litellm.types.utils import (
 # OpenTelemetry imports moved to individual functions to avoid import errors when not installed
 
 if TYPE_CHECKING:
+    from opentelemetry.sdk.resources import Resource as _Resource
     from opentelemetry.sdk.trace import TracerProvider as _SDKTracerProvider
     from opentelemetry.sdk.trace.export import SpanExporter as _SpanExporter
     from opentelemetry.trace import Context as _Context
@@ -82,6 +88,12 @@ class _UsageCompletionTokensView(TypedDict, total=False):
 class _ResponseWithUsageView(TypedDict, total=False):
     usage: "_UsageCompletionTokensView | None"
 
+
+# Cap on credential-scoped providers held at once; each one owns an exporter thread.
+_MAX_DYNAMIC_TRACER_PROVIDERS: Final = 256
+
+# Dedicated so a slow exporter shutdown cannot starve the shared logging executor.
+_PROVIDER_SHUTDOWN_EXECUTOR: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="OtelProviderShutdown")
 
 LITELLM_TRACER_NAME: Final = os.getenv("OTEL_TRACER_NAME", "litellm")
 LITELLM_METER_NAME: Final = os.getenv("LITELLM_METER_NAME", "litellm")
@@ -227,6 +239,34 @@ def _freeze_for_dedupe(value: object, _depth: int = 0) -> HashableScope:
     return repr(value)
 
 
+def _shutdown_tracer_provider(provider: "_SDKTracerProvider") -> None:
+    """Flush and stop a dropped provider so its exporter thread is reclaimed."""
+    try:
+        provider.shutdown()
+    except Exception as e:  # noqa: BLE001  # exporter shutdown must not fail the request that dropped it
+        verbose_logger.debug("OpenTelemetry: error shutting down dropped tracer provider: %s", e)
+
+
+@dataclass(frozen=True, slots=True)
+class _CachedTracerProvider:
+    """A cached credential-scoped provider plus whether it may be shut down when dropped."""
+
+    provider: "_SDKTracerProvider"
+    owns_exporter: bool
+
+
+def _provider_owns_exporter(exporter: "str | _SpanExporter") -> bool:
+    """Whether a provider built for ``exporter`` may be shut down when it is dropped.
+
+    ``_get_span_processor`` builds a fresh exporter for a named kind, but wraps a
+    caller-supplied ``SpanExporter`` instance as-is, and that instance is shared with the
+    logger's own provider. Shutting a dropped provider down would then stop exporting for
+    the whole process. The shared case also uses ``SimpleSpanProcessor``, so it owns no
+    thread and there is nothing to reclaim.
+    """
+    return not hasattr(exporter, "export")
+
+
 @dataclass
 class OpenTelemetryConfig:
     exporter: str | SpanExporter = "console"
@@ -322,6 +362,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         tracer_provider: object | None = None,
         logger_provider: object | None = None,
         meter_provider: object | None = None,
+        max_dynamic_tracer_providers: int = _MAX_DYNAMIC_TRACER_PROVIDERS,
         **kwargs,
     ):
         team_metadata_keys_override: Final = kwargs.pop("baggage_team_metadata_keys", None)
@@ -347,7 +388,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         self.OTEL_EXPORTER = self.config.exporter
         self.OTEL_ENDPOINT = self.config.endpoint
         self.OTEL_HEADERS = self.config.headers
-        self._tracer_provider_cache: dict[str, _SDKTracerProvider] = {}
+        self._tracer_provider_cache: OrderedDict[str, _CachedTracerProvider] = OrderedDict()
+        self._tracer_provider_cache_lock: Final = threading.Lock()
+        self._max_dynamic_tracer_providers: Final = max(1, max_dynamic_tracer_providers)
+        self._litellm_resource_memo: _Resource | None = None
         self._init_tracing(tracer_provider)
 
         _debug_otel: Final = str(os.getenv("DEBUG_OTEL", "False")).lower()
@@ -373,7 +417,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         self._init_otel_logger_on_litellm_proxy()
 
     @staticmethod
-    def _get_litellm_resource(config: OpenTelemetryConfig):
+    def _get_litellm_resource(config: OpenTelemetryConfig) -> "_Resource":
         """Create an OpenTelemetry Resource using config-driven defaults."""
         from opentelemetry.sdk.resources import OTELResourceDetector, Resource
 
@@ -387,6 +431,21 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         otel_resource_detector: Final = OTELResourceDetector()
         env_resource: Final = otel_resource_detector.detect()
         return base_resource.merge(env_resource)
+
+    def _litellm_resource(self) -> "_Resource":
+        """The Resource every provider on this logger is built with, frozen at first use.
+
+        ``Resource.create`` scans every installed distribution's entry points, roughly 3ms and
+        200 file opens, and the dynamic providers reach it from the async logging path. Freezing
+        also keeps them consistent with whatever this logger built at startup. ``cached_property``
+        locks class-wide before 3.12, which this file still supports.
+        """
+        memo: Final = self._litellm_resource_memo
+        if memo is not None:
+            return memo
+        built: Final = self._get_litellm_resource(self.config)
+        self._litellm_resource_memo = built
+        return built
 
     def _init_otel_logger_on_litellm_proxy(self):
         """
@@ -555,7 +614,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         from opentelemetry.trace import SpanKind
 
         def create_tracer_provider():
-            provider: Final = TracerProvider(resource=self._get_litellm_resource(self.config))
+            provider: Final = TracerProvider(resource=self._litellm_resource())
             provider.add_span_processor(self._get_span_processor())
             return provider
 
@@ -593,7 +652,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             metric_reader: Final = self._get_metric_reader()
             return MeterProvider(
                 metric_readers=[metric_reader],
-                resource=self._get_litellm_resource(self.config),
+                resource=self._litellm_resource(),
             )
 
         meter_provider = self._get_or_create_provider(
@@ -651,7 +710,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 
         def create_logger_provider():
-            provider: Final = OTLoggerProvider(resource=self._get_litellm_resource(self.config))
+            provider: Final = OTLoggerProvider(resource=self._litellm_resource())
             log_exporter: Final = self._get_log_exporter()
             provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
             return provider
@@ -678,6 +737,28 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         self._handle_failure(kwargs, response_obj, start_time, end_time)
 
+    def _start_service_span(self, payload: ServiceLoggerPayload, parent_otel_span: Span, start_time_ns: int) -> Span:
+        """Open a service span, named and classified by what the service is.
+
+        A datastore call is an outbound CLIENT span carrying ``db.*`` semconv.
+        Without those a Postgres span says only ``service=postgres``, so the
+        backend falls back to the transport peer, which for Prisma is the local
+        query engine on loopback. Everything else stays an INTERNAL span.
+        """
+        from opentelemetry import trace
+        from opentelemetry.trace import SpanKind
+
+        attributes: Final = db_span_attributes(payload.service.value, payload.call_type)
+        span: Final = self.tracer.start_span(
+            name=payload.service,
+            context=trace.set_span_in_context(parent_otel_span),
+            start_time=start_time_ns,
+            kind=SpanKind.CLIENT if attributes else SpanKind.INTERNAL,
+        )
+        for key, value in attributes.items():
+            self.safe_set_attribute(span=span, key=key, value=value)
+        return span
+
     async def async_service_success_hook(
         self,
         payload: ServiceLoggerPayload,
@@ -686,7 +767,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         end_time: datetime | float | None = None,
         event_metadata: dict | None = None,
     ):
-        from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
         _start_time_ns = 0
@@ -703,12 +783,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             _end_time_ns = self._to_ns(end_time)
 
         if parent_otel_span is not None:
-            _span_name: Final = payload.service
-            service_logging_span: Final = self.tracer.start_span(
-                name=_span_name,
-                context=trace.set_span_in_context(parent_otel_span),
-                start_time=_start_time_ns,
-            )
+            service_logging_span: Final = self._start_service_span(payload, parent_otel_span, _start_time_ns)
             self.safe_set_attribute(
                 span=service_logging_span,
                 key="call_type",
@@ -746,7 +821,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         end_time: float | datetime | None = None,
         event_metadata: dict | None = None,
     ):
-        from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
         _start_time_ns = 0
@@ -763,12 +837,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             _end_time_ns = self._to_ns(end_time)
 
         if parent_otel_span is not None:
-            _span_name: Final = payload.service
-            service_logging_span: Final = self.tracer.start_span(
-                name=_span_name,
-                context=trace.set_span_in_context(parent_otel_span),
-                start_time=_start_time_ns,
-            )
+            service_logging_span: Final = self._start_service_span(payload, parent_otel_span, _start_time_ns)
             self.safe_set_attribute(
                 span=service_logging_span,
                 key="call_type",
@@ -1027,38 +1096,94 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         return self.construct_dynamic_otel_config(standard_callback_dynamic_params=standard_callback_dynamic_params)
 
-    def _get_tracer_with_dynamic_config(self, dynamic_config: OpenTelemetryConfig):
+    def _insert_or_drop(
+        self, cache_key: str, built: "_CachedTracerProvider"
+    ) -> "tuple[_CachedTracerProvider, _CachedTracerProvider | None]":
+        """Cache ``built`` under ``cache_key``, returning the entry to use and what to drop.
+
+        Caller holds ``_tracer_provider_cache_lock``. The drop is either the loser of a
+        concurrent build for this key or the LRU victim its insertion pushed out.
+        """
+        raced: Final = self._tracer_provider_cache.get(cache_key)
+        if raced is not None:
+            self._tracer_provider_cache.move_to_end(cache_key)
+            return raced, built
+
+        self._tracer_provider_cache[cache_key] = built
+        if len(self._tracer_provider_cache) > self._max_dynamic_tracer_providers:
+            return built, self._tracer_provider_cache.popitem(last=False)[1]
+        return built, None
+
+    def _cached_dynamic_tracer(
+        self,
+        cache_key: str,
+        build: Callable[[], "_SDKTracerProvider"],
+        owns_exporter: bool,
+    ) -> "_Tracer":
+        """Return the tracer for ``cache_key``, building and caching a provider on miss.
+
+        A provider that owns its exporter also owns a ``BatchSpanProcessor`` worker thread
+        that only stops on ``shutdown()``, so the cache is a bounded LRU and whatever it
+        drops is shut down. Without both, a proxy serving key-scoped credentials accumulates
+        one live thread per credential set for the life of the process.
+
+        ``owns_exporter`` also decides ``shutdown_on_exit`` at build time: a provider we may
+        never shut down must not hold an interpreter-exit hook, which would both pin it in
+        memory for the life of the process and stop the shared exporter at exit. Those
+        providers use ``SimpleSpanProcessor``, which buffers nothing, so the hook costs them
+        no flush.
+
+        ``owns_exporter`` describes the provider being built, and is cached with it, because
+        the two dynamic entry points share this cache and can disagree: whether the LRU
+        victim may be shut down is a property of the victim, never of the request that
+        happened to evict it.
+        """
+        with self._tracer_provider_cache_lock:
+            cached: Final = self._tracer_provider_cache.get(cache_key)
+            if cached is not None:
+                self._tracer_provider_cache.move_to_end(cache_key)
+                return cached.provider.get_tracer(LITELLM_TRACER_NAME)
+
+        # Built outside the lock: exporter construction can block on DNS/TLS.
+        built: Final = _CachedTracerProvider(provider=build(), owns_exporter=owns_exporter)
+
+        with self._tracer_provider_cache_lock:
+            winner, dropped = self._insert_or_drop(cache_key, built)
+
+        if dropped is not None and dropped.owns_exporter:
+            # Off the caller's thread: shutdown joins the exporter worker.
+            _PROVIDER_SHUTDOWN_EXECUTOR.submit(_shutdown_tracer_provider, dropped.provider)
+        return winner.provider.get_tracer(LITELLM_TRACER_NAME)
+
+    def _get_tracer_with_dynamic_config(self, dynamic_config: OpenTelemetryConfig) -> "_Tracer":
         """Create (or reuse) a tracer whose exporter target comes from a per-request config."""
         from opentelemetry.sdk.trace import TracerProvider
 
-        cache_key = f"dynamic_config:{dynamic_config.exporter}:{dynamic_config.endpoint}:{dynamic_config.headers}"
-        if cache_key in self._tracer_provider_cache:
-            return self._tracer_provider_cache[cache_key].get_tracer(LITELLM_TRACER_NAME)
+        owns_exporter: Final = _provider_owns_exporter(dynamic_config.exporter)
 
-        temp_provider: Final = TracerProvider(resource=self._get_litellm_resource(self.config))
-        temp_provider.add_span_processor(self._get_span_processor(config_override=dynamic_config))
+        def _build() -> "_SDKTracerProvider":
+            provider: Final = TracerProvider(resource=self._litellm_resource(), shutdown_on_exit=owns_exporter)
+            provider.add_span_processor(self._get_span_processor(config_override=dynamic_config))
+            return provider
 
-        self._tracer_provider_cache[cache_key] = temp_provider
+        cache_key: Final = (
+            f"dynamic_config:{dynamic_config.exporter}:{dynamic_config.endpoint}:{dynamic_config.headers}"
+        )
+        return self._cached_dynamic_tracer(cache_key, _build, owns_exporter)
 
-        return temp_provider.get_tracer(LITELLM_TRACER_NAME)
-
-    def _get_tracer_with_dynamic_headers(self, dynamic_headers: dict):
-        """Create a temporary tracer with dynamic headers for this request only."""
+    def _get_tracer_with_dynamic_headers(self, dynamic_headers: Mapping[str, str]) -> "_Tracer":
+        """Create (or reuse) a tracer whose OTLP headers come from a per-request credential set."""
         from opentelemetry.sdk.trace import TracerProvider
 
-        # Prevents thread exhaustion by reusing providers for the same credential sets (e.g. per-team keys)
+        owns_exporter: Final = _provider_owns_exporter(self.OTEL_EXPORTER)
+
+        def _build() -> "_SDKTracerProvider":
+            provider: Final = TracerProvider(resource=self._litellm_resource(), shutdown_on_exit=owns_exporter)
+            provider.add_span_processor(self._get_span_processor(dynamic_headers=dynamic_headers))
+            return provider
+
         cache_key: Final = str(sorted(dynamic_headers.items()))
-        if cache_key in self._tracer_provider_cache:
-            return self._tracer_provider_cache[cache_key].get_tracer(LITELLM_TRACER_NAME)
-
-        # Create a temporary tracer provider with dynamic headers
-        temp_provider: Final = TracerProvider(resource=self._get_litellm_resource(self.config))
-        temp_provider.add_span_processor(self._get_span_processor(dynamic_headers=dynamic_headers))
-
-        # Store in cache for reuse
-        self._tracer_provider_cache[cache_key] = temp_provider
-
-        return temp_provider.get_tracer(LITELLM_TRACER_NAME)
+        return self._cached_dynamic_tracer(cache_key, _build, owns_exporter)
 
     def construct_dynamic_otel_headers(
         self, standard_callback_dynamic_params: StandardCallbackDynamicParams
@@ -1519,7 +1644,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         if self._operation_duration_histogram:
             self._operation_duration_histogram.record(duration_s, attributes=common_attrs)
-            if response_obj and (usage := response_obj.get("usage")) and self._token_usage_histogram:
+            if (
+                self._token_usage_histogram
+                and response_obj
+                and not is_unbilled_non_inference_call_from_params(kwargs.get("call_type"), params, response_obj)
+                and (usage := response_obj.get("usage"))
+            ):
                 in_attrs: Final = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "input"}
                 out_attrs: Final = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "output"}
                 self._token_usage_histogram.record(usage.get("prompt_tokens", 0), attributes=in_attrs)
@@ -1593,6 +1723,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         - For non-streaming: uses end_time - api_call_start_time (total generation time)
         """
         if not self._time_per_output_token_histogram:
+            return
+
+        if is_unbilled_non_inference_call_from_params(
+            kwargs.get("call_type"), kwargs.get("litellm_params"), response_obj
+        ):
             return
 
         # Get completion tokens from response_obj
@@ -1924,6 +2059,26 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 # OTel sequence attributes must be homogeneous primitives;
                 # serialise to JSON once so set_attribute never coerces.
                 guardrail_span.set_attribute("guardrail_violation_categories", safe_dumps(violation_categories))
+
+            # Billable usage counters and USD cost stamped by the provider hook
+            # (e.g. Azure Prompt Shield text records, Bedrock policy units).
+            guardrail_usage = guardrail_information.get("guardrail_usage")
+            if guardrail_usage is not None:
+                guardrail_span.set_attribute("guardrail_usage", safe_dumps(guardrail_usage))
+            guardrail_cost = guardrail_information.get("guardrail_cost")
+            if guardrail_cost is not None:
+                self.safe_set_attribute(
+                    span=guardrail_span,
+                    key="guardrail_cost",
+                    value=guardrail_cost,
+                )
+            guardrail_cost_in_spend = guardrail_information.get("guardrail_cost_in_spend")
+            if isinstance(guardrail_cost_in_spend, bool):
+                self.safe_set_attribute(
+                    span=guardrail_span,
+                    key="guardrail_cost_in_spend",
+                    value=guardrail_cost_in_spend,
+                )
 
             self._set_team_attributes_from_kwargs(guardrail_span, kwargs)
 
@@ -2344,7 +2499,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             self._set_service_tier_attributes(span=span, standard_logging_payload=standard_logging_payload)
 
-            usage: Final = response_obj and response_obj.get("usage")
+            usage: Final = (
+                response_obj.get("usage")
+                if response_obj
+                and not is_unbilled_non_inference_call_from_params(
+                    kwargs.get("call_type"), litellm_params, response_obj
+                )
+                else None
+            )
             if usage:
                 self.safe_set_attribute(
                     span=span,
@@ -2832,7 +2994,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     def _get_span_processor(
         self,
-        dynamic_headers: dict | None = None,
+        dynamic_headers: Mapping[str, str] | None = None,
         config_override: OpenTelemetryConfig | None = None,
     ):
         from opentelemetry.sdk.trace.export import (
@@ -3144,7 +3306,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     @staticmethod
     def _get_headers_dictionary(
-        headers: str | dict | None,
+        headers: "str | Mapping[str, str] | None",
     ) -> dict[str, str]:
         """
         Convert a string or dictionary of headers into a dictionary of headers.
@@ -3158,8 +3320,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 for part in parts:
                     key, value = part.split("=", 1)
                     _split_otel_headers[key] = value
-            elif isinstance(headers, dict):
-                _split_otel_headers = headers
+            elif isinstance(headers, Mapping):
+                _split_otel_headers.update(headers)
         return _split_otel_headers
 
     async def async_management_endpoint_success_hook(

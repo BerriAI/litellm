@@ -21,6 +21,7 @@ import httpx
 
 import litellm
 from litellm import verbose_logger
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -176,13 +177,103 @@ def convert_bedrock_invoke_output_format_to_inline_schema(
     request_body["messages"] = new_messages
 
 
-def remove_custom_field_from_tools(request_body: dict) -> None:
-    """
-    Remove ``custom`` field from each tool in the request body.
+def _bedrock_model_supports(model: str, key: str) -> bool:
+    from litellm.utils import _supports_factory
 
-    Claude Code (v2.1.69+) sends ``custom: {defer_loading: true}`` on tool
-    definitions, which Anthropic's API accepts but Bedrock rejects with
-    ``"Extra inputs are not permitted"``.
+    return _supports_factory(model=model, custom_llm_provider="bedrock", key=key)
+
+
+def apply_bedrock_invoke_structured_output(
+    model: str,
+    request_body: dict[str, object],  # mutable-ok: edited in place like siblings
+) -> None:
+    """
+    Route Anthropic structured-output params to what the Bedrock model supports.
+
+    Consumes the legacy top-level ``output_format`` and the newer
+    ``output_config.format``, keeping the pre-existing precedence of the legacy
+    field when a request carries both. Models flagged
+    ``supports_native_structured_output`` in the model map get the schema
+    forwarded as ``output_config.format``, which Bedrock relays to the model for
+    enforced structured output. For every other model the schema is inlined into
+    the last user message as best-effort text, with a warning because nothing
+    enforces it.
+    """
+    legacy_output_format: Final = request_body.pop("output_format", None)
+    output_config_format: Final = pop_bedrock_invoke_output_config_format(request_body)
+    schema_format: Final = legacy_output_format if isinstance(legacy_output_format, dict) else output_config_format
+    if schema_format is None:
+        return
+
+    if _bedrock_model_supports(model, "supports_native_structured_output"):
+        existing_output_config: Final = request_body.get("output_config")
+        if isinstance(existing_output_config, dict):
+            existing_output_config["format"] = schema_format
+        else:
+            request_body["output_config"] = {"format": schema_format}  # rebind-ok: out-param  # mutable-ok: json
+        return
+
+    verbose_logger.warning(
+        "Bedrock Invoke: model=%s does not advertise `supports_native_structured_output` "
+        "in model_prices_and_context_window.json, so the JSON schema was inlined into "
+        "the last user message and is NOT enforced by the model.",
+        model,
+    )
+    convert_bedrock_invoke_output_format_to_inline_schema(
+        output_format=schema_format,
+        request_body=request_body,
+    )
+
+
+def strip_unsupported_bedrock_invoke_output_config_keys(
+    model: str,
+    request_body: dict[str, object],  # mutable-ok: edited in place like siblings
+) -> None:
+    """
+    Drop ``output_config`` keys the Bedrock model does not accept.
+
+    ``format`` survives unconditionally: it is only attached for models whose map
+    entry advertises ``supports_native_structured_output``. Effort-bearing keys
+    survive only when the map flags ``supports_output_config`` or a
+    ``supports_*_reasoning_effort`` tier; otherwise they are dropped with a
+    warning so Bedrock does not reject the request.
+    """
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    output_config: Final = request_body.get("output_config")
+    if not isinstance(output_config, dict):
+        return
+    if all(key == "format" for key in output_config):
+        return
+    if _bedrock_model_supports(model, "supports_output_config") or AnthropicConfig._model_supports_effort_param(
+        model, "bedrock"
+    ):
+        return
+
+    verbose_logger.warning(
+        "Bedrock Invoke: stripping unsupported `output_config` keys for "
+        "model=%s: neither `supports_output_config` nor any "
+        "`supports_*_reasoning_effort` flag is set in "
+        "model_prices_and_context_window.json. Add the capability "
+        "flag to the model JSON entry if this model accepts "
+        "`output_config`.",
+        model,
+    )
+    preserved_format: Final = output_config.get("format")
+    if preserved_format is None:
+        request_body.pop("output_config", None)
+    else:
+        request_body["output_config"] = {"format": preserved_format}  # rebind-ok: out-param  # mutable-ok: json
+
+
+def normalize_custom_field_on_tools(request_body: dict) -> None:
+    """
+    Drop the ``custom`` field from each tool, first hoisting a boolean
+    ``custom.defer_loading`` onto the top-level ``defer_loading`` flag that
+    Bedrock and Anthropic actually document, unless the tool already carries one.
+
+    Claude Code (v2.1.69+) is reported to send ``custom: {defer_loading: true}`` on
+    tool definitions, which Bedrock rejects with ``"Extra inputs are not permitted"``.
 
     Args:
         request_body: The request dictionary to modify in-place.
@@ -193,8 +284,14 @@ def remove_custom_field_from_tools(request_body: dict) -> None:
     if not tools or not isinstance(tools, list):
         return
     for tool in tools:
-        if isinstance(tool, dict):
-            tool.pop("custom", None)
+        if not isinstance(tool, dict):
+            continue
+        custom: dict[str, object] | None = tool.pop("custom", None)
+        if not isinstance(custom, dict) or "defer_loading" in tool:
+            continue
+        deferred: object = custom.get("defer_loading")
+        if isinstance(deferred, bool):
+            tool["defer_loading"] = deferred
 
 
 def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
@@ -427,15 +524,15 @@ def init_bedrock_client(
     ssl_verify: Final = _get_bedrock_client_ssl_verify()
 
     ### SET REGION NAME
-    if region_name:
-        pass
-    elif aws_region_name:
-        region_name = aws_region_name
-    elif litellm_aws_region_name:
-        region_name = litellm_aws_region_name
-    elif standard_aws_region_name:
-        region_name = standard_aws_region_name
-    else:
+    resolved_region_name: Final = next(
+        (
+            candidate
+            for candidate in (region_name, aws_region_name, litellm_aws_region_name, standard_aws_region_name)
+            if isinstance(candidate, str) and candidate
+        ),
+        None,
+    )
+    if resolved_region_name is None:
         raise BedrockError(
             message="AWS region not set: set AWS_REGION_NAME or AWS_REGION env variable or in .env file",
             status_code=401,
@@ -448,7 +545,7 @@ def init_bedrock_client(
     elif env_aws_bedrock_runtime_endpoint:
         endpoint_url = env_aws_bedrock_runtime_endpoint
     else:
-        endpoint_url = f"https://bedrock-runtime.{region_name}.amazonaws.com"
+        endpoint_url = f"https://bedrock-runtime.{resolved_region_name}.{get_aws_dns_suffix(resolved_region_name)}"
 
     import boto3
 
@@ -485,7 +582,7 @@ def init_bedrock_client(
             aws_access_key_id=sts_response["Credentials"]["AccessKeyId"],
             aws_secret_access_key=sts_response["Credentials"]["SecretAccessKey"],
             aws_session_token=sts_response["Credentials"]["SessionToken"],
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -506,7 +603,7 @@ def init_bedrock_client(
             aws_access_key_id=sts_response["Credentials"]["AccessKeyId"],
             aws_secret_access_key=sts_response["Credentials"]["SecretAccessKey"],
             aws_session_token=sts_response["Credentials"]["SessionToken"],
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -519,7 +616,7 @@ def init_bedrock_client(
             service_name="bedrock-runtime",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -529,7 +626,7 @@ def init_bedrock_client(
 
         client = boto3.Session(profile_name=aws_profile_name).client(
             service_name="bedrock-runtime",
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -540,7 +637,7 @@ def init_bedrock_client(
 
         client = boto3.client(
             service_name="bedrock-runtime",
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -717,6 +814,30 @@ def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
         (litellm.model_cost.get(candidate) or {}).get("supports_parallel_tool_use_config") is True
         for candidate in (model, get_bedrock_base_model(model))
     )
+
+
+def bedrock_model_accepts_cache_points(model: str | None) -> bool:
+    """
+    Whether Converse ``cachePoint`` blocks may be sent to this model.
+
+    Bedrock rejects requests carrying cachePoint blocks for models without prompt
+    caching support ("You invoked an unsupported model or your request did not allow
+    prompt caching"), so a model whose cost-map entry does not declare
+    ``supports_prompt_caching`` must not receive them. A model absent from the map
+    (an application inference profile ARN, a model newer than the map) keeps emitting
+    so existing caching setups never silently degrade. ``litellm.utils.supports_prompt_caching``
+    is not reusable here: it returns False for unmapped models, the opposite polarity.
+    """
+    if model is None:
+        return True
+    entries: Final = tuple(
+        entry
+        for candidate in (model, get_bedrock_base_model(model))
+        if (entry := litellm.model_cost.get(candidate)) is not None
+    )
+    if not entries:
+        return True
+    return any(entry.get("supports_prompt_caching") is True for entry in entries)
 
 
 def is_claude_4_5_on_bedrock(model: str) -> bool:
@@ -1479,6 +1600,7 @@ class CommonBatchFilesUtils:
             aws_role_name=optional_params.get("aws_role_name"),
             aws_web_identity_token=optional_params.get("aws_web_identity_token"),
             aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
+            aws_external_id=optional_params.get("aws_external_id"),
         )
 
         # Prepare the request data

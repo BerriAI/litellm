@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { clearTokenCookies, getCookie, storeLoginToken } from "./cookieUtils";
 import { getToken, setToken } from "./mcpTokenStore";

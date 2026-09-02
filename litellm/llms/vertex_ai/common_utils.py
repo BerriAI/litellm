@@ -1,7 +1,7 @@
 import re
 from copy import deepcopy
 from enum import Enum
-from typing import Any, Final, Literal, get_type_hints
+from typing import Any, Final, Literal, cast, get_type_hints
 
 import httpx
 
@@ -31,7 +31,7 @@ class VertexAIError(BaseLLMException):
         super().__init__(message=message, status_code=status_code, headers=headers)
 
 
-def redact_vertex_ai_metadata_from_logged_object(obj: Any) -> None:
+def redact_vertex_ai_metadata_from_logged_object(obj: object) -> None:
     if isinstance(obj, dict):
         for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
             if field in obj:
@@ -651,7 +651,7 @@ def _build_json_schema(parameters: dict) -> dict:
     return parameters
 
 
-def _filter_anyof_fields(schema_dict: dict[str, Any]) -> dict[str, Any]:
+def _filter_anyof_fields(schema_dict: dict[str, object]) -> dict[str, object]:
     """
     When anyof is present, only keep the anyof field and its contents - otherwise VertexAI will throw an error - https://github.com/BerriAI/litellm/issues/11164
     Filter out other fields in the same dict.
@@ -704,7 +704,7 @@ def process_items(schema, depth=0):
                         process_items(item, depth + 1)
 
 
-def set_schema_property_ordering(schema: dict[str, Any], depth: int = 0) -> dict[str, Any]:
+def set_schema_property_ordering(schema: dict[str, object], depth: int = 0) -> dict[str, object]:
     """
     vertex ai and generativeai apis order output of fields alphabetically, unless you specify the order.
     python dicts retain order, so we just use that. Note that this field only applies to structured outputs, and not tools.
@@ -724,14 +724,16 @@ def set_schema_property_ordering(schema: dict[str, Any], depth: int = 0) -> dict
         # retain propertyOrdering as an escape hatch if user already specifies it
         if "propertyOrdering" not in schema:
             schema["propertyOrdering"] = [k for k, v in schema["properties"].items()]
-        for k, v in schema["properties"].items():
-            set_schema_property_ordering(v, depth + 1)
-    if "items" in schema:
-        set_schema_property_ordering(schema["items"], depth + 1)
+        for v in schema["properties"].values():
+            if isinstance(v, dict):
+                set_schema_property_ordering(cast("dict[str, object]", v), depth + 1)  # cast-ok: JSON Schema child
+    items: Final = schema.get("items")
+    if isinstance(items, dict):
+        set_schema_property_ordering(cast("dict[str, object]", items), depth + 1)  # cast-ok: JSON Schema child
     return schema
 
 
-def filter_schema_fields(schema_dict: dict[str, Any], valid_fields: set[str], processed=None) -> dict[str, Any]:
+def filter_schema_fields(schema_dict: dict[str, object], valid_fields: set[str], processed=None) -> dict[str, object]:
     """
     Recursively filter a schema dictionary to keep only valid fields.
     """
@@ -905,7 +907,7 @@ def _convert_schema_types(schema, depth=0):
                 "maxProperties",
             }
 
-            any_of: Final[list[dict[str, Any]]] = []
+            any_of: Final[list[dict[str, object]]] = []
             for t in type_val:
                 if not isinstance(t, str):
                     continue
@@ -916,7 +918,7 @@ def _convert_schema_types(schema, depth=0):
 
                 # For object/array types, include type-specific fields
                 if t in ("object", "array"):
-                    item_schema = {"type": t}
+                    item_schema: dict[str, object] = {"type": t}
                     # Move type-specific fields into this anyOf item
                     for field in type_specific_fields:
                         if field in schema:
@@ -1110,11 +1112,11 @@ class VertexAITokenCounter(BaseTokenCounter):
         self,
         model_to_use: str,
         messages: list[dict[str, Any]] | None,
-        contents: list[dict[str, Any]] | None,
+        contents: list[dict[str, object]] | None,
         deployment: dict[str, Any] | None = None,
         request_model: str = "",
-        tools: list[dict[str, Any]] | None = None,
-        system: Any | None = None,
+        tools: list[dict[str, object]] | None = None,
+        system: object | None = None,
     ) -> TokenCountResponse | None:
         import copy
 
@@ -1131,25 +1133,26 @@ class VertexAITokenCounter(BaseTokenCounter):
             partner_models_handler: Final = VertexAIPartnerModels()
 
             # Extract vertex-specific params from litellm_params
-            vertex_project = count_tokens_params_request.get("vertex_project") or count_tokens_params_request.get(
+            partner_litellm_params: Final[dict[str, object]] = count_tokens_params_request
+            vertex_project = partner_litellm_params.get("vertex_project") or partner_litellm_params.get(
                 "vertex_ai_project"
             )
 
-            vertex_location = count_tokens_params_request.get("vertex_location") or count_tokens_params_request.get(
+            vertex_location = partner_litellm_params.get("vertex_location") or partner_litellm_params.get(
                 "vertex_ai_location"
             )
 
             # Count tokens not available on global location: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
-            vertex_location = count_tokens_params_request.get("vertex_count_tokens_location") or vertex_location
+            vertex_location = partner_litellm_params.get("vertex_count_tokens_location") or vertex_location
 
-            vertex_credentials: Final = count_tokens_params_request.get(
-                "vertex_credentials"
-            ) or count_tokens_params_request.get("vertex_ai_credentials")
+            vertex_credentials: Final = partner_litellm_params.get("vertex_credentials") or partner_litellm_params.get(
+                "vertex_ai_credentials"
+            )
 
             result = await partner_models_handler.count_tokens(
                 model=model_to_use,
                 messages=messages or [],
-                litellm_params=count_tokens_params_request,
+                litellm_params=partner_litellm_params,
                 vertex_project=vertex_project,
                 vertex_location=vertex_location,
                 vertex_credentials=vertex_credentials,
@@ -1164,21 +1167,31 @@ class VertexAITokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         else:
-            # Use standard Vertex AI (Gemini) token counter
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
+            from litellm.llms.vertex_ai.gemini.transformation import (
+                _gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
+            )
+
+            resolved_contents: Final = (
+                contents
+                if contents is not None
+                else _gemini_convert_messages_with_history(
+                    messages=messages or []  # mutable-ok: fallback for None messages; helper signature requires list
+                )
+            )
 
             count_tokens_params: Final = {
                 "model": model_to_use,
-                "contents": contents,
+                "contents": resolved_contents,
             }
             count_tokens_params_request.update(count_tokens_params)
             result = await VertexAITokenCounter().acount_tokens(
                 **count_tokens_params_request,
             )
 
-            if result is not None:
+            if result is not None and "totalTokens" in result:
                 return TokenCountResponse(
-                    total_tokens=result.get("totalTokens", 0),
+                    total_tokens=result["totalTokens"],
                     request_model=request_model,
                     model_used=model_to_use,
                     tokenizer_type=result.get("tokenizer_used", ""),
