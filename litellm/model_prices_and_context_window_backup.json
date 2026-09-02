@@ -33093,6 +33093,21 @@
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
     },
+    "meta/muse-voice-transcribe-1.0": {
+        "litellm_provider": "meta",
+        "mode": "audio_transcription",
+        "source": "https://dev.meta.ai/docs/speech-to-text",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
     "meta_llama/Llama-3.3-70B-Instruct": {
         "litellm_provider": "meta_llama",
         "max_input_tokens": 128000,

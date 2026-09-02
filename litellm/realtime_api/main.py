@@ -327,7 +327,7 @@ async def _resolve_vertex_access_token_bounded(
 
 
 @wrapper_client
-async def _arealtime(
+async def _arealtime(  # noqa: C901  # central dispatcher branches once per supported realtime provider
     model: str,
     websocket: Any,  # fastapi websocket
     api_base: str | None = None,
@@ -385,7 +385,37 @@ async def _arealtime(
             model=model,
             provider=LlmProviders(_custom_llm_provider),
         )
-    if provider_config is not None:
+    if _custom_llm_provider == LlmProviders.META.value:
+        if model != "muse-voice-transcribe-1.0":
+            raise ValueError(f"Unsupported Meta realtime model: {model}")
+        if query_params is None or query_params.get("intent") != "transcription":
+            raise ValueError("Meta Muse Voice realtime requires intent=transcription")
+
+        from litellm.llms.meta.realtime.handler import MetaRealtime
+
+        meta_api_key: Final = get_secret_str("META_API_KEY")
+        dynamic_key_override: Final = dynamic_api_key if dynamic_api_key != meta_api_key else None
+        resolved_meta_api_key: Final = (
+            api_key
+            or litellm_params.api_key
+            or dynamic_key_override
+            or get_secret_str("MODEL_API_KEY")
+            or dynamic_api_key
+            or meta_api_key
+        )
+        await MetaRealtime().async_realtime(
+            model=model,
+            websocket=websocket,
+            logging_obj=litellm_logging_obj,
+            api_base=dynamic_api_base or litellm_params.api_base or api_base,
+            api_key=resolved_meta_api_key,
+            client=client,
+            timeout=timeout,
+            query_params=query_params,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
+        )
+    elif provider_config is not None:
         await base_llm_http_handler.async_realtime(
             model=model,
             websocket=websocket,

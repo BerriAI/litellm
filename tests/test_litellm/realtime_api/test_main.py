@@ -3,7 +3,6 @@ import time
 from types import TracebackType
 from unittest.mock import MagicMock, patch
 
-
 import pytest
 
 import litellm
@@ -149,6 +148,85 @@ async def test_vertex_credential_resolution_bounds_a_thread_offloaded_refresh():
             timeout_seconds=0.05,
         )
     assert time.monotonic() - start < 5
+
+
+@pytest.mark.asyncio
+async def test_meta_realtime_rejects_missing_transcription_intent(monkeypatch: pytest.MonkeyPatch):
+    def mock_get_llm_provider(model, api_base, api_key):
+        return model.removeprefix("meta/"), "meta", api_key, api_base
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
+
+    with pytest.raises(ValueError, match="requires intent=transcription"):
+        await realtime_main._arealtime.__wrapped__(
+            model="meta/muse-voice-transcribe-1.0",
+            websocket=MagicMock(),
+            litellm_logging_obj=FakeLogging(),
+            query_params={"model": "meta/muse-voice-transcribe-1.0"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_meta_realtime_rejects_unsupported_model_before_connecting(monkeypatch: pytest.MonkeyPatch):
+    def mock_get_llm_provider(model, api_base, api_key):
+        return model.removeprefix("meta/"), "meta", api_key, api_base
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
+
+    with pytest.raises(ValueError, match="Unsupported Meta realtime model: other-model"):
+        await realtime_main._arealtime.__wrapped__(
+            model="meta/other-model",
+            websocket=MagicMock(),
+            litellm_logging_obj=FakeLogging(),
+            query_params={"model": "meta/other-model", "intent": "transcription"},
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("explicit_key", "model_key", "meta_key", "expected"),
+    [
+        ("explicit", "model-env", "meta-env", "explicit"),
+        (None, "model-env", "meta-env", "model-env"),
+        (None, None, "meta-env", "meta-env"),
+    ],
+)
+async def test_meta_realtime_credential_precedence_is_forwarded_to_handler(
+    monkeypatch: pytest.MonkeyPatch,
+    explicit_key: str | None,
+    model_key: str | None,
+    meta_key: str | None,
+    expected: str,
+):
+    captured: dict[str, object] = {}
+
+    def mock_get_llm_provider(model, api_base, api_key):
+        return model.removeprefix("meta/"), "meta", meta_key, api_base
+
+    def mock_get_secret_str(name: str):
+        return {"MODEL_API_KEY": model_key, "META_API_KEY": meta_key}.get(name)
+
+    async def mock_async_realtime(self, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
+    monkeypatch.setattr(realtime_main, "get_secret_str", mock_get_secret_str)
+    monkeypatch.setattr(
+        "litellm.llms.meta.realtime.handler.MetaRealtime.async_realtime",
+        mock_async_realtime,
+    )
+
+    await realtime_main._arealtime.__wrapped__(
+        model="meta/muse-voice-transcribe-1.0",
+        websocket=MagicMock(),
+        litellm_logging_obj=FakeLogging(),
+        api_key=explicit_key,
+        query_params={"model": "meta/muse-voice-transcribe-1.0", "intent": "transcription"},
+    )
+
+    assert captured["model"] == "muse-voice-transcribe-1.0"
+    assert captured["api_key"] == expected
+    assert captured["query_params"] == {"model": "muse-voice-transcribe-1.0", "intent": "transcription"}
 
 
 @pytest.mark.asyncio
