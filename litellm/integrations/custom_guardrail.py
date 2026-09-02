@@ -1,7 +1,9 @@
 import contextvars
+import copy
 import hashlib
 import os
 import secrets
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
 
@@ -38,6 +40,7 @@ except ImportError:
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 dc: Final = DualCache()
 
 
@@ -227,13 +230,13 @@ class CustomGuardrail(CustomLogger):
                 )
         super().__init__(**kwargs)
 
-    def render_violation_message(self, default: str, context: dict[str, Any] | None = None) -> str:
+    def render_violation_message(self, default: str, context: Mapping[str, object] | None = None) -> str:
         """Return a custom violation message if template is configured."""
 
         if not self.violation_message_template:
             return default
 
-        format_context: Final[dict[str, Any]] = {"default_message": default}
+        format_context: Final[dict[str, object]] = {"default_message": default}
         if context:
             format_context.update(context)
         try:
@@ -661,7 +664,7 @@ class CustomGuardrail(CustomLogger):
         value: Final = self._get_admin_metadata(data).get("opted_out_global_guardrails")
         return value if isinstance(value, list) else []
 
-    def _is_valid_response_type(self, result: Any) -> bool:
+    def _is_valid_response_type(self, result: object) -> bool:
         """
         Check if result is a valid LLMResponseTypes instance.
 
@@ -722,7 +725,7 @@ class CustomGuardrail(CustomLogger):
             return None
         return f"{_PRE_CALL_EXECUTED_TOKEN}:{name}"
 
-    def mark_pre_call_hook_ran(self, data: dict[str, Any]) -> None:
+    def mark_pre_call_hook_ran(self, data: dict[str, object]) -> None:
         """
         Record that this guardrail's ``async_pre_call_hook`` already ran for this
         request, so the deployment-level hook does not run it a second time.
@@ -747,7 +750,7 @@ class CustomGuardrail(CustomLogger):
                 return
         data["metadata"] = {PRE_CALL_EXECUTED_GUARDRAILS_KEY: [marker]}
 
-    def _pre_call_hook_already_ran(self, data: dict[str, Any]) -> bool:
+    def _pre_call_hook_already_ran(self, data: dict[str, object]) -> bool:
         marker: Final = self._pre_call_marker()
         if marker is None:
             return False
@@ -850,6 +853,69 @@ class CustomGuardrail(CustomLogger):
             return None
 
         return result
+
+    async def async_logging_hook(
+        self,
+        kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
+        result: object,
+        call_type: str,
+    ) -> tuple[dict, object]:  # mutable-ok: CustomLogger.async_logging_hook contract
+        """logging_only: run apply_guardrail on copies of the logged request/response and record the verdict."""
+        from litellm.llms import get_guardrail_translation_mapping
+
+        if not self.uses_apply_guardrail_interface() or self.use_native_lifecycle_hooks:
+            return kwargs, result
+        try:
+            translation: Final = get_guardrail_translation_mapping(CallTypes(call_type))()
+        except ValueError:
+            verbose_logger.debug(
+                "Guardrail %s: no guardrail translation for call_type=%s, skipping logging_only scan",
+                self.guardrail_name,
+                call_type,
+            )
+            return kwargs, result
+        litellm_params: Final = kwargs.get("litellm_params") or {}
+        scratch_metadata: Final = {
+            key: value
+            for key, value in (litellm_params.get("metadata") or {}).items()
+            if key != "standard_logging_guardrail_information"
+        }
+        try:
+            await self._scan_logged_call(kwargs, result, translation, scratch_metadata)
+        except Exception as e:
+            verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
+        recorded: Final = scratch_metadata.get("standard_logging_guardrail_information")
+        standard_logging_object: Final = kwargs.get("standard_logging_object")
+        if not recorded or not isinstance(standard_logging_object, dict):
+            return kwargs, result
+        entries: Final = recorded if isinstance(recorded, list) else [recorded]
+        existing: Final = standard_logging_object.get("guardrail_information") or []
+        return {
+            **kwargs,
+            "standard_logging_object": {**standard_logging_object, "guardrail_information": [*existing, *entries]},
+        }, result
+
+    async def _scan_logged_call(
+        self,
+        kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
+        result: object,
+        translation: "BaseTranslation",
+        scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
+    ) -> None:
+        optional_params: Final = kwargs.get("optional_params") or {}
+        scratch_input: Final = copy.deepcopy(kwargs.get("messages") or kwargs.get("input"))
+        scratch_request: Final = {
+            "model": kwargs.get("model"),
+            "messages": scratch_input,
+            "input": scratch_input,
+            "tools": copy.deepcopy(optional_params.get("tools")),
+            "litellm_call_id": kwargs.get("litellm_call_id"),
+            "metadata": scratch_metadata,
+        }
+        await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
+        await translation.process_output_response(
+            response=copy.deepcopy(result), guardrail_to_apply=self, request_data=scratch_request
+        )
 
     def supports_scan_only_tool_results(self) -> bool:
         """Whether this guardrail can scan tool-result content.
@@ -1170,7 +1236,7 @@ class CustomGuardrail(CustomLogger):
         This gets logged on downsteam Langfuse, DataDog, etc.
         """
         # Convert None to empty dict to satisfy type requirements
-        guardrail_response: dict[str, Any] | str = {} if response is None else response
+        guardrail_response: dict[str, object] | str = {} if response is None else response
 
         # For apply_guardrail functions in custom_code_guardrail scenario,
         # simplify the logged response to "allow", "deny", or "mask"

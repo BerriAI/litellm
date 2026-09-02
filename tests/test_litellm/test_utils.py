@@ -1006,6 +1006,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "gemini_native_audio": {"type": "boolean"},
                 "gemini_audio_only_live": {"type": "boolean"},
                 "supports_embedding_image_input": {"type": "boolean"},
+                "supports_forced_tool_use": {"type": "boolean"},
                 "supports_function_calling": {"type": "boolean"},
                 "supports_image_input": {"type": "boolean"},
                 "supports_nova_canvas_image_edit": {"type": "boolean"},
@@ -1415,6 +1416,26 @@ def test_get_provider_rerank_config():
         "my_model", LlmProviders.HOSTED_VLLM, "http://localhost", []
     )
     assert isinstance(config, HostedVLLMRerankConfig)
+
+
+def test_get_provider_text_to_speech_config_vertex_gemini_skips_cloud_tts():
+    """Regression for LIT-6501: mapping vertex Gemini TTS params through Google Cloud TTS
+    dropped response_format before the speech_to_completion bridge could honor it."""
+    from litellm.llms.vertex_ai.text_to_speech.transformation import VertexAITextToSpeechConfig
+    from litellm.utils import LlmProviders
+
+    assert (
+        ProviderConfigManager.get_provider_text_to_speech_config(
+            model="gemini-2.5-flash-preview-tts", provider=LlmProviders.VERTEX_AI
+        )
+        is None
+    )
+    assert isinstance(
+        ProviderConfigManager.get_provider_text_to_speech_config(
+            model="en-US-Studio-O", provider=LlmProviders.VERTEX_AI
+        ),
+        VertexAITextToSpeechConfig,
+    )
 
 
 # Models that should be skipped during testing

@@ -257,6 +257,33 @@ describe("buildUpdatedComplexityRouterConfig session affinity", () => {
   });
 });
 
+describe("buildUpdatedComplexityRouterConfig classification mode", () => {
+  it("round-trips a stored user_turn through hydrate then save", () => {
+    const stored = { ...STORED, classification_mode: "user_turn" };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+
+    expect(hydrated.classification_mode).toBe("user_turn");
+    expect(buildUpdatedComplexityRouterConfig(stored, hydrated).classification_mode).toBe("user_turn");
+  });
+
+  it("round-trips an explicitly stored every_request, so an untouched save leaves it as written", () => {
+    const stored = { ...STORED, classification_mode: "every_request" };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+
+    expect(hydrated.classification_mode).toBe("every_request");
+    expect(buildUpdatedComplexityRouterConfig(stored, hydrated).classification_mode).toBe("every_request");
+  });
+
+  it("rewrites a stored user_turn to every_request once the operator picks the default back", () => {
+    const stored = { ...STORED, classification_mode: "user_turn" };
+    const result = buildUpdatedComplexityRouterConfig(stored, {
+      ...FORM_VALUE,
+      classification_mode: "every_request",
+    });
+    expect(result.classification_mode).toBe("every_request");
+  });
+});
+
 describe("buildUpdatedComplexityRouterConfig deployment affinity", () => {
   it("writes deployment_affinity=false when the toggle is off", () => {
     const result = buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, deployment_affinity: false });
@@ -476,6 +503,7 @@ describe("managed keys survive an untouched open-and-save", () => {
     classifier_context_budget_chars: 4000,
     classifier_context_include_assistant_turns: true,
     classifier_fallback: "default_model",
+    classification_mode: "user_turn",
     session_affinity: true,
     deployment_affinity: false,
     adaptive: true,

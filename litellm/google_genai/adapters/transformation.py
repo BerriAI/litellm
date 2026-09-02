@@ -722,7 +722,7 @@ class GoogleGenAIAdapter:
         )
 
         for tool_call in tool_calls:
-            if not hasattr(tool_call, "function"):
+            if not hasattr(tool_call, "function") or isinstance(tool_call, ChatCompletionDeltaCustomToolCall):
                 continue
 
             # 3. Use `index` as the primary key for accumulation

@@ -8,7 +8,7 @@ import asyncio
 import binascii
 import os
 import uuid
-from collections.abc import Callable, Mapping, Sequence, Set
+from collections.abc import Awaitable, Callable, Mapping, Sequence, Set
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -386,6 +386,12 @@ CacheCounterValues: TypeAlias = Sequence[CacheCounterValue | None]
 ParallelGaugeCacheValue: TypeAlias = dict[str, object] | int | float | str | bytes
 
 
+class _AsyncLuaScript(Protocol):
+    """A Lua script registered against the async Redis client, called with KEYS and ARGV."""
+
+    def __call__(self, *, keys: Sequence[str], args: Sequence[object]) -> Awaitable[list[CacheCounterValue]]: ...
+
+
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
     requests_per_unit: int | None
     tokens_per_unit: int | None
@@ -577,6 +583,14 @@ def _parse_output_cap_value(raw_value: object) -> int | None:
 
 
 class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
+    batch_rate_limiter_script: _AsyncLuaScript | None
+    token_increment_script: _AsyncLuaScript | None
+    check_and_increment_by_n_script: _AsyncLuaScript | None
+    window_guarded_token_increment_script: _AsyncLuaScript | None
+    parallel_acquire_script: _AsyncLuaScript | None
+    parallel_release_script: _AsyncLuaScript | None
+    parallel_count_script: _AsyncLuaScript | None
+
     def __init__(
         self,
         internal_usage_cache: InternalUsageCache,
@@ -3855,7 +3869,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 expected_window_start = operation.get("expected_window_start")
                 if window_key is None or expected_window_start is None:
                     continue
-                active_window_start = await self.internal_usage_cache.async_get_cache(
+                active_window_start: CacheCounterValue | None = await self.internal_usage_cache.async_get_cache(
                     key=window_key,
                     litellm_parent_otel_span=parent_otel_span,
                     local_only=True,
@@ -4144,7 +4158,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _collect_tpm_scope_targets(
         self,
         standard_logging_metadata: dict[str, Any],
-        kwargs: Any,
+        kwargs: object,
         model_group: str | None,
     ) -> list[tuple[str, str]]:
         """
@@ -4301,8 +4315,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def _build_success_event_pipeline_operations(
         self,
-        kwargs: Any,
-        response_obj: Any,
+        kwargs: dict[str, Any],
+        response_obj: object,
         rate_limit_type: Literal["output", "input", "total"],
     ) -> list[RedisPipelineIncrementOperation]:
         """Build Redis pipeline increment ops for TPM / parallel-request counters."""

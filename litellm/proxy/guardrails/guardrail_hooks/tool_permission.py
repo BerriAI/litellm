@@ -1,9 +1,10 @@
 import json
 import re
 from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, TypedDict
 
 from fastapi import HTTPException
+from typing_extensions import ReadOnly, Required
 
 from litellm import ChatCompletionToolParam
 from litellm._logging import verbose_proxy_logger
@@ -49,6 +50,27 @@ def _object_mapping(value: object) -> Mapping[str, object] | None:
 def _object_list(value: object) -> Sequence[object] | None:
     """Return ``value`` as an opaque sequence when it is a list."""
     return value if isinstance(value, list) else None
+
+
+class _ToolPermissionRuleFields(TypedDict, total=False):
+    """The config-file shape a :class:`ToolPermissionRule` is built from."""
+
+    id: ReadOnly[Required[str]]
+    tool_name: ReadOnly[str | None]
+    tool_type: ReadOnly[str | None]
+    decision: ReadOnly[Required[Literal["allow", "deny"]]]
+    allowed_param_patterns: ReadOnly[dict[str, str] | None]
+
+
+def _rule_from_fields(fields: _ToolPermissionRuleFields) -> ToolPermissionRule:
+    """Validate one config-file rule entry into a :class:`ToolPermissionRule`."""
+    return ToolPermissionRule(**fields)
+
+
+def _is_tool_use_block(block: object) -> bool:
+    """Whether ``block`` is an Anthropic ``tool_use`` content block."""
+    fields: Final = _object_mapping(block)
+    return fields is not None and fields.get("type") == "tool_use"
 
 
 class ToolPermissionGuardrail(CustomGuardrail):
@@ -101,7 +123,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         compiled_patterns: Final[dict[str, dict[str, re.Pattern]]] = {}
 
         for rule_item in rules or []:
-            rule = rule_item if isinstance(rule_item, ToolPermissionRule) else ToolPermissionRule(**rule_item)
+            rule = rule_item if isinstance(rule_item, ToolPermissionRule) else _rule_from_fields(rule_item)
 
             target_patterns: dict[str, re.Pattern | None] = {
                 "tool_name": None,
@@ -440,7 +462,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         return is_allowed, None, message
 
     @staticmethod
-    def _get_mapping_value(item: Any, key: str) -> Any:
+    def _get_mapping_value(item: object, key: str) -> Any:
         if isinstance(item, dict):
             return item.get(key)
         return getattr(item, key, None)
@@ -450,7 +472,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         return f"legacy_function_call_{choice_index}"
 
     def _legacy_function_call_to_tool_call(
-        self, function_call: Any, choice_index: int
+        self, function_call: object, choice_index: int
     ) -> ChatCompletionMessageToolCall | None:
         if function_call is None:
             return None
@@ -549,7 +571,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
     def _modify_anthropic_content_with_permission_errors(
         self,
         response: object,
-        content: tuple[Any, ...],
+        content: tuple[object, ...],
         denied_tools: tuple[tuple[ChatCompletionMessageToolCall, PermissionError], ...],
     ) -> None:
         if not denied_tools or not isinstance(response, dict):
@@ -557,27 +579,33 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         verbose_proxy_logger.info("Blocking %s unauthorized tool uses", len(denied_tools))
 
-        error_by_tool_use_id: Final = {  # mutable-ok: read-only lookup, never mutated after construction
+        error_by_tool_use_id: Final[
+            Mapping[object, str]
+        ] = {  # mutable-ok: read-only lookup, never mutated after construction
             tool_call.id: self._create_permission_error_result(tool_call, error).content
             for tool_call, error in denied_tools
         }
-        denied_block_ids: Final = frozenset(error_by_tool_use_id)
 
-        def _is_denied(block: object) -> bool:
-            return isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id") in denied_block_ids
+        def _denied_message(block: object) -> str | None:
+            fields: Final = _object_mapping(block)
+            if fields is None or fields.get("type") != "tool_use":
+                return None
+            return error_by_tool_use_id.get(fields.get("id"))
 
-        error_messages: Final = tuple(error_by_tool_use_id[block["id"]] for block in content if _is_denied(block))
-        kept_blocks: Final = tuple(block for block in content if not _is_denied(block))
+        error_messages: Final = tuple(
+            message for message in (_denied_message(block) for block in content) if message is not None
+        )
+        kept_blocks: Final = tuple(block for block in content if _denied_message(block) is None)
         new_content: Final = [  # mutable-ok: response content is a JSON array on the wire
             *kept_blocks,
             {"type": "text", "text": "\n".join(error_messages)},  # mutable-ok: content block is a JSON object
         ]
 
         response["content"] = new_content  # rebind-ok: the guardrail rewrites the provider response in place
-        if not any(isinstance(block, dict) and block.get("type") == "tool_use" for block in kept_blocks):
+        if not any(_is_tool_use_block(block) for block in kept_blocks):
             response["stop_reason"] = "end_turn"  # rebind-ok: dropping every tool_use ends the turn
 
-    def _get_request_tool_name(self, tool: Any) -> tuple[str | None, str | None]:
+    def _get_request_tool_name(self, tool: object) -> tuple[str | None, str | None]:
         tool_type: Final = self._get_mapping_value(tool, "type")
         if tool_type != "function":
             return None, tool_type
@@ -586,7 +614,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         tool_name: Final = self._get_mapping_value(function, "name")
         return tool_name, tool_type
 
-    def _get_legacy_function_name(self, function: Any) -> str | None:
+    def _get_legacy_function_name(self, function: object) -> str | None:
         return self._get_mapping_value(function, "name")
 
     def _get_named_tool_choice(self, data: dict) -> str | None:

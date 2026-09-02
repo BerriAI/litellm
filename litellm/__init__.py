@@ -659,6 +659,8 @@ aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
 dashscope_models: Set = set()
+qwencloud_models: Set = set()
+qwen_ai_platform_models: Set = set()
 moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
@@ -909,6 +911,10 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
             dashscope_models.add(key)
+        elif value.get("litellm_provider") == "qwencloud":
+            qwencloud_models.add(key)
+        elif value.get("litellm_provider") == "qwen_ai_platform":
+            qwen_ai_platform_models.add(key)
         elif value.get("litellm_provider") == "modelscope":
             modelscope_models.add(key)
         elif value.get("litellm_provider") == "moonshot":
@@ -1072,6 +1078,8 @@ model_list = list(
     | deepgram_models
     | elevenlabs_models
     | dashscope_models
+    | qwencloud_models
+    | qwen_ai_platform_models
     | moonshot_models
     | publicai_models
     | darkbloom_models
@@ -1178,6 +1186,8 @@ def _build_models_by_provider() -> dict:
         "elevenlabs": elevenlabs_models,
         "heroku": heroku_models,
         "dashscope": dashscope_models,
+        "qwencloud": qwencloud_models,
+        "qwen_ai_platform": qwen_ai_platform_models,
         "modelscope": modelscope_models,
         "moonshot": moonshot_models,
         "publicai": publicai_models,
@@ -2013,6 +2023,24 @@ if TYPE_CHECKING:
     )
     from .llms.dashscope.rerank.transformation import (
         DashScopeRerankConfig as DashScopeRerankConfig,
+    )
+    from .llms.dashscope.qwencloud import (
+        QwenCloudChatConfig as QwenCloudChatConfig,
+    )
+    from .llms.dashscope.qwencloud import (
+        QwenCloudEmbeddingConfig as QwenCloudEmbeddingConfig,
+    )
+    from .llms.dashscope.qwencloud import (
+        QwenCloudRerankConfig as QwenCloudRerankConfig,
+    )
+    from .llms.dashscope.qwen_ai_platform import (
+        QwenAIPlatformChatConfig as QwenAIPlatformChatConfig,
+    )
+    from .llms.dashscope.qwen_ai_platform import (
+        QwenAIPlatformEmbeddingConfig as QwenAIPlatformEmbeddingConfig,
+    )
+    from .llms.dashscope.qwen_ai_platform import (
+        QwenAIPlatformRerankConfig as QwenAIPlatformRerankConfig,
     )
     from .llms.modelscope.chat.transformation import (
         ModelScopeChatConfig as ModelScopeChatConfig,

@@ -65,6 +65,7 @@ def _job_record(job: ActiveShadowEvalJob, target_type="key", target_id="key-hash
         target_type=target_type,
         target_id=target_id,
         router_name=job.router_name,
+        router_names=job.router_names,
         direction=job.direction,
         baseline_model=job.baseline_model,
         shadow_percentage=job.shadow_percentage,
@@ -81,6 +82,7 @@ def _router(
     shadow_text="shadow answer",
     judge_json='{"preference": "A", "confidence": 0.9, "reasoning": "x"}',
     classifier_cost=None,
+    sibling_router_texts=None,
 ):
     """One mock router serving the shadow call first, the judge call second, told apart by
     the internal-origin stamp rather than the model, since a reverse job's shadow arm names
@@ -100,6 +102,15 @@ def _router(
                 decision["classifier_cost"] = classifier_cost
             kwargs["metadata"]["routing_decision"] = decision
             return {"choices": [{"message": {"content": shadow_text}}], "usage": {"completion_tokens": 5}}
+        if sibling_router_texts and kwargs["model"] in sibling_router_texts:
+            kwargs["metadata"]["routing_decision"] = {
+                "tier_label": "MEDIUM",
+                "routed_model": f"{kwargs['model']}-pick",
+            }
+            return {
+                "choices": [{"message": {"content": sibling_router_texts[kwargs["model"]]}}],
+                "usage": {"completion_tokens": 5},
+            }
         return ModelResponse(
             model=kwargs["model"],
             choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": shadow_text}}],
@@ -1210,29 +1221,36 @@ class TestJobValidation:
             {"direction": "reverse"},
             {"baseline_model": "baseline-model"},
             {"direction": "sideways", "baseline_model": "baseline-model"},
+            {"direction": "reverse", "baseline_model": "baseline-model", "router_names": ("a", "b")},
         ],
-        ids=["reverse-without-baseline", "forward-with-baseline", "unknown-direction"],
+        ids=["reverse-without-baseline", "forward-with-baseline", "unknown-direction", "reverse-with-router-set"],
     )
     def test_unsamplable_shapes_are_rejected(self, overrides):
         with pytest.raises(ValidationError):
             _job(**overrides)
 
-    def test_shadow_target_follows_direction(self):
-        assert _job().shadow_target == "my-router"
-        assert _reverse_job().shadow_target == "baseline-model"
+    def test_arm_target_follows_direction(self):
+        assert _job().arm_target("my-router") == "my-router"
+        assert _reverse_job().arm_target("my-router") == "baseline-model"
+
+    def test_rows_from_before_router_names_carry_their_set_in_router_name(self):
+        assert _job().arm_router_names == ("my-router",)
+        assert _job(router_names=("my-router", "alt-router")).arm_router_names == ("my-router", "alt-router")
 
 
 @pytest.mark.asyncio
 class TestDirection:
     @pytest.mark.parametrize(
-        "job,routed_by,sampled",
+        "job,routed_by,attempt_rows",
         [
-            (_job(), None, True),
-            (_job(), "my-router", False),
-            (_job(), "other-router", True),
-            (_reverse_job(), "my-router", True),
-            (_reverse_job(), None, False),
-            (_reverse_job(), "other-router", False),
+            (_job(), None, 1),
+            (_job(), "my-router", 0),
+            (_job(), "other-router", 1),
+            (_reverse_job(), "my-router", 1),
+            (_reverse_job(), None, 0),
+            (_reverse_job(), "other-router", 0),
+            (_job(router_names=("my-router", "alt-router")), "alt-router", 0),
+            (_job(router_names=("my-router", "alt-router")), "other-router", 2),
         ],
         ids=[
             "forward-samples-unrouted",
@@ -1241,20 +1259,24 @@ class TestDirection:
             "reverse-samples-its-own-router",
             "reverse-skips-unrouted",
             "reverse-skips-another-router",
+            "forward-skips-any-candidates-own-traffic",
+            "forward-multi-samples-once-per-arm",
         ],
     )
-    async def test_direction_decides_which_traffic_is_sampled(self, job, routed_by, sampled):
+    async def test_direction_decides_which_traffic_is_sampled(self, job, routed_by, attempt_rows):
         """The two directions partition the key's traffic: whatever one samples, the other
-        skips, so a key running both never judges the same turn twice for the same reason."""
+        skips, so a key running both never judges the same turn twice for the same reason.
+        A multi-router job extends the forward skip to every candidate: a request one
+        candidate served must not be judged as the incumbent against another candidate."""
         prisma = _prisma()
-        logger = _logger(router=_router(), prisma=prisma, jobs=(job,))
+        logger = _logger(router=_router(sibling_router_texts={"alt-router": "alt answer"}), prisma=prisma, jobs=(job,))
 
         await logger.async_log_success_event(
             _success_kwargs(request_metadata=_routed_by(routed_by) if routed_by else {}), RESPONSE, None, None
         )
         await _drain(logger)
 
-        assert prisma.db.litellm_shadowevalattempt.create.await_count == int(sampled)
+        assert prisma.db.litellm_shadowevalattempt.create.await_count == attempt_rows
 
     async def test_reverse_duplicates_against_the_baseline_model(self):
         prisma = _prisma()
@@ -1314,6 +1336,134 @@ class TestDirection:
         rows = [call.kwargs["data"] for call in prisma.db.litellm_shadowevalattempt.create.call_args_list]
         assert sorted(row["job_id"] for row in rows) == ["forward-job", "reverse-job"]
         assert logger._job_starts == {"forward-job": 1, "reverse-job": 1}
+
+
+@pytest.mark.asyncio
+class TestMultiRouterArms:
+    async def test_every_arm_judges_the_same_request_and_stamps_its_own_row(self):
+        """One sampled request, one row per candidate router, both judged against the same
+        real response: the paired comparison that makes multi-router win rates comparable."""
+        prisma = _prisma()
+        router = _router(sibling_router_texts={"alt-router": "alt answer"})
+        logger = _logger(router=router, prisma=prisma)
+
+        await logger._run_shadow_eval(
+            job=_job(router_names=("my-router", "alt-router")),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.001,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+
+        rows = [call.kwargs["data"] for call in prisma.db.litellm_shadowevalattempt.create.await_args_list]
+        assert [row["router_name"] for row in rows] == ["my-router", "alt-router"]
+        assert {row["request_id"] for row in rows} == {"req-1"}
+        assert [row["shadow_model"] for row in rows] == ["cheap-model", "alt-router-pick"]
+        assert all(row["outcome"] in ("real", "shadow", "tie") for row in rows)
+        assert all(row["real_cost"] == 0.001 for row in rows)
+
+    async def test_a_single_router_job_stamps_its_router_on_the_row(self):
+        prisma = _prisma()
+        logger = _logger(router=_router(), prisma=prisma)
+
+        await logger._run_shadow_eval(
+            job=_job(),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["router_name"] == "my-router"
+
+    async def test_one_arms_failure_never_silences_the_sibling(self):
+        prisma = _prisma()
+        router = _router(sibling_router_texts={"alt-router": "alt answer"})
+        healthy = router.acompletion.side_effect
+
+        async def first_arm_explodes(**kwargs):
+            if kwargs["model"] == "my-router":
+                raise RuntimeError("provider exploded")
+            return await healthy(**kwargs)
+
+        router.acompletion.side_effect = first_arm_explodes
+        logger = _logger(router=router, prisma=prisma)
+
+        await logger._run_shadow_eval(
+            job=_job(router_names=("my-router", "alt-router")),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+
+        rows = [call.kwargs["data"] for call in prisma.db.litellm_shadowevalattempt.create.await_args_list]
+        assert [row["router_name"] for row in rows] == ["my-router", "alt-router"]
+        assert rows[0]["outcome"] == "error"
+        assert "provider exploded" in rows[0]["error"]
+        assert rows[1]["outcome"] in ("real", "shadow", "tie")
+
+    async def test_the_turn_valve_counts_every_arm_a_start_will_write(self):
+        """max_turns is a row ceiling and one sampled request writes one row per arm, so
+        admission pre-counts the arms: a two-arm job with two turns of budget admits one
+        request, not two."""
+        prisma = _prisma()
+        router = _router(sibling_router_texts={"alt-router": "alt answer"})
+        logger = _logger(
+            router=router, prisma=prisma, jobs=(_job(router_names=("my-router", "alt-router"), max_turns=2),)
+        )
+
+        await logger.async_log_success_event(_success_kwargs(request_id="req-1"), RESPONSE, None, None)
+        await logger.async_log_success_event(_success_kwargs(request_id="req-2"), RESPONSE, None, None)
+        await _drain(logger)
+
+        rows = [call.kwargs["data"] for call in prisma.db.litellm_shadowevalattempt.create.await_args_list]
+        assert {row["request_id"] for row in rows} == {"req-1"}
+        assert len(rows) == 2
+
+    async def test_a_withheld_request_runs_no_arm_and_counts_once(self):
+        """The budget gates run once per sampled request, before any arm: funnel counters
+        stay per-request, so coverage math is arm-count independent."""
+        prisma = _prisma()
+        router = _router(sibling_router_texts={"alt-router": "alt answer"})
+        logger = _logger(router=router, prisma=prisma)
+
+        await logger._run_shadow_eval(
+            job=_job(router_names=("my-router", "alt-router"), max_budget=1.0, spend=2.0),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+
+        router.acompletion.assert_not_called()
+        prisma.db.litellm_shadowevalattempt.create.assert_not_called()
+        assert logger._test_funnel == [("job-1", "withheld")]
 
 
 @pytest.mark.asyncio

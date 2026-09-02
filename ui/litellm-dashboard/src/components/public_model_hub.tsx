@@ -47,6 +47,7 @@ import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
 import { getEndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
 import { MessageType } from "@/components/chat_ui/types";
 import { getProviderLogoAndName } from "./provider_info_helpers";
+import { filterBySearchTerm, rankBySearchRelevance } from "@/utils/searchUtils";
 
 interface PublicModelHubProps {
   accessToken?: string | null;
@@ -236,52 +237,11 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const filteredData = useMemo(() => {
     if (!modelHubData || !Array.isArray(modelHubData)) return [];
 
-    let searchResults = modelHubData;
-
-    // Apply search if there's a search term
-    if (searchTerm.trim()) {
-      const lowercaseSearch = searchTerm.toLowerCase();
-      const searchWords = lowercaseSearch.split(/\s+/);
-
-      // First, try flexible matching that handles different separators
-      const exactMatches = modelHubData.filter((model) => {
-        const modelName = model.model_group.toLowerCase();
-
-        // Check if it contains the exact search term
-        if (modelName.includes(lowercaseSearch)) {
-          return true;
-        }
-
-        // Check if it contains all search words (handles spaces vs slashes/dashes)
-        return searchWords.every((word) => modelName.includes(word));
-      });
-
-      // If we have exact matches, rank them by relevance
-      if (exactMatches.length > 0) {
-        searchResults = exactMatches.sort((a, b) => {
-          const aName = a.model_group.toLowerCase();
-          const bName = b.model_group.toLowerCase();
-
-          // Calculate relevance scores
-          const aExactMatch = aName === lowercaseSearch ? 1000 : 0;
-          const bExactMatch = bName === lowercaseSearch ? 1000 : 0;
-
-          const aStartsWith = aName.startsWith(lowercaseSearch) ? 100 : 0;
-          const bStartsWith = bName.startsWith(lowercaseSearch) ? 100 : 0;
-
-          const aContainsWords = lowercaseSearch.split(/\s+/).every((word) => aName.includes(word)) ? 50 : 0;
-          const bContainsWords = lowercaseSearch.split(/\s+/).every((word) => bName.includes(word)) ? 50 : 0;
-
-          const aLength = aName.length;
-          const bLength = bName.length;
-
-          const aScore = aExactMatch + aStartsWith + aContainsWords + (1000 - aLength);
-          const bScore = bExactMatch + bStartsWith + bContainsWords + (1000 - bLength);
-
-          return bScore - aScore; // Higher score first
-        });
-      }
-    }
+    const searchResults = rankBySearchRelevance(
+      filterBySearchTerm(modelHubData, searchTerm, (model) => [model.model_group]),
+      searchTerm,
+      (model) => model.model_group,
+    );
 
     // Apply other filters
     return searchResults.filter((model) => {
@@ -310,43 +270,11 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const filteredAgentData = useMemo(() => {
     if (!agentHubData || !Array.isArray(agentHubData)) return [];
 
-    let searchResults = agentHubData;
-
-    // Apply search if there's a search term
-    if (agentSearchTerm.trim()) {
-      const lowercaseSearch = agentSearchTerm.toLowerCase();
-      const searchWords = lowercaseSearch.split(/\s+/);
-
-      searchResults = agentHubData.filter((agent) => {
-        const agentName = agent.name.toLowerCase();
-        const agentDescription = agent.description.toLowerCase();
-
-        // Check if it contains the exact search term
-        if (agentName.includes(lowercaseSearch) || agentDescription.includes(lowercaseSearch)) {
-          return true;
-        }
-
-        // Check if it contains all search words
-        return searchWords.every((word) => agentName.includes(word) || agentDescription.includes(word));
-      });
-
-      // Sort by relevance
-      searchResults = searchResults.sort((a, b) => {
-        const aName = a.name.toLowerCase();
-        const bName = b.name.toLowerCase();
-
-        const aExactMatch = aName === lowercaseSearch ? 1000 : 0;
-        const bExactMatch = bName === lowercaseSearch ? 1000 : 0;
-
-        const aStartsWith = aName.startsWith(lowercaseSearch) ? 100 : 0;
-        const bStartsWith = bName.startsWith(lowercaseSearch) ? 100 : 0;
-
-        const aScore = aExactMatch + aStartsWith + (1000 - aName.length);
-        const bScore = bExactMatch + bStartsWith + (1000 - bName.length);
-
-        return bScore - aScore;
-      });
-    }
+    const searchResults = rankBySearchRelevance(
+      filterBySearchTerm(agentHubData, agentSearchTerm, (agent) => [agent.name, agent.description]),
+      agentSearchTerm,
+      (agent) => agent.name,
+    );
 
     // Apply skill filters
     return searchResults.filter((agent) => {
@@ -361,43 +289,11 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const filteredMcpData = useMemo(() => {
     if (!mcpHubData || !Array.isArray(mcpHubData)) return [];
 
-    let searchResults = mcpHubData;
-
-    // Apply search if there's a search term
-    if (mcpSearchTerm.trim()) {
-      const lowercaseSearch = mcpSearchTerm.toLowerCase();
-      const searchWords = lowercaseSearch.split(/\s+/);
-
-      searchResults = mcpHubData.filter((server) => {
-        const serverName = server.server_name.toLowerCase();
-        const serverDescription = (server.mcp_info?.description || "").toLowerCase();
-
-        // Check if it contains the exact search term
-        if (serverName.includes(lowercaseSearch) || serverDescription.includes(lowercaseSearch)) {
-          return true;
-        }
-
-        // Check if it contains all search words
-        return searchWords.every((word) => serverName.includes(word) || serverDescription.includes(word));
-      });
-
-      // Sort by relevance
-      searchResults = searchResults.sort((a, b) => {
-        const aName = a.server_name.toLowerCase();
-        const bName = b.server_name.toLowerCase();
-
-        const aExactMatch = aName === lowercaseSearch ? 1000 : 0;
-        const bExactMatch = bName === lowercaseSearch ? 1000 : 0;
-
-        const aStartsWith = aName.startsWith(lowercaseSearch) ? 100 : 0;
-        const bStartsWith = bName.startsWith(lowercaseSearch) ? 100 : 0;
-
-        const aScore = aExactMatch + aStartsWith + (1000 - aName.length);
-        const bScore = bExactMatch + bStartsWith + (1000 - bName.length);
-
-        return bScore - aScore;
-      });
-    }
+    const searchResults = rankBySearchRelevance(
+      filterBySearchTerm(mcpHubData, mcpSearchTerm, (server) => [server.server_name, server.mcp_info?.description]),
+      mcpSearchTerm,
+      (server) => server.server_name,
+    );
 
     // Apply transport filters
     return searchResults.filter((server) => {
