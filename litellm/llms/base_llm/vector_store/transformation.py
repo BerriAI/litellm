@@ -62,6 +62,19 @@ class LiteLLMVectorStoreEmbeddingExecutor:
         )
 
 
+_REQUEST_METADATA: Final = TypeAdapter(dict[str, object])
+
+
+def vector_store_request_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    litellm_metadata: Final = kwargs.get("litellm_metadata")
+    if isinstance(litellm_metadata, dict):
+        return _REQUEST_METADATA.validate_python(litellm_metadata)
+    metadata: Final = kwargs.get("metadata")
+    if isinstance(metadata, dict):
+        return _REQUEST_METADATA.validate_python(metadata)
+    return MappingProxyType({})
+
+
 @dataclass(frozen=True, slots=True)
 class RouterVectorStoreEmbeddingExecutor:
     router: Router
@@ -312,11 +325,12 @@ class BaseQueryEmbeddingVectorStoreConfig(BaseVectorStoreConfig):
     def query_embedding_executor(
         embedding_executor: VectorStoreEmbeddingExecutor | None,
         router: Router | None,
+        request_metadata: Mapping[str, object] = MappingProxyType({}),
     ) -> VectorStoreEmbeddingExecutor:
         if embedding_executor is not None:
             return embedding_executor
         if router is not None:
-            return RouterVectorStoreEmbeddingExecutor(router=router, metadata=MappingProxyType({}))
+            return RouterVectorStoreEmbeddingExecutor(router=router, metadata=request_metadata)
         return LiteLLMVectorStoreEmbeddingExecutor()
 
     def embed_query(
