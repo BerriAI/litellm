@@ -203,8 +203,12 @@ _ENV_ENDPOINT = "https://bedrock-mantle.us-east-1.api.aws.internal.example.com"
 
 
 @pytest.mark.parametrize("config_cls", [AmazonMantleConfig, AmazonMantleMessagesConfig])
-def test_mantle_url_honors_bedrock_mantle_api_base_env(monkeypatch, config_cls):
-    monkeypatch.setenv("BEDROCK_MANTLE_API_BASE", _ENV_ENDPOINT)
+@pytest.mark.parametrize(
+    "env_value",
+    [_ENV_ENDPOINT, f"{_ENV_ENDPOINT}/", f"{_ENV_ENDPOINT}/v1", f"{_ENV_ENDPOINT}/openai/v1"],
+)
+def test_mantle_url_honors_bedrock_mantle_api_base_env(monkeypatch, config_cls, env_value):
+    monkeypatch.setenv("BEDROCK_MANTLE_API_BASE", env_value)
     url = config_cls().get_complete_url(
         api_base=None,
         api_key=None,
@@ -223,7 +227,9 @@ def test_mantle_url_honors_bedrock_mantle_api_base_env(monkeypatch, config_cls):
         (None, {"aws_region_name": "us-gov-west-1", "aws_bedrock_runtime_endpoint": _VPC_ENDPOINT}),
     ],
 )
-def test_mantle_url_explicit_endpoint_beats_bedrock_mantle_api_base_env(monkeypatch, config_cls, api_base, optional_params):
+def test_mantle_url_explicit_endpoint_beats_bedrock_mantle_api_base_env(
+    monkeypatch, config_cls, api_base, optional_params
+):
     monkeypatch.setenv("BEDROCK_MANTLE_API_BASE", _ENV_ENDPOINT)
     url = config_cls().get_complete_url(
         api_base=api_base,

@@ -748,6 +748,15 @@ def strip_bedrock_throughput_suffix(model: str) -> str:
 
 
 MANTLE_MESSAGES_PATH: Final = "/anthropic/v1/messages"
+_MANTLE_OPENAI_BASE_SUFFIXES: Final = ("/openai/v1", "/v1")
+
+
+def _mantle_api_base_from_env() -> str | None:
+    env_base: Final = get_secret_str("BEDROCK_MANTLE_API_BASE")
+    if env_base is None:
+        return None
+    base: Final = env_base.rstrip("/")
+    return next((base[: -len(suffix)] for suffix in _MANTLE_OPENAI_BASE_SUFFIXES if base.endswith(suffix)), base)
 
 
 def build_mantle_messages_url(
@@ -762,9 +771,11 @@ def build_mantle_messages_url(
     private VPC / VPCE / GovCloud Mantle endpoints are reachable; otherwise
     falls back to the public regional host.
     The mantle messages path is appended unless the override already carries it,
-    so callers can pass either the host or the full messages URL.
+    so callers can pass either the host or the full messages URL. The env var is
+    shared with the OpenAI-surface ``bedrock_mantle/*`` routes, which need it to
+    carry their ``/v1`` or ``/openai/v1`` base, so that suffix is dropped first.
     """
-    override: Final = api_base or aws_bedrock_runtime_endpoint or get_secret_str("BEDROCK_MANTLE_API_BASE")
+    override: Final = api_base or aws_bedrock_runtime_endpoint or _mantle_api_base_from_env()
     if override:
         base: Final = override.rstrip("/")
         if base.endswith(MANTLE_MESSAGES_PATH):
