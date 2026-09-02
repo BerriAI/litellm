@@ -3,11 +3,13 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -44,6 +46,43 @@ async def test_make_call_passes_logging_obj_to_client_post():
     mock_client.post.assert_called_once()
     call_kwargs = mock_client.post.call_args[1]
     assert call_kwargs.get("logging_obj") is logging_obj
+
+
+def test_anthropic_completion_does_not_send_deployment_default_limits():
+    captured_requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_default_limits",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-3-5-haiku-20241022",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-3-5-haiku-20241022",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=client,
+            default_api_key_rpm_limit=60,
+            default_api_key_tpm_limit=5000000,
+        )
+    finally:
+        client.close()
+
+    request_body = json.loads(captured_requests[0].content)
+    assert "default_api_key_rpm_limit" not in request_body
+    assert "default_api_key_tpm_limit" not in request_body
 
 
 def test_redacted_thinking_content_block_delta():
@@ -1006,6 +1045,143 @@ def test_multiple_partial_chunks_accumulation():
     assert result3 is not None
     assert iterator.accumulated_json == ""
     assert result3.choices[0].delta.content == "Hello"
+
+
+def test_accumulated_json_partial_fragment_returns_none_without_parsing():
+    """
+    Regression test: before the shared JSONFragmentAccumulator, every partial
+    fragment triggered a `json.loads` attempt over the whole growing buffer,
+    unlike Vertex which already deferred parsing until the buffer could close.
+    A fragment that can't close a JSON value must not trigger a decode attempt.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    iterator.chunk_type = "accumulated_json"
+
+    with patch.object(
+        json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode
+    ) as spy:
+        result = iterator._handle_accumulated_json_chunk(
+            '{"type":"content_block_delta","index":0,"delta":'
+        )
+        assert result is None
+        assert spy.call_count == 0, "incomplete buffer should not be parsed"
+
+
+def test_accumulated_json_does_not_reparse_every_fragment():
+    """
+    Regression test for the O(n^2) json.loads-per-fragment anti-pattern: a
+    payload split across many fragments must be parsed ~once, not once per
+    fragment.
+    """
+    text = "x" * 200_000
+    blob = json.dumps(
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}
+    )
+    fragments = [blob[i : i + 4096] for i in range(0, len(blob), 4096)]
+    assert len(fragments) > 10, "need a multi-fragment payload to exercise the bug"
+
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    iterator.chunk_type = "accumulated_json"
+
+    parsed = None
+    with patch.object(
+        json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode
+    ) as spy:
+        for fragment in fragments:
+            out = iterator._handle_accumulated_json_chunk(fragment)
+            if out is not None:
+                parsed = out
+        parse_calls = spy.call_count
+
+    assert parsed is not None, "the reassembled chunk must still parse"
+    assert parsed.choices[0].delta.content == text
+    assert parse_calls <= 2, (
+        f"raw_decode was called {parse_calls} times for {len(fragments)} fragments; "
+        "the O(n^2) per-fragment re-parse has regressed"
+    )
+
+
+def test_accumulated_json_concatenated_envelopes_do_not_wedge():
+    """
+    Regression test: Anthropic's single `json.loads(self.accumulated_json)`
+    call raised "Extra data" on two concatenated envelopes and, since the
+    buffer was never reset on that failure, returned None forever while
+    growing without bound. The shared accumulator peels one value at a time
+    and keeps the remainder, so both values surface across two calls.
+    """
+    obj = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}'
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    iterator.chunk_type = "accumulated_json"
+
+    first = iterator._handle_accumulated_json_chunk(obj + obj)
+    assert first is not None
+    assert first.choices[0].delta.content == "a"
+
+    second = iterator._handle_accumulated_json_chunk("")
+    assert second is not None
+    assert second.choices[0].delta.content == "a"
+
+    assert iterator.accumulated_json == ""
+
+
+def test_accumulated_json_heuristic_passes_but_value_still_incomplete():
+    """
+    A buffer whose newest fragment ends in '}' can still be genuinely
+    incomplete (an inner object closed, the outer one didn't). The
+    heuristic must let the parse attempt through, and pop_next_value
+    finding nothing must propagate as None rather than raising.
+    """
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    iterator.chunk_type = "accumulated_json"
+
+    result = iterator._handle_accumulated_json_chunk('{"type": {"nested": 1}')
+    assert result is None
+
+
+def test_accumulated_json_setter_and_sync_end_of_stream_drain():
+    """
+    The accumulated_json setter and __next__'s StopIteration drain branch:
+    a buffered partial JSON must still parse and return when the
+    underlying stream ends, instead of being silently dropped.
+    """
+    obj = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}'
+    iterator = ModelResponseIterator(
+        streaming_response=iter([]), sync_stream=True, json_mode=False
+    )
+    iterator.chunk_type = "accumulated_json"
+    iterator.accumulated_json = obj  # exercises the setter
+
+    result = iterator.__next__()
+    assert result is not None
+    assert result.choices[0].delta.content == "a"
+
+
+def test_accumulated_json_async_end_of_stream_drain():
+    """Async twin of the sync end-of-stream drain test: __anext__'s
+    StopAsyncIteration branch must also parse a buffered value."""
+    import asyncio
+
+    obj = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}'
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=False, json_mode=False
+    )
+    iterator.chunk_type = "accumulated_json"
+    iterator.accumulated_json = obj
+    mock_async_iterator = MagicMock()
+    mock_async_iterator.__anext__ = AsyncMock(side_effect=StopAsyncIteration)
+    iterator.async_response_iterator = mock_async_iterator
+
+    result = asyncio.run(iterator.__anext__())
+    assert result is not None
+    assert result.choices[0].delta.content == "a"
 
 
 def test_web_search_tool_result_no_extra_tool_calls():

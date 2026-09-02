@@ -154,6 +154,9 @@ model_list:
         
         # Fallback model if tier cannot be determined
         default_model: gpt-4o
+
+        # Replace a routed model that cannot take image input (default: false)
+        modality_routing: true
 ```
 
 ## Usage
@@ -177,6 +180,69 @@ response = litellm.completion(
 ```
 
 ## Special Behaviors
+
+### Modality-based capability routing
+
+The classifier reads text alone, so a request carrying an image can classify cheap and land on a
+text-only model, which rejects it with a provider 400 no fallback catches. With
+`modality_routing: true`, one gate inspects every decided placement: when the routed model is
+explicitly declared `supports_vision: false` (deployment `model_info` first, the model cost map
+otherwise; unmapped names stay routable, and a multi-deployment group must accept on every
+deployment), the request is re-placed on the nearest HIGHER tier holding a capable model, with
+routing plugins still applied to the re-pick, then on `default_model` (never on plugin routers
+and never for a plan-floored decision), and otherwise rejected with a clear 400 naming the
+router. The walk only ever goes up, so a plan-mode floor cannot be undercut; a router whose only
+vision model sits below the decided tier gets the 400 and an actionable message instead.
+
+A same-tier re-pick keeps the decision's cause and adds `modality:image` to `signals`; a tier
+change or default takeover records `cause: modality_escalation` with the displaced placement
+(`modality_escalated_from:<TIER>` or `modality_displaced_default_model`). Escalations are never
+pinned by session affinity, and a KEPT session pin bypasses the gate entirely: a session pinned
+to a text-only model keeps it even when an image arrives.
+
+### Heuristic-first chaining
+
+`classifier_type: heuristic_first` runs the local scorer on every request and only calls the LLM
+classifier for the ones the scorer could not place cheaply. It takes the same classifier settings as
+`classifier_type: llm`, plus `heuristic_first_max_tier`:
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        classifier_type: heuristic_first
+        heuristic_first_max_tier: SIMPLE
+        classifier_llm_config:
+          model: gpt-4o-mini
+        tiers:
+          SIMPLE: gpt-4o-mini
+          MEDIUM: gpt-4o
+          COMPLEX: claude-sonnet-4
+          REASONING: o1-preview
+```
+
+A request short-circuits, meaning it routes on the scorer's own tier with no classifier call, when
+two things hold: the scorer landed at or below `heuristic_first_max_tier`, and it produced at least
+one signal. Everything else goes to the classifier, which then decides as it normally would.
+
+The signal requirement is what keeps this from quietly routing everything to your cheapest model.
+A prompt where no dimension fires scores exactly 0.0, which is below `simple_medium`, so the score
+to tier mapping calls it SIMPLE by default rather than by evidence. Around half of general traffic
+scores that way. Those requests reach the classifier instead, which is the whole reason to configure
+one. Note the converse too: the score is not a confidence, and a prompt that fires a single weak
+signal and still lands under the boundary does short-circuit, so a lower threshold buys accuracy and
+a higher one buys savings.
+
+`heuristic_first_max_tier` names a built-in tier and may not name the highest one, since that would
+short-circuit everything and leave the classifier unreachable. Operator-defined tier sets
+(`tier_definitions`) are not supported here, because the scorer only produces the built-in tiers.
+When the classifier call fails, the fallback works exactly as it does under `classifier_type: llm`,
+except that the heuristic outcome is the one already computed rather than a second scoring pass.
+
+Spend logs record `routing_decision.cause` as `heuristic_first_short_circuit` when the classifier
+was skipped, and `llm_classifier` when it ran, so the two are told apart per request.
 
 ### Reasoning Override
 

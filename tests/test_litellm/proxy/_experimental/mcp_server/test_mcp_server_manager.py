@@ -43,7 +43,6 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     _obo_retry_applies,
     _resolve_openapi_tool_auth,
     _should_strip_caller_authorization,
-    _without_authorization,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -2405,6 +2404,104 @@ class TestMCPServerManager:
         assert client._resolved_auth is not None
         assert "authorization" not in {k.lower() for k in (client.extra_headers or {})}
 
+    @staticmethod
+    def _esb_server(header: "str | None") -> MCPServer:
+        return MCPServer(
+            server_id="esb",
+            name="esb-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            client_id="cid",
+            client_secret="csec",
+            token_url="https://idp.example.com/token",
+            upstream_token_header=header,
+            static_headers={"Authorization": "Bearer static-upstream-mcp-token"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_static_authorization_survives_a_minted_token_aimed_elsewhere(self):
+        """The dual-credential case: an ESB wants the gateway-minted token on its own header while a
+        separate static Authorization passes through to the origin. Dropping Authorization here (the
+        old name-blind behavior) deletes the second credential and the upstream 401s."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Ok(StaticHeaderAuth("Bearer MINTED-M2M", header_name="esb-oauth"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        client = await manager._create_mcp_client(
+            self._esb_server("esb-oauth"),
+            extra_headers={"Authorization": "Bearer static-upstream-mcp-token"},
+        )
+
+        assert client._resolved_auth is not None
+        assert (client.extra_headers or {})["Authorization"] == "Bearer static-upstream-mcp-token"
+
+    @pytest.mark.asyncio
+    async def test_a_minted_token_aimed_at_the_static_header_still_wins_that_slot(self):
+        """The negative class of the test above: when the two DO collide the resolver-owned
+        credential is still authoritative, so the knob cannot be used to smuggle a second
+        credential into the same slot."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Ok(StaticHeaderAuth("Bearer MINTED-M2M", header_name="esb-oauth"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        client = await manager._create_mcp_client(
+            self._esb_server("esb-oauth"),
+            extra_headers={"esb-oauth": "Bearer signer-jwt", "X-Trace": "keep-me"},
+        )
+
+        assert client._resolved_auth is not None
+        assert "esb-oauth" not in {k.lower() for k in (client.extra_headers or {})}
+        assert (client.extra_headers or {})["X-Trace"] == "keep-me"
+
+    @pytest.mark.asyncio
+    async def test_a_differently_cased_injected_header_is_still_recognised_as_the_collision(self):
+        """HTTP header names are case-insensitive, so the conflict check must be too.
+
+        A case-sensitive check reports no conflict and hands the injected header back untouched, so
+        the returned extra_headers still carries a second copy of the credential slot for every
+        downstream consumer of that dict. httpx happens to collapse the two on the wire, which is
+        exactly why this needs pinning rather than being left to luck.
+        """
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="esb-oauth"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        client = await manager._create_mcp_client(
+            self._esb_server("esb-oauth"),
+            extra_headers={"ESB-OAuth": "Bearer injected", "X-Trace": "keep"},
+        )
+
+        assert client._resolved_auth is not None
+        assert not any(k.lower() == "esb-oauth" for k in (client.extra_headers or {}))
+        assert (client.extra_headers or {})["X-Trace"] == "keep"
+
+    def test_without_header_drops_only_the_named_header(self):
+        from litellm.types.mcp import DEFAULT_CREDENTIAL_HEADER, without_header
+
+        headers = {"Authorization": "Bearer a", "esb-oauth": "Bearer b", "X-Trace": "t"}
+        assert without_header(headers, "ESB-OAuth") == {"Authorization": "Bearer a", "X-Trace": "t"}
+        assert without_header(headers, DEFAULT_CREDENTIAL_HEADER) == {"esb-oauth": "Bearer b", "X-Trace": "t"}
+
     @pytest.mark.asyncio
     async def test_preflight_token_exchange_challenges_on_rejected_subject(self):
         """A subject the IdP rejects must raise the RFC 9728 401 challenge from the preflight, so a
@@ -2624,14 +2721,16 @@ class TestMCPServerManager:
         if captured_extra_headers:
             assert "authorization" not in {k.lower() for k in captured_extra_headers}
 
-    def test_without_authorization_drops_only_the_credential(self):
+    def test_without_header_drops_only_the_credential(self):
+        from litellm.types.mcp import without_header
+
         # None / empty -> None
-        assert _without_authorization(None) is None
-        assert _without_authorization({}) is None
+        assert without_header(None, "Authorization") is None
+        assert without_header({}, "Authorization") is None
         # Only Authorization present -> nothing left -> None (case-insensitive)
-        assert _without_authorization({"authorization": "Bearer x"}) is None
+        assert without_header({"authorization": "Bearer x"}, "Authorization") is None
         # Authorization dropped, other headers kept
-        assert _without_authorization({"Authorization": "Bearer x", "X-Trace-Id": "t"}) == {"X-Trace-Id": "t"}
+        assert without_header({"Authorization": "Bearer x", "X-Trace-Id": "t"}, "Authorization") == {"X-Trace-Id": "t"}
 
     @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_passthrough_forwards_authorization_with_admission_header(
@@ -9641,12 +9740,37 @@ class TestMaterializeAuthHeaders:
         from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
             ClientCredentialsBearerAuth,
         )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+            ClientCredentialsConfig,
+        )
 
         async def _refetch(_stale: str):
             return None
 
-        headers = await _materialize_auth_headers(ClientCredentialsBearerAuth("m2m-token", _refetch))
+        default_carrier = ClientCredentialsConfig()
+        headers = await _materialize_auth_headers(ClientCredentialsBearerAuth("m2m-token", _refetch, default_carrier))
         assert headers == {"Authorization": "Bearer m2m-token"}
+
+    @pytest.mark.asyncio
+    async def test_materialize_follows_the_minted_token_to_a_custom_header(self):
+        # The OpenAPI arm reads header_name off the auth object rather than assuming Authorization,
+        # so it carries the knob with no per-arm change. This pins that it stays that way.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _materialize_auth_headers,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
+            ClientCredentialsBearerAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+            ClientCredentialsConfig,
+        )
+
+        async def _refetch(_stale: str):
+            return None
+
+        esb_carrier = ClientCredentialsConfig(header_name="esb-oauth")
+        headers = await _materialize_auth_headers(ClientCredentialsBearerAuth("m2m-token", _refetch, esb_carrier))
+        assert headers == {"esb-oauth": "Bearer m2m-token"}
 
     @pytest.mark.asyncio
     async def test_noop_and_none_materialize_to_none(self):

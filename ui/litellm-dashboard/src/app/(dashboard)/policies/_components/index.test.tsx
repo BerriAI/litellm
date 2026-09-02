@@ -2,7 +2,7 @@ import React from "react";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import PoliciesPanel from "./index";
 
 /**
@@ -52,7 +52,11 @@ vi.mock("./policy_templates", () => ({
 }));
 
 vi.mock("./pipeline_flow_builder", () => ({
-  FlowBuilderPage: () => null,
+  FlowBuilderPage: ({ onBack }: { onBack: () => void }) => (
+    <button type="button" onClick={onBack}>
+      Back to policies
+    </button>
+  ),
 }));
 
 vi.mock("./policy_info", () => ({
@@ -157,5 +161,50 @@ describe("PoliciesPanel attachment delete", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
+  });
+});
+
+describe("PoliciesPanel flow builder", () => {
+  const POLICY_ID = "pol-11111111-2222-3333-4444-555555555555";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    networkingMocks.getPoliciesList.mockResolvedValue({
+      policies: [
+        {
+          policy_id: POLICY_ID,
+          policy_name: "pii-policy",
+          inherit: null,
+          description: null,
+          guardrails_add: [],
+          guardrails_remove: [],
+          condition: null,
+          definition_location: "db",
+        },
+      ],
+    });
+  });
+
+  afterEach(() => {
+    networkingMocks.getPoliciesList.mockResolvedValue({ policies: [] });
+  });
+
+  it("replaces the tabs and policy table with the flow builder while editing, then restores them on back", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<PoliciesPanel accessToken="test-token" userRole="Admin" />);
+
+    await user.click(screen.getByRole("tab", { name: /^policies$/i }));
+    await user.click(await screen.findByTestId(`policy-actions-${POLICY_ID}`));
+    await user.click(await screen.findByTestId("policy-action-edit"));
+
+    expect(await screen.findByRole("button", { name: "Back to policies" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /^policies$/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("pii-policy")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Back to policies" }));
+
+    expect(await screen.findByText("pii-policy")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^policies$/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("button", { name: "Back to policies" })).not.toBeInTheDocument();
   });
 });
