@@ -25,6 +25,7 @@ const EXPECTED_PARTNER_LOGO_FILES: Record<string, string> = {
   promptguard: "promptguard.svg",
   xecguard: "xecguard.svg",
   deepkeep: "deepkeep.svg",
+  pointguardai: "pointguardai.png",
   repelloai: "repelloai.png",
   straiker: "straiker.svg",
   alice: "alice.svg",

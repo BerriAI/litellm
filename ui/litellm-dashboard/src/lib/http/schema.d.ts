@@ -30465,6 +30465,11 @@ export interface components {
             /** @description Optional parameters for the guardrail */
             optional_params?: components["schemas"]["CiscoAIDefenseGuardrailConfigModelOptionalParams"] | null;
             /**
+             * Org Code
+             * @description Organization code for PointGuardAI.
+             */
+            org_code?: string | null;
+            /**
              * Output Parse Pii
              * @description When True, LiteLLM will replace the masked text with the original text in the response
              */
@@ -30518,6 +30523,11 @@ export interface components {
             pii_entities_config?: {
                 [key: string]: components["schemas"]["PiiAction"];
             } | null;
+            /**
+             * Policy Config Name
+             * @description PointGuardAI policy configuration name.
+             */
+            policy_config_name?: string | null;
             /**
              * Policy Id
              * @description Policy ID for Zscaler AI Guard. Can also be set via ZSCALER_AI_GUARD_POLICY_ID environment variable

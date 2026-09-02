@@ -19,6 +19,7 @@ import openaiSmallLogo from "../../../../../public/assets/logos/openai_small.svg
 import paloAltoNetworksLogo from "../../../../../public/assets/logos/palo_alto_networks.jpeg";
 import pangeaLogo from "../../../../../public/assets/logos/pangea.png";
 import pillarLogo from "../../../../../public/assets/logos/pillar.jpeg";
+import pointguardAiLogo from "../../../../../public/assets/logos/pointguardai.png";
 import promptSecurityLogo from "../../../../../public/assets/logos/prompt_security.png";
 import promptguardLogo from "../../../../../public/assets/logos/promptguard.svg";
 import qohashLogo from "../../../../../public/assets/logos/qohash.jpg";
@@ -82,6 +83,7 @@ export const guardrail_provider_map: Record<string, string> = {
   LlmAsAJudge: "llm_as_a_judge",
   Xecguard: "xecguard",
   Deepkeep: "deepkeep",
+  PointguardAi: "pointguard_ai",
   QostodianNexus: "qostodian_nexus",
   Repelloai: "repelloai",
   Alice: "alice",
@@ -203,6 +205,7 @@ export const guardrailLogoMap = {
   "LiteLLM LLM as a Judge": litellmLogo.src,
   Akto: aktoLogo.src,
   "DeepKeep AI Firewall": deepkeepLogo.src,
+  "PointGuard AI": pointguardAiLogo.src,
   "Qostodian Nexus": qohashLogo.src,
   "RepelloAI Argus": repelloAiLogo.src,
   Straiker: straikerLogo.src,
