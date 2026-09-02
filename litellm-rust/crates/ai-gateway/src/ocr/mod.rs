@@ -1,4 +1,4 @@
-use litellm_core::CoreResult;
+use litellm_core::Error;
 use litellm_core::call_lifecycle::CallLifecycle;
 use serde_json::Value;
 
@@ -13,7 +13,7 @@ pub use types::OcrRequest;
 use handler::execute_ocr_provider_call;
 use prepare::{PreparedOcrCall, prepare_ocr_call};
 
-pub async fn ocr(request: OcrRequest<'_>) -> CoreResult<Value> {
+pub async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
     let PreparedOcrCall { request, hooks } = prepare_ocr_call(request);
     CallLifecycle::default()
         .run_request(request, &hooks, execute_ocr_provider_call)
