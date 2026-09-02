@@ -247,6 +247,35 @@ describe("RequestLogsPanel", () => {
       expect(vi.mocked(uiSpendLogsCall).mock.calls.filter(([options]) => options.page === 3)).toHaveLength(0);
     });
 
+    it("still moves to the next page while a live-tail refetch of the current page is in flight", async () => {
+      const firstPage = Array.from({ length: 50 }, (_, index) => logEntry({ request_id: `req-${index}` }));
+      const firstResponse = {
+        data: firstPage,
+        total: 150,
+        page: 1,
+        page_size: 50,
+        total_pages: 3,
+        next_session_cursor: "2026-07-07 09:50:13|sess-1",
+        has_more: true,
+      };
+      vi.mocked(uiSpendLogsCall)
+        .mockResolvedValueOnce(firstResponse)
+        .mockImplementation(() => new Promise(() => {}));
+      renderPanel();
+
+      await waitFor(() => expect(row("req-0")).not.toBeNull());
+      void testQueryClient.refetchQueries({ queryKey: ["logs", "table"] });
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2));
+
+      fireEvent.click(screen.getByTestId("pagination-next"));
+
+      await waitFor(() => {
+        const call = lastCall();
+        expect(call?.page).toBe(2);
+        expect(call?.params?.session_cursor).toBe("2026-07-07 09:50:13|sess-1");
+      });
+    });
+
     it("drops the cursor and returns to the first page when Custom Range is toggled", async () => {
       const user = userEvent.setup();
       const firstPage = Array.from({ length: 50 }, (_, index) => logEntry({ request_id: `req-${index}` }));
