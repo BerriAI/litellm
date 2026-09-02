@@ -24,7 +24,8 @@ still flips the shared ``_initialize`` flag on any node's timeout, funneling eve
 caller through the reinit lock and, if ``CLUSTER SLOTS`` lands on the slow node, into a full
 teardown. For those versions the factory returns a thin wrapper around upstream's
 ``_execute_command`` that clears the flag again after an isolated timeout (a ConnectionError,
-a third consecutive timeout on the same node, or a concurrent ``aclose()`` still reinit).
+a third consecutive timeout on the same node, or a concurrent request from any other command
+or ``aclose()`` still reinits).
 """
 
 import asyncio
@@ -137,15 +138,22 @@ def get_litellm_async_redis_cluster_class(  # noqa: C901  # supports redis-py ve
                 *args: object,
                 **kwargs: object,  # kwargs-ok: passes redis-py's constructor kwargs through untouched
             ) -> None:
+                self._litellm_initialize = False
+                self._litellm_reinit_requests = 0
                 super().__init__(*args, **kwargs)
-                self._litellm_topology_reinit_requests = 0
                 self._litellm_consecutive_timeouts: dict[  # mutable-ok: per-node counter updated on the command hot path
                     str, int
                 ] = {}
 
-            async def aclose(self) -> None:
-                self._litellm_topology_reinit_requests += 1
-                await super().aclose()
+            @property
+            def _initialize(self) -> bool:
+                return self._litellm_initialize
+
+            @_initialize.setter
+            def _initialize(self, value: bool) -> None:
+                if value:
+                    self._litellm_reinit_requests += 1
+                self._litellm_initialize = value
 
             async def _execute_command(
                 self,
@@ -153,7 +161,8 @@ def get_litellm_async_redis_cluster_class(  # noqa: C901  # supports redis-py ve
                 *args: object,
                 **kwargs: object,  # kwargs-ok: matches redis-py's own command dispatch signature
             ) -> object:
-                reinit_requests_before: Final = self._litellm_topology_reinit_requests
+                requests_before: Final = self._litellm_reinit_requests
+                pending_before: Final = self._litellm_initialize
                 try:
                     result: Final = await super()._execute_command(target_node, *args, **kwargs)
                 except _RedisTimeoutError:
@@ -162,7 +171,7 @@ def get_litellm_async_redis_cluster_class(  # noqa: C901  # supports redis-py ve
                         self._litellm_consecutive_timeouts.pop(target_node.name, None)
                         raise
                     self._litellm_consecutive_timeouts[target_node.name] = timeouts
-                    if self._litellm_topology_reinit_requests == reinit_requests_before:
+                    if not pending_before and self._litellm_reinit_requests == requests_before + 1:
                         self._initialize = False
                     raise
                 if self._litellm_consecutive_timeouts:

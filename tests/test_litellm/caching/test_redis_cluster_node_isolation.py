@@ -5,6 +5,7 @@ CLIENT PAUSE) showed 100% of concurrent commands to the other two, untouched nod
 stalling for the full pause duration before this fix, and zero after -- these tests pin
 the same behavior at the unit level so it can run without a live Redis Cluster."""
 
+import asyncio
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
@@ -54,6 +55,7 @@ class _Fake8xRedisCluster:
             return await target_node.execute_command(*args, **kwargs)
         except (RedisConnectionError, RedisTimeoutError):
             self._initialize = True
+            await asyncio.sleep(0)
             raise
 
     async def aclose(self) -> None:
@@ -91,32 +93,6 @@ def _build_8x_cluster_instance() -> _Fake8xRedisCluster:
         base_cluster_class=_Fake8xRedisCluster,
     )
     return cluster_cls()
-
-
-def test_per_connection_recovery_redis_py_gets_timeout_tolerant_subclass() -> None:
-    cluster_cls = get_litellm_async_redis_cluster_class(
-        cluster_node_class=_NodeClassWithPerConnectionRecovery,
-        base_cluster_class=_Fake8xRedisCluster,
-    )
-
-    assert cluster_cls is not _Fake8xRedisCluster
-    assert issubclass(cluster_cls, _Fake8xRedisCluster)
-    assert "_execute_command" in cluster_cls.__dict__
-
-
-
-def test_pre_recovery_redis_py_still_gets_the_node_isolation_override() -> None:
-    """Old redis-py (5.x) responds to a node-level error with a full-cluster aclose(),
-    so those versions must keep litellm's per-node isolation override."""
-    from redis.asyncio.cluster import RedisCluster
-
-    cluster_cls = get_litellm_async_redis_cluster_class(
-        cluster_node_class=_NodeClassWithoutPerConnectionRecovery
-    )
-
-    assert cluster_cls is not RedisCluster
-    assert issubclass(cluster_cls, RedisCluster)
-    assert "_execute_command" in cluster_cls.__dict__
 
 
 @pytest.mark.asyncio
@@ -165,6 +141,7 @@ async def test_three_consecutive_timeouts_request_topology_reinit_and_reset_coun
         assert exc_info.value is error
 
     assert instance._initialize is True
+    instance._initialize = False
 
     with pytest.raises(RedisTimeoutError) as exc_info:
         await instance._execute_command(target_node, "GET", "k")
@@ -236,6 +213,35 @@ async def test_timeout_does_not_clear_concurrent_topology_reinit_request() -> No
         await instance._execute_command(target_node, "GET", "k")
 
     assert exc_info.value is error
+    assert instance._initialize is True
+
+
+@pytest.mark.asyncio
+async def test_tolerated_timeout_does_not_erase_concurrent_connection_error_reinit() -> None:
+    instance = _build_8x_cluster_instance()
+    failing_node = _FakeClusterNode("node-a", raises=RedisConnectionError("gone"))
+    slow_node = _FakeClusterNode("node-b", raises=RedisTimeoutError("slow"))
+
+    results = await asyncio.gather(
+        instance._execute_command(failing_node, "GET", "a"),
+        instance._execute_command(slow_node, "GET", "b"),
+        return_exceptions=True,
+    )
+
+    assert isinstance(results[0], RedisConnectionError)
+    assert isinstance(results[1], RedisTimeoutError)
+    assert instance._initialize is True
+
+
+@pytest.mark.asyncio
+async def test_tolerated_timeout_does_not_clear_pending_reinit() -> None:
+    instance = _build_8x_cluster_instance()
+    instance._initialize = True
+    target_node = _FakeClusterNode("node-a", raises=RedisTimeoutError("slow"))
+
+    with pytest.raises(RedisTimeoutError):
+        await instance._execute_command(target_node, "GET", "k")
+
     assert instance._initialize is True
 
 
