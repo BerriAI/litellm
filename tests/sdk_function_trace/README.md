@@ -1,29 +1,26 @@
 # SDK function tracing
 
-`profile_python` records selected Python function calls by code object, including their order and nesting depth. `assert_function_trace_parity` compares those events with the Rust trace supplied by a scenario. The profiler observes the current thread; functions dispatched to executor threads need profiling in those threads. Depth counts only selected ancestors. The shared mock provider requires exactly one HTTP request per invocation
+Both runners execute SDK calls against a local HTTP provider fixture and print functions observed during execution, in event order with nesting indentation. Each invocation must issue exactly one HTTP request. They require the LiteLLM Python dependencies; Rust tracing also requires rebuilding the native extension after changing instrumentation
 
-The Rust bridge's `function_trace` module records TRACE spans targeting `litellm::function_trace`. Use `#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]` to take names from the actual functions without recording arguments. Attach its dispatcher to each future with `WithSubscriber` so concurrent requests keep separate traces
-
-This layer provides reusable tracing infrastructure. It does not enable tracing on routes, add native Python exports, validate function signatures, or claim provider parity. Route-specific instrumentation and parity scenarios are added by later layers
-
-Run the infrastructure tests with `python -m pytest tests/sdk_function_trace/test_profiler.py tests/sdk_function_trace/test_mock_provider.py` and `cargo test -p litellm-python-bridge function_trace` from `litellm-rust`
-
-To list the Python functions for a route without installing LiteLLM, run this from the repository root:
+From the repository root, using the project's Python environment:
 
 ```bash
-python3 tests/sdk_function_trace/list_python_steps.py --route chat_completions --signatures --calls
+python -m tests.sdk_function_trace.list_python_steps --route ocr
+python -m tests.sdk_function_trace.list_rust_steps --route ocr
+python -m tests.sdk_function_trace.list_python_steps --route ocr --sync
+python -m tests.sdk_function_trace.list_rust_steps --route ocr --sync
 ```
 
-Routes are `chat_completions`, `audio_transcription`, `messages`, and `ocr`; omit `--route` to list all. Omit `--signatures` or `--calls` for shorter output. `--repo /path/to/litellm` reads another checkout
+Calls default to async; use `--sync` for synchronous calls. The Python Messages SDK currently raises `not implemented for sync calls`; the runner propagates that failure when explicitly requested. Rust Messages supports both modes
 
-The listing reads source declarations and direct call sites, including conditional branches. It covers SDK entrypoints, shared handlers and bases, and selected provider paths. It reports missing selected functions as `NOT FOUND`; it does not execute calls or claim runtime ordering
+Direct script execution also works. Omit `--route` to run all four routes: `chat_completions` and `messages` use Anthropic, `ocr` uses Mistral, and `audio_transcription` uses Bedrock. Bedrock transcription is Rust-only in this checkout, so the Python trace covers its SDK dispatch and requires the native extension too. The fixtures use dummy credentials and loopback HTTP, with no paid provider requests
 
-OCR includes Mistral, Azure AI Mistral, Azure Document Intelligence, Vertex Mistral, and Vertex DeepSeek. See [the OCR comparison](ocr-comparison.md) for confirmed differences in the current implementations
+The Python runner uses the existing `profile_python` / `sys.setprofile` collector, selecting executed code under the installed `litellm` source directory instead of maintaining a function-name allowlist. It prints source locations and qualified function names, including repeated calls. Coroutine resumptions are counted once per invocation. It profiles the current thread and threads created during the call, including the fresh async executor. Existing worker threads are not retroactively profiled; background Python calls may appear, and indentation follows selected Python stack ancestors within each thread
 
-For the equivalent Rust listing:
+The Rust runner calls the compiled PyO3 SDK entrypoints with `trace=True`. The existing `FunctionTrace` subscriber collects `#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]` spans for the route entrypoint, preparation, HTTP handler, and selected provider transformations. Function names come from the actual functions. `WithSubscriber` attaches the collector to each future across async polls. Arguments and provider payloads are not recorded in trace events. Uninstrumented functions do not appear; this is scoped instrumentation, not an exhaustive native call graph
 
-```bash
-uv run tests/sdk_function_trace/list_rust_steps.py --route ocr --signatures --calls
-```
+Tracing is opt-in: native calls without `trace=True` keep their original response shape. Traced calls return `{"response": ..., "trace": [{"function": ..., "depth": ...}]}`. The runners print only trace events. Missing native support or empty traces fail instead of falling back to source searching. The old `--repo`, `--signatures`, and `--calls` options are removed
 
-It accepts the same route and output flags. `uv` installs the two pinned parser packages in an isolated script environment; it does not build Rust or install LiteLLM. The listing includes bridge functions, trait declarations, implementations and call sites from core/provider and gateway route modules. Macros are named but not expanded, conditional compilation is not evaluated, and test modules/files are omitted
+`profile_python(functions)` still supports direct function references for focused parity checks. `assert_function_trace_parity` compares selected Python events with Rust events supplied by an executable scenario. A successful listing only proves which instrumented functions ran for that fixture; it does not assert cross-language function or response parity
+
+Build the extension with `maturin develop` in the project's virtual environment. Then run either command above to get the executed function order

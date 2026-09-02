@@ -6,6 +6,7 @@ use crate::http_utils::truncate_error_body;
 use super::client::http_client;
 use super::types::ProviderAudioTranscriptionRequest;
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn execute_audio_transcription_provider_call(
     request: ProviderAudioTranscriptionRequest,
 ) -> Result<Value, Error> {

@@ -16,6 +16,7 @@ fn provider_config(provider: &str) -> Option<&'static dyn AudioTranscriptionProv
     None
 }
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub fn prepare_audio_transcription_provider_call(
     request: AudioTranscriptionRequest<'_>,
 ) -> Result<ProviderAudioTranscriptionRequest, Error> {

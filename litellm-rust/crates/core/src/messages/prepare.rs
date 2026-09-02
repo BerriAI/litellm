@@ -5,6 +5,7 @@ use super::common_utils::{has_bearer_auth, has_header, messages_provider_config,
 use super::transformation::MessagesAuthStrategy;
 use super::types::{MessagesRequest, ProviderMessagesRequest};
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) fn prepare_messages_call(
     request: MessagesRequest<'_>,
 ) -> Result<ProviderMessagesRequest, Error> {

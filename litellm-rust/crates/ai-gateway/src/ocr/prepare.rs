@@ -13,6 +13,7 @@ pub(crate) struct PreparedOcrCall {
     pub(crate) hooks: OcrLifecycleHooks,
 }
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
     let call_id = request
         .litellm_call_id

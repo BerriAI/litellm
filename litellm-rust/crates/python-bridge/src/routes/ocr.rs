@@ -6,6 +6,7 @@ use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
 use crate::errors::core_error_to_pyerr;
+use crate::function_trace::trace_call;
 use crate::marshal::{optional_object_to_map, optional_timeout};
 
 type MarshaledOcrInputs = (
@@ -34,7 +35,7 @@ fn marshal_inputs(
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
+#[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None, trace=false))]
 #[allow(clippy::too_many_arguments)]
 fn ocr(
     py: Python<'_>,
@@ -46,6 +47,7 @@ fn ocr(
     extra_headers: Option<Py<PyAny>>,
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
+    trace: bool,
 ) -> PyResult<Py<PyAny>> {
     let (document, extra_headers, optional_params, timeout) = marshal_inputs(
         py,
@@ -56,20 +58,23 @@ fn ocr(
     )?;
 
     let result = release_gil(py, || {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(run_ocr(OcrRequest {
-            model: &model,
-            document,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            optional_params,
-            timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
-            litellm_call_id: None,
-        }))
+        pyo3_async_runtimes::tokio::get_runtime().block_on(trace_call(
+            run_ocr(OcrRequest {
+                model: &model,
+                document,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                optional_params,
+                timeout,
+                callbacks: Vec::new(),
+                guardrails: Vec::new(),
+                request_metadata: Default::default(),
+                litellm_call_id: None,
+            }),
+            trace,
+        ))
     });
 
     match result {
@@ -79,7 +84,7 @@ fn ocr(
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
+#[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None, trace=false))]
 #[allow(clippy::too_many_arguments)]
 fn aocr(
     py: Python<'_>,
@@ -91,6 +96,7 @@ fn aocr(
     extra_headers: Option<Py<PyAny>>,
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
+    trace: bool,
 ) -> PyResult<Bound<'_, PyAny>> {
     let (document, extra_headers, optional_params, timeout) = marshal_inputs(
         py,
@@ -101,20 +107,23 @@ fn aocr(
     )?;
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let value = run_ocr(OcrRequest {
-            model: &model,
-            document,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            optional_params,
-            timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
-            litellm_call_id: None,
-        })
+        let value = trace_call(
+            run_ocr(OcrRequest {
+                model: &model,
+                document,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                optional_params,
+                timeout,
+                callbacks: Vec::new(),
+                guardrails: Vec::new(),
+                request_metadata: Default::default(),
+                litellm_call_id: None,
+            }),
+            trace,
+        )
         .await
         .map_err(core_error_to_pyerr)?;
 
