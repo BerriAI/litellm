@@ -1,4 +1,5 @@
 import asyncio
+from types import MappingProxyType
 from unittest.mock import AsyncMock, patch
 
 
@@ -1337,17 +1338,17 @@ async def test_the_user_scope_has_no_pre_upgrade_counter_to_carry():
 
 
 class _SharedFakeRedis(RedisCache):
-    """Dict-backed stand-in for the one Redis every replica's DualCache is attached to.
+    """Stand-in for the one Redis every replica's DualCache is attached to.
 
     Only the methods the limiter and DualCache call are implemented, and
     ``super().__init__`` is skipped so no connection is opened.
     """
 
     def __init__(self):
-        self._store = {}
+        self._store = MappingProxyType({})
 
     async def async_set_cache(self, key, value, **kwargs):
-        self._store[key] = value
+        self._store = MappingProxyType({**self._store, key: value})
 
     async def async_get_cache(self, key, **kwargs):
         return self._store.get(key)
@@ -1357,7 +1358,8 @@ class _SharedFakeRedis(RedisCache):
 
     async def async_increment_pipeline(self, increment_list, **kwargs):
         for op in increment_list:
-            self._store[op["key"]] = self._store.get(op["key"], 0.0) + op["increment_value"]
+            total = self._store.get(op["key"], 0.0) + op["increment_value"]
+            self._store = MappingProxyType({**self._store, op["key"]: total})
         return [self._store[op["key"]] for op in increment_list]
 
 
