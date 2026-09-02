@@ -30,6 +30,10 @@ Not allowed:
 - Provider-specific branching that belongs in `providers`.
 - Panics for user/provider-controlled input.
 
+User-controlled remote media and file URLs must be downloaded through
+`http_utils::safe_fetch`. It owns SSRF-safe DNS, redirect validation, timeouts,
+and byte limits; route/provider code owns media interpretation and encoding.
+
 ## Typed Contracts (core rule)
 
 Trait and function boundaries MUST be strongly typed. No stringly-typed JSON
