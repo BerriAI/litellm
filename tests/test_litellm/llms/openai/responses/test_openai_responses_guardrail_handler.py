@@ -1389,6 +1389,38 @@ class TestBuildBlockSseChunks:
         assert completed["output"][0]["content"][0]["text"] == "Blocked by policy."
         assert completed["usage"] == {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28}
 
+    def test_continuation_reads_usage_from_typed_completed_event(self):
+        from litellm.types.llms.openai import (
+            ResponseCompletedEvent,
+            ResponsesAPIResponse,
+            ResponsesAPIStreamEvents,
+        )
+
+        handler = OpenAIResponsesHandler()
+        original = [
+            ResponseCompletedEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                response=ResponsesAPIResponse.model_validate(
+                    {
+                        "id": "resp_live",
+                        "created_at": 1,
+                        "model": "gpt-5.4-mini",
+                        "output": [],
+                        "usage": {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28},
+                    }
+                ),
+            )
+        ]
+        payloads = self._payloads(
+            handler.build_block_sse_chunks(
+                self._exc(original_response=original), stream_started=True, responses_so_far=[]
+            )
+        )
+        completed = payloads[-1]["response"]
+        assert completed["usage"]["input_tokens"] == 7
+        assert completed["usage"]["output_tokens"] == 21
+        assert completed["usage"]["total_tokens"] == 28
+
     def test_continuation_closes_open_item_given_pydantic_events_with_enum_types(self):
         from litellm.types.llms.openai import (
             BaseLiteLLMOpenAIResponseObject,
