@@ -593,7 +593,9 @@ class TestFilterServerIdsByIpWithInfo:
         assert blocked == 2
 
 
-def _make_scheme_request(scheme, client_host="203.0.113.5", headers=None):
+def _make_scheme_request(
+    scheme: str, client_host: str = "203.0.113.5", headers: dict[str, str] | None = None
+) -> Request:
     request = MagicMock(spec=Request)
     request.client = MagicMock()
     request.client.host = client_host

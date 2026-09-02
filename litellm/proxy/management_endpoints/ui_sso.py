@@ -2761,7 +2761,7 @@ async def _sso_return_to_redirect(
 
     if _is_same_origin_return_path(return_to):
         redirect_response = RedirectResponse(url=return_to, status_code=303)
-        _set_session_token_cookie(redirect_response, request, jwt_token)
+        set_session_token_cookie(redirect_response, request, jwt_token)
         redirect_response.delete_cookie("litellm_cp_return_to")
         return redirect_response
 
@@ -2784,7 +2784,7 @@ async def _sso_return_to_redirect(
     return None
 
 
-def _set_session_token_cookie(response: Response, request: Request, jwt_token: str) -> None:
+def set_session_token_cookie(response: Response, request: Request, jwt_token: str) -> None:
     """Set the ``token`` session cookie shared by every sign-in path.
 
     Not HttpOnly: the dashboard reads this cookie via ``document.cookie`` to
@@ -3661,7 +3661,7 @@ class SSOAuthenticationHandler:
             litellm_dashboard_ui += "?login=success"
         verbose_proxy_logger.info("Redirecting to %s", litellm_dashboard_ui)
         redirect_response: Final = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-        _set_session_token_cookie(redirect_response, request, jwt_token)
+        set_session_token_cookie(redirect_response, request, jwt_token)
         return redirect_response
 
     @staticmethod

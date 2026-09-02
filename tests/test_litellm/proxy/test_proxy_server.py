@@ -147,7 +147,7 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     assert mock_jwt_encode.call_args.kwargs == {"algorithm": "HS256"}
 
 
-def _mock_login_v2_deps(monkeypatch):
+def _mock_login_v2_deps(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "litellm.proxy.auth.login_utils.authenticate_user",
         AsyncMock(return_value={"user_id": "test-user"}),

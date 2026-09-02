@@ -15258,8 +15258,8 @@ async def login(request: Request):
     # _is_same_origin_return_path (strictly relative path) so it can never be an open redirect, and the
     # one-shot cookie is cleared after use.
     from litellm.proxy.management_endpoints.ui_sso import (
-        _set_session_token_cookie,
         _sso_return_to_redirect,
+        set_session_token_cookie,
     )
 
     # Resume through the SAME resumer the SSO callback uses, rather than a second, narrower arm.
@@ -15292,7 +15292,7 @@ async def login(request: Request):
 
     # Create redirect response with cookie
     redirect_response: Final = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-    _set_session_token_cookie(redirect_response, request, jwt_token)
+    set_session_token_cookie(redirect_response, request, jwt_token)
     if cp_return_to:
         redirect_response.delete_cookie(key="litellm_cp_return_to")
     return redirect_response
@@ -15302,7 +15302,7 @@ async def login(request: Request):
 async def login_v2(request: Request):
     global premium_user, general_settings, master_key
     from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object, encode_ui_session_jwt
-    from litellm.proxy.management_endpoints.ui_sso import _set_session_token_cookie
+    from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
     from litellm.proxy.utils import get_custom_url
 
     try:
@@ -15336,7 +15336,7 @@ async def login_v2(request: Request):
             content={"redirect_url": litellm_dashboard_ui, "token": jwt_token},
             status_code=status.HTTP_200_OK,
         )
-        _set_session_token_cookie(json_response, request, jwt_token)
+        set_session_token_cookie(json_response, request, jwt_token)
         return json_response
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.login_v2(): Exception occurred - %s", e)
@@ -15435,7 +15435,7 @@ async def login_v3(request: Request):
 
 @router.post("/v3/login/exchange", include_in_schema=False)  # exchange single-use opaque code for JWT
 async def login_v3_exchange(request: Request):
-    from litellm.proxy.management_endpoints.ui_sso import _set_session_token_cookie
+    from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
 
     try:
         if not general_settings.get("control_plane_url"):
@@ -15483,7 +15483,7 @@ async def login_v3_exchange(request: Request):
             },
             status_code=status.HTTP_200_OK,
         )
-        _set_session_token_cookie(json_response, request, cached_data["token"])
+        set_session_token_cookie(json_response, request, cached_data["token"])
         return json_response
     except ProxyException:
         raise

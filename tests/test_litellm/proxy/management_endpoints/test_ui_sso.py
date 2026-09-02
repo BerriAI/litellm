@@ -8692,7 +8692,7 @@ class TestSameOriginReturnPath:
         assert _is_same_origin_return_path("") is False
 
 
-def _make_https_request():
+def _make_https_request() -> Request:
     request = MagicMock(spec=Request)
     request.url.scheme = "https"
     request.headers = {}
@@ -8701,7 +8701,7 @@ def _make_https_request():
     return request
 
 
-def _make_http_request():
+def _make_http_request() -> Request:
     request = MagicMock(spec=Request)
     request.url.scheme = "http"
     request.headers = {}
@@ -8822,11 +8822,11 @@ class TestSessionTokenCookie:
     def test_secure_over_direct_https(self, monkeypatch):
         from fastapi import Response
 
-        from litellm.proxy.management_endpoints.ui_sso import _set_session_token_cookie
+        from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
 
         monkeypatch.delenv("PROXY_BASE_URL", raising=False)
         resp = Response()
-        _set_session_token_cookie(resp, _make_https_request(), "jwt-token-value")
+        set_session_token_cookie(resp, _make_https_request(), "jwt-token-value")
         cookie = self._cookie(resp)
         assert "token=jwt-token-value" in cookie
         assert "Secure" in cookie
@@ -8836,11 +8836,11 @@ class TestSessionTokenCookie:
     def test_not_secure_over_direct_http(self, monkeypatch):
         from fastapi import Response
 
-        from litellm.proxy.management_endpoints.ui_sso import _set_session_token_cookie
+        from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
 
         monkeypatch.delenv("PROXY_BASE_URL", raising=False)
         resp = Response()
-        _set_session_token_cookie(resp, _make_http_request(), "jwt-token-value")
+        set_session_token_cookie(resp, _make_http_request(), "jwt-token-value")
         assert "Secure" not in self._cookie(resp)
 
     def test_secure_behind_trusted_tls_terminating_proxy(self, monkeypatch):
@@ -8849,7 +8849,7 @@ class TestSessionTokenCookie:
         operator has configured a trusted proxy that reports X-Forwarded-Proto: https."""
         from fastapi import Response
 
-        from litellm.proxy.management_endpoints.ui_sso import _set_session_token_cookie
+        from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
 
         monkeypatch.delenv("PROXY_BASE_URL", raising=False)
         monkeypatch.setattr(
@@ -8860,28 +8860,28 @@ class TestSessionTokenCookie:
         request.client.host = "10.0.0.5"
         request.headers = {"X-Forwarded-Proto": "https"}
         resp = Response()
-        _set_session_token_cookie(resp, request, "jwt-token-value")
+        set_session_token_cookie(resp, request, "jwt-token-value")
         assert "Secure" in self._cookie(resp)
 
     def test_untrusted_spoofed_forwarded_proto_is_ignored(self, monkeypatch):
         from fastapi import Response
 
-        from litellm.proxy.management_endpoints.ui_sso import _set_session_token_cookie
+        from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
 
         monkeypatch.delenv("PROXY_BASE_URL", raising=False)
         monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
         request = _make_http_request()
         request.headers = {"X-Forwarded-Proto": "https"}
         resp = Response()
-        _set_session_token_cookie(resp, request, "jwt-token-value")
+        set_session_token_cookie(resp, request, "jwt-token-value")
         assert "Secure" not in self._cookie(resp)
 
     def test_proxy_base_url_https_overrides_literal_http_scheme(self, monkeypatch):
         from fastapi import Response
 
-        from litellm.proxy.management_endpoints.ui_sso import _set_session_token_cookie
+        from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
 
         monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
         resp = Response()
-        _set_session_token_cookie(resp, _make_http_request(), "jwt-token-value")
+        set_session_token_cookie(resp, _make_http_request(), "jwt-token-value")
         assert "Secure" in self._cookie(resp)
