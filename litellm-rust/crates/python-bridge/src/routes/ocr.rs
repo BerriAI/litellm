@@ -4,8 +4,10 @@ use std::future::Future;
 use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
 use pyo3::prelude::*;
 use serde_json::Value;
+use tracing::instrument::WithSubscriber;
 
 use crate::errors::core_error_to_pyerr;
+use crate::function_trace::FunctionTrace;
 use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
 
 fn prepare_ocr(
@@ -22,6 +24,7 @@ fn prepare_ocr(
     })?;
     let optional_params = object_or_empty("optional_params", inputs.optional_params)?;
 
+    let trace = inputs.trace.unwrap_or(false).then(FunctionTrace::default);
     Ok(async move {
         let RouteOptions {
             model,
@@ -31,7 +34,7 @@ fn prepare_ocr(
             extra_headers,
             timeout,
         } = options;
-        run_ocr(OcrRequest {
+        let future = run_ocr(OcrRequest {
             model: &model,
             document,
             api_key: api_key.as_deref(),
@@ -44,8 +47,14 @@ fn prepare_ocr(
             guardrails: Vec::new(),
             request_metadata: Default::default(),
             litellm_call_id: None,
-        })
-        .await
+        });
+        match trace {
+            Some(trace) => {
+                let response = future.with_subscriber(trace.dispatcher()).await?;
+                Ok(serde_json::json!({ "response": response, "trace": trace.events() }))
+            }
+            None => future.await,
+        }
     })
 }
 
@@ -67,6 +76,7 @@ bridge_route! {
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
         optional_params: Option<Value>,
         timeout_seconds: Option<f64>,
+        trace: Option<bool>,
     },
     prepare = prepare_ocr,
     errors = core_error_to_pyerr,

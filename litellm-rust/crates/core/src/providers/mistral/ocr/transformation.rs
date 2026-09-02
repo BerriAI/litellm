@@ -70,10 +70,12 @@ pub struct MistralOcrConfig;
 pub const MISTRAL_OCR_CONFIG: MistralOcrConfig = MistralOcrConfig;
 
 impl OcrProviderConfig for MistralOcrConfig {
-    fn supported_ocr_params(&self) -> &'static [&'static str] {
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+    fn get_supported_ocr_params(&self) -> &'static [&'static str] {
         SUPPORTED_OCR_PARAMS
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_ocr_request(
         &self,
         model: &str,
@@ -100,6 +102,7 @@ impl OcrProviderConfig for MistralOcrConfig {
         })
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_ocr_response(
         &self,
         model: &str,
@@ -153,8 +156,8 @@ impl OcrProviderConfig for MistralOcrConfig {
     }
 }
 
-pub fn supported_ocr_params() -> &'static [&'static str] {
-    MISTRAL_OCR_CONFIG.supported_ocr_params()
+pub fn get_supported_ocr_params() -> &'static [&'static str] {
+    MISTRAL_OCR_CONFIG.get_supported_ocr_params()
 }
 
 pub fn map_ocr_params(non_default_params: &Map<String, Value>) -> Map<String, Value> {
@@ -181,7 +184,7 @@ mod tests {
     #[test]
     fn supported_params_match_python_mistral_ocr_config() {
         assert_eq!(
-            supported_ocr_params(),
+            get_supported_ocr_params(),
             &[
                 "pages",
                 "include_image_base64",

@@ -1,5 +1,6 @@
 mod diagnostics;
 mod errors;
+mod function_trace;
 mod marshal;
 mod routes;
 

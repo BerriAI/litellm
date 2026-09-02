@@ -281,8 +281,8 @@ fn page_dimensions(page: &Map<String, Value>) -> Value {
 }
 
 impl OcrProviderConfig for AzureAiOcrConfig {
-    fn supported_ocr_params(&self) -> &'static [&'static str] {
-        MISTRAL_OCR_CONFIG.supported_ocr_params()
+    fn get_supported_ocr_params(&self) -> &'static [&'static str] {
+        MISTRAL_OCR_CONFIG.get_supported_ocr_params()
     }
 
     fn transform_ocr_request(
@@ -326,7 +326,7 @@ impl OcrProviderConfig for AzureAiOcrConfig {
 }
 
 impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
-    fn supported_ocr_params(&self) -> &'static [&'static str] {
+    fn get_supported_ocr_params(&self) -> &'static [&'static str] {
         AZURE_DOCUMENT_INTELLIGENCE_SUPPORTED_OCR_PARAMS
     }
 
