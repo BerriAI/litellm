@@ -15,8 +15,10 @@ from litellm_proxy_extras.replica_identity import (
     apply_replica_identity_full,
 )
 from litellm_proxy_extras.prisma_toolchain import (
+    PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR,
     ensure_prisma_toolchain,
     prisma_command_timeout,
+    prisma_migrate_deploy_timeout,
 )
 
 
@@ -698,12 +700,13 @@ class ProxyExtrasDBManager:
 
         original_dir = os.getcwd()
         os.chdir(migrations_dir)
+        deploy_timeout = prisma_migrate_deploy_timeout()
         try:
             for attempt in range(4):
                 try:
                     result = subprocess.run(
                         [_get_prisma_command(), "migrate", "deploy"],
-                        timeout=prisma_command_timeout(),
+                        timeout=deploy_timeout,
                         check=True,
                         capture_output=True,
                         text=True,
@@ -713,8 +716,12 @@ class ProxyExtrasDBManager:
                     return True
 
                 except subprocess.TimeoutExpired:
-                    logger.info(
-                        f"prisma migrate deploy attempt {attempt + 1} timed out, retrying"
+                    logger.warning(
+                        "prisma migrate deploy attempt %s timed out after %ss, retrying. "
+                        "Raise %s if this database needs longer to apply its pending migrations.",
+                        attempt + 1,
+                        deploy_timeout,
+                        PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR,
                     )
                     time.sleep(random.randrange(5, 15))
                     continue
@@ -823,7 +830,8 @@ class ProxyExtrasDBManager:
                 "Database migration failed after 4 attempts (retry loop "
                 "exhausted by timeouts or repeated idempotent-recovery "
                 "continues). Check database connectivity, load, and "
-                "_prisma_migrations ledger state."
+                "_prisma_migrations ledger state, and raise "
+                f"{PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR} if the attempts timed out."
             )
         finally:
             os.chdir(original_dir)
@@ -908,7 +916,7 @@ class ProxyExtrasDBManager:
                         # Set migrations directory for Prisma
                         result = subprocess.run(
                             [_get_prisma_command(), "migrate", "deploy"],
-                            timeout=prisma_command_timeout(),
+                            timeout=prisma_migrate_deploy_timeout(),
                             check=True,
                             capture_output=True,
                             text=True,
@@ -1126,7 +1134,11 @@ class ProxyExtrasDBManager:
                     )
                     return True
             except subprocess.TimeoutExpired:
-                logger.info(f"Attempt {attempt + 1} timed out")
+                logger.warning(
+                    "Attempt %s timed out. Raise %s if this database needs longer to apply its pending migrations.",
+                    attempt + 1,
+                    PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR,
+                )
                 time.sleep(random.randrange(5, 15))
             except subprocess.CalledProcessError as e:
                 attempts_left = 3 - attempt
