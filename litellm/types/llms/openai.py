@@ -631,7 +631,7 @@ class ChatCompletionReasoningItem(TypedDict, total=False):
     type: Required[Literal["reasoning"]]
     id: str
     encrypted_content: str | None
-    summary: list["ChatCompletionReasoningSummaryTextBlock"]
+    summary: list[ChatCompletionReasoningSummaryTextBlock]
 
 
 class WebSearchOptionsUserLocationApproximate(TypedDict, total=False):
