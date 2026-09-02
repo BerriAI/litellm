@@ -914,6 +914,7 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
     """
     - Unit test for `_get_trace_id` function in Logging obj
     """
+    from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     litellm.success_callback = ["langfuse"]
@@ -946,24 +947,18 @@ def test_logging_trace_id(langfuse_trace_id, langfuse_existing_trace_id):
     time.sleep(3)
     assert litellm_logging_obj._get_trace_id(service_name="langfuse") is not None
 
-    ## if existing_trace_id exists
+    # langfuse addresses a trace by a 32-hex id, so the id litellm reports back is the
+    # resolved form of whichever source won; that is what the alerting deep link needs
     if langfuse_existing_trace_id is not None:
-        assert (
-            litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == langfuse_existing_trace_id
-        )
-    ## if trace_id exists
+        expected_source = langfuse_existing_trace_id
     elif langfuse_trace_id is not None:
-        assert (
-            litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == langfuse_trace_id
-        )
-    ## if no trace_id or existing_trace_id is provided, use litellm_trace_id
+        expected_source = langfuse_trace_id
     else:
-        assert (
-            litellm_logging_obj._get_trace_id(service_name="langfuse")
-            == litellm_logging_obj.litellm_trace_id
-        )
+        expected_source = litellm_logging_obj.litellm_trace_id
+
+    assert litellm_logging_obj._get_trace_id(service_name="langfuse") == resolve_trace_id(
+        expected_source
+    )
 
 
 def test_convert_model_response_object():

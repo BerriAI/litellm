@@ -1,9 +1,13 @@
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+# langfuse_client_init imports this lazily; cache it before any test mocks
+# sys.modules["langfuse"], or a single-file run dies on the real import
+import litellm.integrations.langfuse.langfuse_sdk  # noqa: F401
 from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
     langfuse_client_init,
@@ -87,13 +91,12 @@ class TestLangfusePromptManagement:
                 "litellm.integrations.langfuse.langfuse_prompt_management.LangFuseLogger._get_langfuse_flush_interval",
                 return_value=1,
             ),
-            patch.dict("sys.modules", {"langfuse": self._mock_langfuse}),
+            patch("litellm.integrations.langfuse.langfuse_sdk.Langfuse", mock_langfuse_class),  # test-quality-ok: the ctor must be intercepted where acquire_langfuse_client resolves it; a real client spawns export threads
             patch(
                 "litellm.llms.custom_httpx.http_handler.get_ssl_configuration",
                 return_value=False,
             ) as mock_get_ssl,
         ):
-            self._mock_langfuse.Langfuse = mock_langfuse_class
 
             langfuse_client_init(
                 langfuse_public_key="pk-1234",
@@ -124,16 +127,76 @@ class _RecordingLangfuseForEnv:
     (("Production", "default"), ("production ", "production"), ("prod", "prod")),
 )
 def test_langfuse_client_init_resolves_deployment_environment(monkeypatch, env_value, expected):
-    mock_langfuse_module: Final = MagicMock()
-    mock_langfuse_module.version.__version__ = "2.60.0"
-    mock_langfuse_module.Langfuse = _RecordingLangfuseForEnv
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
     monkeypatch.setenv("LANGFUSE_HOST", "https://test.langfuse.com")
     monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", env_value)
     monkeypatch.setattr(_RecordingLangfuseForEnv, "last_environment", None)
-    with patch.dict("sys.modules", MappingProxyType({"langfuse": mock_langfuse_module})):
+    with patch("litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuseForEnv):  # test-quality-ok: the ctor must be intercepted where acquire_langfuse_client resolves it; a real client spawns export threads
         langfuse_client_init.cache_clear()
         langfuse_client_init()
     langfuse_client_init.cache_clear()
     assert _RecordingLangfuseForEnv.last_environment == expected
+
+
+def test_langfuse_client_init_mock_mode_makes_no_network_calls(monkeypatch):
+    """LANGFUSE_MOCK promises full execution without egress.
+
+    The registry maps the "langfuse" callback to LangfusePromptManagement, so
+    this client is the one the standard proxy path emits observations through;
+    v4 ships them over its own OTLP exporter, which the httpx mock cannot see.
+    """
+    import threading
+    import time
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from langfuse._client.resource_manager import LangfuseResourceManager
+
+    from litellm.integrations.langfuse.langfuse_sdk import (
+        open_trace_context,
+        start_generation,
+        to_unix_nanos,
+    )
+
+    received = []
+
+    class _Receiver(BaseHTTPRequestHandler):
+        def do_POST(self):
+            received.append(self.path)
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), _Receiver)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("LANGFUSE_MOCK", "true")
+    monkeypatch.setenv("LANGFUSE_HOST", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-pm-mock-egress")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-pm-mock-egress")
+    LangfuseResourceManager._instances.pop("pk-pm-mock-egress", None)
+    langfuse_client_init.cache_clear()
+
+    try:
+        client = langfuse_client_init()
+        context, claim_root = open_trace_context(client=client, trace_id="a" * 32, parent_observation_id=None)
+        now = datetime.now(timezone.utc)
+        start_generation(
+            client=client,
+            context=context,
+            name="pm-mock-gen",
+            start_time=now,
+            claim_trace_root=claim_root,
+            attributes={},
+        ).end(end_time=to_unix_nanos(now))
+        client.flush()
+        time.sleep(1)
+    finally:
+        server.shutdown()
+        langfuse_client_init.cache_clear()
+        LangfuseResourceManager._instances.pop("pk-pm-mock-egress", None)
+
+    assert received == [], f"LANGFUSE_MOCK still sent spans to the configured host: {received}"

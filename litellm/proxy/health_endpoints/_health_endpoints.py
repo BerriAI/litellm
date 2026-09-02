@@ -355,7 +355,10 @@ async def health_services_endpoint(
             from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
             langfuse_logger: Final = LangFuseLogger()
-            langfuse_logger.Langfuse.auth_check()
+            if langfuse_logger.Langfuse.auth_check() is False:
+                raise ValueError(
+                    "langfuse auth_check failed - verify LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are set correctly"
+                )
             _ = litellm.completion(
                 model="openai/litellm-mock-response-model",
                 messages=[{"role": "user", "content": "Hey, how's it going?"}],
