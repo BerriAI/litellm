@@ -312,3 +312,22 @@ def test_mask_credentials_in_payload_masks_only_sensitive_string_leaves():
     assert masked != plaintext
     assert masked.startswith(plaintext[:4])
     assert masked.endswith(plaintext[-4:])
+
+
+def test_extra_sensitive_patterns_add_to_the_defaults():
+    from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
+    masker = SensitiveDataMasker(extra_sensitive_patterns={"connection"})
+
+    assert masker.is_sensitive_key("mongodb_connection_string") is True
+    assert masker.is_sensitive_key("api_key") is True
+    assert masker.is_sensitive_key("aws_secret_access_key") is True
+    assert masker.is_sensitive_key("mongodb_database") is False
+
+
+def test_extra_sensitive_patterns_do_not_leak_into_other_maskers():
+    from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
+    SensitiveDataMasker(extra_sensitive_patterns={"connection"})
+
+    assert SensitiveDataMasker().is_sensitive_key("mongodb_connection_string") is False
