@@ -662,3 +662,8 @@ All these checks must pass before your PR can be merged.
 <a href="https://github.com/BerriAI/litellm/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=BerriAI/litellm" />
 </a>
+---
+
+## Personal Notes
+
+This fork is maintained by Rakesh R for learning GitHub, open source contributions, and experimenting with LiteLLM.
