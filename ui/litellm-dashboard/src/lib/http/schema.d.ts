@@ -22868,6 +22868,10 @@ export interface components {
             required: boolean;
             /** Tooltip */
             tooltip?: string | null;
+            /** Validation Message */
+            validation_message?: string | null;
+            /** Validation Pattern */
+            validation_pattern?: string | null;
         };
         /**
          * AgentExtension
