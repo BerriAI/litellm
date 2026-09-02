@@ -461,7 +461,7 @@ def test_service_tier_audio_tokens_use_base_audio_rate():
         ),
     )
 
-    with patch(
+    with patch(  # test-quality-ok: custom model info isolates the pricing behavior under test
         "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
         return_value=mock_model_info,
     ):
@@ -508,7 +508,7 @@ def test_count_and_duration_priced_modalities_not_double_billed():
         ),
     )
 
-    with patch(
+    with patch(  # test-quality-ok: custom model info isolates the pricing behavior under test
         "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
         return_value=mock_model_info,
     ):
