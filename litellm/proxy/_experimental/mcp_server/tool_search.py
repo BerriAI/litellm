@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, TypedDict, assert_never
+from typing import TYPE_CHECKING, Any, Final, TypedDict
 
-from typing_extensions import ReadOnly, Required
+from typing_extensions import ReadOnly, Required, assert_never
 
 import litellm
 from litellm.proxy.agent_endpoints.agent_search import DEFAULT_AGENT_SEARCH_TOP_K
