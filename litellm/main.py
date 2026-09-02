@@ -8234,6 +8234,40 @@ def speech(
             client=client,
             _is_async=aspeech or False,
         )
+    elif custom_llm_provider == "flowspeech":
+        from litellm.llms.flowspeech.text_to_speech.transformation import (
+            FlowSpeechTextToSpeechConfig,
+        )
+
+        if text_to_speech_provider_config is None:
+            text_to_speech_provider_config = (  # rebind-ok: provider config is resolved lazily for speech dispatch
+                FlowSpeechTextToSpeechConfig()
+            )
+
+        if not isinstance(text_to_speech_provider_config, FlowSpeechTextToSpeechConfig):
+            raise TypeError("FlowSpeech TTS configuration has an unexpected type")
+        flowspeech_config: Final = text_to_speech_provider_config
+
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        voice_name: Final = voice if isinstance(voice, str) else None
+        response = base_llm_http_handler.text_to_speech_handler(  # rebind-ok: provider branch sets dispatch result
+            model=model,
+            input=input,
+            voice=voice_name,
+            text_to_speech_provider_config=flowspeech_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         from litellm.llms.vertex_ai.text_to_speech.transformation import (
             VertexAITextToSpeechConfig,
