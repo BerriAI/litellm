@@ -1,5 +1,8 @@
 use pyo3::prelude::*;
 
+#[macro_use]
+mod definition;
+
 mod audio_transcription;
 mod chat_completions;
 mod messages;
