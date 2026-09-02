@@ -638,7 +638,9 @@ class OpenAIResponsesHandler(BaseTranslation):
                 return responses_so_far
 
         # ------------------------------------------------------------------ #
-        # Case 2: response.output_item.done — extract tool calls only.        #
+        # Case 2: response.output_item.done — extract tool calls only, then  #
+        # fall through to the text fallback when a caller expects rewrites   #
+        # delivered, so a buffer truncated here still fails closed on text.  #
         # ------------------------------------------------------------------ #
         if final_chunk.get("type") == "response.output_item.done":
             model_response_stream: Final = (
@@ -656,7 +658,8 @@ class OpenAIResponsesHandler(BaseTranslation):
                     input_type="response",
                     logging_obj=litellm_logging_obj,
                 )
-            return responses_so_far
+            if not deliver_ended_stream_rewrites:
+                return responses_so_far
 
         # ------------------------------------------------------------------ #
         # Fallback: apply guardrail to the accumulated text string.           #
