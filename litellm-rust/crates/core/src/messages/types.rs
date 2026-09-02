@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::transformation::AnthropicMessagesProviderConfig;
+use crate::streaming::{JsonObject, StreamTarget, StreamTransportOptions};
 
 pub struct MessagesRequest<'a> {
     pub model: &'a str,
@@ -45,6 +46,76 @@ pub struct ContentBlock {
     pub cache_control: Option<CacheControl>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+pub struct MessagesStreamRequest {
+    pub body: AnthropicMessagesRequest,
+    pub target: StreamTarget,
+    pub transport: StreamTransportOptions,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MessagesStreamEvent {
+    MessageStart {
+        message: AnthropicMessagesResponse,
+    },
+    ContentBlockStart {
+        index: u64,
+        content_block: JsonObject,
+    },
+    ContentBlockDelta {
+        index: u64,
+        delta: JsonObject,
+    },
+    ContentBlockStop {
+        index: u64,
+    },
+    MessageDelta {
+        delta: JsonObject,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<JsonObject>,
+    },
+    MessageStop,
+    Ping,
+    Error {
+        error: JsonObject,
+    },
+}
+
+#[cfg(test)]
+mod stream_contract_tests {
+    use super::*;
+
+    #[test]
+    fn message_stop_serializes_as_anthropic_event() {
+        assert_eq!(
+            serde_json::to_value(MessagesStreamEvent::MessageStop).expect("serializable event"),
+            serde_json::json!({"type": "message_stop"})
+        );
+    }
+
+    #[test]
+    fn content_delta_keeps_typed_event_fields() {
+        let event = MessagesStreamEvent::ContentBlockDelta {
+            index: 0,
+            delta: JsonObject(
+                serde_json::json!({"type": "text_delta", "text": "hello"})
+                    .as_object()
+                    .expect("object")
+                    .clone(),
+            ),
+        };
+
+        assert_eq!(
+            serde_json::to_value(event).expect("serializable event"),
+            serde_json::json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "hello"}
+            })
+        );
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

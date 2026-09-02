@@ -1,5 +1,19 @@
-use super::types::{AnthropicMessagesRequest, AnthropicMessagesResponse};
 use crate::Error;
+use crate::streaming::StreamProvider;
+
+use super::types::{
+    AnthropicMessagesRequest, AnthropicMessagesResponse, MessagesStreamEvent, MessagesStreamRequest,
+};
+
+pub trait MessagesStreamProvider:
+    StreamProvider<MessagesStreamRequest, MessagesStreamEvent>
+{
+}
+
+impl<T> MessagesStreamProvider for T where
+    T: StreamProvider<MessagesStreamRequest, MessagesStreamEvent>
+{
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessagesAuthStrategy {
