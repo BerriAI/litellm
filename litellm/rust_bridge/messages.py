@@ -105,7 +105,7 @@ def messages(
         adapt=identity,
         mode=FallbackMode.PYTHON,
         context=_context(model, custom_llm_provider),
-    )
+    ).value
 
 
 async def amessages(
@@ -119,22 +119,24 @@ async def amessages(
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
     native: Final = load_rust_amessages()
-    return await ainvoke(
-        native_call=(
-            None
-            if native is None
-            else lambda: native(
-                model=model,
-                body=body,
-                api_key=api_key,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                extra_headers=extra_headers,
-                timeout_seconds=timeout_to_seconds(timeout),
-            )
-        ),
-        fallback=async_none,
-        adapt=identity,
-        mode=FallbackMode.PYTHON,
-        context=_context(model, custom_llm_provider),
-    )
+    return (
+        await ainvoke(
+            native_call=(
+                None
+                if native is None
+                else lambda: native(
+                    model=model,
+                    body=body,
+                    api_key=api_key,
+                    api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
+                    extra_headers=extra_headers,
+                    timeout_seconds=timeout_to_seconds(timeout),
+                )
+            ),
+            fallback=async_none,
+            adapt=identity,
+            mode=FallbackMode.PYTHON,
+            context=_context(model, custom_llm_provider),
+        )
+    ).value

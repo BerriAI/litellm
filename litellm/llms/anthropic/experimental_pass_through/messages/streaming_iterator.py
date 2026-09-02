@@ -6,7 +6,7 @@ from typing import Any, Final, Protocol, runtime_checkable
 
 import httpx
 from pydantic import TypeAdapter
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.constants import (
     ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS,
@@ -19,6 +19,7 @@ from litellm.llms.anthropic.common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
+from litellm.rust_bridge.runtime import CoreEngine, execution_additional_headers
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
@@ -325,7 +326,8 @@ def _anthropic_content_block_events(index: int, block: Mapping[str, object]) -> 
 
 
 class AnthropicMessagesStreamHiddenParams(TypedDict):
-    additional_headers: dict[str, str]
+    additional_headers: ReadOnly[Mapping[str, str]]
+    core_engine: ReadOnly[str]
 
 
 @runtime_checkable
@@ -344,8 +346,10 @@ _RESPONSE_HEADERS_ADAPTER: Final[TypeAdapter[dict[str, str]]] = TypeAdapter(dict
 def anthropic_messages_stream_hidden_params(
     response_headers: httpx.Headers,
 ) -> AnthropicMessagesStreamHiddenParams:
+    additional_headers: Final = _RESPONSE_HEADERS_ADAPTER.validate_python(process_response_headers(response_headers))
     return AnthropicMessagesStreamHiddenParams(
-        additional_headers=_RESPONSE_HEADERS_ADAPTER.validate_python(process_response_headers(response_headers))
+        additional_headers=execution_additional_headers(additional_headers, CoreEngine.PYTHON),
+        core_engine=CoreEngine.PYTHON.value,
     )
 
 

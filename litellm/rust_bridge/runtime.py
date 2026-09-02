@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import Final, Generic, NoReturn, TypeAlias, TypeVar, cast
@@ -11,10 +11,25 @@ from litellm.rust_bridge.bindings import native_exception_types
 NativeT = TypeVar("NativeT")
 ResultT = TypeVar("ResultT")
 
+CORE_ENGINE_HIDDEN_PARAM: Final = "core_engine"
+CORE_ENGINE_HEADER: Final = "x-litellm-core"
+LEGACY_RUST_HEADER: Final = "x-litellm-rust"
+
 
 class FallbackMode(Enum):
     PYTHON = "python"
     RUST_REQUIRED = "rust_required"
+
+
+class CoreEngine(str, Enum):
+    PYTHON = "python"
+    RUST = "rust"
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionResult(Generic[ResultT]):
+    value: ResultT
+    source: CoreEngine
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +57,48 @@ class BridgeErrorContext:
     model: str
 
 
+def execution_headers(source: CoreEngine) -> dict[str, str]:
+    if source is CoreEngine.RUST:
+        return {  # mutable-ok: response adapters require a mutable header dict
+            CORE_ENGINE_HEADER: source.value,
+            LEGACY_RUST_HEADER: "true",
+        }
+    return {CORE_ENGINE_HEADER: source.value}  # mutable-ok: response adapters require a mutable header dict
+
+
+def execution_additional_headers(
+    additional_headers: Mapping[str, object] | None,
+    source: CoreEngine,
+) -> dict[str, str]:
+    existing: Final = additional_headers or {}  # mutable-ok: empty default is local and never mutated
+    reserved: Final = frozenset({CORE_ENGINE_HEADER, LEGACY_RUST_HEADER})
+    preserved: Final = {  # mutable-ok: response adapters require a mutable header dict
+        str(name): str(value) for name, value in existing.items() if str(name).lower() not in reserved
+    }
+    return {  # mutable-ok: response adapters require a mutable header dict
+        **preserved,
+        **execution_headers(source),
+    }
+
+
+def execution_hidden_params(
+    hidden_params: Mapping[str, object] | None,
+    source: CoreEngine,
+) -> dict[str, object]:
+    existing: Final = hidden_params or {}  # mutable-ok: empty default is local and never mutated
+    raw_headers: Final = existing.get("additional_headers")
+    additional_headers: Final[Mapping[str, object]] = (
+        cast(Mapping[str, object], raw_headers)  # cast-ok: the isinstance check validates the mapping boundary
+        if isinstance(raw_headers, Mapping)
+        else {}  # mutable-ok: empty default is local and never mutated
+    )
+    return {  # mutable-ok: response objects require mutable hidden params
+        **existing,
+        CORE_ENGINE_HIDDEN_PARAM: source.value,
+        "additional_headers": execution_additional_headers(additional_headers, source),
+    }
+
+
 def invoke(
     *,
     native_call: Callable[[], NativeT] | None,
@@ -49,12 +106,12 @@ def invoke(
     adapt: Callable[[NativeT], ResultT],
     mode: FallbackMode,
     context: BridgeErrorContext,
-) -> ResultT:
+) -> ExecutionResult[ResultT]:
     result: Final = attempt(native_call=native_call, adapt=adapt, context=context)
     if isinstance(result, RustHandled):
-        return result.value
+        return ExecutionResult(value=result.value, source=CoreEngine.RUST)
     if mode is FallbackMode.PYTHON:
-        return fallback()
+        return ExecutionResult(value=fallback(), source=CoreEngine.PYTHON)
     _raise_required(result, context)
 
 
@@ -65,12 +122,12 @@ async def ainvoke(
     adapt: Callable[[NativeT], ResultT],
     mode: FallbackMode,
     context: BridgeErrorContext,
-) -> ResultT:
+) -> ExecutionResult[ResultT]:
     result: Final = await aattempt(native_call=native_call, adapt=adapt, context=context)
     if isinstance(result, RustHandled):
-        return result.value
+        return ExecutionResult(value=result.value, source=CoreEngine.RUST)
     if mode is FallbackMode.PYTHON:
-        return await fallback()
+        return ExecutionResult(value=await fallback(), source=CoreEngine.PYTHON)
     _raise_required(result, context)
 
 
@@ -164,12 +221,16 @@ def _raise_upstream(error: BaseException, context: BridgeErrorContext) -> NoRetu
     message_value: Final = args[1] if len(args) > 1 else str(error)
     status: Final = status_value if isinstance(status_value, int) else 0
     message: Final = message_value if isinstance(message_value, str) else str(message_value)
-    raise APIError(
+    api_error: Final = APIError(
         status_code=status or 500,
         message=f"litellm rust {context.route}: {message}",
         llm_provider=context.provider,
         model=context.model,
-    ) from error
+    )
+    api_error.headers = execution_headers(  # pyright: ignore[reportAttributeAccessIssue]  # proxy reads exception headers
+        CoreEngine.RUST
+    )
+    raise api_error from error
 
 
 def identity(value: ResultT) -> ResultT:

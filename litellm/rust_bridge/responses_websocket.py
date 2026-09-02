@@ -10,6 +10,8 @@ from websockets.exceptions import ConnectionClosedOK
 from litellm.rust_bridge.bindings import UNSET, NativeBinding, Unset
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
+    CoreEngine,
+    ExecutionResult,
     FallbackMode,
     acall,
     ainvoke,
@@ -36,9 +38,7 @@ class RustResponsesWebSocketConnection(Protocol):
     ) -> RustResponsesWebSocket: ...
 
 
-_CONNECTION: Final = NativeBinding[type[RustResponsesWebSocketConnection]](
-    "ResponsesWebSocketConnection"
-)
+_CONNECTION: Final = NativeBinding[type[RustResponsesWebSocketConnection]]("ResponsesWebSocketConnection")
 
 
 def set_rust_responses_websocket(
@@ -55,6 +55,7 @@ def load_rust_responses_websocket() -> type[RustResponsesWebSocketConnection] | 
 class _ConnectionAdapter:
     def __init__(self, connection: RustResponsesWebSocket):
         self._connection: Final = connection
+        self.core_engine: Final = CoreEngine.RUST
 
     async def send(self, text: str) -> None:
         await acall(
@@ -83,7 +84,7 @@ async def connect(
     url: str,
     headers: dict[str, str],
     timeout: float | httpx.Timeout | None,
-) -> _ConnectionAdapter | None:
+) -> ExecutionResult[_ConnectionAdapter | None]:
     connection_type: Final = load_rust_responses_websocket()
     native_call: Final = (
         None
