@@ -9607,6 +9607,26 @@ class Router:
             coerce_token_limit(model_info.get("max_output_tokens")),
         )
 
+    def get_configured_display_name(self, model_name: str) -> "str | None":
+        """
+        Return the display_name explicitly configured in a concrete deployment's
+        model_info for model_name, via O(1) index lookup.
+
+        Returns None for wildcard-expanded or unknown names, and treats a
+        non-string or empty configured value as absent rather than failing the
+        listing. Like get_configured_token_limits, this never triggers pattern
+        matching or deep copies, so it is safe to call per listed model on the
+        /v1/models hot path.
+        """
+        deployment: Final = self.get_deployment_by_model_group_name(model_group_name=model_name)
+        if deployment is None:
+            return None
+
+        display_name: Final = deployment.model_info.get("display_name")
+        if isinstance(display_name, str) and display_name.strip():
+            return display_name
+        return None
+
     def get_deployment_credentials_with_provider(
         self, model_id: str, team_id: str | None = None
     ) -> dict[str, Any] | None:
