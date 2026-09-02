@@ -13,7 +13,6 @@ vi.mock("@/components/networking", () => ({
 vi.mock("@/components/router_settings", () => ({ default: () => null }));
 vi.mock("@/components/Settings/RouterSettings/Fallbacks/Fallbacks", () => ({ default: () => null }));
 vi.mock("@/components/routing_groups", () => ({ default: () => null }));
-
 // Mirrors the /config/list ordering: the two prompt-caching rows sit between the
 // General-tab rows in the unfiltered response but are filtered out of the General
 // tab's table, so any index-based lookup into the unfiltered array reads the wrong
@@ -63,6 +62,8 @@ const settingsRow = async (fieldName: string) => {
   return row as HTMLElement;
 };
 
+const numericValueIn = (row: HTMLElement) => Number((within(row).getByRole("spinbutton") as HTMLInputElement).value);
+
 describe("GeneralSettings General tab", () => {
   beforeEach(() => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([...SETTINGS_FIXTURE.map((s) => ({ ...s }))]);
@@ -88,7 +89,7 @@ describe("GeneralSettings General tab", () => {
 
     await user.click(screen.getByText("General"));
     const row = await settingsRow("max_ui_session_budget");
-    expect(within(row).getByRole("spinbutton")).toHaveValue("7.50");
+    expect(numericValueIn(row)).toBe(7.5);
 
     const actionCell = row.querySelectorAll("td")[3];
     const resetIcon = actionCell.querySelector("svg");
@@ -96,6 +97,22 @@ describe("GeneralSettings General tab", () => {
     await user.click(resetIcon as unknown as Element);
 
     expect(deleteConfigFieldSetting).toHaveBeenCalledWith("token", "max_ui_session_budget");
-    expect(within(row).getByRole("spinbutton")).toHaveValue("1.00");
+    expect(numericValueIn(row)).toBe(1);
+  });
+});
+
+// The five tabs here are proxy-wide settings. Auto-routers moved to Models + Endpoints.
+describe("GeneralSettings tabs", () => {
+  beforeEach(() => {
+    vi.mocked(getGeneralSettingsCall).mockResolvedValue([]);
+  });
+
+  it("renders the proxy-wide tabs and no auto-router tab", async () => {
+    renderWithProviders(<GeneralSettings accessToken="token" userRole="proxy_admin" userID="u" />);
+
+    for (const name of ["Loadbalancing", "Routing Groups", "Fallbacks", "Prompt Caching", "General"]) {
+      expect(await screen.findByRole("tab", { name })).toBeInTheDocument();
+    }
+    expect(screen.queryByRole("tab", { name: /auto.?router/i })).not.toBeInTheDocument();
   });
 });

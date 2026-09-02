@@ -20,10 +20,11 @@ import uuid
 import weakref
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from typing import Final
 
 import httpx
 import jwt
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
@@ -51,8 +52,11 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
-CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
-CLIENT_ASSERTION_LIFETIME_SECONDS = 60
+# The cache stores (fingerprint, token); anything else in the slot is treated as absent.
+_CACHED_ENTRY_ADAPTER: Final[TypeAdapter[tuple[str, str]]] = TypeAdapter(tuple[str, str])
+
+CLIENT_ASSERTION_TYPE: Final = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+CLIENT_ASSERTION_LIFETIME_SECONDS: Final = 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +81,7 @@ class TokenEndpointClient:
         client_auth: ClientAuth,
     ) -> Result[ExchangedToken, CredError]:
         try:
-            data = {**grant_params, **_client_auth_params(endpoint, client_id, client_auth)}
+            data: Final = {**grant_params, **_client_auth_params(endpoint, client_id, client_auth)}
         except (ValueError, TypeError, NotImplementedError, jwt.PyJWTError):
             verbose_proxy_logger.warning("MCP token endpoint %s: could not sign the client assertion", endpoint)
             return Error(
@@ -87,7 +91,7 @@ class TokenEndpointClient:
                 )
             )
         try:
-            raw = await _post_form(endpoint, data)
+            raw: Final = await _post_form(endpoint, data)
         except httpx.HTTPStatusError as exc:
             verbose_proxy_logger.warning(
                 "MCP token endpoint %s failed with status %s", endpoint, exc.response.status_code
@@ -107,11 +111,8 @@ class TokenEndpointClient:
             return Error(
                 CredError.of_upstream_unavailable("token exchange failed: token endpoint returned a non-JSON response")
             )
-        if raw is None:
-            verbose_proxy_logger.warning("MCP token endpoint %s returned no response", endpoint)
-            return Error(CredError.of_upstream_unavailable("token exchange failed: no response from token endpoint"))
         try:
-            parsed = _TokenEndpointResponse.model_validate(raw)
+            parsed: Final = _TokenEndpointResponse.model_validate(raw)
         except ValidationError:
             verbose_proxy_logger.warning("MCP token endpoint %s response missing access_token", endpoint)
             return Error(
@@ -134,19 +135,28 @@ class ExchangedTokenCache:
         self,
         cache_key: str,
         compute: Callable[[], Awaitable[Result[ExchangedToken, CredError]]],
+        *,
+        fingerprint: str = "",
     ) -> Result[str, CredError]:
-        cached = self._get(cache_key)
+        """The cached token for `cache_key`, minting one when absent.
+
+        `fingerprint` lets a caller address a slot by something stable (a principal) while still
+        guaranteeing the token it gets back was minted for the *current* inputs: a stored entry
+        whose fingerprint differs reads as a miss and is re-minted over. That keeps eviction
+        addressable without the key having to encode the credential material it protects.
+        """
+        cached = self._get(cache_key, fingerprint)
         if cached is not None:
             return Ok(cached)
         async with self._lock(cache_key):
-            cached = self._get(cache_key)
+            cached = self._get(cache_key, fingerprint)
             if cached is not None:
                 return Ok(cached)
             match await compute():
                 case Ok(token):
                     self._cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
                         cache_key,
-                        token.access_token,
+                        (fingerprint, token.access_token),
                         ttl=_cache_ttl_seconds(token.expires_in),
                     )
                     return Ok(token.access_token)
@@ -157,9 +167,18 @@ class ExchangedTokenCache:
         """Evict one cached token so the next `get_or_compute` re-mints (e.g. after an upstream 401)."""
         self._cache.delete_cache(cache_key)  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
 
-    def _get(self, cache_key: str) -> str | None:
-        value = self._cache.get_cache(cache_key)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # InMemoryCache is untyped; narrowed by isinstance below
-        return value if isinstance(value, str) else None
+    def _get(self, cache_key: str, fingerprint: str) -> str | None:
+        """The stored token, or None when absent or minted for different inputs.
+
+        The fingerprint comparison is what makes a shared slot safe: a mismatch never returns the
+        other party's token, it just reads as a miss.
+        """
+        value = self._cache.get_cache(cache_key)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # InMemoryCache is untyped; the adapter below is the type gate
+        try:
+            stored_fingerprint, token = _CACHED_ENTRY_ADAPTER.validate_python(value)
+        except ValidationError:
+            return None
+        return token if stored_fingerprint == fingerprint else None
 
     def _lock(self, cache_key: str) -> asyncio.Lock:
         lock = self._locks.get(cache_key)
@@ -170,14 +189,14 @@ class ExchangedTokenCache:
 
 
 def _cache_ttl_seconds(expires_in: int | None) -> int:
-    lifetime = expires_in if expires_in is not None else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
+    lifetime: Final = expires_in if expires_in is not None else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
     return max(
         lifetime - MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
         MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
     )
 
 
-async def _post_form(endpoint: str, data: dict[str, str]) -> object | None:
+async def _post_form(endpoint: str, data: dict[str, str]) -> object:
     # litellm's httpx handler and httpx.Response are only partially typed; the token endpoint
     # returns a JSON object that `_TokenEndpointResponse` validates, so the untyped boundary is
     # contained here. A non-2xx raises `httpx.HTTPStatusError`, an unreachable endpoint raises
@@ -186,8 +205,6 @@ async def _post_form(endpoint: str, data: dict[str, str]) -> object | None:
     # each to a CredError.
     client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore[reportUnknownVariableType]  # litellm http handler is untyped
     response = await client.post(endpoint, data=data)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # litellm http handler is untyped
-    if response is None:
-        return None
     response.raise_for_status()
     return response.json()  # pyright: ignore[reportAny]  # untyped JSON; validated by _TokenEndpointResponse in fetch
 
@@ -209,7 +226,7 @@ def _client_auth_params(endpoint: str, client_id: str, client_auth: ClientAuth) 
 
 
 def _client_assertion(endpoint: str, client_id: str, auth: PrivateKeyJwtAuth) -> str:
-    now = int(time.time())
+    now: Final = int(time.time())
     return jwt.encode(
         {
             "iss": client_id,
