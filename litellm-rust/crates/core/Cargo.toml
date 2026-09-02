@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+futures-util.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
