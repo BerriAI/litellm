@@ -156,6 +156,13 @@ def test_create_follow_up_messages_for_chat_appends_tool_results():
     assert follow_up[-1]["name"] == "foo"
     assert follow_up[-1]["content"] == "done"
 
+    assistant_turn = follow_up[1]
+    assert "content" in assistant_turn, (
+        f"the replayed assistant tool-call turn lost its content key, which strict OpenAI-compatible "
+        f"backends reject: {assistant_turn}"
+    )
+    assert assistant_turn["content"] is None
+
 
 def test_transform_mcp_tools_to_openai_uses_chat_format(monkeypatch):
     captured = {}

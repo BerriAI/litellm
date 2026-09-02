@@ -927,7 +927,7 @@ class LiteLLM_Proxy_MCP_Handler:
         """Create follow-up chat messages that include tool execution results."""
         from copy import deepcopy
 
-        from litellm.utils import convert_list_message_to_dict
+        from litellm.utils import convert_list_message_to_dict, convert_to_dict
 
         follow_up_messages: list[dict[str, object]] = convert_list_message_to_dict(deepcopy(original_messages))
 
@@ -938,7 +938,7 @@ class LiteLLM_Proxy_MCP_Handler:
         try:
             first_choice: Final = response.choices[0]
             if isinstance(first_choice, Choices) and getattr(first_choice, "message", None):
-                message_to_append = first_choice.message.model_dump(exclude_none=True)
+                message_to_append = convert_to_dict(first_choice.message)
                 # Ensure tool_calls have arguments field (required by OpenAI API)
                 if message_to_append.get("tool_calls"):
                     for tool_call in message_to_append["tool_calls"]:
