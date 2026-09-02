@@ -22,7 +22,7 @@ import traceback
 import weakref
 from collections import defaultdict
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator, Mapping, Sequence
-from functools import lru_cache
+from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
 
@@ -825,6 +825,7 @@ class Router:
         self._zero_cost_cache: dict[str, bool] = {}
         self._routing_group_rows: tuple[DeploymentTypedDict, ...] | None = None
         self._init_routing_groups(None)
+        self._provider_unresolved_deployments: tuple[Callable[[], Deployment | None], ...] = ()
 
         self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
         self.model_group_affinity_config = model_group_affinity_config
@@ -8472,6 +8473,19 @@ class Router:
             return deployment
         except Exception as e:
             if self.ignore_invalid_deployments:
+                if isinstance(e, litellm.BadRequestError):
+                    self._provider_unresolved_deployments = (
+                        *self._provider_unresolved_deployments,
+                        partial(
+                            self._create_deployment,
+                            deployment_info=deployment_info,
+                            _model_name=_model_name,
+                            _litellm_params=_litellm_params,
+                            _model_info=_model_info,
+                            declared_id=declared_id,
+                            duplicate_ids=duplicate_ids,
+                        ),
+                    )
                 verbose_router_logger.exception(
                     "Error creating deployment: %s, ignoring and continuing with other deployments.", e
                 )
@@ -8901,6 +8915,7 @@ class Router:
         self.quality_routers = {}
         self.complexity_routers = {}
         self.auto_routers = {}
+        self._provider_unresolved_deployments = ()
         self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
@@ -9523,8 +9538,12 @@ class Router:
         """Re-assert this router's deployments onto a freshly fetched catalog.
 
         Reads ``model_list`` at call time, so only deployments the router still
-        serves are restored.
+        serves are restored, plus any config deployment the fresh catalog now resolves.
         """
+        provider_unresolved: Final = self._provider_unresolved_deployments
+        self._provider_unresolved_deployments = ()
+        for create_deployment in provider_unresolved:
+            create_deployment()
         for entry in tuple(self.model_list):
             try:
                 deployment = entry if isinstance(entry, Deployment) else Deployment(**entry)
