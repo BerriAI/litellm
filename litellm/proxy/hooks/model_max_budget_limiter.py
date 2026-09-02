@@ -1,6 +1,6 @@
 import json
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
@@ -199,23 +199,37 @@ async def build_model_max_budget_usage(
         )
         for budget_model, budget_config in budgets
     )
-    batched: Final = await cache.async_batch_get_cache(
-        keys=list(spend_keys)  # mutable-ok: async_batch_get_cache annotates keys as list, so one must exist here
-    )
-    # async_batch_get_cache returns None if it fails internally, and its result is
-    # index-aligned with `keys` otherwise. An unusable result reads as a miss,
-    # which is what a never-written counter already reads as.
-    current_spends: Final = (
-        tuple(batched) if isinstance(batched, list) and len(batched) == len(budgets) else (None,) * len(budgets)
-    )
+    current_spends: Final = await _current_window_spends(cache=cache, spend_keys=spend_keys)
     return {
         budget_model: {
-            "current_spend": round(_as_spend(current_spend), 4),
+            "current_spend": round(current_spend, 4),
             "budget_limit": budget_config.max_budget,
             "time_period": budget_config.budget_duration,
         }
         for (budget_model, budget_config), current_spend in zip(budgets, current_spends, strict=True)
     }
+
+
+async def _current_window_spends(cache: DualCache, spend_keys: Sequence[str]) -> tuple[float, ...]:
+    """Redis holds the window total across replicas; the in-memory copy is one replica's share."""
+    keys: Final = list(spend_keys)  # mutable-ok: both batch readers annotate their key argument as list
+    redis_cache: Final = cache.redis_cache
+    if redis_cache is not None:
+        # RedisCache.async_batch_get_cache is declared to return a bare `dict`.
+        shared: Final = await redis_cache.async_batch_get_cache(  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # untyped upstream cache return
+            key_list=keys
+        )
+        return tuple(
+            _as_spend(shared.get(key))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped upstream cache return
+            for key in keys
+        )
+    # async_batch_get_cache returns None if it fails internally, and its result is
+    # index-aligned with `keys` otherwise. An unusable result reads as a miss,
+    # which is what a never-written counter already reads as.
+    batched: Final = await cache.async_batch_get_cache(keys=keys)
+    if not isinstance(batched, list) or len(batched) != len(keys):
+        return (0.0,) * len(keys)
+    return tuple(_as_spend(current_spend) for current_spend in batched)  # pyright: ignore[reportUnknownVariableType]  # untyped upstream cache return
 
 
 def _usable_budget_config(raw_budget_config: object) -> BudgetConfig | None:
@@ -404,7 +418,10 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         return current_spend + _as_spend(await self._cached_spend(legacy_spend_key))
 
     async def _cached_spend(self, spend_key: str) -> float | None:
-        return await self.dual_cache.async_get_cache(key=spend_key)
+        redis_cache: Final = self.dual_cache.redis_cache
+        if redis_cache is None:
+            return await self.dual_cache.async_get_cache(key=spend_key)
+        return await redis_cache.async_get_cache(key=spend_key)  # pyright: ignore[reportUnknownMemberType]  # untyped upstream cache return
 
     async def async_filter_deployments(
         self,
