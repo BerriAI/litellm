@@ -12578,11 +12578,15 @@ class Router:
             return None
         return f"claude_code_session_router:v1:{caller_scope}:{session_id}"
 
-    async def _clear_claude_code_session_router(self, cache_key: str) -> None:
+    async def _delete_claude_code_session_router_binding(self, cache_key: str) -> None:
         try:
             await self.cache.async_delete_cache(key=cache_key)
         except Exception as e:  # noqa: BLE001  # cache cleanup must not fail an otherwise routable request
-            verbose_router_logger.debug("Claude Code session router cleanup skipped for %s: %s", cache_key, e)
+            verbose_router_logger.warning(
+                "Failed to delete Claude Code session router binding; "
+                "the binding may remain until its TTL expires: %s",
+                e,
+            )
 
     async def _resolve_claude_code_session_router(
         self,
@@ -12601,7 +12605,7 @@ class Router:
                 return registered_model_name
             bound_registered_model: Final = self._get_model_from_alias(model=bound_model) or bound_model
             if self._select_pre_routing_strategy(bound_registered_model, request_kwargs) is None:
-                await self._clear_claude_code_session_router(cache_key)
+                await self._delete_claude_code_session_router_binding(cache_key)
                 return registered_model_name
             await self.cache.async_set_cache(
                 key=cache_key,
@@ -12616,7 +12620,7 @@ class Router:
         if request_kwargs.get("fallback_depth") not in (None, 0):
             return registered_model_name
         if self._select_pre_routing_strategy(registered_model_name, request_kwargs) is None:
-            await self._clear_claude_code_session_router(cache_key)
+            await self._delete_claude_code_session_router_binding(cache_key)
             return registered_model_name
         await self.cache.async_set_cache(
             key=cache_key,
