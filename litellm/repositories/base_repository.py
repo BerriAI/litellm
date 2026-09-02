@@ -40,7 +40,7 @@ def record_to_dict(record: DbRecord) -> Mapping[str, object]:
 class BaseRepository(ABC, Generic[T]):
     """Abstract base class for all repositories."""
 
-    def __init__(self, prisma_client: Any):  # any-ok: PrismaClient is an untyped runtime wrapper
+    def __init__(self, prisma_client: object):
         self._prisma_client = prisma_client
 
     @property
