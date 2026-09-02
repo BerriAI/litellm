@@ -24,7 +24,11 @@ from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 
 from .base_cache import BaseCache
 from .in_memory_cache import InMemoryCache
-from .redis_cache import RedisCache
+from .redis_cache import (
+    RedisCache,
+    _refresh_ttl_argument,  # pyright: ignore[reportPrivateUsage]  # shared Redis argument validation
+    _ttl_argument,  # pyright: ignore[reportPrivateUsage]  # shared Redis argument validation
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -137,6 +141,11 @@ class DualCache(BaseCache):
 
         Returns - int - the incremented value
         """
+        if self.redis_cache is not None and local_only is False:
+            redis_ttl = self.redis_cache.get_ttl(ttl=kwargs.get("ttl"))
+            if type(redis_ttl) is int or redis_ttl is None:
+                _ttl_argument(redis_ttl)
+
         try:
             result: int = value
             if self.in_memory_cache is not None:
@@ -388,6 +397,11 @@ class DualCache(BaseCache):
         Returns - the incremented value, or None if no cache backend is
         available (in_memory_cache is None and Redis failed/is absent).
         """
+        if self.redis_cache is not None and local_only is False:
+            redis_ttl = self.redis_cache.get_ttl(ttl=kwargs.get("ttl"))
+            if type(redis_ttl) is int or redis_ttl is None:
+                _ttl_argument(redis_ttl)
+
         result: float | None = None
         try:
             if self.in_memory_cache is not None:
@@ -417,6 +431,11 @@ class DualCache(BaseCache):
         parent_otel_span: Span | None = None,
         **kwargs,
     ) -> list[float] | None:
+        if self.redis_cache is not None and local_only is False:
+            for increment_op in increment_list:
+                _ttl_argument(increment_op["ttl"])
+                _refresh_ttl_argument(increment_op.get("refresh_ttl", True))
+
         result: list[float] | None = None
         try:
             if self.in_memory_cache is not None:

@@ -1,11 +1,12 @@
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import fakeredis
 import pytest
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import ResponseError
 
-from unittest.mock import AsyncMock
-
-from litellm.caching.redis_cache import RedisCache
+from litellm.caching.redis_cache import _ATOMIC_INCREMENT_SCRIPT, RedisCache
 
 
 @pytest.fixture
@@ -15,6 +16,14 @@ def redis_no_ping():
         # Either raise an exception or return a mock that will handle the task creation
         mock_get_loop.side_effect = RuntimeError("No running event loop")
         yield
+
+
+@pytest.fixture
+def lua_redis():
+    pytest.importorskip("lupa", reason="Lua semantic tests require fakeredis[lua]")
+    client = fakeredis.FakeRedis()
+    yield client
+    client.close()
 
 
 @pytest.mark.parametrize(
@@ -293,17 +302,17 @@ async def test_async_register_script_not_shared_across_namespaces(
 
 
 @pytest.mark.asyncio
-async def test_async_register_script_cluster_path_uses_evalsha(
+async def test_async_register_script_cluster_path_uses_eval(
     monkeypatch, redis_no_ping
 ):
-    """Redis Cluster exposes script_load/evalsha rather than register_script.
-    The script is loaded once and invoked via evalsha with namespaced keys."""
+    """Redis Cluster invokes Lua with EVAL so failover cannot lose the script cache."""
+    from redis.asyncio import RedisCluster
+
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache(namespace="ns")
 
-    cluster_client = MagicMock(spec=["script_load", "evalsha"])
-    cluster_client.script_load = MagicMock(return_value="sha123")
-    cluster_client.evalsha = AsyncMock(return_value="cluster-ok")
+    cluster_client = MagicMock(spec=RedisCluster)
+    cluster_client.eval = AsyncMock(return_value="cluster-ok")
 
     with patch.object(
         redis_cache, "init_async_client", return_value=cluster_client
@@ -312,17 +321,14 @@ async def test_async_register_script_cluster_path_uses_evalsha(
         result = await script(keys=["{k:v}:tokens"], args=[5, 60])
 
     assert result == "cluster-ok"
-    cluster_client.script_load.assert_called_once_with("return 'cluster'")
-    cluster_client.evalsha.assert_awaited_once_with(
-        "sha123", 1, "ns:{k:v}:tokens", 5, 60
-    )
+    cluster_client.eval.assert_awaited_once_with("return 'cluster'", 1, "ns:{k:v}:tokens", 5, 60)
 
 
 @pytest.mark.asyncio
 async def test_async_register_script_raises_for_unsupported_client(
     monkeypatch, redis_no_ping
 ):
-    """A client exposing neither register_script nor script_load fails loudly
+    """A client exposing neither register_script nor eval fails loudly
     rather than silently returning a no-op callable."""
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache()
@@ -448,11 +454,239 @@ def test_increment_cache_namespaces_key(
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache(namespace=namespace)
     mock_client = MagicMock()
-    mock_client.incr.return_value = 5
-    mock_client.ttl.return_value = 100
+    mock_client.eval.return_value = 5
     redis_cache.redis_client = mock_client
     redis_cache.increment_cache(key="k", value=1)
-    mock_client.incr.assert_called_once_with(name=expected, amount=1)
+    mock_client.eval.assert_called_once()
+    assert mock_client.eval.call_args.args[2] == expected
+
+
+def test_increment_cache_uses_one_atomic_eval(monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    mock_client = MagicMock()
+    mock_client.eval.return_value = 3
+    redis_cache.redis_client = mock_client
+
+    assert redis_cache.increment_cache(key="counter", value=2, ttl=60) == 3
+
+    mock_client.eval.assert_called_once_with(_ATOMIC_INCREMENT_SCRIPT, 1, "counter", "2", "60", "0", "int")
+    mock_client.incr.assert_not_called()
+    mock_client.ttl.assert_not_called()
+    mock_client.expire.assert_not_called()
+
+
+def test_increment_cache_rejects_invalid_ttl_before_eval(monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    mock_client = MagicMock()
+    redis_cache.redis_client = mock_client
+
+    with pytest.raises(ValueError, match="positive integer"):
+        redis_cache.increment_cache(key="counter", value=1, ttl=0)
+
+    mock_client.eval.assert_not_called()
+
+
+def _eval_increment_script(client, key, value, ttl, refresh_ttl, mode):
+    ttl_arg = "" if ttl is None else str(ttl)
+    refresh_ttl_arg = "1" if refresh_ttl else "0"
+    return client.eval(
+        _ATOMIC_INCREMENT_SCRIPT,
+        1,
+        key,
+        str(value),
+        ttl_arg,
+        refresh_ttl_arg,
+        mode,
+    )
+
+
+def test_atomic_lua_sets_ttl_for_new_key(lua_redis):
+    result = _eval_increment_script(lua_redis, "counter", 1, 60, False, "int")
+
+    assert result == 1
+    assert 0 < lua_redis.ttl("counter") <= 60
+
+
+def test_atomic_lua_refreshes_only_when_requested(lua_redis):
+    _eval_increment_script(lua_redis, "counter", 1, 60, False, "int")
+    lua_redis.expire("counter", 10)
+    before_no_refresh = lua_redis.ttl("counter")
+
+    _eval_increment_script(lua_redis, "counter", 1, 60, False, "int")
+    after_no_refresh = lua_redis.ttl("counter")
+    assert 0 < after_no_refresh <= before_no_refresh
+
+    lua_redis.expire("counter", 10)
+    before_refresh = lua_redis.ttl("counter")
+    _eval_increment_script(lua_redis, "counter", 1, 60, True, "int")
+    after_refresh = lua_redis.ttl("counter")
+    assert after_refresh > before_refresh
+
+
+def test_atomic_lua_repairs_permanent_key(lua_redis):
+    lua_redis.set("counter", "4")
+    assert lua_redis.ttl("counter") == -1
+
+    result = _eval_increment_script(lua_redis, "counter", 1.5, 60, False, "float")
+
+    assert float(result) == 5.5
+    assert 0 < lua_redis.ttl("counter") <= 60
+
+
+def test_atomic_lua_empty_ttl_keeps_key_permanent(lua_redis):
+    result = _eval_increment_script(lua_redis, "counter", 1.5, None, False, "float")
+
+    assert float(result) == 1.5
+    assert lua_redis.ttl("counter") == -1
+
+
+def test_atomic_lua_rejects_omitted_argument_without_mutation(lua_redis):
+    lua_redis.set("counter", "7")
+    lua_redis.expire("counter", 60)
+    before_value = lua_redis.get("counter")
+    before_ttl = lua_redis.ttl("counter")
+
+    with pytest.raises(ResponseError, match="expected one key and four arguments"):
+        lua_redis.eval(_ATOMIC_INCREMENT_SCRIPT, 1, "counter", "1", "60", "0")
+
+    assert lua_redis.get("counter") == before_value
+    assert 0 < lua_redis.ttl("counter") <= before_ttl
+
+
+def test_atomic_lua_rejects_non_positive_ttl_without_mutation(lua_redis):
+    lua_redis.set("counter", "7")
+    before_ttl = lua_redis.ttl("counter")
+
+    with pytest.raises(ResponseError, match="ttl must be a positive integer"):
+        _eval_increment_script(lua_redis, "counter", 1, 0, False, "int")
+
+    assert lua_redis.get("counter") == b"7"
+    assert lua_redis.ttl("counter") == before_ttl
+
+
+def test_atomic_lua_recovers_after_script_flush(lua_redis):
+    assert _eval_increment_script(lua_redis, "counter", 1, 60, False, "int") == 1
+    assert lua_redis.script_flush() is True
+
+    assert _eval_increment_script(lua_redis, "counter", 1, 60, False, "int") == 2
+    assert 0 < lua_redis.ttl("counter") <= 60
+
+
+class _FailingExpireRedis:
+    def __init__(self, client):
+        self.client = client
+
+    def incrbyfloat(self, key, value):
+        return self.client.incrbyfloat(key, value)
+
+    def ttl(self, key):
+        return self.client.ttl(key)
+
+    def expire(self, key, ttl):
+        raise RedisConnectionError("injected disconnect before EXPIRE")
+
+
+def _legacy_non_atomic_increment(client, key, value, ttl):
+    result = client.incrbyfloat(key, value)
+    if client.ttl(key) == -1:
+        client.expire(key, ttl)
+    return result
+
+
+def test_legacy_sequence_can_leave_permanent_key_but_lua_repairs_it(lua_redis):
+    key = "counter"
+
+    with pytest.raises(RedisConnectionError, match="injected disconnect"):
+        _legacy_non_atomic_increment(_FailingExpireRedis(lua_redis), key, 1.5, 60)
+
+    assert lua_redis.get(key) == b"1.5"
+    assert lua_redis.ttl(key) == -1
+
+    _eval_increment_script(lua_redis, key, 1.5, 60, False, "float")
+    assert float(lua_redis.get(key)) == 3.0
+    assert 0 < lua_redis.ttl(key) <= 60
+
+
+@pytest.mark.asyncio
+async def test_async_increment_uses_one_atomic_eval(monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    mock_client = AsyncMock()
+    mock_client.eval.return_value = "3.5"
+
+    with patch.object(redis_cache, "init_async_client", return_value=mock_client):
+        result = await redis_cache.async_increment(key="counter", value=1.5, ttl=60, refresh_ttl=True)
+
+    assert result == 3.5
+    mock_client.eval.assert_awaited_once_with(_ATOMIC_INCREMENT_SCRIPT, 1, "counter", "1.5", "60", "1", "float")
+    mock_client.incrbyfloat.assert_not_awaited()
+    mock_client.ttl.assert_not_awaited()
+    mock_client.expire.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_async_increment_rejects_invalid_ttl_before_eval(monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    mock_client = AsyncMock()
+
+    with patch.object(redis_cache, "init_async_client", return_value=mock_client) as init_client:
+        with pytest.raises(ValueError, match="positive integer"):
+            await redis_cache.async_increment(key="counter", value=1, ttl=0)
+
+    init_client.assert_not_called()
+    mock_client.eval.assert_not_awaited()
+
+
+class _RecordingPipeline:
+    def __init__(self, results):
+        self.eval_calls = []
+        self.results = results
+        self.executed = False
+
+    def eval(self, *args):
+        self.eval_calls.append(args)
+
+    async def execute(self):
+        self.executed = True
+        return self.results
+
+
+@pytest.mark.asyncio
+async def test_pipeline_increment_uses_one_eval_per_operation_and_preserves_order(monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace="ns")
+    pipe = _RecordingPipeline(["1.5", b"2.5"])
+    increment_list = [
+        {"key": "first", "increment_value": 1.5, "ttl": 60, "refresh_ttl": False},
+        {"key": "second", "increment_value": 2.5, "ttl": 30, "refresh_ttl": True},
+    ]
+
+    results = await redis_cache._pipeline_increment_helper(pipe, increment_list)
+
+    assert results == [1.5, 2.5]
+    assert pipe.executed is True
+    assert len(pipe.eval_calls) == 2
+    assert pipe.eval_calls[0] == (_ATOMIC_INCREMENT_SCRIPT, 1, "ns:first", "1.5", "60", "0", "float")
+    assert pipe.eval_calls[1] == (_ATOMIC_INCREMENT_SCRIPT, 1, "ns:second", "2.5", "30", "1", "float")
+
+
+@pytest.mark.asyncio
+async def test_pipeline_increment_rejects_invalid_ttl_before_queueing_commands(monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    pipe = _RecordingPipeline([])
+
+    with pytest.raises(ValueError, match="positive integer"):
+        await redis_cache._pipeline_increment_helper(
+            pipe,
+            [{"key": "counter", "increment_value": 1.0, "ttl": 0, "refresh_ttl": False}],
+        )
+
+    assert pipe.eval_calls == []
+    assert pipe.executed is False
 
 
 @pytest.mark.parametrize("namespace, expected", [(None, "k"), ("ns", "ns:k")])

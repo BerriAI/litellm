@@ -354,6 +354,7 @@ async def test_increment_spend_in_current_window():
     assert queued_op["key"] == spend_key
     assert queued_op["increment_value"] == response_cost
     assert queued_op["ttl"] == ttl
+    assert queued_op["refresh_ttl"] is True
 
 
 @pytest.mark.asyncio

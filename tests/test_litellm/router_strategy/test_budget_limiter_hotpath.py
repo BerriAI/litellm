@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 import litellm
@@ -5,6 +7,52 @@ from litellm.caching.caching import DualCache
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.types.router import LiteLLM_Params
 from litellm.types.utils import BudgetConfig
+
+
+@pytest.mark.asyncio
+async def test_budget_window_resets_at_exact_expiry(disable_budget_sync):
+    limiter = RouterBudgetLimiting.__new__(RouterBudgetLimiting)
+    limiter._get_or_set_budget_start_time = AsyncMock(return_value=100.0)
+    limiter._handle_new_budget_window = AsyncMock(return_value=160.0)
+    limiter._increment_spend_in_current_window = AsyncMock()
+    now = MagicMock()
+    now.timestamp.return_value = 160.0
+
+    with patch("litellm.router_strategy.budget_limiter.datetime") as datetime_mock:
+        datetime_mock.now.return_value = now
+        await limiter._increment_spend_for_key(
+            budget_config=BudgetConfig(budget_duration="1m", max_budget=100.0),
+            spend_key="provider_spend:openai:1m",
+            start_time_key="provider_budget_start_time:openai",
+            response_cost=1.0,
+        )
+
+    limiter._handle_new_budget_window.assert_awaited_once()
+    limiter._increment_spend_in_current_window.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_budget_increment_keeps_positive_ttl_when_less_than_one_second_remains(disable_budget_sync):
+    limiter = RouterBudgetLimiting.__new__(RouterBudgetLimiting)
+    limiter._get_or_set_budget_start_time = AsyncMock(return_value=100.0)
+    limiter._handle_new_budget_window = AsyncMock()
+    limiter._increment_spend_in_current_window = AsyncMock()
+    now = MagicMock()
+    now.timestamp.return_value = 159.2
+
+    with patch("litellm.router_strategy.budget_limiter.datetime") as datetime_mock:
+        datetime_mock.now.return_value = now
+        await limiter._increment_spend_for_key(
+            budget_config=BudgetConfig(budget_duration="1m", max_budget=100.0),
+            spend_key="provider_spend:openai:1m",
+            start_time_key="provider_budget_start_time:openai",
+            response_cost=1.0,
+        )
+
+    limiter._handle_new_budget_window.assert_not_awaited()
+    limiter._increment_spend_in_current_window.assert_awaited_once_with(
+        spend_key="provider_spend:openai:1m", response_cost=1.0, ttl=1
+    )
 
 
 @pytest.fixture

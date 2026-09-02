@@ -748,6 +748,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     key=model_token_key,
                     increment_value=total_tokens,
                     ttl=self.v3_limiter.window_size,
+                    refresh_ttl=False,
                 )
             )
 
@@ -774,6 +775,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     key=priority_token_key,
                     increment_value=total_tokens,
                     ttl=self.v3_limiter.window_size,
+                    refresh_ttl=False,
                 )
             )
 

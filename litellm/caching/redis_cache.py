@@ -39,6 +39,61 @@ from litellm.types.services import ServiceTypes
 
 from .base_cache import BaseCache
 
+# Redis executes this script atomically, but a retry after a disconnect can apply the
+# increment twice. This is at-least-once behavior; it does not promise exactly-once counting.
+_ATOMIC_INCREMENT_SCRIPT: Final = """
+if #KEYS ~= 1 or #ARGV ~= 4 then
+    return redis.error_reply("ERR expected one key and four arguments")
+end
+
+if ARGV[3] ~= "0" and ARGV[3] ~= "1" then
+    return redis.error_reply("ERR invalid refresh_ttl flag")
+end
+
+local ttl = nil
+if ARGV[2] ~= "" then
+    ttl = tonumber(ARGV[2])
+    if ttl == nil or ttl <= 0 or ttl ~= math.floor(ttl) then
+        return redis.error_reply("ERR ttl must be a positive integer")
+    end
+end
+
+if ARGV[4] ~= "int" and ARGV[4] ~= "float" then
+    return redis.error_reply("ERR invalid increment mode")
+end
+
+local value
+if ARGV[4] == "int" then
+    value = redis.call("INCRBY", KEYS[1], ARGV[1])
+else
+    value = redis.call("INCRBYFLOAT", KEYS[1], ARGV[1])
+end
+
+if ttl ~= nil then
+    local current_ttl = redis.call("TTL", KEYS[1])
+    if ARGV[3] == "1" or current_ttl == -1 then
+        redis.call("EXPIRE", KEYS[1], ttl)
+    end
+end
+
+return value
+"""
+
+
+def _ttl_argument(ttl: object) -> str:
+    if ttl is None:
+        return ""
+    if isinstance(ttl, bool) or not isinstance(ttl, int) or ttl <= 0:
+        raise ValueError("ttl must be a positive integer")
+    return str(ttl)
+
+
+def _refresh_ttl_argument(refresh_ttl: object) -> str:
+    if not isinstance(refresh_ttl, bool):
+        raise ValueError("refresh_ttl must be a boolean")
+    return "1" if refresh_ttl else "0"
+
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
     from redis.asyncio import Redis, RedisCluster
@@ -516,10 +571,22 @@ class RedisCache(BaseCache):
         _redis_client: Final = self.redis_client
         start_time = time.time()
         set_ttl: Final = self.get_ttl(ttl=ttl)
+        ttl_arg: Final = _ttl_argument(set_ttl)
         key = self.check_and_fix_namespace(key=key)
         try:
             start_time = time.time()
-            result: Final[int] = _redis_client.incr(name=key, amount=value)
+            result: Final[int | str | bytes] = cast(
+                int | str | bytes,
+                _redis_client.eval(  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType]
+                    _ATOMIC_INCREMENT_SCRIPT,
+                    1,
+                    key,
+                    str(value),
+                    ttl_arg,
+                    "0",
+                    "int",
+                ),
+            )
             end_time = time.time()
             _duration = end_time - start_time
             self.service_logger_obj.service_success_hook(
@@ -529,34 +596,7 @@ class RedisCache(BaseCache):
                 start_time=start_time,
                 end_time=end_time,
             )
-
-            if set_ttl is not None:
-                # check if key already has ttl, if not -> set ttl
-                start_time = time.time()
-                current_ttl: Final = _redis_client.ttl(key)
-                end_time = time.time()
-                _duration = end_time - start_time
-                self.service_logger_obj.service_success_hook(
-                    service=ServiceTypes.REDIS,
-                    duration=_duration,
-                    call_type=f"increment_cache_ttl <- {_get_call_stack_info()}",
-                    start_time=start_time,
-                    end_time=end_time,
-                )
-                if current_ttl == -1:
-                    # Key has no expiration
-                    start_time = time.time()
-                    _redis_client.expire(key, set_ttl)
-                    end_time = time.time()
-                    _duration = end_time - start_time
-                    self.service_logger_obj.service_success_hook(
-                        service=ServiceTypes.REDIS,
-                        duration=_duration,
-                        call_type=f"increment_cache_expire <- {_get_call_stack_info()}",
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
-            return result
+            return int(result)
         except Exception as e:
             ## LOGGING ##
             end_time = time.time()
@@ -676,7 +716,23 @@ class RedisCache(BaseCache):
         Kept separate from async_register_script so each loop caches its own
         executor; see that method for why the binding must be per loop.
         """
+        from redis.asyncio import RedisCluster
+
         _redis_client: Final[Any] = self.init_async_client()
+        if isinstance(_redis_client, RedisCluster):
+
+            async def cluster_executor(
+                keys: Sequence[str],
+                args: Sequence[str | bytes | int | float],
+                client: object = None,
+            ) -> object:
+                namespaced_keys: Final = tuple(self.check_and_fix_namespace(key=key) for key in keys)
+                return await _redis_client.eval(  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType]
+                    script, len(namespaced_keys), *namespaced_keys, *args
+                )
+
+            return cluster_executor
+
         if hasattr(_redis_client, "register_script"):
             registered_script: Final = _redis_client.register_script(script)
 
@@ -690,8 +746,7 @@ class RedisCache(BaseCache):
 
             return standalone_executor
 
-        if hasattr(_redis_client, "script_load"):
-            script_sha: Final = _redis_client.script_load(script)
+        if hasattr(_redis_client, "eval"):
 
             async def cluster_executor(
                 keys: Sequence[str],
@@ -699,7 +754,9 @@ class RedisCache(BaseCache):
                 client: object = None,
             ) -> object:
                 namespaced_keys: Final = tuple(self.check_and_fix_namespace(key=key) for key in keys)
-                return await _redis_client.evalsha(script_sha, len(namespaced_keys), *namespaced_keys, *args)
+                return await _redis_client.eval(  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType]
+                    script, len(namespaced_keys), *namespaced_keys, *args
+                )
 
             return cluster_executor
 
@@ -983,21 +1040,25 @@ class RedisCache(BaseCache):
         parent_otel_span: Span | None = None,
         refresh_ttl: bool = False,
     ) -> float:
-        from redis.asyncio import Redis
-
-        _redis_client: Final[Redis] = self.init_async_client()
         start_time: Final = time.time()
         _used_ttl: Final = self.get_ttl(ttl=ttl)
+        ttl_arg: Final = _ttl_argument(_used_ttl)
+        refresh_ttl_arg: Final = _refresh_ttl_argument(refresh_ttl)
+        _redis_client: Final = self.init_async_client()
         key = self.check_and_fix_namespace(key=key)
         try:
-            result: Final = await _redis_client.incrbyfloat(name=key, amount=value)
-            if _used_ttl is not None:
-                if refresh_ttl:
-                    await _redis_client.expire(key, _used_ttl)
-                else:
-                    current_ttl: Final = await _redis_client.ttl(key)
-                    if current_ttl == -1:
-                        await _redis_client.expire(key, _used_ttl)
+            result: Final[int | float | str | bytes] = cast(
+                int | float | str | bytes,
+                await _redis_client.eval(  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType]
+                    _ATOMIC_INCREMENT_SCRIPT,
+                    1,
+                    key,
+                    str(value),
+                    ttl_arg,
+                    refresh_ttl_arg,
+                    "float",
+                ),
+            )
 
             ## LOGGING ##
             end_time = time.time()
@@ -1013,7 +1074,7 @@ class RedisCache(BaseCache):
                     parent_otel_span=parent_otel_span,
                 )
             )
-            return result
+            return float(result)
         except Exception as e:
             ## LOGGING ##
             end_time = time.time()
@@ -1449,21 +1510,32 @@ class RedisCache(BaseCache):
         increment_list: list[RedisPipelineIncrementOperation],
     ) -> list[float] | None:
         """Helper function for pipeline increment operations"""
-        # Iterate through each increment operation and add commands to pipeline
-        for increment_op in increment_list:
-            cache_key = self.check_and_fix_namespace(key=increment_op["key"])
-            print_verbose(
-                f"Increment ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {increment_op['increment_value']}\nttl={increment_op['ttl']}"
+        operation_args: Final = tuple(
+            (
+                self.check_and_fix_namespace(key=increment_op["key"]),
+                str(increment_op["increment_value"]),
+                _ttl_argument(increment_op["ttl"]),
+                _refresh_ttl_argument(increment_op.get("refresh_ttl", True)),
             )
-            pipe.incrbyfloat(cache_key, increment_op["increment_value"])
-            if increment_op["ttl"] is not None:
-                _td = timedelta(seconds=increment_op["ttl"])
-                pipe.expire(cache_key, _td)
+            for increment_op in increment_list
+        )
+        for cache_key, increment_value, ttl_arg, refresh_ttl_arg in operation_args:
+            print_verbose(
+                f"Increment ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {increment_value}\nttl={ttl_arg}"
+            )
+            pipe.eval(  # pyright: ignore[reportUnknownMemberType]  # redis-py pipeline stubs omit EVAL
+                _ATOMIC_INCREMENT_SCRIPT,
+                1,
+                cache_key,
+                increment_value,
+                ttl_arg,
+                refresh_ttl_arg,
+                "float",
+            )
         # Execute the pipeline and return results
         results: Final = await pipe.execute()
-        # only return float values
         verbose_logger.debug("Increment ASYNC Redis Cache PIPELINE: results: %s", results)
-        return [r for r in results if isinstance(r, float)]
+        return [float(result) for result in results]
 
     @_redis_circuit_breaker_guard
     async def async_increment_pipeline(

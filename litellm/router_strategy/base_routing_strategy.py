@@ -78,6 +78,7 @@ class BaseRoutingStrategy(ABC):
             key=key,
             increment_value=value,
             ttl=ttl,
+            refresh_ttl=False,
         )
 
         self.redis_increment_operation_queue.append(increment_op)
@@ -141,6 +142,8 @@ class BaseRoutingStrategy(ABC):
                 ]
 
                 if increment_result is not None:
+                    if len(increment_result) != len(compressed_queue):
+                        raise RuntimeError("Redis increment pipeline returned an unexpected number of results")
                     return_result = {key["key"]: op for key, op in zip(compressed_queue, increment_result)}
                 else:
                     return_result = {}

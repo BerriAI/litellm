@@ -7730,6 +7730,7 @@ class Router:
                         key=tpm_key,
                         increment_value=total_tokens,
                         ttl=RoutingArgs.ttl.value,
+                        refresh_ttl=False,
                     )
                 )
 
@@ -7740,6 +7741,7 @@ class Router:
                         key=rpm_key,
                         increment_value=1,
                         ttl=RoutingArgs.ttl.value,
+                        refresh_ttl=False,
                     )
                 )
 

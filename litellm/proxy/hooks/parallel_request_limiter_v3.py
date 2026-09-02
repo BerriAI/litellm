@@ -3682,6 +3682,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 key=counter_key,
                 increment_value=total_tokens,
                 ttl=self.window_size,
+                refresh_ttl=False,
             )
         )
 
@@ -4249,6 +4250,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     key=self.create_rate_limit_keys(scope_key, scope_value, "tokens"),
                     increment_value=increment,
                     ttl=self.window_size,
+                    refresh_ttl=False,
                 )
             )
         return ops
@@ -4280,11 +4282,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 key=counter_key,
                 increment_value=increment,
                 ttl=self.window_size,
+                refresh_ttl=False,
             )
         return ReservationAwareIncrementOperation(
             key=counter_key,
             increment_value=increment,
             ttl=self.window_size,
+            refresh_ttl=False,
             window_key=f"{{{scope_key}:{scope_value}}}:window",
             expected_window_start=window_identity[0],
             reservation_backend=window_identity[1],

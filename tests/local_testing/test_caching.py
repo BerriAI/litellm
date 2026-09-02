@@ -2380,19 +2380,24 @@ async def test_redis_caching_llm_caching_ttl(sync_mode):
 
     ## Increment cache
     if sync_mode is True:
-        with patch.object(cache_obj.redis_client, "ttl") as mock_incr:
+        with patch.object(cache_obj.redis_client, "eval", return_value=1) as mock_eval:
             cache_obj.increment_cache(key="test", value=1)
-            mock_incr.assert_called_once_with("test")
+            mock_eval.assert_called_once()
+            assert mock_eval.call_args.args[2] == "test"
+            assert mock_eval.call_args.args[3] == "1"
+            assert mock_eval.call_args.args[4] == "120"
     else:
+        mock_redis_instance.eval = AsyncMock(return_value="1.0")
         # Patch self.init_async_client to return our mock Redis client
         with patch.object(
             cache_obj, "init_async_client", return_value=mock_redis_instance
         ):
-            # Call async_set_cache
-            await cache_obj.async_increment(key="test", value="test_value")
+            await cache_obj.async_increment(key="test", value=1.0)
 
-            # Verify that the set method was called on the mock Redis instance
-            mock_redis_instance.ttl.assert_called_once_with("test")
+            mock_redis_instance.eval.assert_awaited_once()
+            assert mock_redis_instance.eval.call_args.args[2] == "test"
+            assert mock_redis_instance.eval.call_args.args[3] == "1.0"
+            assert mock_redis_instance.eval.call_args.args[4] == "120"
 
 
 @pytest.mark.asyncio()

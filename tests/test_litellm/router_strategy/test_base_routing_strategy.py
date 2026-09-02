@@ -70,6 +70,7 @@ async def test_increment_value_in_current_window(base_strategy, mock_dual_cache)
     assert queued_op["key"] == key
     assert queued_op["increment_value"] == value
     assert queued_op["ttl"] == ttl
+    assert queued_op["refresh_ttl"] is False
 
 
 @pytest.mark.asyncio
