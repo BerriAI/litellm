@@ -270,6 +270,10 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_deployment_rpm_limit",
     "litellm_remaining_api_key_requests_for_model",
     "litellm_remaining_api_key_tokens_for_model",
+    "litellm_api_key_rate_limit_allowed_metric",
+    "litellm_api_key_rate_limit_used_metric",
+    "litellm_team_rate_limit_allowed_metric",
+    "litellm_team_rate_limit_used_metric",
     "litellm_llm_api_failed_requests_metric",
     "litellm_callback_logging_failures_metric",
     "litellm_in_flight_requests",
@@ -774,6 +778,22 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
     ]
+
+    litellm_api_key_rate_limit_allowed_metric: ClassVar[tuple[str, ...]] = (
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.RATE_LIMIT_TYPE.value,
+    )
+
+    litellm_api_key_rate_limit_used_metric = litellm_api_key_rate_limit_allowed_metric
+
+    litellm_team_rate_limit_allowed_metric: ClassVar[tuple[str, ...]] = (
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.RATE_LIMIT_TYPE.value,
+    )
+
+    litellm_team_rate_limit_used_metric = litellm_team_rate_limit_allowed_metric
 
     litellm_llm_api_failed_requests_metric = [
         UserAPIKeyLabelNames.END_USER.value,

@@ -9,6 +9,10 @@ in the x-litellm-attempted-fallbacks header. Empty content is accepted only when
 `finish_reason == "length"` and the response billed completion tokens, since
 gpt-5.5 counts reasoning against max_tokens and can consume the whole budget
 before emitting any text; a fallback that produced nothing at all still fails.
+
+The context-window case is a different reroute from a plain failure: the provider
+refuses the prompt on length, and `context_window_fallbacks` is the setting that
+reroutes it, not `fallbacks`.
 """
 
 from __future__ import annotations
@@ -25,8 +29,10 @@ from reliability_support import (
     completion_tokens_of,
     content_of,
     create_bad_base_deployment,
+    create_small_context_deployment,
     create_timeout_deployment,
     finish_reason_of,
+    oversized_prompt,
     reasoning_tokens_of,
 )
 
@@ -80,5 +86,19 @@ class TestReliabilityFallbacks:
         resp = chat_override(
             client.proxy, scoped_key, primary, f"say hi {unique_marker()}",
             override=RouterSettingsOverride(fallbacks=[{primary: ["gpt-5.5"]}]),
+        )
+        _assert_served_by_fallback(resp)
+
+    @pytest.mark.covers("reliability.fallback.context_window.routes_to_fallback")
+    def test_context_window_routes_to_fallback(
+        self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        primary = f"reliability-ctxfail-{unique_marker()}"
+        model_id = create_small_context_deployment(client.proxy, primary)
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+
+        resp = chat_override(
+            client.proxy, scoped_key, primary, oversized_prompt(unique_marker()),
+            override=RouterSettingsOverride(context_window_fallbacks=[{primary: ["gpt-5.5"]}]),
         )
         _assert_served_by_fallback(resp)
