@@ -456,21 +456,38 @@ async def test_assert_user_can_view_request_id_rejects_both_users_none():
 
 
 @pytest.mark.asyncio
-async def test_assert_user_can_view_request_id_rejects_spoofed_call_id_collision():
+async def test_assert_user_can_view_request_id_rejects_when_no_match_is_owned():
+    """An id whose every matching row belongs to other tenants is refused outright,
+    so the relaxed date window of an id lookup cannot reach a foreign row."""
+    prisma = _make_owner_lookup_prisma(
+        [
+            {"request_id": "foreign-request", "litellm_call_id": "shared-id", "user": "tenant_a", "team_id": None},
+            {"request_id": "shared-id", "litellm_call_id": "other-call-id", "user": "tenant_b", "team_id": None},
+        ]
+    )
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller")
+    with pytest.raises(HTTPException) as exc_info:
+        await spend_management_endpoints._assert_user_can_view_request_id(prisma, auth, "shared-id")
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_assert_user_can_view_request_id_allows_owner_despite_foreign_collision():
     """
-    litellm_call_id comes from the client-settable x-litellm-call-id header, so an
-    id lookup can match a row the caller owns AND a different tenant's row (the
-    caller set their own call id to the victim's request_id). Owning one of the
-    matching rows must not authorize the whole ambiguous id: every match has to
-    belong to the caller, or the whole lookup is rejected. Regression for the
-    cross-tenant spend-log read this OR clause introduced.
+    litellm_call_id comes from the client-settable x-litellm-call-id header, so
+    another tenant can mint a row whose call id equals the caller's request_id.
+    That collision must not lock the caller out of their own row: the pre-check
+    passes once one match is theirs, and the scoped data queries keep the foreign
+    row out of the result. Regression for the every-match-must-be-owned rule that
+    let any tenant deny another's lookup by reusing their id.
     """
     prisma = _make_owner_lookup_prisma(
         [
             {
-                "request_id": "caller-own-request",
+                "request_id": "attacker-own-request",
                 "litellm_call_id": "victim-request-id",
-                "user": "caller",
+                "user": "attacker",
                 "team_id": None,
             },
             {
@@ -482,23 +499,21 @@ async def test_assert_user_can_view_request_id_rejects_spoofed_call_id_collision
         ]
     )
 
-    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller")
-    with pytest.raises(HTTPException) as exc_info:
-        await spend_management_endpoints._assert_user_can_view_request_id(
-            prisma, auth, "victim-request-id"
-        )
-    assert exc_info.value.status_code == 403
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="victim")
+    result = await spend_management_endpoints._assert_user_can_view_request_id(prisma, auth, "victim-request-id")
+
+    assert result is None
 
 
 @pytest.mark.asyncio
-async def test_assert_user_can_view_request_id_rejects_foreign_match_past_any_row_cap():
+async def test_assert_user_can_view_request_id_finds_owner_past_any_row_cap():
     """
-    An attacker can mint hundreds of their own rows carrying the victim's
-    request_id as their litellm_call_id, so a capped or sampled ownership read
-    can exhaust its cap on attacker-owned rows and never see the one foreign
-    row the data queries would still return. The ownership check must consider
-    every matching row's owner no matter how many rows match. Regression for
-    the find_many(take=100) sample the first fix used.
+    An attacker can mint hundreds of rows carrying the victim's request_id as
+    their litellm_call_id, so a capped or sampled ownership read could exhaust
+    its cap on attacker-owned rows and never see the victim's own row, locking
+    the victim out of their lookup. The ownership read must consider every
+    matching row's owner no matter how many rows match. Regression for the
+    find_many(take=100) sample the first fix used.
     """
     rows = [
         {
@@ -519,12 +534,10 @@ async def test_assert_user_can_view_request_id_rejects_foreign_match_past_any_ro
     )
     prisma = _make_owner_lookup_prisma(rows)
 
-    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="attacker")
-    with pytest.raises(HTTPException) as exc_info:
-        await spend_management_endpoints._assert_user_can_view_request_id(
-            prisma, auth, "victim-request-id"
-        )
-    assert exc_info.value.status_code == 403
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="victim")
+    result = await spend_management_endpoints._assert_user_can_view_request_id(prisma, auth, "victim-request-id")
+
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -2481,10 +2494,71 @@ async def test_ui_view_spend_logs_request_id_blocks_non_owner(client, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_ui_view_spend_logs_request_id_collision_serves_only_callers_rows(client, monkeypatch):
+    """Two tenants share one id: the attacker minted a row whose client-set
+    litellm_call_id equals the victim's request_id. Each side's lookup of that id
+    returns only their own row, so the collision neither leaks the other tenant's
+    row nor denies the victim theirs (Veria: identifier collision could deny access)."""
+    now_iso = datetime.datetime.now(timezone.utc).isoformat()
+    corpus = [
+        {
+            "id": "log_attacker",
+            "request_id": "attacker-req",
+            "litellm_call_id": "victim-req",
+            "api_key": "sk-attacker-key",
+            "user": "attacker_user",
+            "team_id": None,
+            "spend": 0.05,
+            "startTime": now_iso,
+            "model": "gpt-4",
+        },
+        {
+            "id": "log_victim",
+            "request_id": "victim-req",
+            "litellm_call_id": "victim-call-id",
+            "api_key": "sk-victim-key",
+            "user": "victim_user",
+            "team_id": None,
+            "spend": 0.07,
+            "startTime": now_iso,
+            "model": "gpt-4",
+        },
+    ]
+
+    def filter_fn(where):
+        rid_either = where.get("request_id_or_call_id")
+        rows = [r for r in corpus if rid_either in (r["request_id"], r["litellm_call_id"])]
+        return [r for r in rows if where.get("user") is None or r["user"] == where["user"]]
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", make_ui_spend_logs_mock_prisma(corpus, filter_fn))
+    try:
+        for caller, own_request_id, other in (
+            ("victim_user", "victim-req", "attacker_user"),
+            ("attacker_user", "attacker-req", "victim_user"),
+        ):
+            app.dependency_overrides[ps.user_api_key_auth] = lambda caller=caller: UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER, user_id=caller
+            )
+            response = client.get(
+                "/spend/logs/ui",
+                params={"request_id": "victim-req"},
+                headers={"Authorization": "Bearer sk-test"},
+            )
+            assert response.status_code == 200, response.text
+            data = response.json()
+            assert data["total"] == 1
+            assert data["data"][0]["request_id"] == own_request_id
+            assert other not in response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_ui_view_spend_logs_request_id_rejects_foreign_row_inserted_after_owner_check(client, monkeypatch):
-    """A foreign row that lands between the owner pre-check and the page query must
-    not be returned. The rows actually fetched are ownership-checked again, so the
-    lookup answers 403 instead of serving the just-inserted tenant's row (TOCTOU)."""
+    """The SQL scope keeps foreign rows out of an id lookup; this backstop covers a
+    row the scope did not filter (the mock ignores it on purpose). The rows actually
+    fetched are ownership-checked again, so the lookup answers 403 instead of serving
+    the other tenant's row."""
     now_iso = datetime.datetime.now(timezone.utc).isoformat()
     owned_row = {
         "id": "log_owned",
@@ -2526,11 +2600,79 @@ async def test_ui_view_spend_logs_request_id_rejects_foreign_row_inserted_after_
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
+def _make_payload_lookup_prisma(rows):
+    """Emulate the detail endpoint's SQL over an in-memory corpus: the owner
+    pre-check, the caller scope on ``"user"`` and permitted teams, and the
+    exact-request_id-first ordering with LIMIT 1."""
+
+    class MockDB:
+        async def query_raw(self, sql_query, *params):
+            if 'SELECT DISTINCT "user", team_id' in sql_query:
+                return _emulate_spend_log_owner_lookup(rows, sql_query, params)
+            lookup_id = params[0]
+            matches = [r for r in rows if lookup_id in (r["request_id"], r["litellm_call_id"])]
+            if '"user" = $2' in sql_query:
+                team_ids = params[2] if "ANY($3::text[])" in sql_query else ()
+                matches = [r for r in matches if r["user"] == params[1] or r["team_id"] in team_ids]
+            if "ORDER BY (request_id = $1) DESC" in sql_query:
+                matches = sorted(matches, key=lambda r: r["request_id"] == lookup_id, reverse=True)
+            return matches[:1]
+
+    class MockPrisma:
+        def __init__(self):
+            self.db = MockDB()
+
+    return MockPrisma()
+
+
+def _payload_row(request_id, litellm_call_id, user, prompt):
+    return {
+        "request_id": request_id,
+        "litellm_call_id": litellm_call_id,
+        "messages": [{"role": "user", "content": prompt}],
+        "response": {"id": request_id},
+        "proxy_server_request": None,
+        "metadata": None,
+        "user": user,
+        "team_id": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_ui_view_request_response_collision_serves_callers_own_row(client, monkeypatch):
+    """The attacker's row carries the victim's request_id as its client-set call id
+    and was written first. Each tenant's detail lookup of that id serves only their
+    own payload, and an admin's lookup resolves the exact request_id match rather
+    than whichever colliding row the database happens to return first."""
+    prisma = _make_payload_lookup_prisma(
+        [
+            _payload_row("attacker-req", "victim-req", "attacker_user", "attacker prompt"),
+            _payload_row("victim-req", "victim-call-id", "victim_user", "victim prompt"),
+        ]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    try:
+        for role, user_id, own_prompt, other_prompt in (
+            (LitellmUserRoles.INTERNAL_USER, "victim_user", "victim prompt", "attacker prompt"),
+            (LitellmUserRoles.INTERNAL_USER, "attacker_user", "attacker prompt", "victim prompt"),
+            (LitellmUserRoles.PROXY_ADMIN, "admin", "victim prompt", "attacker prompt"),
+        ):
+            app.dependency_overrides[ps.user_api_key_auth] = lambda role=role, user_id=user_id: UserAPIKeyAuth(
+                user_role=role, user_id=user_id
+            )
+            response = client.get("/spend/logs/ui/victim-req", headers={"Authorization": "Bearer sk-test"})
+            assert response.status_code == 200, response.text
+            assert own_prompt in response.text
+            assert other_prompt not in response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
 @pytest.mark.asyncio
 async def test_ui_view_request_response_rejects_foreign_row_inserted_after_owner_check(client, monkeypatch):
-    """Same TOCTOU on the detail endpoint: the payload row fetched by id is itself
-    ownership-checked, so a foreign row inserted after the pre-check passes cannot
-    have its request/response payload served."""
+    """Backstop behind the SQL scope on the detail endpoint (the mock ignores the
+    scope on purpose): the payload row fetched by id is itself ownership-checked, so
+    a foreign row the scope did not filter cannot have its payload served."""
 
     class MockDB:
         async def query_raw(self, sql_query, *params):
@@ -2655,13 +2797,12 @@ async def test_ui_view_request_response_custom_logger_allows_own_payload_without
 
 
 @pytest.mark.asyncio
-async def test_ui_view_spend_logs_request_id_owner_scoped_by_id_only(
+async def test_ui_view_spend_logs_request_id_owner_lookup_drops_window_keeps_scope(
     client, monkeypatch
 ):
-    """A non-admin owner looking up their own request_id resolves across all time.
-    The ownership check authorizes the single row, so the query drops both the date
-    window and the general user/team scoping and filters by the primary key alone;
-    without that skip an internal user would have a `user`/`OR` clause added."""
+    """A non-admin owner looking up their own request_id resolves across all time:
+    the query drops the date window the dashboard sends, while the caller's own-user
+    scope stays on the id lookup so a colliding foreign row can never be served."""
     today = datetime.datetime.now(timezone.utc)
     mock_spend_logs = [
         {
@@ -2714,8 +2855,7 @@ async def test_ui_view_spend_logs_request_id_owner_scoped_by_id_only(
         assert data["data"][0]["request_id"] == "req-old"
         assert "startTime" not in captured["where"]
         assert captured["where"]["request_id_or_call_id"] == "req-old"
-        assert "user" not in captured["where"]
-        assert "OR" not in captured["where"]
+        assert captured["where"]["user"] == "user_1"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
