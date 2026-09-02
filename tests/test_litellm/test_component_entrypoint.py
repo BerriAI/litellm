@@ -7,7 +7,6 @@ import re
 import stat
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 import pytest
 
@@ -16,10 +15,15 @@ COMPONENT_ENTRYPOINT = REPO_ROOT / "docker" / "component_entrypoint.sh"
 PROD_ENTRYPOINT = REPO_ROOT / "docker" / "prod_entrypoint.sh"
 GATEWAY_DOCKERFILE = REPO_ROOT / "gateway" / "Dockerfile"
 BACKEND_DOCKERFILE = REPO_ROOT / "backend" / "Dockerfile"
+BUILD_FROM_PIP_DOCKERFILE = REPO_ROOT / "docker" / "build_from_pip" / "Dockerfile.build_from_pip"
 TERRAFORM_ECS = REPO_ROOT / "terraform" / "litellm" / "aws" / "ecs.tf"
 TERRAFORM_CLOUDRUN = REPO_ROOT / "terraform" / "litellm" / "gcp" / "cloudrun.tf"
 
 IMAGE_ENTRYPOINT_PATH = "/app/docker/component_entrypoint.sh"
+PROD_ENTRYPOINT_PATH = "/app/docker/prod_entrypoint.sh"
+
+TRUTHY_USE_DDTRACE = ("true", "True", "TRUE", "tRuE")
+FALSY_USE_DDTRACE = (None, "", "false", "False", "1", "yes", "on", "truex")
 
 PYTHONPATH_SENTINEL = "/lit-entrypoint-sentinel:/app"
 
@@ -53,7 +57,7 @@ def _write_stubs(bin_dir: Path, names: tuple[str, ...]) -> None:
 def _run_entrypoint(
     script: Path,
     argv: tuple[str, ...],
-    use_ddtrace: Optional[str],
+    use_ddtrace: str | None,
     tmp_path: Path,
 ) -> tuple[str, ...]:
     """Run `script` with stubbed executables on PATH and return the recorded lines."""
@@ -84,7 +88,7 @@ def _run_entrypoint(
     return tuple(record.read_text().splitlines()) if record.exists() else ()
 
 
-def _run_shell_command(command: str, bin_dir: Path, record: Path, use_ddtrace: Optional[str]) -> tuple[str, ...]:
+def _run_shell_command(command: str, bin_dir: Path, record: Path, use_ddtrace: str | None) -> tuple[str, ...]:
     """Run a resolved Terraform launch command through `sh -c` and return the recorded lines."""
     env = {
         **os.environ,
@@ -184,9 +188,19 @@ def test_ddtrace_disabled_execs_the_command_directly(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("use_ddtrace", [None, "", "false", "True", "TRUE", "1", "yes"])
-def test_gating_matches_the_monolithic_entrypoint(use_ddtrace: Optional[str], tmp_path: Path) -> None:
-    """The componentized images must honor `USE_DDTRACE` exactly as the monolith does."""
+@pytest.mark.parametrize(
+    "use_ddtrace, traced",
+    [*((v, True) for v in TRUTHY_USE_DDTRACE), *((v, False) for v in FALSY_USE_DDTRACE)],
+)
+def test_gating_matches_the_monolithic_entrypoint_and_get_secret_bool(
+    use_ddtrace: str | None, traced: bool, tmp_path: Path
+) -> None:
+    """Both entrypoints must accept exactly the spellings `get_secret_bool` accepts.
+
+    `ProxyStartupEvent._init_dd_tracer` reads `USE_DDTRACE` through `get_secret_bool`, which
+    matches `true` case-insensitively. If the shell gate were stricter, `USE_DDTRACE=True` would
+    give in-process LLM spans without `ddtrace-run` HTTP spans, a half-enabled state.
+    """
     component = _run_entrypoint(
         COMPONENT_ENTRYPOINT,
         ("uvicorn", "gateway.main:app"),
@@ -200,8 +214,22 @@ def test_gating_matches_the_monolithic_entrypoint(use_ddtrace: Optional[str], tm
         tmp_path=tmp_path / "monolith",
     )
 
-    assert component[0].startswith("exec=") and monolith[0].startswith("exec=")
-    assert (component[0] == "exec=ddtrace-run") == (monolith[0] == "exec=ddtrace-run")
+    expected_exec = "exec=ddtrace-run" if traced else "exec=uvicorn"
+    expected_openai = "DD_TRACE_OPENAI_ENABLED=False" if traced else "DD_TRACE_OPENAI_ENABLED=<unset>"
+    assert component[0] == expected_exec
+    assert component[2] == expected_openai
+    assert monolith[0] == ("exec=ddtrace-run" if traced else "exec=litellm")
+    assert monolith[2] == expected_openai
+    assert monolith[1] == ("args=litellm --port 4000" if traced else "args=--port 4000")
+
+
+def test_build_from_pip_image_launches_litellm_through_the_prod_entrypoint() -> None:
+    entrypoint = _entrypoint_argv(BUILD_FROM_PIP_DOCKERFILE)
+    body = BUILD_FROM_PIP_DOCKERFILE.read_text()
+
+    assert entrypoint == (PROD_ENTRYPOINT_PATH,), f"{BUILD_FROM_PIP_DOCKERFILE} bypasses the ddtrace-aware entrypoint"
+    assert f"COPY docker/prod_entrypoint.sh {PROD_ENTRYPOINT_PATH}" in body
+    assert f"chmod +x {PROD_ENTRYPOINT_PATH}" in body
 
 
 def test_entrypoint_script_is_executable() -> None:
@@ -239,9 +267,9 @@ def test_component_images_make_the_entrypoint_executable(dockerfile: Path) -> No
 
 @pytest.mark.parametrize("terraform_file", TERRAFORM_LAUNCH_SITES, ids=lambda p: p.parent.name)
 @pytest.mark.parametrize("component", ["gateway", "backend"])
-@pytest.mark.parametrize("use_ddtrace", [None, "true", "false", "True"])
+@pytest.mark.parametrize("use_ddtrace", [*TRUTHY_USE_DDTRACE, *FALSY_USE_DDTRACE])
 def test_terraform_launch_command_matches_the_script_contract(
-    terraform_file: Path, component: str, use_ddtrace: Optional[str], tmp_path: Path
+    terraform_file: Path, component: str, use_ddtrace: str | None, tmp_path: Path
 ) -> None:
     """The Terraform command and `docker/component_entrypoint.sh` must decide identically.
 
@@ -273,7 +301,7 @@ def test_terraform_launch_command_matches_the_script_contract(
     assert from_terraform[2] == from_script[2], f"{terraform_file} disagrees with the script on the openai integration"
     assert app_target in from_terraform[1]
 
-    if use_ddtrace == "true":
+    if use_ddtrace in TRUTHY_USE_DDTRACE:
         assert from_terraform[0] == "exec=ddtrace-run"
         assert from_terraform[2] == "DD_TRACE_OPENAI_ENABLED=False"
     else:
