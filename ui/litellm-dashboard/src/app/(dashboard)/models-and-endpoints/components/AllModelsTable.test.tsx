@@ -183,6 +183,39 @@ describe("AllModelsTable", () => {
     expect(screen.queryByText(/^\$/)).not.toBeInTheDocument();
   });
 
+  it("renders the per-second rate instead of $0.00 token costs for a video model priced per second", () => {
+    const { rerender } = render(
+      <AllModelsTable
+        {...baseProps}
+        data={[
+          makeModel({
+            input_cost: "0.00" as unknown as number,
+            output_cost: "0.00" as unknown as number,
+            output_cost_per_second: 0.4,
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByText("$0.40/s")).toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+
+    rerender(
+      <AllModelsTable
+        {...baseProps}
+        data={[
+          makeModel({
+            input_cost: "0.60" as unknown as number,
+            output_cost: "0.00" as unknown as number,
+            output_cost_per_second: 0.015,
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByText("$0.60")).toBeInTheDocument();
+    expect(screen.getByText("$0.015/s")).toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+  });
+
   it("collapses extra access groups behind a +N more badge", () => {
     render(
       <AllModelsTable
