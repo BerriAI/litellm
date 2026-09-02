@@ -3006,6 +3006,78 @@ def test_update_mcp_semantic_filter_settings_requires_proxy_admin(monkeypatch):
         app.dependency_overrides.pop(user_api_key_auth, None)
 
 
+class TestMcpToolSearchSettingsEndpoints:
+    """`litellm_settings.mcp_tool_search` drives the native `mcp_tool_search` virtual tool, so the UI must round-trip it."""
+
+    @staticmethod
+    def _override_auth(role: LitellmUserRoles):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="u", api_key="hashed", user_role=role
+        )
+
+    def test_get_returns_stored_values_and_field_schema(self, mock_proxy_config, mock_auth, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        mock_proxy_config["config"]["litellm_settings"]["mcp_tool_search"] = {
+            "embedding_model": "text-embedding-3-small",
+            "core_tools": ["treasury-get_rates"],
+        }
+
+        resp = client.get("/get/mcp_tool_search_settings")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["values"] == {
+            "embedding_model": "text-embedding-3-small",
+            "top_k": 5,
+            "similarity_threshold": 0.0,
+            "core_tools": ["treasury-get_rates"],
+        }
+        assert resp.json()["field_schema"]["properties"]["core_tools"]["type"] == "array"
+
+    def test_update_requires_proxy_admin(self, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        self._override_auth(LitellmUserRoles.INTERNAL_USER)
+        try:
+            resp = client.patch("/update/mcp_tool_search_settings", json={"top_k": 3})
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 403
+
+    def test_update_persists_and_applies_in_memory(self, mock_proxy_config, monkeypatch):
+        import litellm
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr(litellm, "mcp_tool_search", None)
+        self._override_auth(LitellmUserRoles.PROXY_ADMIN)
+        payload = {
+            "embedding_model": "text-embedding-3-small",
+            "top_k": 3,
+            "similarity_threshold": 0.25,
+            "core_tools": ["treasury-get_rates"],
+        }
+        try:
+            resp = client.patch("/update/mcp_tool_search_settings", json=payload)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        assert mock_proxy_config["save_call_count"]() == 1
+        assert litellm.mcp_tool_search == payload
+        assert mock_proxy_config["config"]["litellm_settings"]["mcp_tool_search"] == payload
+
+    def test_update_rejects_out_of_range_top_k(self, mock_proxy_config, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        self._override_auth(LitellmUserRoles.PROXY_ADMIN)
+        try:
+            resp = client.patch("/update/mcp_tool_search_settings", json={"top_k": 0})
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 422
+        assert mock_proxy_config["save_call_count"]() == 0
+
+
 class TestPtuCostAttributionUISetting:
     """``enable_ptu_cost_attribution`` is derived from the environment on every GET.
 
