@@ -448,6 +448,30 @@ async def test_async_search_rejects_filters_rather_than_silently_ignoring_them()
         await _asearch(config, optional_params={"filters": {"genre": "sci-fi"}})
 
 
+def test_search_rejects_ranking_options_rather_than_silently_ignoring_them():
+    """A score_threshold that is quietly dropped is worse than an error: the caller asked for
+    results above 0.9, gets results scoring 0.5, and nothing says the threshold never ran."""
+    config, _, _ = _config()
+
+    with pytest.raises(BadRequestError, match="does not support the ranking_options parameter"):
+        _search(config, optional_params={"ranking_options": {"score_threshold": 0.9}})
+
+
+def test_search_rejects_rewrite_query_rather_than_silently_ignoring_it():
+    config, _, _ = _config()
+
+    with pytest.raises(BadRequestError, match="does not support the rewrite_query parameter"):
+        _search(config, optional_params={"rewrite_query": True})
+
+
+@pytest.mark.asyncio
+async def test_async_search_rejects_ranking_options_rather_than_silently_ignoring_them():
+    config, _, _ = _async_config()
+
+    with pytest.raises(BadRequestError, match="does not support the ranking_options parameter"):
+        await _asearch(config, optional_params={"ranking_options": {"score_threshold": 0.9}})
+
+
 @pytest.mark.parametrize("query", ["", "   ", "\n\t", []])
 def test_search_rejects_an_empty_query(query):
     config, _, _ = _config()

@@ -236,6 +236,17 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
                 "MongoDB vector store does not support the filters parameter yet. "
                 "Restrict the collection or the Atlas Vector Search index definition instead."
             )
+        if vector_store_search_optional_params.get("ranking_options") is not None:
+            raise config_error(
+                "MongoDB vector store does not support the ranking_options parameter yet. "
+                "Every result already carries the Atlas vectorSearchScore, so filter or re-rank "
+                "on that rather than having the threshold silently ignored."
+            )
+        if vector_store_search_optional_params.get("rewrite_query") is not None:
+            raise config_error(
+                "MongoDB vector store does not support the rewrite_query parameter. The query is "
+                "embedded exactly as sent; rewrite it before calling if you need that."
+            )
         limit: Final = cls._limit(vector_store_search_optional_params)
         search: Final = MappingProxyType(
             {
