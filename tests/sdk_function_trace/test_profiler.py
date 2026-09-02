@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
 from types import FunctionType
 from typing import Final, cast
 
@@ -82,6 +83,23 @@ def test_profiler_does_not_count_coroutine_resumption_as_another_call() -> None:
         FunctionTraceEvent(function="suspended", depth=0),
         FunctionTraceEvent(function="run", depth=1),
     ]
+
+
+def test_source_profiler_records_real_frame_ancestry() -> None:
+    def outer() -> None:
+        First.run()
+
+    with profile_python(source_root=Path(__file__).parent) as profiler:
+        outer()
+        Second.run()
+
+    outer_event, first_event, second_event = (
+        event for event in profiler.events if event.function.startswith("test_profiler.py:")
+    )
+    assert first_event.ancestors is not None
+    assert outer_event.function in first_event.ancestors
+    assert second_event.ancestors is not None
+    assert outer_event.function not in second_event.ancestors
 
 
 @pytest.mark.parametrize(

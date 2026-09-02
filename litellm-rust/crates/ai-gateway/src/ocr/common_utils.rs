@@ -32,6 +32,7 @@ pub(super) fn truncate_error_body(body: &str) -> String {
     format!("{truncated}... (truncated)")
 }
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) fn ocr_provider_config(
     provider: &str,
     model: &str,

@@ -1,5 +1,6 @@
 use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
 use crate::error::Error;
+use crate::http_utils::http_request;
 
 use super::client::http_client;
 use super::common_utils::truncate_error_body;
@@ -17,8 +18,7 @@ pub(super) async fn execute_messages_provider_call(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = request_builder
-        .send()
+    let response = http_request(request_builder)
         .await
         .map_err(|err| Error::Network(err.to_string()))?;
 
@@ -57,8 +57,7 @@ pub(super) async fn execute_messages_provider_stream(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = request_builder
-        .send()
+    let response = http_request(request_builder)
         .await
         .map_err(|err| Error::Network(err.to_string()))?;
     let status = response.status();

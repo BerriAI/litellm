@@ -14,6 +14,7 @@ from typing import Final
 class FunctionTraceEvent:
     function: str
     depth: int
+    ancestors: tuple[str, ...] | None = None
 
 
 class PythonProfiler:
@@ -29,9 +30,17 @@ class PythonProfiler:
         function_name: Final = self.function_name(frame.f_code)
         if function_name is None:
             return
-        depth: Final = sum(self.function_name(ancestor.f_code) is not None for ancestor in _frame_ancestors(frame))
+        ancestors: Final = tuple(
+            name for ancestor in _frame_ancestors(frame) if (name := self.function_name(ancestor.f_code)) is not None
+        )
         self._seen_frames.add(frame)
-        self.events.append(FunctionTraceEvent(function=function_name, depth=depth))
+        self.events.append(
+            FunctionTraceEvent(
+                function=function_name,
+                depth=len(ancestors),
+                ancestors=ancestors if self._source_root is not None else None,
+            )
+        )
 
     def function_name(self, code: CodeType) -> str | None:
         if self._source_root is None:
