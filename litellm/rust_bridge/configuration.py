@@ -12,7 +12,6 @@ if TYPE_CHECKING:
 
 DEFAULT_RUST_ENABLED: Final = False
 _TRUE_ENV_VALUES: Final = frozenset({"1", "true", "yes", "on"})
-_FALSE_ENV_VALUES: Final = frozenset({"0", "false", "no", "off"})
 _GLOBAL_ENV_NAME: Final = "LITELLM_RUST"
 _LEGACY_OCR_ENV_NAME: Final = "LITELLM_USE_RUST_OCR"
 
@@ -32,16 +31,10 @@ class _RustConfiguration:
 _CONFIGURATION: Final = _RustConfiguration()
 
 
-def _parse_env_bool(name: str, value: str | None) -> bool | None:
+def _parse_env_bool(value: str | None) -> bool | None:
     if value is None:
         return None
-    normalized: Final = value.strip().lower()
-    if normalized in _TRUE_ENV_VALUES:
-        return True
-    if normalized in _FALSE_ENV_VALUES:
-        return False
-    accepted: Final = ", ".join(sorted(_TRUE_ENV_VALUES | _FALSE_ENV_VALUES))
-    raise ValueError(f"{name} must be one of: {accepted}")
+    return value.strip().lower() in _TRUE_ENV_VALUES
 
 
 def resolve_rust_enabled(
@@ -72,7 +65,7 @@ def rust_enabled(*, request_override: bool | None = None) -> bool:
     return resolve_rust_enabled(
         request_override=None,
         process_override=None,
-        environment_override=_parse_env_bool(_GLOBAL_ENV_NAME, os.getenv(_GLOBAL_ENV_NAME)),
+        environment_override=_parse_env_bool(os.getenv(_GLOBAL_ENV_NAME)),
     )
 
 
@@ -82,10 +75,8 @@ def rust_ocr_enabled(*, request_override: bool | None = None) -> bool:
     process_override: Final = _CONFIGURATION.override
     if process_override is not None:
         return process_override
-    global_override: Final = _parse_env_bool(_GLOBAL_ENV_NAME, os.getenv(_GLOBAL_ENV_NAME))
-    legacy_override: Final = (
-        None if global_override is not None else _parse_env_bool(_LEGACY_OCR_ENV_NAME, os.getenv(_LEGACY_OCR_ENV_NAME))
-    )
+    global_override: Final = _parse_env_bool(os.getenv(_GLOBAL_ENV_NAME))
+    legacy_override: Final = None if global_override is not None else _parse_env_bool(os.getenv(_LEGACY_OCR_ENV_NAME))
     if legacy_override is not None:
         warnings.warn(
             f"{_LEGACY_OCR_ENV_NAME} is deprecated; use {_GLOBAL_ENV_NAME} instead",

@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
 import pytest
@@ -94,11 +95,34 @@ def test_global_environment_accepts_explicit_false(monkeypatch: pytest.MonkeyPat
     assert configuration.rust_enabled() is False
 
 
-def test_invalid_environment_value_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LITELLM_RUST", "sometimes")
+@pytest.mark.parametrize("value", ("", " ", "sometimes", "2"))
+def test_invalid_environment_value_disables_rust(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setenv("LITELLM_RUST", value)
+    monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
 
-    with pytest.raises(ValueError, match="LITELLM_RUST must be one of"):
-        configuration.rust_enabled()
+    assert configuration.rust_enabled() is False
+    assert configuration.rust_ocr_enabled() is False
+
+
+@pytest.mark.parametrize("value", ("", " ", "sometimes", "2"))
+def test_invalid_legacy_environment_value_disables_ocr(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setenv("LITELLM_USE_RUST_OCR", value)
+
+    with pytest.warns(DeprecationWarning, match="LITELLM_USE_RUST_OCR is deprecated"):
+        assert configuration.rust_ocr_enabled() is False
+
+
+def test_process_override_and_reset_apply_to_existing_threads(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        assert executor.submit(configuration.rust_enabled).result() is True
+        configuration.use_litellm_rust(False)
+        assert executor.submit(configuration.rust_enabled).result() is False
+        assert executor.submit(configuration.rust_ocr_enabled).result() is False
+        configuration.reset_rust_configuration()
+        assert executor.submit(configuration.rust_enabled).result() is True
+        assert executor.submit(configuration.rust_ocr_enabled).result() is True
 
 
 def test_explicit_override_precedes_invalid_environment(monkeypatch: pytest.MonkeyPatch) -> None:
