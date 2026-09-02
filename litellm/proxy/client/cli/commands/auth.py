@@ -100,9 +100,10 @@ class CliPollData(TypedDict, total=False):
 
 
 class CliSsoStartData(TypedDict):
-    login_id: str
-    poll_secret: str
-    user_code: str
+    login_id: ReadOnly[str]
+    poll_secret: ReadOnly[str]
+    user_code: ReadOnly[str]
+    verification_uri_complete: ReadOnly[NotRequired[str]]
 
 
 class CliAuthResult(TypedDict):
@@ -860,11 +861,22 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
         poll_secret: Final = cli_sso_flow["poll_secret"]
         user_code: Final = cli_sso_flow["user_code"]
 
-        sso_url = f"{base_url}/sso/key/generate?" + urlencode({"source": LITELLM_CLI_SOURCE_IDENTIFIER, "key": key_id})
+        browser_prefills_code: Final = isinstance(cli_sso_flow.get("verification_uri_complete"), str)
+        sso_url: Final = f"{base_url}/sso/key/generate?" + urlencode(
+            (
+                ("source", LITELLM_CLI_SOURCE_IDENTIFIER),
+                ("key", key_id),
+                *((("user_code", user_code),) if browser_prefills_code else ()),
+            )
+        )
 
         click.echo(f"Opening browser to: {sso_url}")
         click.echo("Please complete the SSO authentication in your browser...")
-        click.echo(f"Verification code: {user_code}")
+        click.echo(
+            f"Verification code: {user_code} (pre-filled in the browser, check it matches)"
+            if browser_prefills_code
+            else f"Verification code: {user_code}"
+        )
         click.echo(f"Session ID: {key_id}")
 
         # Open browser
