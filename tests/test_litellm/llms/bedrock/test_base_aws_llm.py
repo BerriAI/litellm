@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 from botocore.awsrequest import AWSPreparedRequest, AWSRequest
 from botocore.auth import SigV4Auth
 from botocore.credentials import Credentials
+from botocore.exceptions import NoCredentialsError
 
 import litellm
 from litellm.llms.bedrock.base_aws_llm import (
@@ -799,6 +800,23 @@ def test_get_request_headers_with_sigv4():
         mock_sigv4_class.assert_called_once_with(credentials, "bedrock", "us-west-2")
         mock_sigv4.add_auth.assert_called_once_with(mock_request)
         assert result == mock_request.prepare.return_value
+
+
+def test_get_request_headers_without_credentials_or_bearer_token_raises_no_credentials():
+    """Bearer-token auth needs no SigV4 principal, so `credentials` may be None.
+    Reaching the SigV4 branch with neither must fail the way botocore always
+    has instead of signing with a missing principal."""
+    llm = BaseAWSLLM()
+
+    with patch.dict(os.environ, {}, clear=True), pytest.raises(NoCredentialsError):
+        llm.get_request_headers(
+            credentials=None,
+            aws_region_name="us-west-2",
+            extra_headers=None,
+            endpoint_url="https://api.example.com",
+            data='{"prompt": "test"}',
+            headers={"Content-Type": "application/json"},
+        )
 
 
 def test_sigv4_matches_rust_golden_vector():
