@@ -8,6 +8,7 @@ import httpx
 import pytest
 from fastapi import HTTPException, Request
 from prisma import errors as prisma_errors
+from prisma.engine.errors import BinaryNotFoundError, EngineConnectionError
 from prisma.errors import (
     ClientNotConnectedError,
     DataError,
@@ -318,6 +319,43 @@ def test_is_database_service_unavailable_error_in_chain_sees_through_wrapping():
     assert PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(ValueError("nope")) is False
 
 
+def test_find_database_service_unavailable_error_in_chain_returns_the_wrapped_outage_itself():
+    """Wording a 503 by the kind of outage needs the wrapped database error, not the ValueError
+    get_user_object wrapped it in, so the finder must hand back the inner exception."""
+    outage = _wrapped_like_get_user_object(ConnectionError("can't reach database server"))
+    found = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(outage)
+    assert isinstance(found, ConnectionError)
+    assert found is outage.__context__
+    missing_user = _wrapped_like_get_user_object(Exception())
+    assert PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(missing_user) is None
+
+
+def _raised_while_handling(inner, outer):
+    try:
+        raise inner
+    except BaseException:
+        try:
+            raise outer
+        except BaseException as surfaced:
+            return surfaced
+
+
+def test_permanent_fault_outranks_the_transient_error_that_surfaced_it():
+    """A reconnect that dies on a missing engine binary raises the transport error last, with the
+    BinaryNotFoundError left as __context__. The binary is what keeps the database down, so both the
+    finder and the 503 wording must pick it over the outer transient error, whichever way they nest."""
+    permanent = BinaryNotFoundError("query engine binary not found")
+    transient_over_permanent = _raised_while_handling(permanent, httpx.ConnectError("connection refused"))
+    permanent_over_transient = _raised_while_handling(httpx.ConnectError("connection refused"), permanent)
+
+    for chain in (transient_over_permanent, permanent_over_transient):
+        assert PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(chain) is permanent
+        message = PrismaDBExceptionHandler.database_unavailable_message(chain)
+        assert "BinaryNotFoundError" in message
+        assert "will not clear by retrying" in message
+        assert "temporarily unreachable" not in message
+
+
 def test_is_database_service_unavailable_error_in_chain_terminates_on_a_cause_cycle():
     """The walk must terminate on a pathological __cause__ cycle rather than hang. Neither link is an
     outage, so the bounded walk returns False instead of looping forever."""
@@ -507,6 +545,51 @@ def test_permanent_prisma_faults_are_still_reported_as_service_problems(prisma_e
     as a rejected credential."""
     assert PrismaDBExceptionHandler.is_database_infrastructure_error(prisma_error) is True
     assert PrismaDBExceptionHandler.is_database_service_unavailable_error(prisma_error) is True
+
+
+RECONNECTABLE_CLIENT_STATE_FAULTS = (prisma_errors.ClientNotConnectedError, prisma_errors.HTTPClientClosedError)
+
+
+@pytest.mark.parametrize("prisma_error", PERMANENT_PRISMA_FAULTS)
+def test_permanent_prisma_faults_are_worded_as_not_retryable(prisma_error):
+    """A 503 for a fault that never heals must not tell the operator to wait.
+
+    The status stays 503 (the service is at fault), but the message has to say
+    the outage is not transient and name the engine fault, or an operator
+    watching a version-skewed engine keeps retrying a request that can never
+    succeed. The two client-state faults a reconnect can repair keep the retry
+    wording."""
+    reconnectable = isinstance(prisma_error, RECONNECTABLE_CLIENT_STATE_FAULTS)
+    message = PrismaDBExceptionHandler.database_unavailable_message(prisma_error)
+
+    assert PrismaDBExceptionHandler.is_permanent_database_fault(prisma_error) is (not reconnectable)
+    assert message.startswith("Service Unavailable")
+    assert ("temporarily unreachable" in message) is reconnectable
+    assert ("Please retry shortly" in message) is reconnectable
+    assert ("will not clear by retrying" in message) is (not reconnectable)
+    assert (type(prisma_error).__name__ in message) is (not reconnectable)
+
+
+@pytest.mark.parametrize(
+    "transient_error",
+    [
+        pytest.param(httpx.ConnectError("All connection attempts failed"), id="ConnectError"),
+        pytest.param(ConnectionError("connection refused"), id="ConnectionError"),
+        pytest.param(EngineConnectionError(), id="EngineConnectionError"),
+        pytest.param(prisma_errors.PrismaError("can't reach database server"), id="P1001_text"),
+        pytest.param(
+            ProxyException(message="no db", type=ProxyErrorTypes.no_db_connection, param=None, code=503),
+            id="ProxyException",
+        ),
+    ],
+)
+def test_transient_outages_keep_the_retry_wording(transient_error):
+    """A genuine outage is expected to come back, so the retry guidance is the
+    right message and must not be replaced by the permanent-fault text."""
+    assert PrismaDBExceptionHandler.is_permanent_database_fault(transient_error) is False
+    assert PrismaDBExceptionHandler.database_unavailable_message(transient_error) == (
+        "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."
+    )
 
 
 @pytest.mark.parametrize(
