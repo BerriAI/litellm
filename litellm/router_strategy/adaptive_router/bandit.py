@@ -7,7 +7,7 @@ Each (router, request_type, model) cell is a Beta(alpha, beta) posterior.
 - mean  = alpha / (alpha + beta)
 - total samples = alpha + beta - COLD_START_MASS  (informative prior, not data)
 
-Hot path: thompson_sample() — pure function, no I/O.
+Hot path: posterior mean or thompson_sample() — pure functions, no I/O.
 """
 
 import random
@@ -75,6 +75,21 @@ def apply_delta(cell: BanditCell, delta_alpha: float, delta_beta: float) -> Band
     return BanditCell(alpha=new_alpha, beta=new_beta)
 
 
+def apply_evaluation_prior(
+    cell: BanditCell,
+    successes: float,
+    failures: float,
+    max_mass: float,
+) -> BanditCell:
+    alpha: Final = cell.alpha + successes
+    beta: Final = cell.beta + failures
+    total: Final = alpha + beta
+    if total <= max_mass:
+        return BanditCell(alpha=alpha, beta=beta)
+    mean: Final = alpha / total
+    return BanditCell(alpha=mean * max_mass, beta=(1.0 - mean) * max_mass)
+
+
 def thompson_sample(cell: BanditCell, rng: random.Random | None = None) -> float:
     """Draw a sample from Beta(alpha, beta). Returns a quality estimate in [0, 1]."""
     r: Final = rng if rng is not None else random
@@ -114,10 +129,11 @@ def pick_best(
     model_costs: dict[str, float],
     quality_weight: float = DEFAULT_QUALITY_WEIGHT,
     cost_weight: float = DEFAULT_COST_WEIGHT,
+    exploration_rate: float = 1.0,
     rng: random.Random | None = None,
 ) -> str:
     """
-    Sample once per model, score each, return the model with highest score.
+    Use posterior means for exploitation or sample once per model for exploration.
 
     cells: {model_name: BanditCell}
     model_costs: {model_name: $/1k tokens}
@@ -125,10 +141,12 @@ def pick_best(
     if not cells:
         raise ValueError("pick_best called with no models")
     all_costs: Final = list(model_costs.values())
+    random_source: Final = rng if rng is not None else random
+    explore: Final = random_source.random() < exploration_rate
     best_model: str | None = None
     best_score = float("-inf")
     for model, cell in cells.items():
-        q = thompson_sample(cell, rng=rng)
+        q = thompson_sample(cell, rng=rng) if explore else cell.mean
         s = score(q, model_costs[model], all_costs, quality_weight, cost_weight)
         if s > best_score:
             best_score = s

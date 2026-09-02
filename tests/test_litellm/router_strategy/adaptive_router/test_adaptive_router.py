@@ -1,15 +1,16 @@
 """Unit tests for the AdaptiveRouter strategy class."""
 
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
-
-from litellm.router_strategy.adaptive_router import adaptive_router as ar_module
 
 import pytest
 
+from litellm.router_strategy.adaptive_router import adaptive_router as ar_module
 from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
 from litellm.router_strategy.adaptive_router.signals import Turn
 from litellm.types.router import (
     AdaptiveRouterConfig,
+    AdaptiveRouterEvaluationPrior,
     AdaptiveRouterPreferences,
     RequestType,
 )
@@ -35,6 +36,33 @@ async def test_pick_model_returns_model_from_available_list():
     r = _make_router()
     chosen = await r.pick_model(RequestType.GENERAL)
     assert chosen in {"fast", "smart"}
+
+
+@pytest.mark.asyncio
+async def test_evaluation_priors_seed_matching_request_type_and_model() -> None:
+    cfg: Final = AdaptiveRouterConfig(
+        available_models=["fast", "smart"],
+        exploration_rate=0,
+        evaluation_priors=(
+            AdaptiveRouterEvaluationPrior(
+                request_type=RequestType.CODE_GENERATION,
+                model="fast",
+                successes=18,
+                failures=2,
+            ),
+        ),
+    )
+    router: Final = AdaptiveRouter(
+        router_name="seeded",
+        config=cfg,
+        model_to_prefs={
+            "fast": AdaptiveRouterPreferences(quality_tier=2),
+            "smart": AdaptiveRouterPreferences(quality_tier=2),
+        },
+        model_to_cost={"fast": 0.001, "smart": 0.001},
+    )
+
+    assert await router.pick_model(RequestType.CODE_GENERATION) == "fast"
 
 
 @pytest.mark.asyncio

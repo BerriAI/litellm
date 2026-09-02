@@ -1036,9 +1036,35 @@ class AdaptiveRouterWeights(BaseModel):
         return v
 
 
+class AdaptiveRouterEvaluationPrior(BaseModel):
+    request_type: RequestType
+    model: str
+    successes: float = Field(ge=0.0)
+    failures: float = Field(ge=0.0)
+
+    @model_validator(mode="after")
+    def _has_observations(self) -> "AdaptiveRouterEvaluationPrior":
+        if self.successes + self.failures <= 0:
+            raise ValueError("evaluation prior must contain at least one observation")
+        return self
+
+
 class AdaptiveRouterConfig(BaseModel):
     available_models: list[str]
     weights: AdaptiveRouterWeights = Field(default_factory=AdaptiveRouterWeights)
+    evaluation_priors: tuple[AdaptiveRouterEvaluationPrior, ...] = ()
+    evaluation_prior_max_mass: float = Field(default=50.0, ge=10.0, le=100.0)
+    exploration_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _valid_evaluation_priors(self) -> "AdaptiveRouterConfig":
+        keys: Final = tuple((prior.request_type, prior.model) for prior in self.evaluation_priors)
+        unknown_models: Final = sorted({model for _, model in keys if model not in self.available_models})
+        if unknown_models:
+            raise ValueError(f"evaluation priors reference unavailable models: {unknown_models}")
+        if len(keys) != len(set(keys)):
+            raise ValueError("evaluation priors must contain unique request_type and model pairs")
+        return self
 
 
 class AdaptiveRouterPreferences(BaseModel):

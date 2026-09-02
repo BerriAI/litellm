@@ -16,7 +16,9 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import OrderedDict
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+from types import MappingProxyType
 from typing import Any, Final, cast
 
 from litellm._logging import verbose_router_logger
@@ -26,6 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.router_strategy.adaptive_router.bandit import (
     BanditCell,
     apply_delta,
+    apply_evaluation_prior,
     initial_cell,
     pick_best,
 )
@@ -60,6 +63,7 @@ from litellm.repositories.table_repositories import AdaptiveRouterStateRepositor
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import (
     AdaptiveRouterConfig,
+    AdaptiveRouterEvaluationPrior,
     AdaptiveRouterPreferences,
     PreRoutingHookResponse,
     RequestType,
@@ -117,10 +121,32 @@ class AdaptiveRouter:
 
     def _init_cold_start_cells(self) -> None:
         """Populate _cells with cold-start priors for every (rt, model) combination."""
-        for rt in RequestType:
-            for model in self.config.available_models:
-                prefs = self.model_to_prefs.get(model) or _default_prefs()
-                self._cells[(rt, model)] = initial_cell(prefs, rt)
+        configured_priors: Final = MappingProxyType(
+            {(prior.request_type, prior.model): prior for prior in self.config.evaluation_priors}
+        )
+        self._cells = {  # mutable-ok: online feedback updates bandit cells in place
+            (request_type, model): self._initial_cell(request_type, model, configured_priors)
+            for request_type in RequestType
+            for model in self.config.available_models
+        }
+
+    def _initial_cell(
+        self,
+        request_type: RequestType,
+        model: str,
+        configured_priors: Mapping[tuple[RequestType, str], AdaptiveRouterEvaluationPrior],
+    ) -> BanditCell:
+        prefs: Final = self.model_to_prefs.get(model) or _default_prefs()
+        base_cell: Final = initial_cell(prefs, request_type)
+        prior: Final = configured_priors.get((request_type, model))
+        if prior is None:
+            return base_cell
+        return apply_evaluation_prior(
+            cell=base_cell,
+            successes=prior.successes,
+            failures=prior.failures,
+            max_mass=self.config.evaluation_prior_max_mass,
+        )
 
     async def load_state_from_db(self, prisma_client: Any) -> None:
         """Override cold-start cells with persisted state. Called once at startup."""
@@ -225,6 +251,7 @@ class AdaptiveRouter:
             costs,
             quality_weight=self.config.weights.quality,
             cost_weight=self.config.weights.cost,
+            exploration_rate=self.config.exploration_rate,
         )
 
     async def get_state_snapshot(self) -> dict[str, Any]:
@@ -256,6 +283,7 @@ class AdaptiveRouter:
                 "quality": self.config.weights.quality,
                 "cost": self.config.weights.cost,
             },
+            "exploration_rate": self.config.exploration_rate,
             "model_costs": dict(self.model_to_cost),
             "cells": cells,
             "feedback_contexts_live": feedback_contexts_live,

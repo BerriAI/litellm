@@ -39,6 +39,7 @@ model_list:
       adaptive_router_default_model: gpt-4o-mini
       adaptive_router_config:
         available_models: ["gpt-4o", "gpt-4o-mini"]
+        exploration_rate: 0.05
         weights:
           quality: 0.7
           cost: 0.3
@@ -47,15 +48,41 @@ model_list:
 Callers may pass header `x-litellm-min-quality-tier: 3` (or metadata key
 `min_quality_tier: 3`) to force selection from tier-3-or-higher models only.
 
+## Seed quality from offline evaluations
+
+The router can start from measured quality instead of relying only on declared
+tiers and strengths. Store one JSON object per evaluated model response:
+
+```json
+{"request_type":"code_generation","model":"gpt-4o-mini","quality":1.0}
+{"request_type":"code_generation","model":"gpt-4o","quality":0.8}
+```
+
+`quality` accepts partial-credit values from 0 through 1. Generate aggregated
+Beta priors with:
+
+```shell
+python -m litellm.router_strategy.adaptive_router.training evaluations.jsonl
+```
+
+Add the resulting `evaluation_priors` to `adaptive_router_config`. The router
+combines each prior with its declared quality tier and strength. Large datasets
+are compressed to `evaluation_prior_max_mass`, which defaults to 50, so online
+feedback can still change the posterior after deployment. The generated config
+uses posterior means for 95% of requests and Thompson sampling for 5% so the
+router continues to explore without paying the cost on every request.
+
 ## Behavior summary
 
 - **Cold start.** Each `(request_type, model)` cell starts with a
   Beta prior whose mean = `BASE_TIER_WEIGHT[tier] (+ STRENGTH_BONUS if declared)`
-  and total mass = `COLD_START_MASS` (10). About ten real observations move it
-  meaningfully.
-- **Per-request decision.** Sample once per eligible model, score with
-  `quality_weight·sample + cost_weight·normalized_cost`, pick the argmax.
-  Routing is stateless per-turn — no sticky lookup. Each call resamples.
+  and total mass = `COLD_START_MASS` (10). Configured `evaluation_priors` update
+  and optionally strengthen that prior before online observations arrive.
+- **Per-request decision.** Use each model's posterior mean for exploitation
+  requests and a Thompson sample for exploration requests. Score with
+  `quality_weight·estimate + cost_weight·normalized_cost`, then pick the argmax.
+  `exploration_rate` defaults to 1 for backward compatibility. Offline training
+  emits the recommended value of 0.05.
 - **Previous-response attribution.** Post-call, feedback from the current user
   message is attributed to the model that produced the previous response, while
   response signals are attributed to the current model. Contexts expire after

@@ -3,6 +3,7 @@ from pydantic import ValidationError
 
 from litellm.types.router import (
     AdaptiveRouterConfig,
+    AdaptiveRouterEvaluationPrior,
     AdaptiveRouterPreferences,
     AdaptiveRouterWeights,  # noqa: F401  # imported per spec, exercised transitively
     RequestType,
@@ -53,3 +54,45 @@ def test_config_accepts_all_six_request_types_in_strengths():
         ],
     )
     assert len(prefs.strengths) == 6
+
+
+def test_config_accepts_evaluation_priors():
+    cfg = AdaptiveRouterConfig(
+        available_models=["fast", "smart"],
+        evaluation_priors=(
+            AdaptiveRouterEvaluationPrior(
+                request_type=RequestType.CODE_GENERATION,
+                model="fast",
+                successes=80,
+                failures=20,
+            ),
+        ),
+    )
+
+    assert cfg.evaluation_priors[0].successes == 80
+
+
+def test_config_accepts_bounded_exploration_rate():
+    cfg = AdaptiveRouterConfig(available_models=["fast", "smart"], exploration_rate=0.05)
+
+    assert cfg.exploration_rate == 0.05
+
+    with pytest.raises(ValidationError):
+        AdaptiveRouterConfig(available_models=["fast", "smart"], exploration_rate=1.1)
+
+
+def test_config_rejects_evaluation_prior_for_unavailable_model():
+    with pytest.raises(ValidationError, match="unavailable models"):
+        AdaptiveRouterConfig.model_validate(
+            {
+                "available_models": ["fast"],
+                "evaluation_priors": [
+                    {
+                        "request_type": "code_generation",
+                        "model": "smart",
+                        "successes": 1,
+                        "failures": 1,
+                    }
+                ],
+            }
+        )
