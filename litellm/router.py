@@ -12601,6 +12601,8 @@ class Router:
         cache_key: Final = self._claude_code_session_router_cache_key(request_kwargs)
         if cache_key is None or not isinstance(request_kwargs, dict):
             return registered_model_name
+        if request_kwargs.get("fallback_depth") not in (None, 0):
+            return registered_model_name
 
         agent_id: Final = self._request_header(request_kwargs, "x-claude-code-agent-id")
         if agent_id is not None:
@@ -12620,8 +12622,6 @@ class Router:
             return bound_registered_model
 
         if self._request_header(request_kwargs, "x-app") != "cli":
-            return registered_model_name
-        if request_kwargs.get("fallback_depth") not in (None, 0):
             return registered_model_name
         if self._select_pre_routing_strategy(registered_model_name, request_kwargs) is None:
             await self._delete_claude_code_session_router_binding(cache_key)
