@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable
-from typing import Final, Protocol, cast
+from typing import Final, Protocol, cast  # noqa: TID251  # native extension exposes dynamically typed callables
 
 import httpx
 
