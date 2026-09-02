@@ -132,7 +132,7 @@ jobs:
             | uv run --no-sync python .github/e2e-stack/secrets_to_env.py tests/e2e/.env
           aws secretsmanager get-secret-value --secret-id litellm-e2e-changed-license \
             --query SecretString --output text \
-            | jq -R -s '{"LITELLM_LICENSE": rtrimstr("\n")}' \
+            | jq -R -s '{"LITELLM_LICENSE": .}' \
             | uv run --no-sync python .github/e2e-stack/secrets_to_env.py tests/e2e/.env
 
       - name: Boot the stage-mirror stack
