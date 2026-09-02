@@ -533,6 +533,10 @@ def test_extract_partial_responses_usage_real_bridge_iterator_pre_first_chunk():
             self.logging_obj = MagicMock()
             self._hidden_params = {"model_id": "deployment-123"}
 
+    class _FakeStreamWrapperWithoutHiddenParams:
+        def __init__(self) -> None:
+            self.logging_obj = MagicMock()
+
     iterator = LiteLLMCompletionStreamingIterator(
         model="anthropic/claude-3-5-sonnet-latest",
         litellm_custom_stream_wrapper=_FakeStreamWrapper(),
@@ -545,4 +549,12 @@ def test_extract_partial_responses_usage_real_bridge_iterator_pre_first_chunk():
     assert iterator._hidden_params == {"model_id": "deployment-123"}
     assert not iterator.collected_chat_completion_chunks
 
+    iterator_without_hidden_params = LiteLLMCompletionStreamingIterator(
+        model="anthropic/claude-3-5-sonnet-latest",
+        litellm_custom_stream_wrapper=_FakeStreamWrapperWithoutHiddenParams(),
+        request_input="hi",
+        responses_api_request={},
+    )
+
+    assert iterator_without_hidden_params._hidden_params == {}
     assert Router._extract_partial_responses_usage(iterator) is None
