@@ -10,6 +10,7 @@ import sys
 import wave
 from collections.abc import Awaitable
 from dataclasses import dataclass
+from itertools import zip_longest
 from pathlib import Path
 from typing import Final, Protocol, cast
 
@@ -220,9 +221,43 @@ def trace_diff(python: tuple[FunctionTraceEvent, ...], rust: tuple[FunctionTrace
     )
 
 
-def _print_tree(events: tuple[FunctionTraceEvent, ...]) -> None:
-    for event in events:
-        sys.stdout.write(f"{'  ' * event.depth}{event.function}\n")
+_PYTHON_COLUMN_WIDTH: Final = 52
+
+
+def _tree_lines(events: tuple[FunctionTraceEvent, ...], only: frozenset[str], marker: str) -> tuple[str, ...]:
+    return tuple(
+        f"{'  ' * event.depth}{event.function}" + (f"  {marker}" if event.function in only else "") for event in events
+    )
+
+
+def report(route: str, *, asynchronous: bool, full: bool) -> None:
+    case: Final = invocation(route, rust=False, asynchronous=asynchronous)
+    python_events: Final = run_trace(route, rust=False, asynchronous=asynchronous)
+    rust_events: Final = run_trace(route, rust=True, asynchronous=asynchronous)
+    python_steps: Final = python_events if full else pipeline_steps(route, "python", python_events)
+    rust_steps: Final = rust_events if full else pipeline_steps(route, "rust", rust_events)
+    diff: Final = trace_diff(python_steps, rust_steps)
+    sys.stdout.write(f"route: {route}    provider: {case.label}    mode: {'async' if asynchronous else 'sync'}\n\n")
+    if full:
+        sys.stdout.write("python runtime events\n")
+        for event in python_steps:
+            sys.stdout.write(f"{'  ' * event.depth}{event.function}\n")
+        sys.stdout.write("rust runtime events\n")
+        for event in rust_steps:
+            sys.stdout.write(f"{'  ' * event.depth}{event.function}\n\n")
+        return
+    sys.stdout.write(f"{'python':<{_PYTHON_COLUMN_WIDTH}}rust\n")
+    paired: Final = zip_longest(
+        _tree_lines(python_steps, frozenset(diff.python_only), "<- python only"),
+        _tree_lines(rust_steps, frozenset(diff.rust_only), "<- rust only"),
+        fillvalue="",
+    )
+    for python_line, rust_line in paired:
+        sys.stdout.write(f"{python_line:<{_PYTHON_COLUMN_WIDTH}}{rust_line}\n")
+    order: Final = "the same" if diff.shared_order_matches else "a different"
+    sys.stdout.write(f"\nshared steps appear in {order} order\n")
+    sys.stdout.write(f"python-only: {', '.join(diff.python_only) or 'none'}\n")
+    sys.stdout.write(f"rust-only: {', '.join(diff.rust_only) or 'none'}\n\n")
 
 
 def main() -> None:
@@ -242,22 +277,3 @@ def main() -> None:
     for selected in ROUTES:
         if route in ("all", selected):
             report(selected, asynchronous=asynchronous, full=full)
-
-
-def report(route: str, *, asynchronous: bool, full: bool) -> None:
-    case: Final = invocation(route, rust=False, asynchronous=asynchronous)
-    python_events: Final = run_trace(route, rust=False, asynchronous=asynchronous)
-    rust_events: Final = run_trace(route, rust=True, asynchronous=asynchronous)
-    python_steps: Final = python_events if full else pipeline_steps(route, "python", python_events)
-    rust_steps: Final = rust_events if full else pipeline_steps(route, "rust", rust_events)
-    sys.stdout.write(f"{route} | {case.label} | {'async' if asynchronous else 'sync'}\n")
-    sys.stdout.write(f"python ({len(python_steps)} steps)\n")
-    _print_tree(python_steps)
-    sys.stdout.write(f"rust ({len(rust_steps)} steps)\n")
-    _print_tree(rust_steps)
-    diff: Final = trace_diff(python_steps, rust_steps)
-    sys.stdout.write(
-        f"shared order: {'same' if diff.shared_order_matches else 'differs'};"
-        f" python-only: {', '.join(diff.python_only) or 'none'};"
-        f" rust-only: {', '.join(diff.rust_only) or 'none'}\n\n"
-    )
