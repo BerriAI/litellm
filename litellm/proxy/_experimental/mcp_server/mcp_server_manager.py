@@ -6067,13 +6067,13 @@ class MCPServerManager:
         internal_networks = IPAddressUtils.parse_internal_networks(general_settings.get("mcp_internal_ip_ranges"))
         return IPAddressUtils.is_internal_ip(client_ip, internal_networks)
 
-    def get_mcp_server_by_id(self, server_id: str) -> MCPServer | None:
-        """
-        Get the MCP Server from the server id
-        """
+    def get_mcp_server_by_id(self, server_id: str, client_ip: str | None = None) -> MCPServer | None:
+        """Get the MCP Server from the server id."""
         registry: Final = self.get_registry()
         for server in registry.values():
             if server.server_id == server_id:
+                if not self._is_server_accessible_from_ip(server, client_ip):
+                    return None
                 return server
         return None
 

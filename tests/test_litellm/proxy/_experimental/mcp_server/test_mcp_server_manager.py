@@ -128,6 +128,32 @@ class TestMCPServerManager:
         assert added_server.args == ["-m", "server"]
         assert added_server.env == {"DEBUG": "1", "TEST": "1"}
 
+    def test_get_mcp_server_by_id_allows_internal_or_unspecified_client_ip(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="private-server",
+            name="private-server",
+            transport=MCPTransport.http,
+            available_on_public_internet=False,
+        )
+        manager.registry[server.server_id] = server
+
+        assert manager.get_mcp_server_by_id(server.server_id) is server
+        assert manager.get_mcp_server_by_id(server.server_id, client_ip="10.0.0.1") is server
+
+    def test_get_mcp_server_by_id_rejects_private_server_for_public_ip(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="private-server",
+            name="private-server",
+            transport=MCPTransport.http,
+            available_on_public_internet=False,
+        )
+        manager.registry[server.server_id] = server
+
+        with patch.object(manager, "_get_general_settings", return_value={}):
+            assert manager.get_mcp_server_by_id(server.server_id, client_ip="8.8.8.8") is None
+
     async def test_create_mcp_client_stdio(self):
         """Test creating MCP client for stdio transport"""
         manager = MCPServerManager()
