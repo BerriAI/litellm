@@ -333,7 +333,7 @@ async def test_bedrock_kb_request_body_has_transformed_filters(
         timeout=None,
         client=None,
         _is_async=False,
-        router=None,
+        router: "litellm.Router | None" = None,
     ):
         litellm_params_dict = (
             litellm_params.model_dump(exclude_none=False)
