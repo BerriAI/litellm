@@ -24,6 +24,7 @@ from litellm.llms.mongodb.common_utils import (
     DEFAULT_SERVER_SELECTION_TIMEOUT_MS,
     DEFAULT_SOCKET_TIMEOUT_MS,
     MongoClientKey,
+    config_error,
     get_async_client,
     get_sync_client,
     index_not_ready_error,
@@ -88,7 +89,7 @@ class _MongoDBSearchParams(BaseModel):
 
     def require_embedding_model(self) -> str:
         if not self.litellm_embedding_model:
-            raise ValueError(
+            raise config_error(
                 "litellm_embedding_model is required in litellm_params for the MongoDB vector store. "
                 "It must be the same model that produced the vectors stored in "
                 f"'{self.mongodb_collection or '<collection>'}.{self.embedding_field}', or search results "
@@ -98,13 +99,13 @@ class _MongoDBSearchParams(BaseModel):
 
     def require_connection_string(self) -> str:
         if not self.mongodb_connection_string:
-            raise ValueError(
+            raise config_error(
                 "mongodb_connection_string is required in litellm_params for the MongoDB vector store. "
                 "Example: mongodb+srv://<user>:<password>@<cluster>.mongodb.net"
             )
         scheme: Final = self.mongodb_connection_string.split("://", 1)[0].lower()
         if scheme not in ("mongodb", "mongodb+srv"):
-            raise ValueError(
+            raise config_error(
                 "mongodb_connection_string must start with 'mongodb://' or 'mongodb+srv://', "
                 f"got '{self.mongodb_connection_string.split('://', 1)[0]}://'"
             )
@@ -112,7 +113,7 @@ class _MongoDBSearchParams(BaseModel):
 
     def require_database(self) -> str:
         if not self.mongodb_database:
-            raise ValueError(
+            raise config_error(
                 "mongodb_database is required in litellm_params for the MongoDB vector store. "
                 "Example: mongodb_database: sample_mflix"
             )
@@ -120,7 +121,7 @@ class _MongoDBSearchParams(BaseModel):
 
     def require_collection(self) -> str:
         if not self.mongodb_collection:
-            raise ValueError(
+            raise config_error(
                 "mongodb_collection is required in litellm_params for the MongoDB vector store. "
                 "Example: mongodb_collection: embedded_movies"
             )
@@ -145,9 +146,9 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
     def _query_text(query: str | Sequence[str]) -> str:
         text: Final = query if isinstance(query, str) else " ".join(query)
         if not text.strip():
-            raise ValueError("query must not be empty")
+            raise config_error("query must not be empty")
         if len(text) > MAX_QUERY_CHARACTERS:
-            raise ValueError(f"query must be at most {MAX_QUERY_CHARACTERS} characters, got {len(text)}")
+            raise config_error(f"query must be at most {MAX_QUERY_CHARACTERS} characters, got {len(text)}")
         return text
 
     @staticmethod
@@ -156,7 +157,7 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         if requested is None:
             return DEFAULT_MAX_NUM_RESULTS
         if not MIN_MAX_NUM_RESULTS <= requested <= MAX_MAX_NUM_RESULTS:
-            raise ValueError(
+            raise config_error(
                 f"max_num_results must be between {MIN_MAX_NUM_RESULTS} and {MAX_MAX_NUM_RESULTS}, got {requested}"
             )
         return requested
@@ -165,7 +166,7 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
     def _num_candidates(limit: int, configured: int | None) -> int:
         if configured is not None:
             if not limit <= configured <= MAX_NUM_CANDIDATES:
-                raise ValueError(
+                raise config_error(
                     f"mongodb_num_candidates must be between max_num_results ({limit}) and "
                     f"{MAX_NUM_CANDIDATES}, got {configured}"
                 )
@@ -199,7 +200,7 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
     ) -> list[dict[str, object]]:
         if vector_store_search_optional_params.get("filters") is not None:
-            raise ValueError(
+            raise config_error(
                 "MongoDB vector store does not support the filters parameter yet. "
                 "Restrict the collection or the Atlas Vector Search index definition instead."
             )
@@ -268,7 +269,7 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
     def _embedding_vector(embedding_response: EmbeddingResponse) -> Sequence[float]:
         data: Final = embedding_response.data
         if not data:
-            raise ValueError(
+            raise config_error(
                 "The embedding model returned no embedding for the search query, so there is nothing "
                 "to search MongoDB with. Check the embedding deployment named by litellm_embedding_model."
             )

@@ -5,8 +5,11 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+from litellm.exceptions import BadRequestError, Timeout
 from litellm.llms.mongodb.common_utils import (
     MongoClientKey,
+    index_not_ready_error,
+    missing_index_error,
     get_async_client,
     get_sync_client,
     reset_client_cache,
@@ -219,7 +222,7 @@ def test_num_candidates_can_be_overridden():
 def test_num_candidates_below_the_limit_or_above_the_ceiling_is_rejected(configured):
     config, _, _ = _config()
 
-    with pytest.raises(ValueError, match="mongodb_num_candidates"):
+    with pytest.raises(BadRequestError, match="mongodb_num_candidates"):
         _search(config, optional_params={"max_num_results": 5}, litellm_params={"mongodb_num_candidates": configured})
 
 
@@ -296,7 +299,7 @@ def test_response_stringifies_a_non_string_document_id():
 def test_search_requires_an_embedding_model():
     config, _, _ = _config()
 
-    with pytest.raises(ValueError, match="litellm_embedding_model is required"):
+    with pytest.raises(BadRequestError, match="litellm_embedding_model is required"):
         config.execute_search_vector_store_request(
             vector_store_id=INDEX,
             query="q",
@@ -309,7 +312,7 @@ def test_search_requires_an_embedding_model():
 def test_missing_embedding_model_message_names_the_field_being_searched():
     config, _, _ = _config()
 
-    with pytest.raises(ValueError, match=r"embedded_movies\.embedding"):
+    with pytest.raises(BadRequestError, match=r"embedded_movies\.embedding"):
         config.execute_search_vector_store_request(
             vector_store_id=INDEX,
             query="q",
@@ -322,7 +325,7 @@ def test_missing_embedding_model_message_names_the_field_being_searched():
 def test_search_requires_a_connection_string():
     config, _, _ = _config()
 
-    with pytest.raises(ValueError, match="mongodb_connection_string is required"):
+    with pytest.raises(BadRequestError, match="mongodb_connection_string is required"):
         _search(config, litellm_params={"mongodb_connection_string": None})
 
 
@@ -330,7 +333,7 @@ def test_search_requires_a_connection_string():
 def test_search_rejects_a_non_mongodb_connection_scheme(connection_string):
     config, _, _ = _config()
 
-    with pytest.raises(ValueError, match="must start with 'mongodb://' or 'mongodb\\+srv://'"):
+    with pytest.raises(BadRequestError, match="must start with 'mongodb://' or 'mongodb\\+srv://'"):
         _search(config, litellm_params={"mongodb_connection_string": connection_string})
 
 
@@ -345,21 +348,21 @@ def test_search_accepts_the_plain_mongodb_scheme():
 def test_search_requires_a_database():
     config, _, _ = _config()
 
-    with pytest.raises(ValueError, match="mongodb_database is required"):
+    with pytest.raises(BadRequestError, match="mongodb_database is required"):
         _search(config, litellm_params={"mongodb_database": None})
 
 
 def test_search_requires_a_collection():
     config, _, _ = _config()
 
-    with pytest.raises(ValueError, match="mongodb_collection is required"):
+    with pytest.raises(BadRequestError, match="mongodb_collection is required"):
         _search(config, litellm_params={"mongodb_collection": None})
 
 
 def test_search_rejects_filters_rather_than_silently_ignoring_them():
     config, _, _ = _config()
 
-    with pytest.raises(ValueError, match="does not support the filters parameter"):
+    with pytest.raises(BadRequestError, match="does not support the filters parameter"):
         _search(config, optional_params={"filters": {"genre": "sci-fi"}})
 
 
@@ -367,7 +370,7 @@ def test_search_rejects_filters_rather_than_silently_ignoring_them():
 async def test_async_search_rejects_filters_rather_than_silently_ignoring_them():
     config, _, _ = _async_config()
 
-    with pytest.raises(ValueError, match="does not support the filters parameter"):
+    with pytest.raises(BadRequestError, match="does not support the filters parameter"):
         await _asearch(config, optional_params={"filters": {"genre": "sci-fi"}})
 
 
@@ -375,14 +378,14 @@ async def test_async_search_rejects_filters_rather_than_silently_ignoring_them()
 def test_search_rejects_an_empty_query(query):
     config, _, _ = _config()
 
-    with pytest.raises(ValueError, match="query must not be empty"):
+    with pytest.raises(BadRequestError, match="query must not be empty"):
         _search(config, query=query)
 
 
 def test_search_rejects_an_oversized_query():
     config, _, _ = _config()
 
-    with pytest.raises(ValueError, match="at most 32000 characters"):
+    with pytest.raises(BadRequestError, match="at most 32000 characters"):
         _search(config, query="x" * 32_001)
 
 
@@ -398,7 +401,7 @@ def test_search_accepts_a_query_at_the_size_ceiling():
 def test_search_rejects_out_of_range_max_num_results(max_num_results):
     config, _, _ = _config()
 
-    with pytest.raises(ValueError, match="max_num_results must be between 1 and 50"):
+    with pytest.raises(BadRequestError, match="max_num_results must be between 1 and 50"):
         _search(config, optional_params={"max_num_results": max_num_results})
 
 
@@ -422,7 +425,7 @@ def test_search_treats_an_explicit_null_max_num_results_as_the_default():
 def test_search_fails_when_the_embedding_model_returns_nothing():
     config, _, _ = _config(embedding=None)
 
-    with pytest.raises(ValueError, match="returned no embedding"):
+    with pytest.raises(BadRequestError, match="returned no embedding"):
         _search(config)
 
 
@@ -433,7 +436,7 @@ def test_validation_runs_before_any_connection_is_opened():
         sync_client_factory=lambda key: opened.append(key) or FakeClient(FakeCollection([])),
     )
 
-    with pytest.raises(ValueError, match="query must not be empty"):
+    with pytest.raises(BadRequestError, match="query must not be empty"):
         _search(config, query="")
 
     assert opened == []
@@ -474,7 +477,7 @@ async def test_async_search_builds_the_same_pipeline_and_maps_the_response():
 async def test_async_search_requires_an_embedding_model():
     config, _, _ = _async_config()
 
-    with pytest.raises(ValueError, match="litellm_embedding_model is required"):
+    with pytest.raises(BadRequestError, match="litellm_embedding_model is required"):
         await config.aexecute_search_vector_store_request(
             vector_store_id=INDEX,
             query="q",
@@ -627,7 +630,7 @@ class TestErrorTranslation:
 
         config, _, _ = _config(error=ServerSelectionTimeoutError("no servers"))
 
-        with pytest.raises(ValueError, match="IP access list"):
+        with pytest.raises(Timeout, match="IP access list"):
             _search(config)
 
     @pytest.mark.asyncio
@@ -636,7 +639,7 @@ class TestErrorTranslation:
 
         config, _, _ = _async_config(error=OperationFailure("auth failed", code=18))
 
-        with pytest.raises(ValueError, match="rejected the credentials"):
+        with pytest.raises(BadRequestError, match="rejected the credentials"):
             await _asearch(config)
 
 
@@ -645,14 +648,14 @@ class TestMissingDriver:
         from litellm.llms.mongodb.common_utils import import_sync_mongo_client
 
         with patch.dict(sys.modules, {"pymongo": None}):
-            with pytest.raises(ValueError, match=r"pip install litellm\[mongodb\]"):
+            with pytest.raises(BadRequestError, match=r"pip install litellm\[mongodb\]"):
                 import_sync_mongo_client()
 
     def test_the_async_import_names_the_extra_to_install(self):
         from litellm.llms.mongodb.common_utils import import_async_mongo_client
 
         with patch.dict(sys.modules, {"pymongo": None}):
-            with pytest.raises(ValueError, match=r"pip install litellm\[mongodb\]"):
+            with pytest.raises(BadRequestError, match=r"pip install litellm\[mongodb\]"):
                 import_async_mongo_client()
 
     def test_error_translation_degrades_gracefully_without_the_driver(self):
@@ -670,7 +673,7 @@ class TestEmptyResultsAreDisambiguated:
     def test_a_missing_index_becomes_an_error_rather_than_an_empty_page(self):
         config, _, collection = _config(documents=[], search_indexes=[])
 
-        with pytest.raises(ValueError, match="No queryable Atlas Vector Search index"):
+        with pytest.raises(BadRequestError, match="No queryable Atlas Vector Search index"):
             _search(config)
 
         assert collection.listed_indexes == [INDEX]
@@ -678,7 +681,7 @@ class TestEmptyResultsAreDisambiguated:
     def test_the_missing_index_error_explains_why_mongodb_reported_no_results(self):
         config, _, _ = _config(documents=[], search_indexes=[])
 
-        with pytest.raises(ValueError, match="returns no results rather than an error"):
+        with pytest.raises(BadRequestError, match="returns no results rather than an error"):
             _search(config)
 
     def test_an_index_still_building_becomes_an_error_naming_its_status(self):
@@ -686,7 +689,7 @@ class TestEmptyResultsAreDisambiguated:
             documents=[], search_indexes=[{"name": INDEX, "status": "PENDING", "queryable": False}]
         )
 
-        with pytest.raises(ValueError, match="not queryable yet; its status is PENDING"):
+        with pytest.raises(BadRequestError, match="not queryable yet; its status is PENDING"):
             _search(config)
 
     def test_a_genuine_no_match_against_a_ready_index_returns_an_empty_page(self):
@@ -709,7 +712,7 @@ class TestEmptyResultsAreDisambiguated:
     async def test_async_missing_index_becomes_an_error_rather_than_an_empty_page(self):
         config, _, collection = _async_config(documents=[], search_indexes=[])
 
-        with pytest.raises(ValueError, match="No queryable Atlas Vector Search index"):
+        with pytest.raises(BadRequestError, match="No queryable Atlas Vector Search index"):
             await _asearch(config)
 
         assert collection.listed_indexes == [INDEX]
@@ -720,7 +723,7 @@ class TestEmptyResultsAreDisambiguated:
             documents=[], search_indexes=[{"name": INDEX, "status": "PENDING", "queryable": False}]
         )
 
-        with pytest.raises(ValueError, match="not queryable yet; its status is PENDING"):
+        with pytest.raises(BadRequestError, match="not queryable yet; its status is PENDING"):
             await _asearch(config)
 
     @pytest.mark.asyncio
@@ -752,7 +755,7 @@ class TestEmptyResultsAreDisambiguated:
             sync_client_factory=lambda key: FakeClient(collection),
         )
 
-        with pytest.raises(ValueError, match="lacks read access"):
+        with pytest.raises(BadRequestError, match="lacks read access"):
             _search(config)
 
 
@@ -785,3 +788,75 @@ class TestAtlasPlanExecutorErrors:
 
         assert "does not match the vector dimensions" in str(translated)
         assert "mongodb_embedding_field" not in str(translated)
+
+
+class TestErrorsCarryTheRightHttpStatus:
+    """litellm.exception_type passes a litellm exception through untouched but wraps anything
+    else into APIConnectionError, which the proxy serves as a 500 with a Python traceback in the
+    body. A misconfigured connection string is the caller's to fix, so it has to arrive as a 400.
+    """
+
+    @pytest.mark.parametrize(
+        "invoke",
+        [
+            pytest.param(lambda: _search(_config()[0], query="  "), id="empty-query"),
+            pytest.param(
+                lambda: _search(_config()[0], optional_params={"max_num_results": 999}),
+                id="max-num-results-out-of-range",
+            ),
+            pytest.param(
+                lambda: _search(_config()[0], optional_params={"filters": {"genre": "Action"}}),
+                id="unsupported-filters",
+            ),
+            pytest.param(
+                lambda: _search(_config()[0], litellm_params={"mongodb_connection_string": "postgres://host/db"}),
+                id="wrong-uri-scheme",
+            ),
+            pytest.param(
+                lambda: _search(_config()[0], litellm_params={"mongodb_database": None}), id="missing-database"
+            ),
+            pytest.param(
+                lambda: _search(_config()[0], litellm_params={"litellm_embedding_model": None}),
+                id="missing-embedding-model",
+            ),
+        ],
+    )
+    def test_configuration_failures_are_400(self, invoke):
+        with pytest.raises(BadRequestError) as excinfo:
+            invoke()
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.llm_provider == "mongodb"
+
+    def test_missing_index_is_400(self):
+        error = missing_index_error("idx", "db", "coll")
+        assert error.status_code == 400
+        assert error.llm_provider == "mongodb"
+
+    def test_index_still_building_is_400(self):
+        error = index_not_ready_error("idx", "db", "coll", "PENDING")
+        assert error.status_code == 400
+
+    def test_unreachable_deployment_is_a_timeout_not_a_bad_request(self):
+        from pymongo.errors import ServerSelectionTimeoutError
+
+        translated = translate_mongo_error(
+            ServerSelectionTimeoutError("no servers"), index_name="idx", database="db", collection="coll"
+        )
+        assert isinstance(translated, Timeout)
+        assert translated.status_code == 408
+
+    def test_query_execution_timeout_is_a_timeout(self):
+        from pymongo.errors import ExecutionTimeout
+
+        translated = translate_mongo_error(
+            ExecutionTimeout("too slow"), index_name="idx", database="db", collection="coll"
+        )
+        assert isinstance(translated, Timeout)
+        assert translated.status_code == 408
+
+    def test_unrecognised_errors_are_not_relabelled_as_bad_requests(self):
+        original = RuntimeError("something else entirely")
+        assert (
+            translate_mongo_error(original, index_name="idx", database="db", collection="coll")
+            is original
+        )
