@@ -76,6 +76,18 @@ def test_is_database_transport_error_non_connection_prisma_errors(prisma_error):
     assert PrismaDBExceptionHandler.is_database_transport_error(prisma_error) == False
 
 
+@pytest.mark.parametrize(
+    "transport_error",
+    [
+        httpx.ConnectError("connection refused"),
+        ClientNotConnectedError(),
+        HTTPClientClosedError(),
+    ],
+)
+def test_is_database_transport_error_connection_errors(transport_error):
+    assert PrismaDBExceptionHandler.is_database_transport_error(transport_error) is True
+
+
 def test_is_database_connection_generic_errors():
     """
     Test non-Prisma error cases for database connection checking
@@ -97,6 +109,8 @@ def test_is_database_connection_generic_errors():
         PrismaDBExceptionHandler.is_database_connection_error(db_proxy_exception)
         == True
     )
+    assert PrismaDBExceptionHandler.is_database_infrastructure_error(db_proxy_exception)
+    assert PrismaDBExceptionHandler.is_database_transport_error(db_proxy_exception)
 
     # Test with non-DB error
     regular_exception = Exception("Regular error")
@@ -104,6 +118,26 @@ def test_is_database_connection_generic_errors():
         PrismaDBExceptionHandler.is_database_connection_error(regular_exception)
         == False
     )
+
+
+def test_db_less_proxy_auth_error_does_not_require_prisma():
+    """A missing Prisma dependency must not mask a normal authentication error."""
+    original_import = __import__
+
+    def import_without_prisma(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "prisma" or name.startswith("prisma."):
+            raise ModuleNotFoundError("No module named 'prisma'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    with patch("builtins.__import__", side_effect=import_without_prisma):
+        error = Exception("No api key passed in.")
+        assert PrismaDBExceptionHandler.is_database_connection_error(error) is False
+        assert PrismaDBExceptionHandler.is_database_infrastructure_error(error) is False
+        assert PrismaDBExceptionHandler.is_prisma_data_error(error) is False
+        assert PrismaDBExceptionHandler.is_database_transport_error(error) is False
+        assert PrismaDBExceptionHandler.is_deadlock_error(error) is False
+        assert PrismaDBExceptionHandler.is_prisma_engine_internal_error(error) is False
+        assert PrismaDBExceptionHandler.is_database_service_unavailable_error(error) is False
 
 
 @pytest.mark.parametrize(

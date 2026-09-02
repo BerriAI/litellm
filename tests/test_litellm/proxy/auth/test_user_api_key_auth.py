@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 
+import httpx
 import pytest
 from fastapi import status
 
@@ -535,6 +536,45 @@ async def test_user_custom_auth_skips_post_custom_auth_checks_by_default():
         for attr, val in originals.items():
             setattr(_proxy_server_mod, attr, val)
         litellm.enable_post_custom_auth_checks = original_flag
+
+
+@pytest.mark.asyncio
+async def test_user_custom_auth_transport_error_does_not_use_db_fallback():
+    """An unavailable custom authenticator must not receive the DB fallback identity."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    mock_user_custom_auth = AsyncMock(side_effect=httpx.ConnectError("auth service unavailable"))
+    attrs = _proxy_server_attrs_for_custom_auth(user_custom_auth=mock_user_custom_auth)
+    attrs["general_settings"] = {"allow_requests_on_db_unavailable": True}
+    originals = {attr: getattr(_proxy_server_mod, attr, None) for attr in attrs}
+
+    try:
+        for attr, val in attrs.items():
+            setattr(_proxy_server_mod, attr, val)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        with pytest.raises(ProxyException) as exc_info:
+            await _user_api_key_auth_builder(
+                request=request,
+                api_key="Bearer sk-custom-auth-unavailable",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+
+        assert exc_info.value.type == ProxyErrorTypes.no_db_connection
+        assert int(exc_info.value.code) == status.HTTP_503_SERVICE_UNAVAILABLE
+        mock_user_custom_auth.assert_awaited_once()
+    finally:
+        for attr, val in originals.items():
+            setattr(_proxy_server_mod, attr, val)
 
 
 @pytest.mark.asyncio
