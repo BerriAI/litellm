@@ -56,6 +56,24 @@ def test_duplicate_function_names_are_matched_by_ordinal():
     assert list(merged) == [original[0]]
 
 
+def test_interleaved_duplicate_names_keep_their_own_ordinals():
+    original = [
+        _function("dup", "a"),
+        _function("other", "x"),
+        _function("dup", "b"),
+        _function("dup", "c"),
+        _function("other", "y"),
+    ]
+    groups = _groups(original)
+    flat = _flat(groups)
+    edited = {**flat[3], "function": {**flat[3]["function"], "description": "changed"}}
+
+    merged = merge_guardrailed_tools(original, groups, [*flat[:3], edited, flat[4]])
+
+    assert list(merged) == [*original[:3], {**_function("dup", "changed"), "strict": False}, original[4]]
+    assert all(merged[position] is original[position] for position in (0, 1, 2, 4))
+
+
 def test_edited_mcp_tool_is_rewritten():
     original = [{"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"}]
     groups = _groups(original)
