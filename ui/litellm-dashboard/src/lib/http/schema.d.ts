@@ -23639,7 +23639,7 @@ export interface components {
             timeout?: number | null;
             /**
              * Unreachable Fallback
-             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
+             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'neuraltrust'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
              * @default fail_closed
              * @enum {string}
              */
@@ -30184,6 +30184,11 @@ export interface components {
              * @default 25000
              */
             chunk_budget_chars: number;
+            /**
+             * Collector Key
+             * @description TrustGuard collector key (tgcol_...). Optional when the API key is bound to a collector. Env: TRUSTGUARD_COLLECTOR_KEY.
+             */
+            collector_key?: string | null;
             /**
              * Confidence Threshold
              * @description Only block or mask when detection confidence >= this value; below threshold, allow or log_only.

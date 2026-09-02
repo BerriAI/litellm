@@ -9752,7 +9752,7 @@
             },
             "unreachable_fallback": {
               "default": "fail_closed",
-              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
+              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'neuraltrust'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
               "enum": [
                 "fail_closed",
                 "fail_open"
@@ -11209,6 +11209,18 @@
               "exclusiveMinimum": 0.0,
               "title": "Chunk Budget Chars",
               "type": "integer"
+            },
+            "collector_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "TrustGuard collector key (tgcol_...). Optional when the API key is bound to a collector. Env: TRUSTGUARD_COLLECTOR_KEY.",
+              "title": "Collector Key"
             },
             "confidence_threshold": {
               "default": 0.5,
