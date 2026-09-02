@@ -78,9 +78,17 @@ class _AsyncRedisCommands(Protocol):
     def pipeline(self, transaction: bool = True) -> "Pipeline[bytes]": ...
 
 
+_BREAKER_GUARD_FRAME_NAMES: Final = frozenset(
+    {"<lambda>", "wrapper", "_run_under_circuit_breaker", "_run_under_circuit_breaker_sync"}
+)
+
+
 def _get_call_stack_info(num_frames: int = 2) -> str:
     """
     Get the function names from the previous 1-2 functions in the call stack.
+
+    Frames belonging to this module's circuit-breaker guards are skipped so the
+    reported callers stay the real ones even on guarded methods.
 
     Args:
         num_frames: Number of previous frames to include (default: 2)
@@ -102,11 +110,11 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
             return "unknown"
         function_names: Final = []
 
-        for _ in range(num_frames):
-            if frame is None:
-                break
-            func_name = frame.f_code.co_name
-            function_names.append(func_name)
+        while frame is not None and len(function_names) < num_frames:
+            if frame.f_code.co_name in _BREAKER_GUARD_FRAME_NAMES and frame.f_code.co_filename == __file__:
+                frame = frame.f_back
+                continue
+            function_names.append(frame.f_code.co_name)
             frame = frame.f_back
 
         if not function_names:

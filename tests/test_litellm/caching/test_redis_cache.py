@@ -524,6 +524,35 @@ def test_circuit_breaker_opens_when_sync_batch_get_cache_swallows_redis_failure(
         sync_batch_redis_cache.batch_get_cache(key_list=["lit6729"])
 
 
+def test_call_stack_info_skips_breaker_guard_frames():
+    """Guarded methods must still report their real callers in service-log call_type.
+
+    The breaker guards put their own frames between a method body and its caller, so
+    without skipping them every guarded method logged the guard machinery instead of
+    who actually issued the Redis call.
+    """
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        _get_call_stack_info,
+        _redis_circuit_breaker_guard_sync,
+    )
+
+    class Guarded:
+        _circuit_breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+
+        @_redis_circuit_breaker_guard_sync
+        def probe(self):
+            return _get_call_stack_info()
+
+    def caller_one():
+        return Guarded().probe()
+
+    def caller_two():
+        return caller_one()
+
+    assert caller_two() == "caller_one <- caller_two"
+
+
 @pytest.mark.asyncio
 async def test_circuit_breaker_success_still_resets_the_failure_streak(redis_no_ping):
     """A reachable Redis must keep the breaker closed, however many earlier calls failed.
