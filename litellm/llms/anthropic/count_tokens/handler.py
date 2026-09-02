@@ -41,7 +41,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
             model: The model identifier (e.g., "claude-3-5-sonnet-20241022")
             messages: The messages to count tokens for
             api_key: The Anthropic API key
-            api_base: Optional custom API base URL
+            api_base: Optional deployment api_base the count-tokens path is appended to
             timeout: Optional timeout for the request (defaults to litellm.request_timeout)
 
         Returns:
@@ -67,7 +67,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
             verbose_logger.debug("Transformed request: %s", request_body)
 
             # Get endpoint URL
-            endpoint_url: Final = api_base or self.get_anthropic_count_tokens_endpoint()
+            endpoint_url: Final = self.get_anthropic_count_tokens_endpoint(api_base)
 
             verbose_logger.debug("Making request to: %s", endpoint_url)
 
