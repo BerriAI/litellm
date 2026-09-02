@@ -222,12 +222,27 @@ def trace_diff(python: tuple[FunctionTraceEvent, ...], rust: tuple[FunctionTrace
 
 
 _PYTHON_COLUMN_WIDTH: Final = 52
+_PYTHON_ONLY_COLOR: Final = "\033[33m"
+_RUST_ONLY_COLOR: Final = "\033[36m"
+_RESET: Final = "\033[0m"
 
 
-def _tree_lines(events: tuple[FunctionTraceEvent, ...], only: frozenset[str], marker: str) -> tuple[str, ...]:
+def _tree_lines(
+    events: tuple[FunctionTraceEvent, ...], only: frozenset[str], marker: str
+) -> tuple[tuple[str, bool], ...]:
     return tuple(
-        f"{'  ' * event.depth}{event.function}" + (f"  {marker}" if event.function in only else "") for event in events
+        (
+            f"{'  ' * event.depth}{event.function}" + (f"  {marker}" if event.function in only else ""),
+            event.function in only,
+        )
+        for event in events
     )
+
+
+def _cell(line: tuple[str, bool], width: int, color: str, *, colorize: bool) -> str:
+    text, marked = line
+    padded: Final = f"{text:<{width}}"
+    return f"{color}{padded}{_RESET}" if colorize and marked else padded
 
 
 def report(route: str, *, asynchronous: bool, full: bool) -> None:
@@ -247,13 +262,16 @@ def report(route: str, *, asynchronous: bool, full: bool) -> None:
             sys.stdout.write(f"{'  ' * event.depth}{event.function}\n\n")
         return
     sys.stdout.write(f"{'python':<{_PYTHON_COLUMN_WIDTH}}rust\n")
+    colorize: Final = sys.stdout.isatty() and "NO_COLOR" not in os.environ
     paired: Final = zip_longest(
         _tree_lines(python_steps, frozenset(diff.python_only), "<- python only"),
         _tree_lines(rust_steps, frozenset(diff.rust_only), "<- rust only"),
-        fillvalue="",
+        fillvalue=("", False),
     )
     for python_line, rust_line in paired:
-        sys.stdout.write(f"{python_line:<{_PYTHON_COLUMN_WIDTH}}{rust_line}\n")
+        python_cell = _cell(python_line, _PYTHON_COLUMN_WIDTH, _PYTHON_ONLY_COLOR, colorize=colorize)
+        rust_cell = _cell(rust_line, 0, _RUST_ONLY_COLOR, colorize=colorize)
+        sys.stdout.write(f"{python_cell}{rust_cell}\n")
     order: Final = "the same" if diff.shared_order_matches else "a different"
     sys.stdout.write(f"\nshared steps appear in {order} order\n")
     sys.stdout.write(f"python-only: {', '.join(diff.python_only) or 'none'}\n")
