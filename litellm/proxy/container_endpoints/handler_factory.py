@@ -207,7 +207,7 @@ async def _process_binary_request(
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
 
     try:
-        content: Final = await processor.base_process_llm_request(
+        content: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -268,7 +268,7 @@ async def _process_multipart_upload_request(
     user_api_key_dict: UserAPIKeyAuth,
     route_type: str,
     container_id: str,
-):
+) -> object:
     """Process multipart file upload requests."""
     from litellm.proxy.common_utils.http_parsing_utils import (
         convert_upload_files_to_file_data,
@@ -357,7 +357,7 @@ async def _process_request(
     user_api_key_dict: UserAPIKeyAuth,
     route_type: str,
     path_params: dict[str, str],
-):
+) -> object:
     """Common request processing logic."""
     from litellm.proxy.proxy_server import (
         general_settings,

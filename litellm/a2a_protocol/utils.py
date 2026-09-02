@@ -2,6 +2,7 @@
 Utility functions for A2A protocol.
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
@@ -46,7 +47,7 @@ class A2ARequestUtils:
         return " ".join(text_parts)
 
     @staticmethod
-    def extract_text_from_response(response_dict: dict[str, Any]) -> str:
+    def extract_text_from_response(response_dict: Mapping[str, object]) -> str:
         """
         Extract text content from A2A response result.
 
@@ -109,7 +110,7 @@ class A2ARequestUtils:
     @staticmethod
     def calculate_usage_from_request_response(
         request: "SendMessageRequest | SendStreamingMessageRequest",
-        response_dict: dict[str, Any],
+        response_dict: Mapping[str, object],
     ) -> tuple[int, int, int]:
         """
         Calculate token usage from A2A request and response.
@@ -145,5 +146,5 @@ def extract_text_from_a2a_message(message: Any) -> str:
     return A2ARequestUtils.extract_text_from_message(message)
 
 
-def extract_text_from_a2a_response(response_dict: dict[str, Any]) -> str:
+def extract_text_from_a2a_response(response_dict: Mapping[str, object]) -> str:
     return A2ARequestUtils.extract_text_from_response(response_dict)

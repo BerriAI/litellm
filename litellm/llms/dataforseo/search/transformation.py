@@ -4,7 +4,7 @@ Calls DataForSEO SERP API to search the web.
 DataForSEO API Reference: https://docs.dataforseo.com/v3/serp/google/organic/live/advanced/?bash
 """
 
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 import httpx
 
@@ -126,7 +126,7 @@ class DataForSEOSearchConfig(BaseSearchConfig):
             List[Dict]: Request body for DataForSEO API (array of task objects as required by API)
         """
         # DataForSEO expects an array of task objects
-        task: Final[dict[str, Any]] = {}
+        task: Final[dict[str, object]] = {}
 
         # Convert query to string if it's a list
         if isinstance(query, list):

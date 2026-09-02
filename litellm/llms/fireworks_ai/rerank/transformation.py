@@ -67,11 +67,11 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Map Cohere rerank params to Fireworks AI rerank params
         """
-        params: Final[dict[str, Any]] = {
+        params: Final[dict[str, object]] = {
             "query": query,
             "documents": documents,
         }

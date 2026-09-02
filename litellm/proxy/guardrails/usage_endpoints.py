@@ -355,6 +355,11 @@ def _to_dict(value: object) -> dict[str, Any]:
     return {}
 
 
+def _field_str(mapping: Mapping[str, object], key: str, default: str) -> str:
+    """Stringify `mapping[key]`, falling back to `default` when the key is absent."""
+    return str(mapping.get(key, default))
+
+
 def _get_guardrail_attrs(g: "_DbOrConfigGuardrail") -> tuple[Any, str]:
     """Get (guardrail_id, display_name) from guardrail - handles Prisma model or dict."""
     gid: Final = _get_guardrail_field(g, "guardrail_id")
@@ -383,9 +388,9 @@ def _guardrail_overview_rows(
         req, blocked = a["requests"], a["blocked"]
         fail_rate = (100.0 * blocked / req) if req else 0.0
         litellm_params = _to_dict(_get_guardrail_field(g, "litellm_params"))
-        provider = str(litellm_params.get("guardrail", "Unknown"))
+        provider = _field_str(litellm_params, "guardrail", "Unknown")
         guardrail_info = _to_dict(_get_guardrail_field(g, "guardrail_info"))
-        gtype = str(guardrail_info.get("type", "Guardrail"))
+        gtype = _field_str(guardrail_info, "type", "Guardrail")
         prev_fail = 0.0
         for k in lookup_keys:
             if k in prev_agg:
@@ -624,8 +629,8 @@ async def guardrails_usage_detail(
     return UsageDetailResponse(
         guardrail_id=guardrail_id,
         guardrail_name=_guardrail_name or guardrail_id,
-        type=str(guardrail_info.get("type", "Guardrail")),
-        provider=str(litellm_params.get("guardrail", "Unknown")),
+        type=_field_str(guardrail_info, "type", "Guardrail"),
+        provider=_field_str(litellm_params, "guardrail", "Unknown"),
         requestsEvaluated=requests,
         failRate=round(fail_rate, 1),
         avgScore=None,

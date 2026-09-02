@@ -1,17 +1,32 @@
 # stdlib imports
 import re
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 # third party imports
 import click
 import rich
 import yaml
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 # local imports
 from ... import Client
+from ._cli_context import cli_context_values
+
+if TYPE_CHECKING:
+    from rich.console import JustifyMethod
+
+
+class _ModelInfoColumnConfig(TypedDict):
+    """Rendering config for one column of the ``models info`` table."""
+
+    header: ReadOnly[str]
+    style: ReadOnly[str]
+    justify: NotRequired[ReadOnly["JustifyMethod"]]
+    get_value: ReadOnly[Callable[..., str]]
 
 
 @dataclass
@@ -84,7 +99,8 @@ def format_cost_per_1k_tokens(cost: float | None) -> str:
 
 def create_client(ctx: click.Context) -> Client:
     """Helper function to create a client from context."""
-    return Client(base_url=ctx.obj["base_url"], api_key=ctx.obj["api_key"])
+    context: Final = cli_context_values(ctx)
+    return Client(base_url=context["base_url"], api_key=context["api_key"])
 
 
 @click.group()
@@ -216,7 +232,7 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
         table: Final = rich.table.Table(title="Models Information")
 
         # Define all possible columns with their configurations
-        column_configs: Final[dict[str, dict[str, Any]]] = {
+        column_configs: Final[dict[str, _ModelInfoColumnConfig]] = {
             "public_model": {
                 "header": "Public Model",
                 "style": "cyan",

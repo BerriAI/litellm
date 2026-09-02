@@ -13,6 +13,7 @@ bounded list of recent tool call signatures.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -92,7 +93,7 @@ class Turn:
     user_content: str | None = None
     assistant_content: str | None = None
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
-    tool_results: list[dict[str, Any]] = field(default_factory=list)
+    tool_results: Sequence[Mapping[str, object]] = field(default_factory=list[Mapping[str, object]])
     response_status: int | None = None
 
 
@@ -104,7 +105,7 @@ _TOKEN_RE: Final = re.compile(r"[A-Za-z0-9]+")
 def _tokens(text: str | None) -> set[str]:
     if not text:
         return set()
-    return {t.lower() for t in _TOKEN_RE.findall(text)}
+    return {match.group(0).lower() for match in _TOKEN_RE.finditer(text)}
 
 
 def _jaccard(a: set[str], b: set[str]) -> float:
@@ -160,7 +161,7 @@ def _detect_satisfaction(curr_user: str | None) -> bool:
     return any(p.search(curr_user) for p in _SATISFACTION_PATTERNS)
 
 
-def _detect_failure(tool_results: list[dict[str, Any]]) -> bool:
+def _detect_failure(tool_results: Sequence[Mapping[str, object]]) -> bool:
     """Any tool result explicitly flagged as an error.
 
     We do NOT treat empty content as failure — many tools legitimately return
@@ -209,7 +210,7 @@ _EXHAUSTION_KEYWORDS: Final = (
 )
 
 
-def _detect_exhaustion(status: int | None, tool_results: list[dict[str, Any]]) -> bool:
+def _detect_exhaustion(status: int | None, tool_results: Sequence[Mapping[str, object]]) -> bool:
     if status is not None and status in _EXHAUSTION_STATUSES:
         return True
     for r in tool_results:
@@ -222,7 +223,7 @@ def _detect_exhaustion(status: int | None, tool_results: list[dict[str, Any]]) -
 def detect_user_feedback(
     previous_user_content: str | None,
     current_user_content: str | None,
-    tool_results: list[dict[str, Any]],
+    tool_results: Sequence[Mapping[str, object]],
     allow_satisfaction: bool,
 ) -> SignalDelta:
     return SignalDelta(
@@ -238,7 +239,7 @@ def detect_response_signals(
     current_assistant_content: str | None,
     tool_call_history: list[str],
     tool_calls: list[dict[str, Any]],
-    tool_results: list[dict[str, Any]],
+    tool_results: Sequence[Mapping[str, object]],
     response_status: int | None,
 ) -> SignalDelta:
     return SignalDelta(

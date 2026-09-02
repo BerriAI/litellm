@@ -123,7 +123,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         optional_params: dict,
         voice: str | dict | None = None,
         drop_params: bool = False,
-        kwargs: dict[str, Any] | None = None,
+        kwargs: Mapping[str, object] | None = None,
     ) -> tuple[str | None, dict]:
         """
         Map OpenAI parameters to MiniMax TTS parameters

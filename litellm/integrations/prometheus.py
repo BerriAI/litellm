@@ -10,7 +10,7 @@ import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
 
 from pydantic import BaseModel
 
@@ -140,6 +140,9 @@ class _ExcludedLabelMetric:
             value for name, value in zip(self._original_labelnames, values) if name not in self._excluded_labels
         )
         return self._metric.labels(*kept_values) if kept_values else self._metric
+
+
+_MetricLike: TypeAlias = "NoOpMetric | _ExcludedLabelMetric | MetricWrapperBase"
 
 
 def _get_budget_metrics_per_request_timeout() -> float:
@@ -1652,7 +1655,7 @@ class PrometheusLogger(CustomLogger):
 
         cache_creation_detail_tokens: Final = PrometheusLogger._resolve_cache_write_tokens(prompt_details)
 
-        detail_metrics: Final[list[tuple[Any, DEFINED_PROMETHEUS_METRICS, object]]] = [
+        detail_metrics: Final[list[tuple[_MetricLike, DEFINED_PROMETHEUS_METRICS, object]]] = [
             (
                 self.litellm_input_cached_tokens_metric,
                 "litellm_input_cached_tokens_metric",
@@ -1705,7 +1708,7 @@ class PrometheusLogger(CustomLogger):
         if not isinstance(usage_object, dict):
             return
 
-        media_metrics: Final[list[tuple[Any, DEFINED_PROMETHEUS_METRICS, object]]] = [
+        media_metrics: Final[list[tuple[_MetricLike, DEFINED_PROMETHEUS_METRICS, object]]] = [
             (
                 self.litellm_video_duration_seconds_metric,
                 "litellm_video_duration_seconds_metric",
@@ -1727,7 +1730,7 @@ class PrometheusLogger(CustomLogger):
 
     def _inc_sparse_usage_counters(
         self,
-        counters_with_values: Sequence[tuple[Any, DEFINED_PROMETHEUS_METRICS, object]],
+        counters_with_values: Sequence[tuple[_MetricLike, DEFINED_PROMETHEUS_METRICS, object]],
         enum_values: UserAPIKeyLabelValues,
         label_context: PrometheusLabelFactoryContext | None = None,
     ) -> None:
@@ -2623,7 +2626,7 @@ class PrometheusLogger(CustomLogger):
         """
         standard_logging_payload: Final = request_kwargs.get("standard_logging_object", {}) or {}
         _litellm_params: Final = request_kwargs.get("litellm_params", {}) or {}
-        _metadata_raw: Final = self._safe_get(standard_logging_payload, "metadata") or {}
+        _metadata_raw: Final[object] = self._safe_get(standard_logging_payload, "metadata") or {}
         if isinstance(_metadata_raw, dict):
             _metadata = _metadata_raw
         else:

@@ -5,7 +5,7 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 import asyncio
 import base64
 import os
-from collections.abc import Awaitable, Callable, Generator, Sequence
+from collections.abc import Awaitable, Callable, Generator
 from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from functools import partial
@@ -13,11 +13,19 @@ from importlib import metadata
 from typing import Any, Final, Protocol, TypeAlias, TypeVar
 
 import httpx
+from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from mcp import ClientSession, McpError, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
+from mcp.shared.message import SessionMessage
+from typing_extensions import Unpack
 
-_TransportContext: TypeAlias = AbstractAsyncContextManager[Sequence[Any]]
+_TransportStreams: TypeAlias = tuple[
+    MemoryObjectReceiveStream[SessionMessage | Exception],
+    MemoryObjectSendStream[SessionMessage],
+    Unpack[tuple[object, ...]],
+]
+_TransportContext: TypeAlias = AbstractAsyncContextManager[_TransportStreams]
 
 
 class _StreamableHttpClientFactory(Protocol):

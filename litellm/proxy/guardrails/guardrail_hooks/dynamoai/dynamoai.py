@@ -6,7 +6,7 @@
 # +-------------------------------------------------------------+
 
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterable
 from datetime import datetime
 from typing import Any, Final
 
@@ -188,7 +188,7 @@ class DynamoAIGuardrails(CustomGuardrail):
         applied_policies: Final = response.get("appliedPolicies", [])
 
         violations_detected: Final[list[str]] = []
-        violation_details: Final[dict[str, Any]] = {}
+        violation_details: Final[dict[str, object]] = {}
 
         # For now, only handle BLOCK action
         if final_action == "BLOCK":
@@ -404,7 +404,7 @@ class DynamoAIGuardrails(CustomGuardrail):
         # to avoid sending empty content to DynamoAI (e.g., during tool calls)
         if isinstance(response, litellm.ModelResponse):
             has_text_content = False
-            dynamoai_messages: Final[list[dict[str, Any]]] = []
+            dynamoai_messages: Final[list[dict[str, str]]] = []
 
             for choice in response.choices:
                 if isinstance(choice, litellm.Choices):
@@ -446,7 +446,7 @@ class DynamoAIGuardrails(CustomGuardrail):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
+        response: AsyncIterable[ModelResponseStream],
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """

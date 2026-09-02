@@ -6,7 +6,7 @@ usage/spend data by querying the aggregated daily activity endpoints.
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import date
-from typing import Any, Final, Literal, Protocol, cast, overload
+from typing import Any, Final, Literal, NamedTuple, Protocol, cast, overload
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -80,6 +80,15 @@ class _EntityEntry(TypedDict, total=False):
 
 class _DayDump(TypedDict, total=False):
     breakdown: ReadOnly[Mapping[str, Mapping[str, _EntityEntry]]]
+
+
+class _EntityTotal(NamedTuple):
+    """Running per-entity totals accumulated while summarising a usage dump."""
+
+    alias: str
+    spend: float
+    requests: float
+    tokens: float
 
 
 class _UsageDump(Protocol):
@@ -241,7 +250,7 @@ def _parse_csv_ids(raw: str | None) -> list[str] | None:
 async def _query_activity(
     table_name: str,
     entity_id_field: str,
-    entity_id: Any | None,
+    entity_id: str | list[str] | None,
     start_date: str,
     end_date: str,
     *,
@@ -382,23 +391,22 @@ def _summarise_entity_data(data: _UsageDump, entity_label: str) -> str:
     if not results:
         return f"No {entity_label} usage data found for the given date range."
 
-    totals: Final[dict[str, dict[str, Any]]] = {}
+    totals: Final[dict[str, _EntityTotal]] = {}
     for day in results:
         for eid, entry in day.get("breakdown", {}).get("entities", {}).items():
-            if eid not in totals:
-                alias = entry.get("metadata", {}).get("alias", eid)
-                totals[eid] = {"alias": alias, "spend": 0.0, "requests": 0, "tokens": 0}
+            previous = totals.get(eid)
             m = entry.get("metrics", {})
-            totals[eid]["spend"] += m.get("spend", 0)
-            totals[eid]["requests"] += m.get("api_requests", 0)
-            totals[eid]["tokens"] += m.get("total_tokens", 0)
+            totals[eid] = _EntityTotal(
+                alias=previous.alias if previous is not None else entry.get("metadata", {}).get("alias", eid),
+                spend=(previous.spend if previous is not None else 0.0) + m.get("spend", 0),
+                requests=(previous.requests if previous is not None else 0) + m.get("api_requests", 0),
+                tokens=(previous.tokens if previous is not None else 0) + m.get("total_tokens", 0),
+            )
 
     lines: Final = [f"{entity_label} Usage ({len(totals)} {entity_label.lower()}s):", ""]
-    for eid, d in sorted(totals.items(), key=lambda x: -x[1]["spend"]):
-        label = d["alias"] if d["alias"] != eid else eid
-        lines.append(
-            f"- {label} (ID: {eid}): ${d['spend']:.4f} | {int(d['requests'])} reqs | {int(d['tokens'])} tokens"
-        )
+    for eid, d in sorted(totals.items(), key=lambda x: -x[1].spend):
+        label = d.alias if d.alias != eid else eid
+        lines.append(f"- {label} (ID: {eid}): ${d.spend:.4f} | {int(d.requests)} reqs | {int(d.tokens)} tokens")
     return "\n".join(lines)
 
 

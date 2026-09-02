@@ -14,6 +14,7 @@ from functools import partial
 from typing import Any, Final, Literal, cast
 
 import httpx
+from openai import AsyncOpenAI, OpenAI
 
 # Type aliases for provider parameters
 FileCreateProvider = Literal[
@@ -1002,7 +1003,7 @@ def file_content_streaming(
     timeout: float | httpx.Timeout,
     logging_obj: LiteLLMLoggingObj | None,
     _is_async: bool,
-    client: Any | None,
+    client: OpenAI | AsyncOpenAI | None,
 ) -> FileContentStreamingResult | Coroutine[object, object, FileContentStreamingResult]:
     if logging_obj is not None:
         logging_obj.model = model or ""
