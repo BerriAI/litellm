@@ -8234,6 +8234,45 @@ def speech(
             client=client,
             _is_async=aspeech or False,
         )
+    elif custom_llm_provider == "gandr":
+        from litellm.llms.gandr.text_to_speech.transformation import (
+            GandrTextToSpeechConfig,
+        )
+
+        if text_to_speech_provider_config is None:  # rebind-ok: default construction when unset
+            text_to_speech_provider_config = GandrTextToSpeechConfig()  # rebind-ok: default construction when unset
+
+        assert isinstance(text_to_speech_provider_config, GandrTextToSpeechConfig)
+        gandr_config: Final = text_to_speech_provider_config
+
+        voice_input: Final = voice if isinstance(voice, str) else None
+        if voice_input is None or not voice_input.strip():
+            raise litellm.BadRequestError(
+                message="'voice' must resolve to a Gandr voice id for Gandr TTS",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+        gandr_voice_id: Final = voice_input.strip()
+
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        response = base_llm_http_handler.text_to_speech_handler(  # rebind-ok: every provider branch assigns response for the shared return
+            model=model,
+            input=input,
+            voice=gandr_voice_id,
+            text_to_speech_provider_config=gandr_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         from litellm.llms.vertex_ai.text_to_speech.transformation import (
             VertexAITextToSpeechConfig,

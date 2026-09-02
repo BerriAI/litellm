@@ -9446,6 +9446,12 @@ class ProviderConfigManager:
             )
 
             return ElevenLabsTextToSpeechConfig()
+        elif litellm.LlmProviders.GANDR == provider:
+            from litellm.llms.gandr.text_to_speech.transformation import (
+                GandrTextToSpeechConfig,
+            )
+
+            return GandrTextToSpeechConfig()
         elif litellm.LlmProviders.RUNWAYML == provider:
             from litellm.llms.runwayml.text_to_speech.transformation import (
                 RunwayMLTextToSpeechConfig,
