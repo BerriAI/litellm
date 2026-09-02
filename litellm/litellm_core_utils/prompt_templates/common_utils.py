@@ -1564,7 +1564,9 @@ def strip_litellm_internal_message_fields(message: AllMessageValues) -> AllMessa
         return message
     return cast(  # cast-ok: same TypedDict minus internal keys
         AllMessageValues,
-        {key: value for key, value in message.items() if key not in LITELLM_INTERNAL_MESSAGE_FIELDS},
+        {  # mutable-ok: provider transforms mutate message dicts in place downstream
+            key: value for key, value in message.items() if key not in LITELLM_INTERNAL_MESSAGE_FIELDS
+        },
     )
 
 

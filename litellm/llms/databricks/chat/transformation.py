@@ -3,7 +3,7 @@ Translates from OpenAI's `/v1/chat/completions` to Databricks' `/chat/completion
 """
 
 import os
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import httpx
@@ -56,7 +56,7 @@ from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import DatabricksBase, DatabricksException
 
 
-def _is_bare_assistant_message(message_dict: dict[str, Any]) -> bool:
+def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
     """Databricks rejects assistant messages with neither content nor tool calls, e.g. a replayed
     thinking-only turn once its `thinking_blocks` are stripped."""
     return message_dict.get("role") == "assistant" and not any(
@@ -442,7 +442,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             if "cache_control" in _message and isinstance(_message.get("content"), str):
                 _message = self._move_cache_control_into_string_content_block(_message)
             _sanitize_empty_content(cast(dict[str, Any], _message))
-            if _is_bare_assistant_message(cast(dict[str, Any], _message)):
+            if _is_bare_assistant_message(_message):
                 continue
             new_messages.append(_message)
 
