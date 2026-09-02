@@ -63,8 +63,7 @@ class ClassifierResponseSchema(TypedDict):
 def _candidate_card(candidate: CapabilityRouterCandidate) -> str:
     header: Final = f"- model={json.dumps(candidate.model)}, description={json.dumps(candidate.description)}"
     rules: Final = tuple(
-        f"  rule id={json.dumps(rule_id)}, text={json.dumps(rule.rule)}"
-        for rule_id, rule in indexed_rules(candidate)
+        f"  rule id={json.dumps(rule_id)}, text={json.dumps(rule.rule)}" for rule_id, rule in indexed_rules(candidate)
     )
     return "\n".join((header, *rules))
 
