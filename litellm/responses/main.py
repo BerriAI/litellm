@@ -175,7 +175,7 @@ async def aresponses_api_with_mcp(
     (
         mcp_tools_with_litellm_proxy,
         other_tools,
-    ) = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
+    ) = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(tools)
 
     # Process MCP tools through the complete pipeline (fetch + filter + deduplicate + transform)
     # Extract user_api_key_auth from litellm_metadata (where it's added by add_user_api_key_auth_to_request_metadata)
@@ -234,6 +234,7 @@ async def aresponses_api_with_mcp(
         "timeout": timeout,
         "custom_llm_provider": custom_llm_provider,
         **kwargs,
+        "_skip_mcp_handler": True,
     }
 
     # Handle MCP streaming if requested
@@ -839,13 +840,14 @@ def _responses_try_dispatch_mcp_gateway(
     custom_llm_provider: str | None,
     kwargs: dict[str, object],
     _is_async: bool,
+    skip_mcp_handler: bool,
 ) -> Any | None:
     """Return a response when MCP gateway handles the call; otherwise None."""
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
     )
 
-    if not LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
+    if skip_mcp_handler or not LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
         return None
     mcp_call_kwargs: Final = {
         "input": input,
@@ -1015,6 +1017,7 @@ def responses(
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aresponses", False) is True
+        skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
         use_chat_completions_api = _pop_use_chat_completions_api_kw(kwargs)
 
         client_headers: Final = kwargs.get("headers")
@@ -1109,6 +1112,7 @@ def responses(
             custom_llm_provider=custom_llm_provider,
             kwargs=kwargs,
             _is_async=_is_async,
+            skip_mcp_handler=skip_mcp_handler,
         )
         if _mcp_dispatch is not None:
             return _mcp_dispatch

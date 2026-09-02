@@ -1,6 +1,6 @@
 import re
 import traceback
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypedDict, overload
 
@@ -23,6 +23,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamingResponse,
 )
 from litellm.types.llms.openai import ToolParam as ResponsesToolParam
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.utils import (
     CallTypes,
     ChatCompletionMessageCustomToolCall,
@@ -45,6 +46,7 @@ else:
 
 # NOTE: We intentionally keep ToolParam as a broad type here to avoid tight coupling
 ToolParam: TypeAlias = Mapping[str, object]
+SplitTools: TypeAlias = tuple[list[ToolParam], list[Any]]
 
 
 class MCPToolResult(TypedDict):
@@ -56,12 +58,63 @@ class MCPToolResult(TypedDict):
 LITELLM_PROXY_MCP_SERVER_URL: Final = "litellm_proxy"
 LITELLM_PROXY_MCP_SERVER_URL_PREFIX: Final = f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/"
 
-# Matches any URL whose path ends with /mcp/<server_name> — covers both root-path
-# (http://host:port/mcp/name) and sub-path (http://host/base/mcp/name) proxy deployments.
-# A false-positive match (e.g. an external URL that happens to end with /mcp/<name>) results
-# in a "server not found" error from the internal gateway, not a silent failure or data leak,
-# so this broad pattern is intentional and preferred over anchoring to localhost only.
 _PROXY_MCP_PATH_RE: Final = re.compile(r"^https?://.+/mcp/([^/]+)$")
+
+
+def _mcp_server_url(tool: ToolParam) -> str | None:
+    if not isinstance(tool, dict) or tool.get("type") != "mcp":
+        return None
+    server_url: Final = tool.get("server_url")
+    return server_url if isinstance(server_url, str) else None
+
+
+def _names_gateway_explicitly(tool: ToolParam) -> bool:
+    return (_mcp_server_url(tool) or "").startswith(LITELLM_PROXY_MCP_SERVER_URL)
+
+
+def _proxy_path_mcp_name(tool: ToolParam) -> str | None:
+    server_url: Final = _mcp_server_url(tool)
+    match: Final = None if server_url is None else _PROXY_MCP_PATH_RE.match(server_url)
+    return None if match is None else match.group(1)
+
+
+def _registered_mcp_servers() -> Collection[MCPServer]:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    return global_mcp_server_manager.get_registry().values()
+
+
+def _registry_serves(name: str, servers: Collection[MCPServer]) -> bool:
+    return any(
+        name in (server.alias, server.server_name, server.name) or name in (server.access_groups or ())
+        for server in servers
+    )
+
+
+async def _toolset_exists(name: str) -> bool:
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            return False
+        return await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, name) is not None
+    except Exception as e:
+        verbose_logger.debug("Could not resolve '%s' as toolset: %s", name, e)
+        return False
+
+
+async def _gateway_served_names(
+    names: Collection[str],
+    servers: Callable[[], Collection[MCPServer]] = _registered_mcp_servers,
+    toolset_exists: Callable[[str], Awaitable[bool]] = _toolset_exists,
+) -> frozenset[str]:
+    registered: Final = tuple(servers()) if names else ()
+    return frozenset([name for name in names if _registry_serves(name, registered) or await toolset_exists(name)])
 
 
 class LiteLLM_Proxy_MCP_Handler:
@@ -87,57 +140,31 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     def _should_use_litellm_mcp_gateway(tools: Iterable[ToolParam] | None) -> bool:
-        """
-        Returns True if any MCP tool should be handled via the litellm proxy MCP gateway.
-        This includes tools with server_url="litellm_proxy" as well as URLs ending in /mcp/<name>.
-        """
-        if tools:
-            for tool in tools:
-                if isinstance(tool, dict) and tool.get("type") == "mcp":
-                    server_url = tool.get("server_url", "")
-                    if isinstance(server_url, str) and server_url.startswith(LITELLM_PROXY_MCP_SERVER_URL):
-                        return True
-                    if isinstance(server_url, str) and _PROXY_MCP_PATH_RE.match(server_url):
-                        return True
-        return False
+        """True when a tool may name this gateway: server_url "litellm_proxy..." or an http(s) URL ending in
+        /mcp/<name>. `_split_mcp_tools` then settles which of the latter the gateway actually serves."""
+        return any(_names_gateway_explicitly(tool) or _proxy_path_mcp_name(tool) is not None for tool in tools or ())
 
     @staticmethod
-    def _parse_mcp_tools(
+    def _parse_mcp_tools(tools: Iterable[Mapping[str, object]] | None) -> SplitTools:
+        items: Final = tuple(tools or ())
+        gateway_tools: Final[list[ToolParam]] = [tool for tool in items if _names_gateway_explicitly(tool)]
+        other_tools: Final[list[Any]] = [tool for tool in items if not _names_gateway_explicitly(tool)]
+        return gateway_tools, other_tools
+
+    @staticmethod
+    async def _split_mcp_tools(
         tools: Iterable[Mapping[str, object]] | None,
-    ) -> tuple[list[ToolParam], list[Any]]:
-        """
-        Parse tools and separate MCP tools with litellm_proxy from other tools.
-
-        Returns:
-            Tuple of (mcp_tools_with_litellm_proxy, other_tools)
-        """
-        mcp_tools_with_litellm_proxy: Final[list[ToolParam]] = []
-        other_tools: Final[list[Any]] = []
-
-        if tools:
-            for tool in tools:
-                if isinstance(tool, dict) and tool.get("type") == "mcp":
-                    server_url = tool.get("server_url", "")
-                    if isinstance(server_url, str) and server_url.startswith(LITELLM_PROXY_MCP_SERVER_URL):
-                        mcp_tools_with_litellm_proxy.append(tool)
-                    elif isinstance(server_url, str):
-                        # Also intercept URLs like http://localhost:4000/mcp/atlassian_test
-                        # by rewriting them to the internal litellm_proxy format.
-                        m = _PROXY_MCP_PATH_RE.match(server_url)
-                        if m:
-                            rewritten = {
-                                **tool,
-                                "server_url": f"{LITELLM_PROXY_MCP_SERVER_URL_PREFIX}{m.group(1)}",
-                            }
-                            mcp_tools_with_litellm_proxy.append(rewritten)
-                        else:
-                            other_tools.append(tool)
-                    else:
-                        other_tools.append(tool)
-                else:
-                    other_tools.append(tool)
-
-        return mcp_tools_with_litellm_proxy, other_tools
+        served_names: Callable[[Collection[str]], Awaitable[frozenset[str]]] = _gateway_served_names,
+    ) -> SplitTools:
+        resolved: Final = tuple((tool, _proxy_path_mcp_name(tool)) for tool in tools or ())
+        names: Final = frozenset(name for _, name in resolved if name is not None)
+        served: Final = await served_names(names) if names else frozenset[str]()
+        return LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(
+            [
+                {**tool, "server_url": f"{LITELLM_PROXY_MCP_SERVER_URL_PREFIX}{name}"} if name in served else tool
+                for tool, name in resolved
+            ]
+        )
 
     @staticmethod
     async def _apply_toolset_permissions(
