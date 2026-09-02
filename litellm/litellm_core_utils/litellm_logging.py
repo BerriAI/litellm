@@ -579,7 +579,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         Initializes CustomLogger compatible callbacks in self.dynamic_* callbacks
 
-        If a callback is in litellm._known_custom_logger_compatible_callbacks, it needs to be intialized and added to the respective dynamic_* callback list.
+        If a callback is in litellm._known_custom_logger_compatible_callbacks, it needs to be initialized and added to the respective dynamic_* callback list.
         """
         # Process input callbacks
         self.dynamic_input_callbacks = self._process_dynamic_callback_list(
