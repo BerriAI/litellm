@@ -10,7 +10,7 @@ from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class WandbConfig(OpenAIGPTConfig):
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: inherited contract
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: inherited contract
         return super().get_supported_openai_params(model) + ["reasoning_effort"]  # mutable-ok: inherited contract
 
     def map_openai_params(
