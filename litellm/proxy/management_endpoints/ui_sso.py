@@ -111,8 +111,10 @@ from litellm.proxy.management_endpoints.sso_helper_utils import (
 )
 from litellm.proxy.management_endpoints.team_endpoints import new_team, team_member_add
 from litellm.proxy.management_endpoints.types import (
+    LITELLM_USER_ROLE_HIERARCHY,
     CustomOpenID,
     get_litellm_user_role,
+    highest_privilege_role,
     is_valid_litellm_user_role,
 )
 from litellm.proxy.utils import (
@@ -806,15 +808,6 @@ def normalize_email(email: str | None) -> str | None:
     if email is None:
         return None
     return email.lower() if isinstance(email, str) else email
-
-
-# Ordered highest to lowest privilege
-LITELLM_USER_ROLE_HIERARCHY: Final = (
-    LitellmUserRoles.PROXY_ADMIN,
-    LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-    LitellmUserRoles.INTERNAL_USER,
-    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-)
 
 
 def determine_role_from_groups(
@@ -4287,14 +4280,9 @@ class MicrosoftSSOHandler:
         listed first. Roles the hierarchy does not rank (org_admin, team, customer)
         resolve by name to stay deterministic
         """
-        resolved: Final = frozenset(
+        return highest_privilege_role(
             role for role in (get_litellm_user_role(role_str) for role_str in app_roles or ()) if role is not None
         )
-        if not resolved:
-            return None
-
-        ranked: Final = next((role for role in LITELLM_USER_ROLE_HIERARCHY if role in resolved), None)
-        return ranked if ranked is not None else min(resolved, key=lambda role: role.value)
 
     @staticmethod
     def get_app_roles_from_id_token(id_token: str | None) -> list[str]:

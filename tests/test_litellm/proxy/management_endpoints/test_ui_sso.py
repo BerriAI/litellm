@@ -4535,6 +4535,42 @@ class TestGenericResponseConvertorUserRole:
             assert isinstance(result, CustomOpenID)
             assert result.user_role is None
 
+    @pytest.mark.parametrize(
+        "role_claim",
+        [
+            ["proxy_admin_viewer", "internal_user"],
+            ["internal_user", "proxy_admin_viewer"],
+            ["internal_user", "unknown_role", "proxy_admin_viewer"],
+        ],
+    )
+    def test_generic_response_convertor_multi_valued_role_claim_picks_highest_privilege(self, role_claim):
+        """
+        A user in several mapped groups keeps the most privileged role, regardless of the
+        order the SSO provider lists the roles in.
+        """
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+        sso_response = {
+            "preferred_username": "testuser",
+            "email": "test@example.com",
+            "sub": "Test User",
+            "role": role_claim,
+        }
+
+        with patch.dict(os.environ, {"GENERIC_USER_ROLE_ATTRIBUTE": "role"}):
+            result = generic_response_convertor(
+                response=sso_response,
+                jwt_handler=mock_jwt_handler,
+                sso_jwt_handler=None,
+            )
+
+        assert isinstance(result, CustomOpenID)
+        assert result.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+
 
 class TestGetGenericSSORedirectParams:
     """Test _get_generic_sso_redirect_params state parameter priority handling"""
