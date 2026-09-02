@@ -3867,6 +3867,7 @@ class LlmProviders(str, Enum):
     PG_VECTOR = "pg_vector"
     S3_VECTORS = "s3_vectors"
     VALKEY = "valkey"
+    MONGODB = "mongodb"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"

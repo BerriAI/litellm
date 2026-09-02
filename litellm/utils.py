@@ -9022,6 +9022,12 @@ class ProviderConfigManager:
             )
 
             return ValkeyVectorStoreConfig()
+        elif litellm.LlmProviders.MONGODB == provider:
+            from litellm.llms.mongodb.vector_stores.transformation import (
+                MongoDBVectorStoreConfig,
+            )
+
+            return MongoDBVectorStoreConfig()
         return None
 
     @staticmethod
