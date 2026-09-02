@@ -16,7 +16,10 @@ import tempfile
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import walk_user_text
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -470,6 +473,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
             )
         return text
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -491,6 +495,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         return True
 
     #### CALL HOOKS - proxy only ####
+    @log_guardrail_information
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
