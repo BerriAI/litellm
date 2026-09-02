@@ -211,13 +211,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        """
-        Handle https://github.com/BerriAI/litellm/issues/9720
-
-        Filter out 'name' from messages, and drop 'web_search_options': xAI retired Live Search on
-        /v1/chat/completions and now answers those requests with a 410. xAI web search lives on the
-        Responses API, where completion() bridges it to a native 'web_search' tool
-        """
+        """Handle https://github.com/BerriAI/litellm/issues/9720"""
         if "web_search_options" in optional_params:
             verbose_logger.warning(
                 "XAI no longer supports web search on /chat/completions (Live Search is deprecated). "
