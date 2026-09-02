@@ -130,7 +130,12 @@ describe("ComplexityRouterConfig", () => {
   it("selects heuristic v2 without requiring a classifier model or showing weighted scoring", () => {
     const onChange = vi.fn();
     const { rerender } = renderWithProviders(
-      <ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={onChange} />,
+      <ComplexityRouterConfig
+        modelInfo={mockModelInfo}
+        value={defaultValue}
+        onChange={onChange}
+        allowHeuristicV2={true}
+      />,
     );
 
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
@@ -144,12 +149,34 @@ describe("ComplexityRouterConfig", () => {
     );
 
     const heuristicV2Value: ComplexityRouterConfigValue = { ...defaultValue, classifier_type: "heuristic_v2" };
-    rerender(<ComplexityRouterConfig modelInfo={mockModelInfo} value={heuristicV2Value} onChange={onChange} />);
+    rerender(
+      <ComplexityRouterConfig
+        modelInfo={mockModelInfo}
+        value={heuristicV2Value}
+        onChange={onChange}
+        allowHeuristicV2={true}
+      />,
+    );
 
     expect(screen.queryByText("Classifier Model")).not.toBeInTheDocument();
     expect(screen.queryByText("Advanced scoring")).not.toBeInTheDocument();
     expect(screen.getByText(/estimates success probability for all four tiers/)).toBeInTheDocument();
     expect(screen.queryByText(/Score < 0.15/)).not.toBeInTheDocument();
+  });
+
+  it("reserves heuristic v2 selection for proxy admins", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} allowHeuristicV2={false} />);
+
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    const heuristicV2 = screen.getByRole("radio", { name: /Heuristic v2/ });
+    expect(heuristicV2).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("radio", { name: /^Heuristic \(/ })).not.toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("radio", { name: /LLM Classifier/ })).not.toHaveAttribute("aria-disabled", "true");
+
+    fireEvent.click(heuristicV2);
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("should show classifier fields and use the configured values when classifier_type is llm", () => {
