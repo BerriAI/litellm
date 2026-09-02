@@ -257,3 +257,57 @@ def test_tuple_unpacking_runs(body: str, expected):
     assert fn is not None
     inputs = {"pair": (1, 2), "nested": (1, (2, 3)), "seq": [1, 2, 3], "ctx": _Ctx()}
     assert fn(inputs, {}, "request") == expected
+
+
+def _guard_names(source: str) -> set[str]:
+    """Names of the RestrictedPython guards the compiled bytecode calls."""
+    import types
+
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
+        compile_sandboxed,
+    )
+
+    found: set[str] = set()
+    stack = [compile_sandboxed(source)]
+    while stack:
+        code = stack.pop()
+        found |= {n for n in code.co_names + code.co_varnames if n.startswith("_") and n.endswith("_")}
+        stack += [c for c in code.co_consts if isinstance(c, types.CodeType)]
+    return found
+
+
+def test_async_with_gets_the_same_guards_as_with():
+    """`async with` is the async spelling of `with`; it must not enforce less."""
+    sync_guards = _guard_names("def f(x):\n    with x as (a, b):\n        pass\n")
+    async_guards = _guard_names("async def f(x):\n    async with x as (a, b):\n        pass\n")
+
+    assert "_unpack_sequence_" in sync_guards, "precondition: `with` unpacking is guarded"
+    assert sync_guards <= async_guards
+
+
+@pytest.mark.asyncio
+async def test_async_with_still_executes():
+    """Guarding `async with` must not break it."""
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
+        build_sandbox_globals,
+        compile_sandboxed,
+    )
+
+    class _ACtx:
+        def __init__(self, value):
+            self.value = value
+
+        async def __aenter__(self):
+            return self.value
+
+        async def __aexit__(self, *args):
+            return False
+
+    sandbox_globals = build_sandbox_globals()
+    exec(  # noqa: S102
+        compile_sandboxed(
+            "async def f(ctx):\n    async with ctx as (a, b):\n        return a + b\n"
+        ),
+        sandbox_globals,
+    )
+    assert await sandbox_globals["f"](_ACtx((5, 6))) == 11

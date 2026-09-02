@@ -45,7 +45,10 @@ class AsyncAwareTransformer(RestrictingNodeTransformer):
     has the same ``_fields`` as ``FunctionDef`` and the same security
     semantics, so we delegate to ``visit_FunctionDef`` — name check, argument
     check, print-scope wrapping, and any future additions to that method are
-    inherited automatically. ``AsyncFor``/``AsyncWith``/``Await`` delegate to
+    inherited automatically. ``AsyncWith`` gets the same treatment for the same
+    reason: ``node_contents_visit`` only recurses into children, so routing it
+    there left ``async with x as (a, b)`` without the unpack guard that
+    ``with x as (a, b)`` gets. ``AsyncFor``/``Await`` delegate to
     ``node_contents_visit`` so their children still get transformed.
     """
 
@@ -56,7 +59,7 @@ class AsyncAwareTransformer(RestrictingNodeTransformer):
         return self.node_contents_visit(node)
 
     def visit_AsyncWith(self, node: ast.AsyncWith) -> ast.AST:
-        return self.node_contents_visit(node)
+        return self.visit_With(node)
 
     def visit_Await(self, node: ast.Await) -> ast.AST:
         return self.node_contents_visit(node)
