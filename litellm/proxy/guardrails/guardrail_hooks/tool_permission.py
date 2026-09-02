@@ -176,10 +176,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
         super().update_in_memory_litellm_params(litellm_params)
 
         # The generic update above sets ``self.rules`` from the incoming value
-        # (None on a partial update that omits rules), but never rebuilds the
-        # compiled maps. Rebuild them when rules are provided; otherwise restore
-        # the previous ruleset so a partial update doesn't silently wipe it. An
-        # explicit empty list still clears the rules.
+        # (skipping None) but never rebuilds the compiled maps. Rebuild them
+        # when a rules list is provided; otherwise restore the previous ruleset
+        # so a non-list value can't silently wipe it. An explicit empty list
+        # still clears the rules.
         rules: Final = params.get("rules")
         if isinstance(rules, list):
             try:

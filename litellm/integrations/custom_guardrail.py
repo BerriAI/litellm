@@ -1298,6 +1298,9 @@ class CustomGuardrail(CustomLogger):
         resync ``event_hook`` when the update carries a new ``mode``. The new
         mode is validated against ``supported_event_hooks`` before any state
         is mutated, so a rejected update leaves the guardrail untouched.
+        ``None`` values are skipped because both sources serialize every unset
+        LitellmParams field as ``None``; applying them would clobber
+        constructor-derived state (e.g. dict defaults) with ``None``.
         """
         updated_params: Final[Mapping[str, object]] = (
             litellm_params if isinstance(litellm_params, Mapping) else vars(litellm_params)
@@ -1307,7 +1310,8 @@ class CustomGuardrail(CustomLogger):
         if new_event_hook is not None and self.supported_event_hooks:
             self._validate_or_warn_event_hook(new_event_hook, self.supported_event_hooks)
         for key, value in updated_params.items():
-            setattr(self, key, value)
+            if value is not None:
+                setattr(self, key, value)
         if new_event_hook is not None:
             self.event_hook = new_event_hook
 

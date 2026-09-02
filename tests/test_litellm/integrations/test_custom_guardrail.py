@@ -2281,6 +2281,24 @@ class TestUpdateInMemoryLitellmParams:
         assert getattr(guardrail, "api_base", None) == "https://guardrail.example.com"
         assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_call) is True
 
+    def test_none_values_do_not_clobber_constructor_state(self):
+        guardrail = self._guardrail()
+        guardrail.additional_provider_specific_params = {"team": "security"}
+        guardrail.api_base = "https://guardrail.example.com"
+
+        guardrail.update_in_memory_litellm_params(
+            {
+                "mode": "post_call",
+                "api_base": None,
+                "additional_provider_specific_params": None,
+                "extra_headers": None,
+            }
+        )
+
+        assert guardrail.additional_provider_specific_params == {"team": "security"}
+        assert guardrail.api_base == "https://guardrail.example.com"
+        assert guardrail.event_hook is GuardrailEventHooks.post_call
+
     def test_strict_mode_rejects_unsupported_mode_without_mutating(self, monkeypatch):
         monkeypatch.delenv("LITELLM_STRICT_GUARDRAIL_MODES", raising=False)
         guardrail = self._guardrail()
