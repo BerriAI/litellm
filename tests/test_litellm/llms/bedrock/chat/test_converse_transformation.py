@@ -887,6 +887,43 @@ def test_get_supported_openai_params_bedrock_converse():
         print(f"✅ Passed for model: {model}")
 
 
+@pytest.mark.parametrize(
+    "tools, expected_marker",
+    [
+        pytest.param(
+            [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}],
+            "dep-bedrock",
+            id="tools-present-so-the-cachepoint-is-placed",
+        ),
+        pytest.param(None, None, id="no-tools-so-nothing-is-placed"),
+    ],
+)
+def test_tool_config_cachepoint_is_credited_only_where_it_is_placed(tools, expected_marker):
+    """Spend attribution credits the gateway for breakpoints it placed, and a tool_config
+    point becomes one here or nowhere.
+
+    The hook that reads the configuration cannot record it: whether a cachePoint lands
+    depends on this provider and on the request carrying tools, neither of which the hook
+    sees, so marking on the point's presence credited request shapes that inject nothing.
+    """
+    bucket: dict = {"user_api_key": "sk-test"}
+    optional_params = {"cache_control_injection_points": [{"location": "tool_config"}]}
+    if tools is not None:
+        optional_params["tools"] = tools
+
+    data = AmazonConverseConfig()._transform_request_helper(
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        system_content_blocks=[],
+        optional_params=optional_params,
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_params={"metadata": bucket, "litellm_metadata": None, "model_info": {"id": "dep-bedrock"}},
+    )
+
+    placed = "cachePoint" in json.dumps(data.get("toolConfig", {}))
+    assert placed is (expected_marker is not None)
+    assert bucket.get("litellm_gateway_injected_cache") == expected_marker
+
+
 def test_transform_request_helper_includes_anthropic_beta_and_tools():
     """Test _transform_request_helper includes anthropic_beta for computer tools."""
     config = AmazonConverseConfig()
@@ -918,6 +955,28 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools():
     assert "tools" in fields
     assert len(fields["tools"]) == 1
     assert fields["tools"][0]["type"] == "computer_20250124"
+
+
+def test_config_blocks_do_not_leak_into_inference_config():
+    """Regression: inferenceConfig was built before the config blocks were popped, so a dead
+    nested copy of each block (guardrailConfig, performanceConfig, serviceTier) rode inside
+    inferenceConfig alongside the real top-level one."""
+    data = AmazonConverseConfig()._transform_request_helper(
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        system_content_blocks=[],
+        optional_params={
+            "maxTokens": 100,
+            "guardrailConfig": {"guardrailIdentifier": "gr-id", "guardrailVersion": "DRAFT"},
+            "performanceConfig": {"latency": "optimized"},
+            "serviceTier": {"type": "priority"},
+        },
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert data["inferenceConfig"] == {"maxTokens": 100}
+    assert data["guardrailConfig"] == {"guardrailIdentifier": "gr-id", "guardrailVersion": "DRAFT"}
+    assert data["performanceConfig"] == {"latency": "optimized"}
+    assert data["serviceTier"] == {"type": "priority"}
 
 
 def test_parallel_tool_calls_config_kept_for_sonnet_5(monkeypatch):
@@ -2816,17 +2875,11 @@ def test_guarded_text_guardrail_config_preserved():
         headers={},
     )
 
-    # GuardrailConfig should be present at top level
     assert "guardrailConfig" in result
     assert result["guardrailConfig"]["guardrailIdentifier"] == "gr-abc123"
 
-    # GuardrailConfig should also be in inferenceConfig
     assert "inferenceConfig" in result
-    assert "guardrailConfig" in result["inferenceConfig"]
-    assert (
-        result["inferenceConfig"]["guardrailConfig"]["guardrailIdentifier"]
-        == "gr-abc123"
-    )
+    assert "guardrailConfig" not in result["inferenceConfig"]
 
 
 def test_auto_convert_last_user_message_to_guarded_text():
@@ -6396,3 +6449,95 @@ def test_disabled_thinking_omitted_for_always_on_models_converse(
         assert "thinking" not in additional
     else:
         assert additional.get("thinking") == {"type": "disabled"}
+
+@pytest.mark.parametrize(
+    "model",
+    ["anthropic.claude-fable-5-1", "us.anthropic.claude-fable-5-1"],
+)
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["required", {"type": "function", "function": {"name": "get_weather"}}],
+)
+def test_forced_tool_choice_downgraded_to_auto_on_fable_5_1_converse(
+    local_model_cost_map, model, tool_choice
+):
+    config = AmazonConverseConfig()
+
+    result = config.map_tool_choice_values(
+        model=model, tool_choice=tool_choice, drop_params=True
+    )
+
+    assert result == {"auto": {}}
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["required", {"type": "function", "function": {"name": "get_weather"}}],
+)
+def test_forced_tool_choice_raises_clean_error_on_fable_5_1_converse(
+    local_model_cost_map, tool_choice, monkeypatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="forced tool use"):
+        config.map_tool_choice_values(
+            model="anthropic.claude-fable-5-1", tool_choice=tool_choice, drop_params=False
+        )
+
+
+@pytest.mark.parametrize("tool_choice", ["auto", "none"])
+def test_unforced_tool_choice_unaffected_on_fable_5_1_converse(local_model_cost_map, tool_choice):
+    config = AmazonConverseConfig()
+
+    result = config.map_tool_choice_values(
+        model="anthropic.claude-fable-5-1", tool_choice=tool_choice, drop_params=True
+    )
+
+    assert result == ({"auto": {}} if tool_choice == "auto" else None)
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["anthropic.claude-fable-5-1", "us.anthropic.claude-fable-5-1"],
+)
+def test_response_format_avoids_native_and_forced_tool_choice_on_fable_5_1_converse(
+    local_model_cost_map, model
+):
+    """Regression: Bedrock rejects both ``outputConfig`` structured output and forced
+    tool_choice for Fable 5.1, so response_format must map to a tool without a forced
+    tool_choice."""
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+                },
+            }
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "outputConfig" not in result
+    assert "tools" in result
+    assert "tool_choice" not in result
+    assert result.get("json_mode") is True
+
+
+def test_forced_tool_choice_forwarded_on_converse_models_that_support_it(
+    local_model_cost_map, monkeypatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    result = config.map_tool_choice_values(
+        model="anthropic.claude-fable-5", tool_choice="required", drop_params=False
+    )
+
+    assert result == {"any": {}}

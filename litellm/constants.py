@@ -13,6 +13,12 @@ DEFAULT_BATCH_SIZE: Final = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
 DEFAULT_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SECONDS", 5))
 DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_S3_BATCH_SIZE: Final = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
+# https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
+MAX_S3_OBJECT_KEY_BYTES: Final = 1024
+S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
+S3_PREFIX_DIGEST_CHARS: Final = 16
+# s3 allows 2048 bytes of combined metadata headers, which Content-Disposition counts against
+MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))
 DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1))
@@ -35,6 +41,7 @@ DEFAULT_COOLDOWN_TIME_SECONDS: Final = int(os.getenv("DEFAULT_COOLDOWN_TIME_SECO
 DEFAULT_REPLICATE_POLLING_RETRIES: Final = int(os.getenv("DEFAULT_REPLICATE_POLLING_RETRIES", 5))
 DEFAULT_REPLICATE_POLLING_DELAY_SECONDS: Final = int(os.getenv("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1))
 DEFAULT_IMAGE_TOKEN_COUNT: Final = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
+HF_CONFIG_FETCH_TIMEOUT_SECONDS: Final = 10.0
 
 # Maximum wall-clock seconds a streaming response is allowed to run.
 # Streams exceeding this duration are terminated with a Timeout error.
@@ -288,6 +295,7 @@ REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_org_spend_update
 REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_end_user_spend_update_buffer"
 REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_agent_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_tag_spend_update_buffer"
+REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_window_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT: Final = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
 # Bounds asyncio.Queue() instances (log queues, spend update queues, etc.) to prevent unbounded memory growth
 LITELLM_ASYNCIO_QUEUE_MAXSIZE: Final = int(os.getenv("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000))
@@ -482,6 +490,22 @@ FIREWORKS_AI_80_B: Final = int(os.getenv("FIREWORKS_AI_80_B", 80))
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING: Final = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS: Final = int(os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50))
+# Backpressure + lifetime bounds for the /v1/messages streaming relay (see
+# BaseAnthropicMessagesStreamingIterator.async_sse_wrapper). The relay queue is
+# bounded so a slow client throttles the upstream pump instead of letting it
+# buffer the whole response in memory; the detached-drain cap bounds how many
+# post-disconnect drains may run concurrently so client behavior can't create
+# unbounded worker state.
+ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE: Final = int(
+    os.getenv("ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", "1024")
+)
+# Setting this to 0 disables detached draining entirely: every post-disconnect
+# pump bills whatever partial output it has already collected and aborts the
+# upstream stream immediately, instead of continuing to drain for the real
+# terminal usage.
+ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS: Final = int(
+    os.getenv("ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", "100")
+)
 LOGGING_WORKER_CONCURRENCY: Final = int(os.getenv("LOGGING_WORKER_CONCURRENCY", 100))  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = int(os.getenv("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000))
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = float(os.getenv("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0))
@@ -612,6 +636,8 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "nscale",
     "nebius",
     "dashscope",
+    "qwencloud",
+    "qwen_ai_platform",
     "modelscope",
     "moonshot",
     "publicai",
@@ -628,6 +654,15 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "docker_model_runner",
     "amazon_nova",
 ]
+
+# Resolving these providers runs an OAuth device flow (their provider info IS the login), so any
+# metadata or capability lookup against them can block for minutes waiting on a human.
+PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO: Final = frozenset(
+    {
+        "github_copilot",
+        "chatgpt",
+    }
+)
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS: Final = [
     "openai",
@@ -772,6 +807,7 @@ openai_compatible_endpoints: Final[list] = [
     "inference.api.nscale.com/v1",
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "https://api-inference.modelscope.cn/v1",
     "https://api.moonshot.ai/v1",
     "https://api.publicai.co/v1",
@@ -795,6 +831,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.meta.ai/v1",
     "https://api.cognition.ai/v1",
     "https://api.scx.ai/v1",
+    "https://gigachat.devices.sberbank.ru/api/v1",
 ]
 
 
@@ -844,6 +881,8 @@ openai_compatible_providers: Final[list] = [
     "nscale",
     "nebius",
     "dashscope",
+    "qwencloud",
+    "qwen_ai_platform",
     "modelscope",
     "moonshot",
     "v0",
@@ -874,6 +913,8 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "featherless_ai",
     "nebius",
     "dashscope",
+    "qwencloud",
+    "qwen_ai_platform",
     "modelscope",
     "moonshot",
     "publicai",
@@ -1081,7 +1122,7 @@ nebius_models: Final[set] = set(
     ]
 )
 
-dashscope_models: Final[set] = set(
+dashscope_models: Final[frozenset] = frozenset(
     [
         "qwen-turbo",
         "qwen-plus",
@@ -1095,6 +1136,10 @@ dashscope_models: Final[set] = set(
         "qwen3-30b-a3b",
     ]
 )
+
+qwencloud_models: Final[frozenset] = frozenset(dashscope_models)
+
+qwen_ai_platform_models: Final[frozenset] = frozenset(dashscope_models)
 
 nebius_embedding_models: Final[set] = set(
     [
@@ -1212,6 +1257,7 @@ BEDROCK_CONVERSE_MODELS: Final = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-fable-5-1",
     "anthropic.claude-fable-5",
     "anthropic.claude-sonnet-5",
     "anthropic.claude-opus-5",
@@ -1399,6 +1445,12 @@ DEFAULT_SOFT_BUDGET: Final = float(
 )  # by default all litellm proxy keys have a soft budget of 50.0
 # makes it clear this is a rate limit error for a litellm virtual key
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY: Final = "LiteLLM Virtual Key user_api_key_hash"
+# Prefix of the 401 raised when a submitted virtual key is not shaped like one.
+INVALID_VIRTUAL_KEY_ERROR_MESSAGE: Final = "LiteLLM Virtual Key expected"
+# Attribute stamped on that 401 at its raise site so log routing recognises it by
+# provenance. Message text is caller-influenceable on other 401s, so it must not
+# be used to classify.
+INVALID_VIRTUAL_KEY_ERROR_MARKER: Final = "_litellm_invalid_virtual_key_error"
 
 # Python garbage collection threshold configuration
 # Format: "gen0,gen1,gen2" e.g., "1000,50,50"
@@ -1672,6 +1724,7 @@ DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS: Final = 16
 # Ceilings on the cached auth registries; larger tables fall back to per-row lookups
 # instead of holding an unbounded id set in every worker.
 TAG_REGISTRY_MAX_SIZE: Final = 5000
+MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE: Final = 5000
 END_USER_RESTRICTED_REGISTRY_MAX_SIZE: Final = 5000
 # How long a failed registry load is remembered as "unusable", so a degraded Postgres
 # is not re-scanned on every request on top of the per-id lookups it falls back to.
@@ -1716,6 +1769,7 @@ SENTRY_DENYLIST: Final = [
     "jwt_token",
     "private_key",
     "SLACK_WEBHOOK_URL",
+    "ALERTING_WEBHOOK_URL",
     "webhook_url",
     "LANGFUSE_SECRET_KEY",
     # Email Configuration

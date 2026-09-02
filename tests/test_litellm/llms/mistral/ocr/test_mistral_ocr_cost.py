@@ -24,6 +24,9 @@ OCR3_MODEL = "mistral/mistral-ocr-2512"
 OCR3_COST_PER_PAGE = 0.002
 OCR3_ANNOTATION_COST_PER_PAGE = 0.003
 
+AZURE_DOC_AI_MODEL = "azure_ai/mistral-document-ai-2512"
+AZURE_DOC_AI_COST_PER_PAGE = 0.003
+
 
 def _ocr_response(model: str, pages_processed: int) -> OCRResponse:
     return OCRResponse(
@@ -33,14 +36,11 @@ def _ocr_response(model: str, pages_processed: int) -> OCRResponse:
     )
 
 
-def _annotated_ocr_response(model: str, pages_processed: int, pages_processed_annotation: int) -> OCRResponse:
+def _annotated_ocr_response(model: str, pages_processed: int | None, annotation_pages: int) -> OCRResponse:
     return OCRResponse(
-        pages=[OCRPage(index=i, markdown=f"page {i}") for i in range(pages_processed)],
+        pages=[],
         model=model,
-        usage_info=OCRUsageInfo(
-            pages_processed=pages_processed,
-            pages_processed_annotation=pages_processed_annotation,
-        ),
+        usage_info=OCRUsageInfo(pages_processed=pages_processed, pages_processed_annotation=annotation_pages),
     )
 
 
@@ -92,14 +92,44 @@ def test_ocr3_cost_scales_with_pages(local_model_cost_map, pages_processed: int)
     assert cost == pytest.approx(OCR3_COST_PER_PAGE * pages_processed)
 
 
-def test_ocr3_cost_includes_annotation_pages(local_model_cost_map) -> None:
+def test_ocr3_bills_ocr_and_annotation_pages_at_their_own_rates(local_model_cost_map) -> None:
     cost = completion_cost(
-        completion_response=_annotated_ocr_response(
-            "mistral-ocr-2512", pages_processed=2, pages_processed_annotation=3
-        ),
+        completion_response=_annotated_ocr_response("mistral-ocr-2512", 2, 3),
         model=OCR3_MODEL,
         custom_llm_provider="mistral",
         call_type="ocr",
     )
+    assert cost == pytest.approx(2 * OCR3_COST_PER_PAGE + 3 * OCR3_ANNOTATION_COST_PER_PAGE)
 
-    assert cost == pytest.approx(OCR3_COST_PER_PAGE * 2 + OCR3_ANNOTATION_COST_PER_PAGE * 3)
+
+def test_ocr3_bills_annotation_only_response(local_model_cost_map) -> None:
+    cost = completion_cost(
+        completion_response=_annotated_ocr_response("mistral-ocr-2512", 0, 3),
+        model=OCR3_MODEL,
+        custom_llm_provider="mistral",
+        call_type="ocr",
+    )
+    assert cost == pytest.approx(3 * OCR3_ANNOTATION_COST_PER_PAGE)
+
+
+def test_ocr3_bills_annotation_pages_when_pages_processed_missing(local_model_cost_map) -> None:
+    cost = completion_cost(
+        completion_response=_annotated_ocr_response("mistral-ocr-2512", None, 4),
+        model=OCR3_MODEL,
+        custom_llm_provider="mistral",
+        call_type="ocr",
+    )
+    assert cost == pytest.approx(4 * OCR3_ANNOTATION_COST_PER_PAGE)
+
+
+def test_azure_doc_ai_annotation_pages_fall_back_to_ocr_rate(local_model_cost_map) -> None:
+    info = litellm.get_model_info(model=AZURE_DOC_AI_MODEL, custom_llm_provider="azure_ai")
+    assert info.get("annotation_cost_per_page") is None
+    assert info["ocr_cost_per_page"] == AZURE_DOC_AI_COST_PER_PAGE
+    cost = completion_cost(
+        completion_response=_annotated_ocr_response("mistral-document-ai-2512", 0, 1),
+        model=AZURE_DOC_AI_MODEL,
+        custom_llm_provider="azure_ai",
+        call_type="ocr",
+    )
+    assert cost == pytest.approx(AZURE_DOC_AI_COST_PER_PAGE)

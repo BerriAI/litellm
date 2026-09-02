@@ -7,7 +7,7 @@ import json
 import time
 import types
 from collections.abc import Mapping
-from typing import Final, Literal, cast, overload
+from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
 
@@ -93,6 +93,9 @@ from ..common_utils import (
     is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
 )
+
+if TYPE_CHECKING:
+    import tiktoken
 
 # Computer use tool prefixes supported by Bedrock
 BEDROCK_COMPUTER_USE_TOOLS: Final = [
@@ -585,6 +588,10 @@ class AmazonConverseConfig(BaseConfig):
             supported_params.append("context_management")
         return supported_params
 
+    @staticmethod
+    def _auto_tool_choice() -> ToolChoiceValuesBlock:
+        return ToolChoiceValuesBlock(auto={})
+
     def map_tool_choice_values(
         self, model: str, tool_choice: str | dict, drop_params: bool
     ) -> ToolChoiceValuesBlock | None:
@@ -597,10 +604,14 @@ class AmazonConverseConfig(BaseConfig):
                     status_code=400,
                 )
         elif tool_choice == "required":
+            if AnthropicModelInfo.forced_tool_use_downgraded(model, drop_params):
+                return self._auto_tool_choice()
             return ToolChoiceValuesBlock(any={})
         elif tool_choice == "auto":
-            return ToolChoiceValuesBlock(auto={})
+            return self._auto_tool_choice()
         elif isinstance(tool_choice, dict):
+            if AnthropicModelInfo.forced_tool_use_downgraded(model, drop_params):
+                return self._auto_tool_choice()
             # only supported for anthropic + mistral models - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             specific_tool: Final = SpecificToolChoiceBlock(
                 name=make_valid_bedrock_tool_name(tool_choice.get("function", {}).get("name", ""))
@@ -921,7 +932,7 @@ class AmazonConverseConfig(BaseConfig):
                         custom_llm_provider="bedrock",
                     )
                     capped = (
-                        AnthropicConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
+                        AnthropicConfig.cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
                         if legacy_thinking is not None
                         else None
                     )
@@ -1062,6 +1073,7 @@ class AmazonConverseConfig(BaseConfig):
             if (
                 litellm.utils.supports_tool_choice(model=model, custom_llm_provider=self.custom_llm_provider)
                 and not is_thinking_enabled
+                and not AnthropicModelInfo.forced_tool_use_unsupported(model)
             ):
                 optional_params["tool_choice"] = ToolChoiceValuesBlock(
                     tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)
@@ -1543,6 +1555,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: list[AllMessageValues] | None = None,
         headers: dict | None = None,
         drop_params: bool = False,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> CommonRequestObject:
         ## VALIDATE REQUEST
         """
@@ -1605,6 +1618,16 @@ class AmazonConverseConfig(BaseConfig):
                 if point.get("location") == "tool_config":
                     cache_point = self._build_cache_point_block(point.get("control"), model)
                     bedrock_tools.append(ToolBlock(cachePoint=cache_point))
+                    # Spend attribution credits the gateway only for breakpoints it placed, and
+                    # this is the one place a tool_config point becomes one. The hook that reads
+                    # the configuration cannot record it: whether a cachePoint lands depends on
+                    # this provider and on the request carrying tools, neither of which it sees.
+                    if litellm_params is not None:
+                        from litellm.integrations.anthropic_cache_control_hook import (
+                            AnthropicCacheControlHook,
+                        )
+
+                        AnthropicCacheControlHook.record_gateway_injection(litellm_params, 1)
                     break
 
         bedrock_tool_config: ToolConfigBlock | None = None
@@ -1617,6 +1640,11 @@ class AmazonConverseConfig(BaseConfig):
                 bedrock_tool_config["toolChoice"] = tool_choice_values
                 self._drop_tool_choice_type_conflicting_with_tool_config(additional_request_params)
 
+        config_block_entries: Final = tuple(
+            (config_name, config_class, inference_params.pop(config_name, None))
+            for config_name, config_class in self.get_config_blocks().items()
+        )
+
         data: Final[CommonRequestObject] = {
             "inferenceConfig": self._transform_inference_params(inference_params=inference_params),
         }
@@ -1627,9 +1655,7 @@ class AmazonConverseConfig(BaseConfig):
         if system_content_blocks:
             data["system"] = system_content_blocks
 
-        # Handle all config blocks
-        for config_name, config_class in self.get_config_blocks().items():
-            config_value = inference_params.pop(config_name, None)
+        for config_name, config_class, config_value in config_block_entries:
             if config_value is not None:
                 data[config_name] = config_class(**config_value)
 
@@ -1667,6 +1693,7 @@ class AmazonConverseConfig(BaseConfig):
             messages=messages,
             headers=headers,
             drop_params=litellm_params.get("drop_params") is True,
+            litellm_params=litellm_params,
         )
 
         bedrock_messages: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
@@ -1726,6 +1753,7 @@ class AmazonConverseConfig(BaseConfig):
             messages=messages,
             headers=headers,
             drop_params=litellm_params.get("drop_params") is True,
+            litellm_params=litellm_params,
         )
 
         ## TRANSFORMATION ##
@@ -1757,7 +1785,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

@@ -6,13 +6,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import Any, Final, NoReturn, cast
+from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, cast
 
 from fastapi import HTTPException, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
@@ -26,12 +25,17 @@ from litellm.proxy.auth.auth_utils import get_model_from_request
 from litellm.proxy.auth.budget_throttle import should_throttle_budget_exceeded
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
     end_user_cache_key,
+    model_access_group_cache_key,
+    model_access_group_spend_counter_key,
     tag_cache_key,
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
+from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
+from litellm.types.router import DeploymentTypedDict
 
 
 @dataclass
@@ -43,6 +47,7 @@ class _BudgetCounter:
     entity_id: str
     source_cache_key: str | None = None
     spend_log_entity_id: str | None = None
+    window_duration: str | None = None
     window_start: datetime | None = None
 
 
@@ -53,6 +58,7 @@ _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
     "User": Litellm_EntityType.USER.value,
     "EndUser": Litellm_EntityType.END_USER.value,
     "Tag": Litellm_EntityType.TAG.value,
+    "Model access group": Litellm_EntityType.MODEL_ACCESS_GROUP.value,
     "Organization": Litellm_EntityType.ORGANIZATION.value,
 }
 
@@ -158,7 +164,7 @@ async def reserve_budget_for_request(
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
     prisma_client: PrismaClient | None,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     end_user_id: str | None = None,
     end_user_object: object = None,
@@ -167,7 +173,14 @@ async def reserve_budget_for_request(
 ) -> dict | None:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
-    if route in {"/models", "/v1/models", "/utils/token_counter"}:
+    if route in {
+        "/models",
+        "/v1/models",
+        "/utils/token_counter",
+        "/responses/input_tokens",
+        "/v1/responses/input_tokens",
+        "/openai/v1/responses/input_tokens",
+    }:
         return None
     if get_model_from_request(request_body, route, llm_router=llm_router) is None:
         return None
@@ -348,7 +361,7 @@ async def _get_budget_counters(
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
     prisma_client: PrismaClient | None,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     end_user_id: str | None = None,
     end_user_object: object = None,
@@ -437,6 +450,14 @@ async def _get_budget_counters(
         )
     )
 
+    counters.extend(
+        await _get_model_access_group_budget_counters(
+            valid_token=valid_token,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+    )
+
     team_member_counter: Final = await _get_team_member_budget_counter(
         valid_token=valid_token,
         team_object=team_object,
@@ -491,7 +512,7 @@ async def _get_end_user_budget_counter(
 async def _get_tag_budget_counters(
     request_body: dict,
     prisma_client: PrismaClient | None,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> list[_BudgetCounter]:
     from litellm.proxy.auth.auth_checks import get_tag_objects_batch
@@ -530,6 +551,46 @@ async def _get_tag_budget_counters(
     return counters
 
 
+async def _get_model_access_group_budget_counters(
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> list[_BudgetCounter]:
+    """Reservation counters for the model access groups that authorized this request.
+
+    The names come off the auth object rather than the request body: ``common_checks`` already
+    resolved which granted groups serve the requested model, and re-deriving that here would both
+    duplicate the walk and risk disagreeing with what the spend writer attributes.
+    """
+    from litellm.proxy.auth.auth_checks import get_model_access_group_budgets_batch
+
+    group_names: Final = tuple(dict.fromkeys(valid_token.matched_model_access_groups or ()))
+    if not group_names:
+        return []
+
+    budgets: Final = await get_model_access_group_budgets_batch(
+        access_group_names=group_names,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    candidates: Final = (_model_access_group_counter(group, budgets.get(group)) for group in group_names)
+    return [counter for counter in candidates if counter is not None]
+
+
+def _model_access_group_counter(group: str, budget: ModelAccessGroupBudget | None) -> _BudgetCounter | None:
+    """A counter for one group, or nothing when the group carries no budget to reserve against."""
+    if budget is None or budget.max_budget is None or budget.max_budget <= 0:
+        return None
+    return _BudgetCounter(
+        counter_key=model_access_group_spend_counter_key(group),
+        source_cache_key=model_access_group_cache_key(group),
+        max_budget=budget.max_budget,
+        fallback_spend=budget.spend,
+        entity_type="Model access group",
+        entity_id=group,
+    )
+
+
 def _dedupe_tags(tags: list[str]) -> list[str]:
     seen: Final = set()
     deduped_tags: Final = []
@@ -545,7 +606,7 @@ async def _get_team_member_budget_counter(
     valid_token: UserAPIKeyAuth,
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
 ) -> _BudgetCounter | None:
     if team_object is None or team_object.team_id is None or user_object is None or valid_token.user_id is None:
         return None
@@ -588,7 +649,7 @@ async def _get_team_member_budget_counter(
 async def _get_org_budget_counter(
     valid_token: UserAPIKeyAuth,
     team_object: LiteLLM_TeamTable | None,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
 ) -> _BudgetCounter | None:
     org_id: str | None = None
     if valid_token.org_id is not None:
@@ -637,7 +698,7 @@ def _get_budget_limit_counters(
     for window in budget_limits:
         window_dict = _coerce_window(window)
         budget_duration = window_dict.get("budget_duration")
-        max_budget = window_dict.get("max_budget")
+        max_budget = _to_float(window_dict.get("max_budget"))
         if not budget_duration or max_budget is None or max_budget <= 0:
             continue
         window_start = get_budget_window_start(window_dict)
@@ -657,24 +718,27 @@ def _get_budget_limit_counters(
                 entity_type=entity_type,
                 entity_id=f"{entity_id}:{budget_duration}",
                 spend_log_entity_id=entity_id,
+                window_duration=str(budget_duration),
                 window_start=window_start,
             )
         )
     return counters
 
 
-def _coerce_window(window: Any) -> dict:
-    if isinstance(window, dict):
+def _coerce_window(window: object) -> Mapping[str, object]:
+    if isinstance(window, Mapping):
         return window
     if isinstance(window, str):
         try:
-            parsed: Final = json.loads(window)
-            return parsed if isinstance(parsed, dict) else {}
+            parsed: Final[object] = json.loads(window)
         except Exception:
             return {}
-    if hasattr(window, "model_dump"):
-        return window.model_dump()
-    return {}
+        return parsed if isinstance(parsed, Mapping) else {}
+    model_dump: Final = getattr(window, "model_dump", None)
+    if not callable(model_dump):
+        return {}
+    dumped: Final[object] = model_dump()
+    return dumped if isinstance(dumped, Mapping) else {}
 
 
 async def _reserve_counter(
@@ -700,6 +764,7 @@ async def _reserve_counter(
                 counter_key=counter.counter_key,
                 entity_type=counter.entity_type,
                 entity_id=counter.spend_log_entity_id,
+                window_duration=counter.window_duration,
                 window_start=counter.window_start,
             )
             if initialized is False:
@@ -891,7 +956,7 @@ def _get_entry_reserved_cost(entry: dict, default_reserved_cost: float) -> float
         return default_reserved_cost
 
 
-def get_budget_window_start(window: Any) -> datetime | None:
+def get_budget_window_start(window: object) -> datetime | None:
     window_dict: Final = _coerce_window(window)
     budget_duration: Final = window_dict.get("budget_duration")
     if budget_duration is None:
@@ -909,7 +974,7 @@ def get_budget_window_start(window: Any) -> datetime | None:
     return reset_at - timedelta(seconds=duration_seconds)
 
 
-def _coerce_datetime(value: Any) -> datetime | None:
+def _coerce_datetime(value: object) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -1183,11 +1248,11 @@ def _get_model_cost_infos(
 
 
 def _deployment_tiered_pricing_table(
-    deployment: dict[str, Any],
+    deployment: DeploymentTypedDict,
     llm_router: Router,
-) -> list[dict] | None:
-    model_id: Final = deployment.get("model_info", {}).get("id")
-    backend_model: Final = deployment.get("litellm_params", {}).get("model")
+) -> Sequence[Mapping[str, object]] | None:
+    model_id: Final = _get_value(_get_value(deployment, "model_info"), "id")
+    backend_model: Final = _get_value(_get_value(deployment, "litellm_params"), "model")
     if not isinstance(model_id, str) or not isinstance(backend_model, str):
         return None
     deployment_model_info: Final = llm_router.get_deployment_model_info(model_id=model_id, model_name=backend_model)
@@ -1352,7 +1417,7 @@ def _estimate_output_tokens(
     return min(requested, model_ceiling)
 
 
-def _count_text_tokens(model: str, text: Any) -> int:
+def _count_text_tokens(model: str, text: object) -> int:
     if text is None:
         return 0
 
@@ -1392,8 +1457,8 @@ def _is_input_only_route(route: str) -> bool:
     )
 
 
-def _to_float(value: Any) -> float | None:
-    if value is None:
+def _to_float(value: object) -> float | None:
+    if not isinstance(value, (SupportsFloat, SupportsIndex, str, bytes, bytearray)):
         return None
     try:
         return float(value)
@@ -1401,8 +1466,8 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
-def _to_int(value: Any) -> int | None:
-    if value is None:
+def _to_int(value: object) -> int | None:
+    if not isinstance(value, (SupportsInt, SupportsIndex, str, bytes, bytearray)):
         return None
     try:
         return int(value)
@@ -1410,7 +1475,7 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
-def _get_value(obj: Any, key: str) -> Any:
-    if isinstance(obj, dict):
+def _get_value(obj: object, key: str) -> object:
+    if isinstance(obj, Mapping):
         return obj.get(key)
     return getattr(obj, key, None)

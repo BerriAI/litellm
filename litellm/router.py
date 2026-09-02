@@ -64,6 +64,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
@@ -229,6 +230,7 @@ from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingRoutingDecision,
     Usage,
+    all_litellm_params,
     shared_backend_model_info,
 )
 from litellm.types.utils import ModelInfo as ModelMapInfo
@@ -243,6 +245,7 @@ from litellm.utils import (
     get_secret,
     get_utc_datetime,
     is_region_allowed,
+    provider_rejectable_params,
     set_live_deployment_replay,
 )
 
@@ -3998,6 +4001,7 @@ class Router:
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
             prompt_label=prompt_label,
+            request_kwargs=kwargs,
         )
 
         # Filter out prompt management specific parameters from data before merging
@@ -6482,6 +6486,8 @@ class Router:
                     **kwargs,
                 )
             elif call_type == "allm_passthrough_route":
+                if client:
+                    kwargs["client"] = client
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
                     passthrough_on_no_deployment=True,
@@ -7047,13 +7053,11 @@ class Router:
             _sibling_metadata_key: Final = (
                 "metadata" if _fallback_metadata_key == "litellm_metadata" else "litellm_metadata"
             )
-            if isinstance(_sibling_metadata := kwargs.get(_sibling_metadata_key), dict) and (
-                "attempted_fallbacks" in _sibling_metadata or "original_model_group" in _sibling_metadata
-            ):
-                _scrubbed_sibling_metadata: Final = _sibling_metadata.copy()
-                _scrubbed_sibling_metadata.pop("attempted_fallbacks", None)
-                _scrubbed_sibling_metadata.pop("original_model_group", None)
-                kwargs[_sibling_metadata_key] = _scrubbed_sibling_metadata
+            if isinstance(_sibling_metadata := kwargs.get(_sibling_metadata_key), dict):
+                # In place, like every other router bucket write: downstream resolves the bucket by
+                # key presence, so rebinding kwargs to a copy detaches the proxy's request_data write-backs
+                _sibling_metadata.pop("attempted_fallbacks", None)
+                _sibling_metadata.pop("original_model_group", None)
             if isinstance(_fallback_metadata := kwargs.get(_fallback_metadata_key), dict):
                 _fallback_metadata["attempted_fallbacks"] = 0
                 if model_group is not None:
@@ -8162,6 +8166,52 @@ class Router:
                     model_info[field] = backend_value
 
     @staticmethod
+    def _inherit_builtin_base_rates_for_off_peak(
+        model_info: dict,  # mutable-ok: cost-map entry filled in place
+        backend_model: str,
+        custom_llm_provider: str | None,
+    ) -> None:
+        """Fill missing pricing fields on a deployment entry that only sets
+        ``off_peak_pricing``, from the backend model's built-in cost map entry.
+
+        Cost lookup selects the deployment-scoped entry over the shared backend
+        entry only when the deployment entry carries a base pricing field, and
+        ``off_peak_pricing`` is deliberately kept off the shared entry, so a
+        deployment spelling out only its off-peak schedule would otherwise
+        never receive the discount. The backend model's entire canonical cost
+        map entry is copied, field by field, so threshold, tiered,
+        service-tier, cache, character, and per-second rates as well as
+        companion billing fields like ``web_search_billing_unit`` and the
+        regional uplift multipliers all carry over, and peak-hour billing
+        through the deployment entry matches the shared backend entry exactly.
+        The raw ``litellm.model_cost`` entry is the copy source rather than
+        ``get_model_info``'s view of it, since that view synthesizes zero flat
+        token rates for backends without one and storing those would mark a
+        tiered-only backend explicitly priced free. Values are deep-copied to
+        keep the builtin entry isolated. User-specified fields always win;
+        no-op when any base pricing field is already set or the backend model
+        has no canonical entry.
+        """
+        if not model_info.get("off_peak_pricing"):
+            return
+        if any(
+            model_info.get(field) is not None
+            for field in ("input_cost_per_token", "input_cost_per_second", "tiered_pricing")
+        ):
+            return
+        try:
+            backend_info: Final = litellm.get_model_info(model=backend_model, custom_llm_provider=custom_llm_provider)
+        except Exception:  # noqa: BLE001  # get_model_info raises plain Exception for an unmapped backend model
+            return
+        backend_entry: Final = litellm.model_cost.get(backend_info.get("key") or "")
+        if not isinstance(backend_entry, dict):
+            return
+        for field, backend_value in backend_entry.items():
+            if model_info.get(field) is not None or backend_value is None:
+                continue
+            model_info[field] = copy.deepcopy(backend_value)
+
+    @staticmethod
     def _inherit_builtin_tiered_output_rate(
         model_info: dict, backend_model: str, custom_llm_provider: str | None
     ) -> None:
@@ -8249,6 +8299,11 @@ class Router:
                 if deployment.litellm_params.get(field) is not None:
                     _model_info[field] = deployment.litellm_params[field]
 
+            Router._inherit_builtin_base_rates_for_off_peak(
+                model_info=_model_info,
+                backend_model=deployment.litellm_params.model,
+                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            )
             if _model_info.get("input_cost_per_token") is not None:
                 Router._inherit_builtin_cache_pricing(
                     model_info=_model_info,
@@ -8990,6 +9045,11 @@ class Router:
             if field_value is not None:
                 _model_info_dict[field] = field_value
 
+        Router._inherit_builtin_base_rates_for_off_peak(
+            model_info=_model_info_dict,
+            backend_model=deployment.litellm_params.model,
+            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+        )
         if _model_info_dict.get("input_cost_per_token") is not None:
             Router._inherit_builtin_cache_pricing(
                 model_info=_model_info_dict,
@@ -9150,7 +9210,8 @@ class Router:
             if _deployment_on_router is not None:
                 # deployment with this model_id exists on the router
                 if (
-                    deployment.litellm_params == _deployment_on_router.litellm_params
+                    deployment.model_name == _deployment_on_router.model_name
+                    and deployment.litellm_params == _deployment_on_router.litellm_params
                     and deployment.model_info == _deployment_on_router.model_info
                 ):
                     # No need to update
@@ -9244,6 +9305,11 @@ class Router:
             field_value = deployment.litellm_params.get(field)
             if field_value is not None:
                 model_info[field] = field_value
+        Router._inherit_builtin_base_rates_for_off_peak(
+            model_info=model_info,
+            backend_model=deployment.litellm_params.model,
+            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+        )
         if model_info.get("input_cost_per_token") is not None:
             Router._inherit_builtin_cache_pricing(
                 model_info=model_info,
@@ -10832,6 +10898,114 @@ class Router:
         }
         return {**deployment, "model_info": model_info}  # mutable-ok: DeploymentTypedDict rows are plain dicts
 
+    TIER_PARAMS_NEVER_DROPPED: Final = frozenset(all_litellm_params) | frozenset(
+        {
+            "additional_drop_params",
+            "drop_params",
+            "messages",
+            "model",
+            "extra_headers",
+            "max_tokens",
+            "max_completion_tokens",
+        }
+    )
+
+    @staticmethod
+    def _declared_param_allowlist(params: Mapping[str, object]) -> frozenset[str]:
+        declared: Final = params.get("allowed_openai_params")
+        if not isinstance(declared, (list, tuple, set, frozenset)):
+            return frozenset()
+        return frozenset(entry for entry in declared if isinstance(entry, str))
+
+    @staticmethod
+    def _deployment_accepts_param(deployment: DeploymentTypedDict, group: str, param: str) -> bool:
+        deployment_params: Final = deployment.get("litellm_params")
+        if not deployment_params:
+            return True
+        if param in Router._declared_param_allowlist(deployment_params):
+            return True
+        if declared_authenticating_provider(
+            str(deployment_params.get("model") or ""), deployment_params.get("custom_llm_provider")
+        ):
+            return True
+        deployment_model_info: Final = deployment.get("model_info")
+        base_model: Final = (
+            deployment_model_info.get("base_model") if deployment_model_info else None
+        ) or deployment_params.get("base_model")
+        try:
+            model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                model=deployment_params.get("model") or group,
+                custom_llm_provider=deployment_params.get("custom_llm_provider"),
+            )
+            supported: Final = litellm.get_supported_openai_params(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                base_model=base_model if isinstance(base_model, str) else None,
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not narrow the request
+            verbose_router_logger.debug(
+                "litellm.router.py::_deployment_accepts_param: keeping %s for model=%s. Got - %s", param, group, e
+            )
+            return True
+        return supported is None or param in supported
+
+    def _tier_params_the_target_accepts(
+        self, model: str, tier_params: Mapping[str, object], request_kwargs: Mapping[str, object]
+    ) -> Mapping[str, object]:
+        """Drop an OpenAI param that no deployment behind ``model`` declares.
+
+        A tier's litellm_params are an operator override applied to every request the tier routes,
+        so one the target cannot take turns that whole tier into a 400 raised before the request
+        leaves the proxy. The candidates are exactly what get_optional_params can reject, asked of
+        the module that raises, so credentials and endpoint controls are never at risk.
+
+        TIER_PARAMS_NEVER_DROPPED is excluded on top of that, for two reasons. No provider lists a
+        litellm control among its supported params, so "no deployment declares it" means litellm
+        consumes it rather than that the target refuses it, and dropping one changes litellm's own
+        behavior: dropping drop_params or additional_drop_params silently disables the sanitization
+        the operator configured. Providers do list extra_headers, but it carries auth, tenancy and
+        routing information, so sending fewer headers than configured is worse than today's error.
+        Token ceilings stay for the same reason: a tier's max_tokens or max_completion_tokens is a
+        cost bound, and dropping it would let a caller's own larger value through where today the
+        mismatch fails loudly.
+
+        The trade this filter makes is a param for a working request, which is right for one that
+        only shapes how the model answers and wrong for anything else.
+
+        A param survives if ANY deployment could take it, because routing has not chosen one yet,
+        and it survives both an unresolvable provider and a group with no deployments, because a
+        best-effort filter must never narrow what the request already did.
+
+        A github_copilot or chatgpt deployment counts as accepting everything, decided before any
+        lookup: resolving either provider runs its OAuth device flow, so a capability question
+        asked from the routing path can freeze the event loop for minutes waiting on a human.
+
+        allowed_openai_params is the documented escape hatch for an outdated or incomplete
+        supported-params list: request-time validation extends the supported list with it before
+        comparing. The filter asks the same question, so a param named by the allowlist on the tier
+        overlay, the request, or a deployment's own litellm_params is never a drop candidate.
+        """
+        deployments: Final = self.get_model_list(model_name=model) or ()
+        if not deployments:
+            return tier_params
+        allowlisted: Final = self._declared_param_allowlist(tier_params) | self._declared_param_allowlist(
+            request_kwargs
+        )
+        candidates: Final = provider_rejectable_params(tier_params) - self.TIER_PARAMS_NEVER_DROPPED - allowlisted
+        unsupported: Final = frozenset(
+            param
+            for param in candidates
+            if not any(self._deployment_accepts_param(deployment, model, param) for deployment in deployments)
+        )
+        if not unsupported:
+            return tier_params
+        verbose_router_logger.warning(
+            "litellm.router.py: dropping tier params %s for model=%s, no deployment behind it declares them",
+            ", ".join(sorted(unsupported)),
+            model,
+        )
+        return MappingProxyType({key: value for key, value in tier_params.items() if key not in unsupported})
+
     def get_model_list(
         self, model_name: str | None = None, team_id: str | None = None
     ) -> list[DeploymentTypedDict] | None:
@@ -11842,6 +12016,33 @@ class Router:
 
         return healthy_deployments
 
+    @staticmethod
+    def _pop_effort_from_nested_carrier(request_kwargs: dict[str, object], carrier: str) -> None:
+        nested: Final = request_kwargs.get(carrier)
+        if not isinstance(nested, dict):
+            return
+        nested.pop("effort", None)
+        if not nested:
+            request_kwargs.pop(carrier, None)
+
+    @staticmethod
+    def _drop_client_effort_carriers_a_tier_pin_supersedes(
+        request_kwargs: dict[str, object],
+        tier_litellm_params: Mapping[str, object],
+    ) -> None:
+        """Tier litellm_params are deliberate operator overrides, but provider
+        translations let a caller-supplied carrier of the same setting
+        (``thinking``, ``output_config.effort``, ``reasoning.effort``) outrank
+        the ``reasoning_effort`` alias, so a pinned effort only reaches the wire
+        if the client's other encodings are removed before the merge. Non-effort
+        fields a carrier also holds (``output_config.format``,
+        ``reasoning.summary``) are kept."""
+        if "reasoning_effort" not in tier_litellm_params:
+            return
+        request_kwargs.pop("thinking", None)
+        Router._pop_effort_from_nested_carrier(request_kwargs, "output_config")
+        Router._pop_effort_from_nested_carrier(request_kwargs, "reasoning")
+
     async def async_get_available_deployment(
         self,
         model: str,
@@ -11887,7 +12088,11 @@ class Router:
                 model = pre_routing_hook_response.model
                 messages = pre_routing_hook_response.messages
                 if pre_routing_hook_response.litellm_params:
-                    request_kwargs.update(pre_routing_hook_response.litellm_params)
+                    accepted_tier_params: Final = self._tier_params_the_target_accepts(
+                        model, pre_routing_hook_response.litellm_params, request_kwargs
+                    )
+                    self._drop_client_effort_carriers_a_tier_pin_supersedes(request_kwargs, accepted_tier_params)
+                    request_kwargs.update(accepted_tier_params)
             #########################################################
 
             # Resolve the strategy and logger AFTER the pre-routing hook, since
@@ -11998,7 +12203,11 @@ class Router:
                 model = pre_routing_hook_response.model
                 messages = pre_routing_hook_response.messages
                 if pre_routing_hook_response.litellm_params:
-                    request_kwargs.update(pre_routing_hook_response.litellm_params)
+                    accepted_tier_params: Final = self._tier_params_the_target_accepts(
+                        model, pre_routing_hook_response.litellm_params, request_kwargs
+                    )
+                    self._drop_client_effort_carriers_a_tier_pin_supersedes(request_kwargs, accepted_tier_params)
+                    request_kwargs.update(accepted_tier_params)
 
             # 2. Get healthy deployments
             healthy_deployments: Final = await self.async_get_healthy_deployments(

@@ -210,21 +210,6 @@ describe("AddAutoRouterTab", () => {
     expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
   });
 
-  it("submits when the dry-run passes, so the gate is not simply blocking everything", async () => {
-    const user = userEvent.setup();
-    vi.mocked(getMissingTiersError).mockReturnValue(null);
-    validateAutoRouterConfig.mockResolvedValueOnce({ valid: true });
-
-    renderWithProviders(<Harness />);
-    await user.type(screen.getByPlaceholderText(/smart_router/i), "accepted-router");
-    await user.click(screen.getByRole("button", { name: /add auto router/i }));
-
-    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
-  });
-
-  // A second submit while the dry-run round-trip is pending must not start another create: the
-  // button disables, and the handler itself refuses re-entry since a form submit (Enter) fires it
-  // regardless of the button's disabled state.
   it("creates the router once when the form is submitted again mid dry-run", async () => {
     vi.mocked(getMissingTiersError).mockReturnValue(null);
     let resolveVerdict: (verdict: { valid: boolean }) => void = () => {};
@@ -246,6 +231,18 @@ describe("AddAutoRouterTab", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled());
     expect(validateAutoRouterConfig).toHaveBeenCalledTimes(1);
     expect(handleAddAutoRouterSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("submits when the dry-run passes, so the gate is not simply blocking everything", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+    validateAutoRouterConfig.mockResolvedValueOnce({ valid: true });
+
+    renderWithProviders(<Harness />);
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "accepted-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
   });
 
   // LIT-5133: "Add keyword rule" seeds a row with no keywords, and the semantic toggle that used
@@ -284,6 +281,25 @@ describe("AddAutoRouterTab", () => {
 
     expect(screen.getByRole("button", { name: /add auto router/i })).toBeEnabled();
     expect(screen.queryByText("At least one keyword is required")).not.toBeInTheDocument();
+  });
+
+  it("shows the orphaned-rule reason in the tier editor when a rule's tier is removed", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "orphan-rule-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
+    await user.click(screen.getByRole("button", { name: /add keyword rule/i }));
+    await addKeyword(user, screen.getByText("Keywords 1").closest("div") as HTMLElement, "invoice");
+
+    await user.click(screen.getByRole("button", { name: "Edit tiers" }));
+    await user.click(screen.getByRole("button", { name: "Remove the COMPLEX tier" }));
+
+    expect(await screen.findByText(/route to a tier this router no longer has/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
   });
 
   it("marks only the offending keyword row, leaving a filled one alone", async () => {
@@ -346,8 +362,8 @@ describe("AddAutoRouterTab", () => {
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
     expandDetailedConfiguration();
-    await user.click(screen.getByText("Advanced: Affinity"));
-    expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    expect(await screen.findByRole("radio", { name: /Once per session/ })).not.toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
@@ -355,6 +371,71 @@ describe("AddAutoRouterTab", () => {
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
       session_affinity: false,
     });
+  });
+
+  it("carries a context-window escalation opt-out through to the create payload", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "ctx-window-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Context Window Escalation"));
+    const toggle = await screen.findByRole("switch", { name: "Escalate oversized prompts to a tier that fits" });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      enable_context_window_escalation: false,
+    });
+  });
+
+  it("clamps the context-window buffer to 1 and keeps an untouched buffer out of the payload", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "ctx-buffer-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Context Window Escalation"));
+    const buffer = await screen.findByLabelText("Window fit buffer");
+    fireEvent.change(buffer, { target: { value: "1.5" } });
+    fireEvent.blur(buffer, { target: { value: "1.5" } });
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    const config = vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config;
+    expect(config).toMatchObject({ context_window_escalation_buffer: 1 });
+    expect(config).not.toHaveProperty("enable_context_window_escalation");
+  });
+
+  it("clearing the buffer removes it from the payload so the router tracks the backend default", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "ctx-clear-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Context Window Escalation"));
+    const buffer = await screen.findByLabelText("Window fit buffer");
+    fireEvent.change(buffer, { target: { value: "0.8" } });
+    fireEvent.blur(buffer, { target: { value: "0.8" } });
+    fireEvent.change(buffer, { target: { value: "" } });
+    fireEvent.blur(buffer, { target: { value: "" } });
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).not.toHaveProperty(
+      "context_window_escalation_buffer",
+    );
   });
 
   // The scalar floor is the one scorer knob with no group dict behind it, so its wiring into the create
@@ -387,8 +468,8 @@ describe("AddAutoRouterTab", () => {
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
     expandDetailedConfiguration();
-    await user.click(screen.getByText("Advanced: Affinity"));
-    await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Once per session/ }));
 
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
@@ -396,6 +477,44 @@ describe("AddAutoRouterTab", () => {
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
       session_affinity: true,
     });
+  });
+
+  it("carries every new user message through to the create payload", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "user-turn-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Every new user message/ }));
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      classification_mode: "user_turn",
+    });
+  });
+
+  it("writes every_request into the create payload when the default frequency stays selected", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "default-timing-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    expect(await screen.findByRole("radio", { name: /Every request/ })).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(
+      vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config.classification_mode,
+    ).toBe("every_request");
   });
 
   it("defaults a new router to deployment affinity on, matching the backend field default", async () => {
@@ -651,28 +770,6 @@ describe("AddAutoRouterTab", () => {
       });
     });
 
-    // Every step between the bundled JSON and the payload drops these params silently.
-    it("carries a preset's per-tier reasoning effort through to the create payload", async () => {
-      const user = userEvent.setup();
-      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
-
-      renderWithProviders(<Harness />);
-      await waitForPresetEnabled("Anthropic Family");
-      await selectTemplate("Anthropic Family");
-
-      await user.type(screen.getByPlaceholderText(/smart_router/i), "anthropic-router");
-      await user.click(screen.getByRole("button", { name: /add auto router/i }));
-
-      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
-      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
-        complexity_router_config: {
-          tier_model_configs: {
-            REASONING: [{ model_name: "claude-opus-5", litellm_params: { reasoning_effort: "high" } }],
-          },
-        },
-      });
-    });
-
     // Bugbot-found bug: submitBlockedReason disables the button for this, but Form's onFinish
     // (wired to the same handler as the button) fires whenever the form itself is submitted,
     // independent of the button's own disabled state. Without submitRecommendedRouter re-checking
@@ -699,6 +796,27 @@ describe("AddAutoRouterTab", () => {
 
       await waitFor(() => expect(toast.fromError).toHaveBeenCalledWith(expect.stringContaining("no longer available")));
       expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
+    });
+
+    it("carries a preset's per-tier reasoning effort through to the create payload", async () => {
+      const user = userEvent.setup();
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+
+      renderWithProviders(<Harness />);
+      await waitForPresetEnabled("Anthropic Family");
+      await selectTemplate("Anthropic Family");
+
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "anthropic-router");
+      await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+      expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
+        complexity_router_config: {
+          tier_model_configs: {
+            REASONING: [{ model_name: "claude-opus-5", litellm_params: { reasoning_effort: "high" } }],
+          },
+        },
+      });
     });
   });
 
@@ -972,6 +1090,23 @@ describe("getSubmitBlockedReason", () => {
   it("blocks an LLM classifier with no model, which the button previously left enabled", () => {
     expect(getSubmitBlockedReason({ tiers, classifier_type: "llm" }, [], referenced, availability)).toContain(
       "Please select a classifier model",
+    );
+  });
+
+  it("blocks an edited tier set with no classifier model, since the set forces the LLM classifier", () => {
+    const config = {
+      tiers,
+      classifier_type: "heuristic" as const,
+      custom_tier_set: {
+        tiers: [
+          { id: "a", name: "CASUAL", definition: "d", models: ["gpt-4o-mini"] },
+          { id: "b", name: "AUDIT", definition: "d", models: ["gpt-4o-mini"] },
+        ],
+        fallback_tier_id: "a",
+      },
+    };
+    expect(getSubmitBlockedReason(config, [], referenced, availability)).toContain(
+      "an edited tier set routes with the LLM classifier",
     );
   });
 

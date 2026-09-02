@@ -14,7 +14,9 @@
       },
       "classifier_type": "heuristic",
       "escalation_keywords": ["LITELLM ESCALATE"],
+      "classification_mode": "every_request",
       "session_affinity": false,
+      "modality_routing": false,
       "deployment_affinity": true
     }
   },
@@ -30,19 +32,25 @@
       },
       "classifier_type": "heuristic",
       "escalation_keywords": ["LITELLM ESCALATE"],
+      "classification_mode": "every_request",
       "session_affinity": false,
+      "modality_routing": false,
       "deployment_affinity": true
     }
   },
   "lite": {
     "label": "Lite",
-    "description": "Cost-optimized routing across providers: DeepSeek V4 Flash for simple queries, Muse Spark 1.2 for medium, Kimi K3 for complex, Claude Opus 5 for reasoning-heavy requests. An LLM classifier with the agentic rubric assigns tiers.",
+    "description": "Cost-optimized routing across providers: DeepSeek V4 Flash for simple queries, Muse Spark 1.2 at xhigh for medium, Kimi K3 at max for complex, Claude Opus 5 for reasoning. An LLM classifier with the agentic rubric assigns tiers.",
     "complexity_router_config": {
       "tiers": {
         "SIMPLE": ["deepseek-v4-flash"],
         "MEDIUM": ["muse-spark-1.2"],
         "COMPLEX": ["kimi-k3"],
         "REASONING": ["claude-opus-5"]
+      },
+      "tier_model_configs": {
+        "MEDIUM": [{ "model_name": "muse-spark-1.2", "litellm_params": { "reasoning_effort": "xhigh" } }],
+        "COMPLEX": [{ "model_name": "kimi-k3", "litellm_params": { "reasoning_effort": "max" } }]
       },
       "classifier_type": "llm",
       "classifier_llm_config": {
@@ -52,7 +60,9 @@
       },
       "classifier_context_window_size": 0,
       "escalation_keywords": ["LITELLM ESCALATE"],
+      "classification_mode": "every_request",
       "session_affinity": false,
+      "modality_routing": false,
       "deployment_affinity": true
     }
   },
@@ -68,7 +78,9 @@
       },
       "classifier_type": "heuristic",
       "escalation_keywords": ["LITELLM ESCALATE"],
+      "classification_mode": "every_request",
       "session_affinity": false,
+      "modality_routing": false,
       "deployment_affinity": true
     }
   }

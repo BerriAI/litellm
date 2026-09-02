@@ -245,27 +245,71 @@ ShadowEvalStatus: TypeAlias = Literal["running", "completed", "stopped"]
 
 ShadowEvalDirection: TypeAlias = Literal["forward", "reverse"]
 
+ShadowEvalTargetType: TypeAlias = Literal["key", "team", "user"]
+
 DEFAULT_SHADOW_EVAL_JUDGE_MODEL: Final[str] = "anthropic/claude-sonnet-5"
 
 # Sample-count ceiling written on every new job: a zero-cost error loop (a shadow arm that
 # fails before billing) never consumes spend budget, so it must terminate on count instead.
+# A multi-router job writes one attempt row per router arm, so the valve is reached
+# proportionally sooner; it is a safety valve, not a sample budget.
 SHADOW_EVAL_TURN_VALVE: Final[int] = 10_000
+
+SHADOW_EVAL_MAX_ROUTERS: Final[int] = 4
 
 
 class StartShadowEvalRequest(BaseModel):
-    """Start duplicating one or more keys' traffic for blind comparison against an auto-router."""
+    """Start duplicating one or more targets' traffic for blind comparison against an auto-router.
+
+    A target is a virtual key, a team, or a user; each becomes its own leg with its own
+    budget and stop state. Team and user targets match on the identity every request
+    carries after auth (user_api_key_team_id / user_api_key_user_id), so they cover
+    JWT-authenticated traffic, which presents no virtual key at all."""
 
     api_key_ids: tuple[str, ...] = Field(
-        min_length=1,
+        default=(),
         max_length=100,
         description=(
-            "The hashed virtual keys whose traffic will be shadowed. Shadow evaluation runs ONLY on these "
-            "keys' traffic; requests made with any other key are not sampled. Each key carries its own "
-            "max_budget spend budget, so one key exhausting its budget leaves the others sampling. At most 100 "
-            "keys per job, which also bounds every read the job's endpoints make."
+            "Hashed virtual keys whose traffic will be shadowed. Combined with team_ids and user_ids the job "
+            "needs at least one target and at most 100, which also bounds every read the job's endpoints make. "
+            "Each target carries its own max_budget spend budget, so one exhausting its budget leaves the "
+            "others sampling."
         ),
     )
-    router_name: str = Field(description="The auto-router under evaluation, in either direction")
+    team_ids: tuple[str, ...] = Field(
+        default=(),
+        max_length=100,
+        description=(
+            "Teams whose traffic will be shadowed, matched on the team every authenticated request resolves "
+            "to, so a team's JWT-auth and virtual-key traffic are both sampled"
+        ),
+    )
+    user_ids: tuple[str, ...] = Field(
+        default=(),
+        max_length=100,
+        description=(
+            "Users whose traffic will be shadowed, matched on the user every authenticated request resolves "
+            "to across all their teams: JWT requests carrying their subject claim and virtual keys they own"
+        ),
+    )
+    router_name: str | None = Field(
+        default=None,
+        description=(
+            "The auto-router under evaluation, in either direction: the single-router spelling of "
+            "router_names. Provide exactly one of the two fields"
+        ),
+    )
+    router_names: tuple[str, ...] = Field(
+        default=(),
+        max_length=SHADOW_EVAL_MAX_ROUTERS,
+        description=(
+            "The auto-routers under evaluation, at most "
+            f"{SHADOW_EVAL_MAX_ROUTERS}. Every sampled request runs through every router listed and each "
+            "arm is judged independently against the same real response, so routers compare head-to-head "
+            "on identical traffic. More than one router requires direction 'forward'. After validation "
+            "this field always carries the full deduplicated set, whichever spelling the caller used"
+        ),
+    )
     direction: ShadowEvalDirection = Field(
         default="forward",
         description=(
@@ -285,7 +329,7 @@ class StartShadowEvalRequest(BaseModel):
     shadow_percentage: float = Field(
         ge=0.1,
         le=100.0,
-        description="Percentage of the key's requests to duplicate through the router",
+        description="Percentage of each target's requests to duplicate through the router",
     )
     judge_model: str = Field(
         default=DEFAULT_SHADOW_EVAL_JUDGE_MODEL,
@@ -306,10 +350,11 @@ class StartShadowEvalRequest(BaseModel):
         ge=0.01,
         le=10_000,
         description=(
-            "Per-key USD budget for the eval's own overhead, the shadow-arm and judge calls, priced with "
-            "the same figures the spend pipeline bills. EACH scoped key samples until its recorded eval "
-            "spend reaches this, so a job over N keys spends at most about N times max_budget; in-flight "
-            "samples can overshoot the cap by one sampling cache window"
+            "Per-target USD budget for the eval's own overhead, the shadow-arm and judge calls, priced with "
+            "the same figures the spend pipeline bills. EACH scoped target samples until its recorded eval "
+            "spend reaches this, so a job over N targets spends at most about N times max_budget; in-flight "
+            "samples can overshoot the cap by one sampling cache window. Every router arm draws from the "
+            "same per-target budget, so a multi-router job reaches it proportionally sooner"
         ),
     )
 
@@ -319,7 +364,7 @@ class StartShadowEvalRequest(BaseModel):
         """Pydantic ignores unknown fields, so a caller still sending max_turns would
         silently run on the default dollar budget instead of the bound they asked for."""
         if isinstance(values, Mapping) and "max_turns" in values:
-            raise ValueError("max_turns was replaced by max_budget, the per-key USD cap on the eval's own spend")
+            raise ValueError("max_turns was replaced by max_budget, the per-target USD cap on the eval's own spend")
         return values
 
     @field_validator("shadow_percentage")
@@ -327,11 +372,20 @@ class StartShadowEvalRequest(BaseModel):
     def _round_percentage(cls, value: float) -> float:
         return round(value, 2)
 
-    @field_validator("api_key_ids")
+    @field_validator("api_key_ids", "team_ids", "user_ids")
     @classmethod
-    def _dedupe_keys(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        """A key named twice would collide with itself on the one-active-per-(key, direction) index."""
+    def _dedupe_targets(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """A target named twice would collide with itself on the one-active-per-(target, direction) index."""
         return tuple(dict.fromkeys(value))
+
+    @model_validator(mode="after")
+    def _at_least_one_target_at_most_hundred(self) -> "StartShadowEvalRequest":
+        total: Final = len(self.api_key_ids) + len(self.team_ids) + len(self.user_ids)
+        if total < 1:
+            raise ValueError("at least one target is required: pass api_key_ids, team_ids, or user_ids")
+        if total > 100:
+            raise ValueError("at most 100 targets per job across api_key_ids, team_ids, and user_ids")
+        return self
 
     @model_validator(mode="after")
     def _baseline_model_matches_direction(self) -> "StartShadowEvalRequest":
@@ -341,10 +395,28 @@ class StartShadowEvalRequest(BaseModel):
             raise ValueError("baseline_model is only meaningful when direction is 'reverse'")
         return self
 
+    @model_validator(mode="after")
+    def _resolve_router_set(self) -> "StartShadowEvalRequest":
+        """Whichever spelling the caller used, router_names leaves validation as the full
+        deduplicated set, so every downstream reader consumes one field."""
+        if (self.router_name is None) == (not self.router_names):
+            raise ValueError("provide exactly one of router_name or router_names")
+        single: Final = () if self.router_name is None else (self.router_name,)
+        routers: Final = tuple(dict.fromkeys(self.router_names or single))
+        if not all(name.strip() for name in routers):
+            raise ValueError("router names must be non-empty strings")
+        if len(routers) > 1 and self.direction == "reverse":
+            raise ValueError("a reverse job evaluates one router against baseline_model; pass a single router")
+        # A returned model_copy is ignored on the __init__ construction path, so the
+        # normalization must land as a self attribute store to hold for every caller.
+        self.router_names = routers
+        return self
+
 
 class ShadowEvalSlice(BaseModel):
-    """Judge outcomes for one slice of a job's verdicts (a router tier, or one of the
-    models that served the real arm)."""
+    """Judge outcomes for one slice of a job's verdicts: a router tier, one of the
+    models that served the real arm, or one scoped target (embedded on that target's
+    own entry, so slices never need re-joining to a target by id)."""
 
     group: str
     turn_count: int
@@ -362,6 +434,27 @@ class ShadowEvalSlice(BaseModel):
     )
     tie_rate_pct: float
     avg_judge_confidence: float
+    real_spend: float = Field(
+        default=0.0,
+        description=(
+            "USD the real arm billed on this slice's judged turns, completion plus its own routing "
+            "classifier when it routed, excluding turns litellm's response cache served for free"
+        ),
+    )
+    shadow_spend: float = Field(
+        default=0.0,
+        description=(
+            "USD the shadow arm billed on the same turns, completion plus its own routing classifier, "
+            "excluding the judge and the same cache-served turns, so the two spends compare like for like"
+        ),
+    )
+    cache_hit_turns: int = Field(
+        default=0,
+        description=(
+            "Judged turns litellm's response cache served, excluded from both spends: an adopted router "
+            "would be served by the same cache, so those turns cost the same either way"
+        ),
+    )
 
 
 class ShadowEvalResult(BaseModel):
@@ -374,37 +467,76 @@ class ShadowEvalResult(BaseModel):
             "and in reverse the models the router itself picked"
         )
     )
-    by_key: tuple[ShadowEvalSlice, ...] = Field(
+    by_router: tuple[ShadowEvalSlice, ...] = Field(
+        default=(),
         description=(
-            "One slice per scoped key that has judged verdicts, grouped on the raw key hash. Keys the job "
-            "scopes but has not judged a turn for yet are absent rather than reported as zero"
+            "One slice per router arm, grouped on the router name. Every arm of a multi-router job is "
+            "judged against the same real responses over the same sampled requests, so these slices "
+            "compare routers head-to-head: like-for-like win rates and spends on identical traffic. "
+            "Verdicts from before arm stamping existed count toward the job's own router"
         ),
     )
     overall_shadow_win_rate_pct: float
     overall_tie_rate_pct: float
+    sampled_real_spend: float = Field(
+        default=0.0,
+        description=(
+            "USD the real arm billed across all judged turns, cache-served turns excluded. A judged turn "
+            "is one (request, router arm) verdict, so a multi-router job counts the real response once per "
+            "arm it was judged against; per-router comparisons read by_router"
+        ),
+    )
+    sampled_shadow_spend: float = Field(
+        default=0.0,
+        description="USD the shadow arms billed across the same turns, judge excluded, like for like",
+    )
+    not_sampled_count: int | None = Field(
+        default=None,
+        description=(
+            "Eligible requests the sampling dice skipped, summed over legs: the judged rows stand for "
+            "judged + this many requests. None for jobs from before the funnel existed"
+        ),
+    )
+    unjudgeable_count: int | None = Field(
+        default=None,
+        description="Sampled requests whose shape could not be judged (tool-final turn, empty text)",
+    )
+    shed_count: int | None = Field(
+        default=None,
+        description="Sampled requests dropped by the per-pod concurrency cap, so quiet periods are overweighted",
+    )
+    withheld_count: int | None = Field(
+        default=None,
+        description=(
+            "Sampled requests the pipeline declined to spend on: no database to record into, an over-budget "
+            "key or team, or the eval budget unverifiable or already reached (the in-flight burst as a job "
+            "crosses max_budget lands here rather than vanishing from coverage)"
+        ),
+    )
 
 
-class ShadowEvalJobKeyResponse(BaseModel):
-    """One key a job shadows, with its own budget and stop state."""
+class ShadowEvalJobTargetResponse(BaseModel):
+    """One target a job shadows (a key, team, or user), with its own budget and stop state."""
 
-    api_key_id: str = Field(description="The hashed virtual key whose traffic this entry scopes")
+    target_type: ShadowEvalTargetType = Field(description="What kind of entity this entry scopes")
+    target_id: str = Field(description="The hashed virtual key, team id, or user id whose traffic this entry scopes")
     max_turns: int = Field(
         description=(
-            "This key's sample-count ceiling: the whole budget for jobs created before max_budget "
+            "This target's sample-count ceiling: the whole budget for jobs created before max_budget "
             "existed, and the error-loop safety valve otherwise"
         )
     )
     max_budget: float | None = Field(
         default=None,
         description=(
-            "This key's own USD budget for the eval's shadow and judge spend, independent of its "
+            "This target's own USD budget for the eval's shadow and judge spend, independent of its "
             "siblings'; None on jobs created before spend budgets existed, which max_turns alone bounds"
         ),
     )
     stopped_at: datetime | None = Field(
         default=None,
         description=(
-            "When this key's slot was stamped free, whether its own budget ran out, the window closed, "
+            "When this target's slot was stamped free, whether its own budget ran out, the window closed, "
             "or an operator stopped the job; status is derived, so a spent budget reads completed even "
             "while this is still unset"
         ),
@@ -412,18 +544,23 @@ class ShadowEvalJobKeyResponse(BaseModel):
     attempt_count: int | None = Field(
         default=None,
         description=(
-            "This key's sampled attempts so far, judged and errored alike, the same count the sampler "
+            "This target's sampled attempts so far, judged and errored alike, the same count the sampler "
             "budgets against max_turns; populated on list and detail responses. Frozen at stopped_at "
-            "once the key is stamped, so in-flight attempts landing after a stop never reclassify it"
+            "once the target is stamped, so in-flight attempts landing after a stop never reclassify it"
         ),
     )
     spend: float | None = Field(
         default=None,
         description=(
-            "This key's recorded shadow plus judge spend in USD, the same figure the sampler budgets "
+            "This target's recorded shadow plus judge spend in USD, the same figure the sampler budgets "
             "against max_budget; populated on list and detail responses and frozen at stopped_at "
             "exactly like attempt_count"
         ),
+    )
+
+    verdicts: "ShadowEvalSlice | None" = Field(
+        default=None,
+        description="This target's own judged-verdict slice; detail endpoint only, None until a turn is judged",
     )
 
     @property
@@ -431,28 +568,37 @@ class ShadowEvalJobKeyResponse(BaseModel):
         over_spend: Final = self.max_budget is not None and self.spend is not None and self.spend >= self.max_budget
         return over_spend or (self.attempt_count is not None and self.attempt_count >= self.max_turns)
 
-    key_alias: str | None = Field(
+    target_alias: str | None = Field(
         default=None,
-        description="Alias of the shadowed key, resolved from the key row at read time; None when unset or deleted",
+        description=(
+            "Display label resolved from the target's own row at read time: the key's alias, the team's "
+            "alias, or the user's email; None when unset or deleted"
+        ),
     )
     key_name: str | None = Field(
         default=None,
-        description="Masked display name (sk-...) of the shadowed key, resolved at read time like key_alias",
+        description="Masked display name (sk-...) for key targets, resolved at read time; None for teams and users",
     )
 
 
 class ShadowEvalJobResponse(BaseModel):
-    """A shadow-eval job over one or more keys, each with its own budget and stop state;
-    status is derived from stopped_by, the keys' stop and budget state, and ends_at,
+    """A shadow-eval job over one or more targets, each with its own budget and stop state;
+    status is derived from stopped_by, the targets' stop and budget state, and ends_at,
     never stored, so no writer anywhere can produce an inconsistent one. Aggregate
     fields are populated by the detail endpoint only and stay None on list responses."""
 
     job_id: str
-    keys: tuple[ShadowEvalJobKeyResponse, ...] = Field(
+    targets: tuple[ShadowEvalJobTargetResponse, ...] = Field(
         min_length=1,
-        description="The keys whose traffic this job evaluates, and only those keys', each with its own budget",
+        description="The targets whose traffic this job evaluates, and only theirs, each with its own budget",
     )
-    router_name: str
+    router_names: tuple[str, ...] = Field(
+        min_length=1,
+        description=(
+            "Every auto-router this job runs as a shadow arm. Multi-router jobs sample one slice of "
+            "traffic and judge every arm against the same real responses"
+        ),
+    )
     direction: ShadowEvalDirection = "forward"
     baseline_model: str | None = None
     judge_model: str
@@ -476,11 +622,18 @@ class ShadowEvalJobResponse(BaseModel):
 
     @computed_field
     @property
+    def router_name(self) -> str:
+        """The first router, kept for callers that predate router_names; derived so the
+        two fields can never disagree."""
+        return self.router_names[0]
+
+    @computed_field
+    @property
     def status(self) -> ShadowEvalStatus:
         """Three recorded facts, no history-guessing: a stop is stopped_by (the migration
         backfills it for every job that displayed stopped when the column arrived, so the
-        pre-column population is closed), completion is the window passing or every key
-        spending its budget, and anything else is running. The all-keys-stamped fallback
+        pre-column population is closed), completion is the window passing or every target
+        spending its budget, and anything else is running. The all-targets-stamped fallback
         covers only stops written by pre-column pods during a rolling deploy."""
         if self.stopped_by is not None:
             return "stopped"
@@ -488,8 +641,8 @@ class ShadowEvalJobResponse(BaseModel):
             self.ends_at if self.ends_at.tzinfo else self.ends_at.replace(tzinfo=timezone.utc)
         ):
             return "completed"
-        if all(key.budget_spent for key in self.keys):
+        if all(target.budget_spent for target in self.targets):
             return "completed"
-        if all(key.stopped_at is not None for key in self.keys):
+        if all(target.stopped_at is not None for target in self.targets):
             return "stopped"
         return "running"
