@@ -259,7 +259,7 @@ if MCP_AVAILABLE:
         if normalize_upstream_header_name(raw) is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={  # mutable-ok: FastAPI exception detail requires a JSON-serializable dictionary
+                detail={
                     "error": (
                         f"Invalid upstream_token_header {raw!r}: must be a valid HTTP header name "
                         "(RFC 7230 token, e.g. 'esb-oauth')"
