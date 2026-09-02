@@ -30452,13 +30452,6 @@ export interface components {
              */
             on_sensitive_data?: ("block" | "route") | null;
             /**
-             * On Unscannable Image
-             * @description What to do with an image the guardrail cannot scan - ApplyGuardrail accepts png/jpeg only, and remote image URLs are not fetched while litellm.user_url_validation is disabled. 'block' (default) rejects the request; 'allow' logs a warning and sends the image to the model unscanned.
-             * @default block
-             * @enum {string}
-             */
-            on_unscannable_image: "block" | "allow";
-            /**
              * On Violation
              * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.
              */

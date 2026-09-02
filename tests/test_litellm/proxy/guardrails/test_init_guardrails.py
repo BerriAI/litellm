@@ -121,40 +121,6 @@ def test_initialize_guardrail_sets_run_in_parallel(config_value, expected):
     assert custom_guardrail.run_in_parallel is expected
 
 
-def test_initialize_bedrock_forwards_on_unscannable_image():
-    """Regression: `on_unscannable_image` set in config.yaml must reach the guardrail.
-
-    Same shape as chunk_budget_chars above: the field lives on
-    BedrockGuardrailConfigModel so LitellmParams parses it, but initialize_bedrock
-    enumerates its kwargs explicitly. Dropped here, an operator who opted into
-    `allow` would keep getting 400s on unscannable images with no indication why.
-    """
-    import litellm
-    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
-
-    test_guardrail = {
-        "guardrail_name": "test_bedrock_unscannable_image",
-        "litellm_params": {
-            "guardrail": SupportedGuardrailIntegrations.BEDROCK.value,
-            "mode": "pre_call",
-            "guardrailIdentifier": "test-guardrail",
-            "guardrailVersion": "DRAFT",
-            "on_unscannable_image": "allow",
-        },
-    }
-
-    guardrail_handler = InMemoryGuardrailHandler()
-    guardrail_handler.initialize_guardrail(guardrail=test_guardrail)
-
-    initialized = [
-        callback
-        for callback in litellm.callbacks
-        if isinstance(callback, BedrockGuardrail) and callback.guardrail_name == "test_bedrock_unscannable_image"
-    ]
-    assert initialized, "bedrock guardrail was not registered as a callback"
-    assert initialized[-1].on_unscannable_image == "allow"
-
-
 def test_initialize_presidio_forwards_analyze_chunk_size_bytes():
     """Regression (LIT-4785): `presidio_analyze_chunk_size_bytes` set in
     config.yaml must reach the guardrail instance. The field lives on

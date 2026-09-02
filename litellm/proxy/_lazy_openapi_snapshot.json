@@ -11810,16 +11810,6 @@
               "description": "Action to take when sensitive data is detected. 'block' raises an exception (default behavior). 'route' reroutes the request to the model specified in sensitive_data_route_to_model.",
               "title": "On Sensitive Data"
             },
-            "on_unscannable_image": {
-              "default": "block",
-              "description": "What to do with an image the guardrail cannot scan - ApplyGuardrail accepts png/jpeg only, and remote image URLs are not fetched while litellm.user_url_validation is disabled. 'block' (default) rejects the request; 'allow' logs a warning and sends the image to the model unscanned.",
-              "enum": [
-                "block",
-                "allow"
-              ],
-              "title": "On Unscannable Image",
-              "type": "string"
-            },
             "on_violation": {
               "anyOf": [
                 {

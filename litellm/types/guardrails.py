@@ -551,13 +551,6 @@ class BedrockGuardrailConfigModel(BaseModel):
         "still rejects is bisected automatically, so this value only trades round trips against "
         "batch size and cannot fail a request on its own.",
     )
-    on_unscannable_image: Literal["block", "allow"] = Field(
-        default="block",
-        description="What to do with an image the guardrail cannot scan - ApplyGuardrail "
-        "accepts png/jpeg only, and remote image URLs are not fetched while "
-        "litellm.user_url_validation is disabled. 'block' (default) rejects the request; "
-        "'allow' logs a warning and sends the image to the model unscanned.",
-    )
 
 
 class BedrockGuardrailStreamingParams(BaseModel):

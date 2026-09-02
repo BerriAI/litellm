@@ -92,14 +92,6 @@ class SSRFError(ValueError):
     """Raised when a URL targets a blocked network."""
 
 
-class PayloadTooLargeError(ValueError):
-    """Raised when a fetched body exceeds the caller's byte cap.
-
-    A ``ValueError`` subclass, like :class:`SSRFError`, so callers that already
-    treat a malformed remote response as a rejected fetch need no new except arm.
-    """
-
-
 def encode_url_path_segment(value: object, *, field_name: str = "path parameter") -> str:
     """Percent-encode one user-controlled URL path segment.
 
@@ -468,79 +460,11 @@ def safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response:
     raise SSRFError("Too many redirects")
 
 
-# Headers that describe the wire encoding of the body. `aiter_bytes` yields
-# decoded bytes, so carrying these onto the rebuilt response would describe it
-# wrongly (a gzip label on already-inflated bytes, a length from before decoding).
-_TRANSFER_ENCODING_HEADERS: Final = frozenset({"content-encoding", "content-length"})
-
-
-def _underlying_httpx_client(client: object) -> httpx.AsyncClient:
-    """Return the object exposing ``stream``.
-
-    ``AsyncHTTPHandler``/``HTTPHandler`` wrap an httpx client and forward only
-    ``get``/``post``/..., so streaming has to go through the wrapped ``.client``.
-    A raw httpx client is returned unchanged.
-    """
-    inner: Final = getattr(client, "client", client)
-    if not isinstance(inner, httpx.AsyncClient):
-        raise TypeError(f"cannot stream from {type(client).__name__}: no httpx client to stream with")
-    return inner
-
-
-async def _async_get_capped(
-    client: object,
-    url: str,
-    max_bytes: int,
-    request_kwargs: dict[str, Any],  # mutable-ok: forwarded straight to httpx as **kwargs
-) -> httpx.Response:
-    """GET ``url``, aborting the transfer once the body exceeds ``max_bytes``.
-
-    ``client.get`` buffers the whole body before returning, so a caller-supplied
-    URL serving an arbitrarily large or indefinitely chunked response is an
-    unbounded allocation. Streaming makes the cap effective during the transfer
-    rather than after it.
-
-    Returns a fully-read response so callers keep using ``.content`` as before.
-    """
-    async with _underlying_httpx_client(client).stream("GET", url, **request_kwargs) as response:
-        chunks: Final[list[bytes]] = []  # mutable-ok: accumulator for the capped body
-        total = 0  # rebind-ok: running byte count for the cap
-        async for chunk in response.aiter_bytes():
-            total += len(chunk)
-            if total > max_bytes:
-                raise PayloadTooLargeError(f"remote body exceeds {max_bytes} bytes")
-            chunks.append(chunk)
-    kept_headers: Final = [  # mutable-ok: httpx.Response takes the header pairs as a list
-        (k, v) for k, v in response.headers.multi_items() if k.lower() not in _TRANSFER_ENCODING_HEADERS
-    ]
-    return httpx.Response(
-        status_code=response.status_code,
-        headers=kept_headers,
-        content=b"".join(chunks),
-        request=response.request,
-    )
-
-
-async def async_safe_get(client: Any, url: str, max_bytes: int | None = None, **kwargs: Any) -> httpx.Response:
-    """Async version of safe_get.
-
-    ``max_bytes`` caps the response body, rejecting an oversized transfer with
-    :class:`PayloadTooLargeError` while it is still in flight. Omitting it keeps
-    the previous unbounded buffering, so existing callers are unaffected.
-    """
-
-    async def _issue(
-        target: _AsyncUrlFetcher,
-        target_url: str,
-        request_kwargs: dict[str, Any],  # mutable-ok: forwarded straight to httpx as **kwargs
-    ) -> httpx.Response:
-        if max_bytes is None:
-            return await target.get(target_url, **request_kwargs)
-        return await _async_get_capped(target, target_url, max_bytes, request_kwargs)
-
+async def async_safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response:
+    """Async version of safe_get."""
     if not getattr(litellm, "user_url_validation", True):
         kwargs.setdefault("follow_redirects", True)
-        unvalidated: Final[_ResponseView] = {"response": await _issue(client, url, kwargs)}
+        unvalidated: Final[_ResponseView] = {"response": await client.get(url, **kwargs)}
         return unvalidated["response"]
     fetcher_view: Final[_AsyncFetcherView] = {"fetcher": client}
     fetcher: Final = fetcher_view["fetcher"]
@@ -548,12 +472,12 @@ async def async_safe_get(client: Any, url: str, max_bytes: int | None = None, **
     headers_view: Final[_CallerHeadersView] = {"headers": kwargs.pop("headers", {})}
     for _ in range(_MAX_REDIRECTS):
         validated_url, original_host = validate_url(url)
-        hop_kwargs: dict[str, Any] = {  # mutable-ok: a fresh per-hop kwargs dict, consumed by this call
+        response = await fetcher.get(
+            validated_url,
+            headers={**headers_view["headers"], "Host": original_host},
+            follow_redirects=False,
             **kwargs,
-            "headers": {**headers_view["headers"], "Host": original_host},  # mutable-ok: httpx takes headers as a dict
-            "follow_redirects": False,
-        }
-        response = await _issue(fetcher, validated_url, hop_kwargs)
+        )
         if not response.is_redirect:
             return response
         # Resolve the next hop against the ORIGINAL (pre-rewrite) URL so

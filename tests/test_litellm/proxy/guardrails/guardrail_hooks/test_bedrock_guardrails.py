@@ -4,7 +4,6 @@ Unit tests for Bedrock Guardrails
 
 import asyncio
 import base64
-import contextlib
 import json
 import sys
 from datetime import datetime, timezone
@@ -24,7 +23,6 @@ from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentChunkResult,
     BedrockGuardrail,
     _redact_pii_matches,
-    _retained_image_bytes,
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
@@ -5286,45 +5284,6 @@ class TestBedrockGuardrailImageInput:
 
     _PNG_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
     _GIF_DATA_URI = "data:image/gif;base64,R0lGODlhAQABAAAAACw="
-    _JPEG_BYTES = b"\xff\xd8\xff\xdb"
-    # A literal, globally-routable IP keeps validate_url's getaddrinfo off DNS; the
-    # transport is faked in every test below, so no request leaves the process.
-    _REMOTE_IMAGE_URL = "https://93.184.216.34/a.jpg"
-
-    def _jpeg_response(self, url: str) -> httpx.Response:
-        return httpx.Response(
-            200,
-            content=self._JPEG_BYTES,
-            headers={"content-type": "image/jpeg"},
-            request=httpx.Request("GET", url),
-        )
-
-    @staticmethod
-    def _fake_stream(chunks: list[bytes], served: list[int] | None = None):
-        """Stand in for httpx.AsyncClient.stream, serving `chunks` one at a time.
-
-        The guardrail caps the transfer, so the fetch goes through `stream` rather
-        than `get`. `served` counts the chunks actually pulled, which is how a test
-        tells "stopped mid-transfer" apart from "read everything, then rejected".
-        """
-
-        @contextlib.asynccontextmanager
-        async def _stream(self, method: str, url, **kwargs):
-            async def _aiter_bytes():
-                for chunk in chunks:
-                    if served is not None:
-                        served.append(len(chunk))
-                    yield chunk
-
-            response = MagicMock()
-            response.status_code = 200
-            response.headers = httpx.Headers({"content-type": "image/jpeg"})
-            response.request = httpx.Request("GET", str(url))
-            response.aiter_bytes = _aiter_bytes
-            yield response
-
-        return _stream
-
     def _guardrail(self, **kwargs) -> BedrockGuardrail:
         return BedrockGuardrail(
             guardrail_name="bedrock-image",
@@ -5431,76 +5390,6 @@ class TestBedrockGuardrailImageInput:
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_unscannable_image_is_skipped_when_explicitly_allowed(self):
-        """on_unscannable_image: allow restores the permissive behavior, opt-in only."""
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "hello"},
-                    {"type": "image_url", "image_url": {"url": self._GIF_DATA_URI}},
-                    {"type": "image_url", "image_url": {"url": "not-an-image"}},
-                ],
-            }
-        ]
-
-        request = await self._guardrail(on_unscannable_image="allow").convert_to_bedrock_format(
-            source="INPUT", messages=messages
-        )
-
-        assert request["content"] == [{"text": {"text": "hello"}}]
-
-    @pytest.mark.asyncio
-    async def test_remote_image_is_fetched_and_scanned(self):
-        messages = [
-            {
-                "role": "user",
-                "content": [{"type": "image_url", "image_url": {"url": self._REMOTE_IMAGE_URL}}],
-            }
-        ]
-        with patch.object(httpx.AsyncClient, "stream", new=self._fake_stream([self._JPEG_BYTES])):
-            request = await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
-
-        assert request["content"] == [
-            {
-                "image": {
-                    "format": "jpeg",
-                    "source": {"bytes": base64.b64encode(self._JPEG_BYTES).decode()},
-                }
-            }
-        ]
-
-    @pytest.mark.asyncio
-    async def test_remote_image_is_not_fetched_when_url_validation_is_disabled(self, monkeypatch):
-        """With validation off, async_safe_get is an unrestricted redirect-following GET.
-
-        The url comes straight from the caller, so fetching it here would make the
-        guardrail an SSRF primitive. Treat the image as unscannable instead, and make
-        no request at all.
-        """
-        monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
-        url = "http://169.254.169.254/latest/meta-data/"
-        messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}]
-        get = AsyncMock(return_value=self._jpeg_response(url))
-        served: list[int] = []
-
-        with (
-            patch.object(httpx.AsyncClient, "get", new=get),
-            patch.object(httpx.AsyncClient, "stream", new=self._fake_stream([self._JPEG_BYTES], served)),
-        ):
-            with pytest.raises(HTTPException):
-                await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
-
-            request = await self._guardrail(on_unscannable_image="allow").convert_to_bedrock_format(
-                source="INPUT", messages=messages
-            )
-
-        # Both transports are stubbed: neither the plain nor the capped fetch ran.
-        get.assert_not_awaited()
-        assert served == []
-        assert request["content"] == []
-
-    @pytest.mark.asyncio
     async def test_incremental_scan_does_not_skip_a_request_carrying_an_image(self):
         """`only_scan_new_messages` decides what to scan from `texts` alone.
 
@@ -5564,129 +5453,37 @@ class TestBedrockGuardrailImageInput:
         assert "image" in kinds, f"image never reached the payload: {kinds}"
 
     @pytest.mark.asyncio
-    async def test_oversized_remote_image_is_cut_off_during_the_transfer(self):
-        """A caller-supplied url can serve an unbounded or indefinitely chunked body.
-
-        The decoded-size check runs once the bytes are already resident, so the cap
-        has to apply while the transfer is in flight. Asserting on how much was
-        pulled is what separates that from buffering it all and rejecting after.
-        """
+    async def test_twenty_inline_images_are_accepted(self):
         messages = [
             {
                 "role": "user",
-                "content": [{"type": "image_url", "image_url": {"url": self._REMOTE_IMAGE_URL}}],
-            }
-        ]
-        # 8 MB offered one MB at a time against a 4 MB cap.
-        chunks: list[bytes] = [b"\0" * (1024 * 1024) for _ in range(8)]
-        served: list[int] = []
-
-        with patch.object(httpx.AsyncClient, "stream", new=self._fake_stream(chunks, served)):
-            with pytest.raises(HTTPException):
-                await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
-
-        # Without the cap the fetch buffers through `get` instead, so `served` stays
-        # empty and the HTTPException above would come from an unstubbed transport
-        # rather than from the size rejection. Assert the capped path actually ran.
-        assert served, "the fetch did not go through the capped stream path"
-        assert sum(served) <= 5 * 1024 * 1024, f"read {sum(served)} bytes past a 4 MB cap"
-        assert len(served) < len(chunks), "the whole body was pulled before rejecting it"
-
-    @pytest.mark.asyncio
-    async def test_a_request_full_of_urls_is_bounded_in_total_not_just_per_image(self):
-        """A per-image cap does not bound a request.
-
-        Content items are gathered over every message and every part, so the urls
-        are fetched concurrently, and the 20-image limit is not applied until
-        _bin_pack_bedrock_content runs on items that are already resident. Without
-        a request-wide budget, 200 urls at 4 MB is 800 MB the caller chose.
-        """
-        # 200 parts, each serving a 1 MB image, against a 20 x 4 MB budget.
-        served: list[int] = []
-        one_mb: list[bytes] = [b"\0" * (1024 * 1024)]
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": f"{self._REMOTE_IMAGE_URL}?i={i}"}} for i in range(200)
-                ],
-            }
-        ]
-
-        with patch.object(httpx.AsyncClient, "stream", new=self._fake_stream(one_mb, served)):
-            request = await self._guardrail(on_unscannable_image="allow").convert_to_bedrock_format(
-                source="INPUT", messages=messages
-            )
-
-        fetched: int = sum(served)
-        assert fetched <= 20 * 4 * 1024 * 1024, f"fetched {fetched} bytes for one request"
-        assert len(request["content"]) < 200, "every url was kept despite the budget"
-        assert request["content"], "the budget swallowed the whole request"
-
-    @pytest.mark.asyncio
-    async def test_an_oversized_remote_image_is_dropped_under_the_allow_policy(self):
-        """The transfer is cut off, and then the request has to carry on.
-
-        `block` raises out of the size rejection, so this is the only path that
-        reaches its fall-through. An operator who set `allow` asked for the image to
-        go unscanned, not for the whole request to die on it.
-        """
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "look"},
-                    {"type": "image_url", "image_url": {"url": self._REMOTE_IMAGE_URL}},
-                ],
-            }
-        ]
-        served: list[int] = []
-        chunks: list[bytes] = [b"\0" * (1024 * 1024) for _ in range(8)]
-
-        with patch.object(httpx.AsyncClient, "stream", new=self._fake_stream(chunks, served)):
-            request = await self._guardrail(on_unscannable_image="allow").convert_to_bedrock_format(
-                source="INPUT", messages=messages
-            )
-
-        assert request["content"] == [{"text": {"text": "look"}}]
-        assert served, "the capped stream path did not run"
-        assert len(served) < len(chunks), "the whole body was pulled before dropping it"
-
-    def test_the_budget_grants_a_whole_image_or_nothing(self):
-        """A partial grant would cap a fetch below the per-image limit.
-
-        The rejection then reads "over ApplyGuardrail's 4 MB limit" while naming a
-        few hundred bytes, blaming AWS for this request having spent its own budget.
-        Keeping the two failures separately legible is worth leaving one image's
-        worth of headroom unused at the tail.
-        """
-        from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
-            _MAX_IMAGE_BYTES,
-            _ImageFetchBudget,
-        )
-
-        budget = _ImageFetchBudget(total=_MAX_IMAGE_BYTES + 100)
-
-        assert budget.claim() == _MAX_IMAGE_BYTES
-        assert budget.claim() == 0, "100 bytes left must read as exhausted, not as a 100 byte cap"
-
-    @pytest.mark.asyncio
-    async def test_inline_images_do_not_draw_on_the_download_budget(self):
-        """Base64 arrives in the request body the proxy already accepted.
-
-        Nothing is fetched for it, so charging it against a download quota would
-        refuse inline images for no reason.
-        """
-        messages = [
-            {
-                "role": "user",
-                "content": [{"type": "image_url", "image_url": {"url": self._PNG_DATA_URI}} for _ in range(40)],
+                "content": [{"type": "image_url", "image_url": {"url": self._PNG_DATA_URI}} for _ in range(20)],
             }
         ]
 
         request = await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
 
-        assert len(request["content"]) == 40
+        assert len(request["content"]) == 20
+
+    @pytest.mark.asyncio
+    async def test_twenty_one_duplicate_images_are_rejected_before_decode(self):
+        """Repeated tiny data URIs still consume image slots and must not amplify AWS calls."""
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": self._PNG_DATA_URI}} for _ in range(21)],
+            }
+        ]
+
+        with patch(  # test-quality-ok: the decoder is the thing under assertion -- the cap must reject before it is ever awaited
+            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.BedrockImageProcessor.process_image_async",
+            new_callable=AsyncMock,
+        ) as decode:
+            with pytest.raises(HTTPException) as exc_info:
+                await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        decode.assert_not_awaited()
+        assert "at most 20 images" in str(exc_info.value.detail)
 
     @pytest.mark.parametrize(
         "content",
@@ -5708,7 +5505,7 @@ class TestBedrockGuardrailImageInput:
         into a content item: an unrecognised part that fell through to the text
         branch would be reported to the operator as scanned when it was not.
         """
-        request = await self._guardrail(on_unscannable_image="allow").convert_to_bedrock_format(
+        request = await self._guardrail().convert_to_bedrock_format(
             source="INPUT", messages=[{"role": "user", "content": content}]
         )
 
@@ -5738,12 +5535,11 @@ class TestBedrockGuardrailImageInput:
         assert kinds == ["image"]
 
     @pytest.mark.asyncio
-    async def test_an_unrecognized_payload_is_left_to_the_unscannable_policy(self):
+    async def test_an_unrecognized_payload_is_rejected(self):
         """_normalize_image_input sniffs png and jpeg out of bare base64.
 
-        Anything else is handed to the decoder as-is rather than guessed at, so the
-        rejection comes from on_unscannable_image and not from a helper deciding
-        quietly on its own.
+        Anything else is handed to the decoder as-is rather than guessed at, and the
+        guardrail rejects it instead of forwarding the image unscanned.
         """
         # Reached through apply_guardrail: bare base64 arrives in inputs["images"],
         # which is the only caller that normalizes before decoding.
@@ -5756,40 +5552,11 @@ class TestBedrockGuardrailImageInput:
 
         assert "could not be read" in str(exc_info.value.detail) or "not a png/jpeg" in str(exc_info.value.detail)
 
-    @pytest.mark.asyncio
-    async def test_an_oversized_inline_image_is_dropped_under_the_allow_policy(self):
-        """The allow policy has to survive the size rejection, not just the format one.
-
-        Under `block` the oversized branch raises and never returns, so this is the
-        only path that reaches its fall-through.
-        """
-        oversized_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * (5 * 1024 * 1024)).decode()
-
-        request = await self._guardrail(on_unscannable_image="allow").convert_to_bedrock_format(
-            source="INPUT",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "look"},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{oversized_png}"}},
-                    ],
-                }
-            ],
-        )
-
-        assert request["content"] == [{"text": {"text": "look"}}]
-
-    def test_the_url_and_budget_helpers_guard_their_own_inputs(self):
+    def test_the_url_helper_guards_its_own_inputs(self):
         """Exercised directly so the guards are not dropped in a later refactor."""
         assert BedrockGuardrail._get_image_url(item={"type": "image_url"}) is None
         assert BedrockGuardrail._get_image_url(item={"type": "image_url", "image_url": {"url": 7}}) is None
         assert BedrockGuardrail._get_image_url(item={"type": "image_url", "image_url": 7}) is None
-
-        assert _retained_image_bytes(None) == 0
-        assert _retained_image_bytes({"text": {"text": "not an image"}}) == 0
-        assert _retained_image_bytes({"image": {"format": "png", "source": {"bytes": 123}}}) == 0
-        assert _retained_image_bytes({"image": {"format": "png", "source": {"bytes": "AAAA"}}}) == 3
 
     @pytest.mark.asyncio
     async def test_a_file_backed_image_is_refused_rather_than_ignored(self):
@@ -5985,32 +5752,6 @@ class TestBedrockGuardrailImageInput:
         assert len(images) == 1, f"the image was sent {len(images)} times"
 
     @pytest.mark.asyncio
-    async def test_a_file_backed_image_is_let_through_under_the_allow_policy(self):
-        """An operator who would rather serve it unscanned can still say so."""
-        g = self._guardrail(on_unscannable_image="allow")
-        sent: list = []
-
-        async def spy(**kwargs):
-            sent.append(kwargs["messages"])
-            return {"action": "NONE", "outputs": []}
-
-        with patch.object(g, "make_bedrock_api_request", new=spy):
-            await g.apply_guardrail(
-                inputs={"texts": ["hello"], "images": []},
-                request_data={
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [{"type": "image", "source": {"type": "file", "file_id": "file_abc"}}],
-                        }
-                    ]
-                },
-                input_type="request",
-            )
-
-        assert sent, "the text alongside the file image still has to be scanned"
-
-    @pytest.mark.asyncio
     async def test_the_scannable_source_shapes_are_not_refused(self):
         """The refusal has to be specific to the shape that cannot be read.
 
@@ -6138,8 +5879,8 @@ class TestBedrockGuardrailImageInput:
         """Anthropic's translation drops media_type and passes bare base64.
 
         `_image_sources` returns source["data"] only, so the entry is not a data URI.
-        Without sniffing the format back it would be rejected as unreadable and, under
-        on_unscannable_image=block, turn a legitimate /v1/messages call into a 400.
+        Without sniffing the format back it would be rejected as unreadable and turn
+        a legitimate /v1/messages call into a 400.
         """
         g = self._guardrail()
         sent: list = []
@@ -6202,45 +5943,10 @@ class TestBedrockGuardrailImageInput:
 
         assert "4 MB limit" in str(exc_info.value.detail)
 
-    def test_bin_packing_respects_the_twenty_image_limit(self):
-        """An image measures 0 against the character budget, so count them separately."""
-        image = {"image": {"format": "png", "source": {"bytes": "AAAA"}}}
-        batches = BedrockGuardrail._bin_pack_bedrock_content([image] * 45, budget=25_000)
-        sizes = [len(batch) for batch in batches]
-        assert all(size <= 20 for size in sizes), sizes
-        assert sum(sizes) == 45, sizes
-
     def test_bin_packing_still_splits_on_the_text_budget(self):
         text = {"text": {"text": "x" * 20_000}}
         batches = BedrockGuardrail._bin_pack_bedrock_content([text] * 3, budget=25_000)
         assert [len(batch) for batch in batches] == [1, 1, 1]
-
-    @pytest.mark.asyncio
-    async def test_many_images_are_split_before_the_first_call(self):
-        """Chunking is reactive; an image-count rejection may never match the too-large check."""
-        g = self._guardrail()
-        sent: list = []
-
-        async def fake_post(content, **kwargs):
-            sent.append(sum(1 for item in content if "image" in item))
-            return {"action": "NONE", "outputs": []}
-
-        image = {"image": {"format": "png", "source": {"bytes": "AAAA"}}}
-        with patch.object(g, "_post_apply_guardrail_content_with_retry", new=fake_post):
-            await g._apply_guardrail_content_with_chunking(
-                content=[image] * 45,
-                base_request_data={},
-                credentials=None,
-                aws_region_name="us-west-2",
-                api_key=None,
-                request_data=None,
-                event_type=GuardrailEventHooks.pre_call,
-                start_time=datetime.now(timezone.utc),
-                allow_chunking=True,
-                completed_chunk_usages=[],
-            )
-        assert sent == [20, 20, 5], sent
-
 
 def test_load_credentials_assumes_role_with_external_id():
     """A trust policy requiring sts:ExternalId must be satisfied by the guardrail's aws_external_id."""
