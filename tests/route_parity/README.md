@@ -23,7 +23,7 @@
 
 ## Hypothesis and property-based testing
 
-- Hypothesis is Python libary for property-based testing
+- Hypothesis is a Python library for property-based testing
 - Example-based tests use inputs selected by the test author
 - Property-based tests define strategies for valid inputs and properties that must hold for every generated example
 - Hypothesis generates combinations from those strategies and normally shrinks a failing example to a smaller reproducible case
@@ -85,4 +85,4 @@ also compared against Python
 ## References
 
 - [Hypothesis documentation](https://hypothesis.readthedocs.io/en/latest/)
-- [Hypothesis quick start](https://hypothesis.readthedocs.io/en/latest/quickstart.html)
+- [Hypothesis documentation source](https://github.com/HypothesisWorks/hypothesis/tree/master/hypothesis/docs)
