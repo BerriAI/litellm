@@ -12,6 +12,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+from litellm.exceptions import BadRequestError, Timeout
+
 if TYPE_CHECKING:
     from pymongo import AsyncMongoClient, MongoClient
 
@@ -19,6 +21,19 @@ PYMONGO_INSTALL_HINT: Final = (
     "The MongoDB vector store requires the 'pymongo' package. "
     "Run 'pip install litellm[mongodb]' (or 'pip install pymongo') to install it."
 )
+
+MONGODB_PROVIDER: Final = "mongodb"
+
+
+def config_error(message: str) -> BadRequestError:
+    """Misconfiguration is the caller's to fix, so it maps to 400 rather than the 500
+    a bare ValueError would become once litellm.exception_type wraps it."""
+    return BadRequestError(message=message, model=None, llm_provider=MONGODB_PROVIDER)
+
+
+def timeout_error(message: str) -> Timeout:
+    return Timeout(message=message, model=None, llm_provider=MONGODB_PROVIDER)
+
 
 DEFAULT_CONNECT_TIMEOUT_MS: Final = 10_000
 DEFAULT_SOCKET_TIMEOUT_MS: Final = 30_000
@@ -45,7 +60,7 @@ def import_sync_mongo_client() -> "type[MongoClient]":
     try:
         from pymongo import MongoClient as SyncMongoClient
     except ImportError as e:
-        raise ValueError(PYMONGO_INSTALL_HINT) from e
+        raise config_error(PYMONGO_INSTALL_HINT) from e
     return SyncMongoClient
 
 
@@ -53,7 +68,7 @@ def import_async_mongo_client() -> "type[AsyncMongoClient]":
     try:
         from pymongo import AsyncMongoClient as AsyncMongoClientClass
     except ImportError as e:
-        raise ValueError(PYMONGO_INSTALL_HINT) from e
+        raise config_error(PYMONGO_INSTALL_HINT) from e
     return AsyncMongoClientClass
 
 
@@ -105,19 +120,19 @@ def _index_hint(index_name: str, database: str, collection: str) -> str:
     )
 
 
-def missing_index_error(index_name: str, database: str, collection: str) -> ValueError:
+def missing_index_error(index_name: str, database: str, collection: str) -> BadRequestError:
     """$vectorSearch against a missing index, database or collection returns zero documents
     instead of failing, so an empty result set is checked against the index catalogue and
     turned into this rather than being reported as 'no matches'."""
-    return ValueError(
+    return config_error(
         f"{_index_hint(index_name, database, collection)} A vector search against a database, "
         "collection or index that does not exist returns no results rather than an error, so this "
         "was reported as an empty result set by MongoDB."
     )
 
 
-def index_not_ready_error(index_name: str, database: str, collection: str, status: str) -> ValueError:
-    return ValueError(
+def index_not_ready_error(index_name: str, database: str, collection: str, status: str) -> BadRequestError:
+    return config_error(
         f"The Atlas Vector Search index '{index_name}' on '{database}.{collection}' is not queryable "
         f"yet; its status is {status}. Searches against it return no results until the build finishes."
     )
@@ -141,46 +156,47 @@ def translate_mongo_error(error: Exception, index_name: str, database: str, coll
         return error
 
     if isinstance(error, ServerSelectionTimeoutError):
-        return ValueError(
+        return timeout_error(
             "Could not reach the MongoDB deployment before the timeout. On Atlas this is usually the "
             "project's IP access list not containing this host, or a paused cluster; it can also be an "
             f"unresolvable hostname. Driver detail: {error}"
         )
+    # ExecutionTimeout subclasses OperationFailure, so it has to be matched before it
+    if isinstance(error, (NetworkTimeout, ExecutionTimeout)):
+        return timeout_error(
+            f"The MongoDB vector search against '{database}.{collection}' timed out before returning. "
+            f"Driver detail: {error}"
+        )
     if isinstance(error, OperationFailure):
         code: Final = error.code
         if code in (_AUTHENTICATION_FAILED_CODE, _UNAUTHORIZED_CODE):
-            return ValueError(
+            return config_error(
                 "MongoDB rejected the credentials in mongodb_connection_string, or the database user "
                 f"lacks read access to '{database}.{collection}'. Driver detail: {error.details}"
             )
         detail: Final = str(error).lower()
         if "dimension" in detail:
-            return ValueError(
+            return config_error(
                 "The query embedding does not match the vector dimensions the Atlas index was built for. "
                 "litellm_embedding_model must be the same model that produced the stored vectors. "
                 f"Driver detail: {error}"
             )
         if "is not indexed as vector" in detail:
-            return ValueError(
+            return config_error(
                 "mongodb_embedding_field names a field the Atlas Vector Search index does not cover. "
                 f"It must match the 'path' the index '{index_name}' was created on. Driver detail: {error}"
             )
         if "index" in detail and ("not found" in detail or "does not exist" in detail or "unknown" in detail):
-            return ValueError(f"{_index_hint(index_name, database, collection)} Driver detail: {error}")
-        return ValueError(
+            return config_error(f"{_index_hint(index_name, database, collection)} Driver detail: {error}")
+        return config_error(
             f"MongoDB rejected the vector search against '{database}.{collection}' using index "
             f"'{index_name}'. Driver detail: {error}"
         )
-    if isinstance(error, (NetworkTimeout, ExecutionTimeout)):
-        return ValueError(
-            f"The MongoDB vector search against '{database}.{collection}' timed out before returning. "
-            f"Driver detail: {error}"
-        )
     if isinstance(error, ConfigurationError):
-        return ValueError(
+        return config_error(
             "mongodb_connection_string is not a usable MongoDB connection string. "
             f"Driver detail: {error}"
         )
     if isinstance(error, InvalidOperation):
-        return ValueError(f"The MongoDB client was already closed or is unusable. Driver detail: {error}")
+        return config_error(f"The MongoDB client was already closed or is unusable. Driver detail: {error}")
     return error
