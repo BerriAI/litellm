@@ -16,16 +16,15 @@ pub mod transformation;
 pub mod types;
 
 use handler::{execute_messages_provider_call, execute_messages_provider_stream};
-use prepare::prepare_messages_call;
 use types::{AnthropicMessagesResponse, MessagesRequest};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesResponse, Error> {
-    execute_messages_provider_call(prepare_messages_call(request)?).await
+    execute_messages_provider_call(request).await
 }
 
 pub async fn messages_stream(request: MessagesRequest<'_>) -> Result<reqwest::Response, Error> {
-    execute_messages_provider_stream(prepare_messages_call(request)?).await
+    execute_messages_provider_stream(request).await
 }
 
 #[cfg(test)]

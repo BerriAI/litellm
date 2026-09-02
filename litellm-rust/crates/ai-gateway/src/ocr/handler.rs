@@ -4,11 +4,16 @@ use litellm_core::ocr::transformation::OcrResponseHandling;
 use serde_json::Value;
 
 use super::common_utils::{poll_document_intelligence, truncate_error_body};
-use super::types::ProviderOcrRequest;
+use super::hooks::OcrLifecycleHooks;
+use super::types::PreparedOcrRequest;
 use crate::client::http_client;
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> Result<Value, Error> {
+pub(crate) async fn execute_ocr_provider_call(
+    request: PreparedOcrRequest,
+    hooks: &OcrLifecycleHooks,
+) -> Result<Value, Error> {
+    let request = hooks.prepare_provider_request(request).await?;
     let mut request_builder = http_client().post(&request.url).json(&request.body);
     for (key, value) in &request.upstream_headers {
         request_builder = request_builder.header(key, value);

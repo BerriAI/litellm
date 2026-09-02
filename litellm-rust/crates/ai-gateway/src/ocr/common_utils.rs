@@ -74,12 +74,6 @@ pub(super) fn string_headers(
         .collect()
 }
 
-pub(super) fn has_header(headers: &[(String, String)], name: &str) -> bool {
-    headers
-        .iter()
-        .any(|(key, _)| key.eq_ignore_ascii_case(name))
-}
-
 fn document_url_field(document: &Value) -> Result<Option<(&str, &str)>, Error> {
     let Some(object) = document.as_object() else {
         return Ok(None);

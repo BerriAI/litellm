@@ -27,7 +27,12 @@ use crate::chat_completions::response_utils::{finish_reason_for, unix_now, usage
 /// per-model gate inside `transform_request`, the function this route replaces.
 /// Forwarding it would send `top_k` to a model that removed sampling params and
 /// take a 400 after the call, where Python drops it and succeeds.
-const SUPPORTED_PARAMS: &[&str] = &["max_tokens", "temperature", "top_p", "stop_sequences"];
+const SUPPORTED_PARAMS: &[(&str, &str)] = &[
+    ("max_tokens", "max_tokens"),
+    ("temperature", "temperature"),
+    ("top_p", "top_p"),
+    ("stop", "stop_sequences"),
+];
 
 pub struct AnthropicChatCompletionsConfig;
 
@@ -112,7 +117,8 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         })
     }
 
-    fn supported_params(&self) -> &'static [&'static str] {
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+    fn supported_openai_params(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
     }
 
@@ -121,7 +127,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         messages: &[ChatMessage],
         optional_params: &Map<String, Value>,
     ) -> Option<Unsupported> {
-        unsupported_param(SUPPORTED_PARAMS, &[], optional_params)
+        unsupported_param(self.supported_openai_params(), &[], optional_params)
             .or_else(|| messages.iter().find_map(unsupported_message))
             // Anthropic rejects a request whose first turn is not a user turn.
             // Python only repairs that under `litellm.modify_params`, which the
