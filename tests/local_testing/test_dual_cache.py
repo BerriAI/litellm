@@ -240,3 +240,41 @@ async def test_dual_cache_delete(is_async):
         result = dual_cache.get_cache(test_key)
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_concurrent_sync_and_async_redis_reads():
+    """Sync and async batch reads share one Redis backend in one process, and sync reads never open an async connection"""
+    from redis.asyncio.connection import Connection as AsyncRedisConnection
+
+    redis_cache = RedisCache(host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"))
+    dual_cache = DualCache(redis_cache=redis_cache)
+
+    run_id = str(uuid.uuid4())
+    sync_keys = [f"sync_{run_id}_{index}" for index in range(5)]
+    async_keys = [f"async_{run_id}_{index}" for index in range(5)]
+    in_loop_keys = [f"in_loop_{run_id}_{index}" for index in range(3)]
+    survivor_key = f"survivor_{run_id}"
+    expected = {key: {"key": key} for key in [*sync_keys, *async_keys, *in_loop_keys, survivor_key]}
+    for key, value in expected.items():
+        await redis_cache.async_set_cache(key, value, ttl=60)
+
+    concurrent_results = await asyncio.gather(
+        *(asyncio.to_thread(dual_cache.batch_get_cache, keys=[key]) for key in sync_keys),
+        *(dual_cache.async_batch_get_cache(keys=[key]) for key in async_keys),
+    )
+    assert list(concurrent_results) == [[expected[key]] for key in [*sync_keys, *async_keys]]
+
+    async_connects = []
+    original_connect = AsyncRedisConnection.connect
+
+    async def counting_connect(self, *args, **kwargs):
+        async_connects.append(self)
+        return await original_connect(self, *args, **kwargs)
+
+    with patch.object(AsyncRedisConnection, "connect", counting_connect):
+        in_loop_results = [dual_cache.batch_get_cache(keys=[key]) for key in in_loop_keys]
+
+    assert in_loop_results == [[expected[key]] for key in in_loop_keys]
+    assert async_connects == []
+    assert await dual_cache.async_batch_get_cache(keys=[survivor_key]) == [expected[survivor_key]]
