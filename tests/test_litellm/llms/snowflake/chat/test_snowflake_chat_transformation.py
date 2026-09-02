@@ -17,6 +17,7 @@ import pytest
 import litellm
 from litellm import completion, acompletion
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.snowflake.chat.transformation import SnowflakeConfig
 from litellm.types.utils import ModelResponse
 
@@ -117,6 +118,76 @@ class TestSnowflakeToolTransformation:
                 f"tool_choice='{value}' should pass through unchanged, "
                 f"got {transformed_request['tool_choice']}"
             )
+
+    def test_claude_tool_choice_maps_supported_string_values(self):
+        """
+        Claude models route through the Anthropic request path, where OpenAI
+        string tool_choice values are translated to Anthropic's object form.
+        """
+        config = SnowflakeConfig()
+
+        expected = {
+            "auto": {"type": "auto"},
+            "required": {"type": "any"},
+            "none": {"type": "none"},
+        }
+
+        for value, want in expected.items():
+            transformed_request = config.transform_request(
+                model="snowflake/claude-3-5-sonnet",
+                messages=[{"role": "user", "content": "Test"}],
+                optional_params={"tool_choice": value},
+                litellm_params={},
+                headers={},
+            )
+
+            assert transformed_request["tool_choice"] == want, (
+                f"tool_choice='{value}' should map to {want}, got {transformed_request['tool_choice']}"
+            )
+
+    @pytest.mark.parametrize(
+        "tool_choice",
+        ["any", "Required", "REQUIRED", "required ", "requried", "tool"],
+    )
+    def test_claude_unsupported_tool_choice_string_raises(self, tool_choice):
+        """
+        Unrecognized strings must raise, not silently fall back to "auto".
+
+        "required" means the model must call a tool and "auto" means it may,
+        so defaulting inverts the caller's intent with no error surfaced. The
+        lookup is exact-match, so casing and whitespace variants land here too.
+        """
+        config = SnowflakeConfig()
+
+        with pytest.raises(UnsupportedParamsError) as exc_info:
+            config.transform_request(
+                model="snowflake/claude-3-5-sonnet",
+                messages=[{"role": "user", "content": "Test"}],
+                optional_params={"tool_choice": tool_choice},
+                litellm_params={},
+                headers={},
+            )
+
+        assert "tool_choice" in str(exc_info.value)
+
+    def test_claude_unsupported_tool_choice_dropped_when_drop_params_set(self):
+        """With litellm.drop_params, an unsupported value is dropped, not raised."""
+        config = SnowflakeConfig()
+
+        original = litellm.drop_params
+        litellm.drop_params = True
+        try:
+            transformed_request = config.transform_request(
+                model="snowflake/claude-3-5-sonnet",
+                messages=[{"role": "user", "content": "Test"}],
+                optional_params={"tool_choice": "any"},
+                litellm_params={},
+                headers={},
+            )
+        finally:
+            litellm.drop_params = original
+
+        assert "tool_choice" not in transformed_request
 
     def test_transform_response_with_tool_calls(self):
         """

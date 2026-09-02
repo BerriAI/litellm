@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 import httpx
 from typing_extensions import ReadOnly
 
+from litellm.exceptions import UnsupportedParamsError
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -308,21 +309,43 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         return body
 
-    def _transform_tool_choice_to_anthropic(self, tool_choice: Any) -> dict[str, Any]:
+    def _transform_tool_choice_to_anthropic(self, tool_choice: Any) -> dict[str, Any] | None:
         """
         Convert tool_choice from OpenAI format to Anthropic format.
 
         OpenAI string values: "auto", "required", "none"
         OpenAI dict: {"type": "function", "function": {"name": "..."}}
         Anthropic: {"type": "auto"}, {"type": "any"}, {"type": "tool", "name": "..."}
+
+        Returns None when the value is unsupported and `litellm.drop_params`
+        is set, in which case the caller drops the parameter.
+
+        Unrecognized strings raise rather than defaulting to "auto". Falling
+        back inverts the caller's intent — "required" means the model must
+        call a tool, "auto" means it may — and the only symptom is the model
+        occasionally not calling one, which reads as a model quality problem
+        rather than a silently dropped constraint.
         """
+        import litellm
+
         if isinstance(tool_choice, str):
             mapping: Final = {
                 "auto": {"type": "auto"},
                 "required": {"type": "any"},
                 "none": {"type": "none"},
             }
-            return mapping.get(tool_choice, {"type": "auto"})
+            if tool_choice not in mapping:
+                if litellm.drop_params is True:
+                    return None
+                raise UnsupportedParamsError(
+                    message=(
+                        f"Snowflake doesn't support tool_choice={tool_choice}. "
+                        "Supported tool_choice values=['auto', 'required', 'none', json object]. "
+                        "To drop it from the call, set `litellm.drop_params = True`."
+                    ),
+                    status_code=400,
+                )
+            return mapping[tool_choice]
         elif isinstance(tool_choice, dict):
             if tool_choice.get("type") == "function":
                 func: Final = tool_choice.get("function", {})
@@ -345,7 +368,11 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             optional_params["tools"] = self._transform_tools_to_anthropic(optional_params["tools"])
 
         if "tool_choice" in optional_params:
-            optional_params["tool_choice"] = self._transform_tool_choice_to_anthropic(optional_params["tool_choice"])
+            transformed_tool_choice: Final = self._transform_tool_choice_to_anthropic(optional_params["tool_choice"])
+            if transformed_tool_choice is None:  # unsupported + litellm.drop_params
+                optional_params.pop("tool_choice")
+            else:
+                optional_params["tool_choice"] = transformed_tool_choice
 
         max_completion_tokens: Final = optional_params.pop("max_completion_tokens", None)
         if max_completion_tokens and "max_tokens" not in optional_params:
