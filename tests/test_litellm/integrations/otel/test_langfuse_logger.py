@@ -31,6 +31,8 @@ from litellm.types.llms.openai import (  # noqa: E402
 from litellm.types.utils import (  # noqa: E402
     Choices,
     Delta,
+    Embedding,
+    EmbeddingResponse,
     Message,
     ModelResponse,
     ModelResponseStream,
@@ -258,26 +260,41 @@ def test_root_observation_io_survives_the_root_ending_before_the_success_callbac
     assert OUTPUT_ATTR in dict(generation.attributes or {})
 
 
+def test_root_input_is_the_request_as_the_pre_call_chain_left_it():
+    logger, exporter = _logger()
+    raw = {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "my ssn is 123-45-6789"}]}
+    masked = {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "my ssn is [REDACTED]"}]}
+    response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="noted"))])
+    root = _start_root(logger)
+    asyncio.run(logger.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), raw, "acompletion"))
+    asyncio.run(logger.async_post_call_success_hook(data=masked, user_api_key_dict=UserAPIKeyAuth(), response=response))
+    root.end()
+
+    assert json.loads(_root_attrs(exporter)[INPUT_ATTR]) == masked["messages"]
+
+
 def test_root_already_ended_is_left_alone():
     logger, exporter = _logger()
+    response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="pong"))])
     root = _start_root(logger)
     root.end()
-
-    asyncio.run(logger.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), CHAT_DATA, "acompletion"))
-
-    assert INPUT_ATTR not in _root_attrs(exporter)
-
-
-def test_non_chat_call_types_do_not_stamp_input():
-    logger, exporter = _logger()
-    root = _start_root(logger)
 
     asyncio.run(
-        logger.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), {"model": "e", "input": "ping"}, "aembedding")
+        logger.async_post_call_success_hook(data=CHAT_DATA, user_api_key_dict=UserAPIKeyAuth(), response=response)
     )
-    root.end()
 
-    assert INPUT_ATTR not in _root_attrs(exporter)
+    attrs = _root_attrs(exporter)
+    assert INPUT_ATTR not in attrs and OUTPUT_ATTR not in attrs
+
+
+def test_responses_without_a_message_body_stamp_neither_input_nor_output():
+    logger, exporter = _logger()
+    embedding = EmbeddingResponse(model="e", data=[Embedding(embedding=[0.1], index=0, object="embedding")])
+
+    _run_request(logger, {"model": "e", "input": "ping"}, "aembedding", embedding)
+
+    attrs = _root_attrs(exporter)
+    assert INPUT_ATTR not in attrs and OUTPUT_ATTR not in attrs
 
 
 def test_unrenderable_output_never_raises_into_the_request():
@@ -285,7 +302,8 @@ def test_unrenderable_output_never_raises_into_the_request():
 
     _run_request(logger, CHAT_DATA, "acompletion", object())
 
-    assert OUTPUT_ATTR not in _root_attrs(exporter)
+    attrs = _root_attrs(exporter)
+    assert INPUT_ATTR not in attrs and OUTPUT_ATTR not in attrs
 
 
 @pytest.mark.parametrize(
@@ -331,7 +349,11 @@ def test_langfuse_otel_preset_builds_a_logger_that_stamps_the_root(monkeypatch):
         assert built is not None
         assert _maybe_construct_otel_v2("langfuse_otel", loggers) is built
         root = _start_root(built)
-        asyncio.run(built.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), CHAT_DATA, "acompletion"))
-        assert INPUT_ATTR in dict(root.attributes or {})
+        response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="pong"))])
+        asyncio.run(
+            built.async_post_call_success_hook(data=CHAT_DATA, user_api_key_dict=UserAPIKeyAuth(), response=response)
+        )
+        attrs = dict(root.attributes or {})
+        assert INPUT_ATTR in attrs and OUTPUT_ATTR in attrs
     finally:
         is_otel_v2_enabled.cache_clear()
