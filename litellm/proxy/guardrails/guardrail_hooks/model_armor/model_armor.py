@@ -33,6 +33,7 @@ from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
 )
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import (
     CallTypes,
     CallTypesLiteral,
@@ -97,7 +98,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         template_id: str | None = None,
         project_id: str | None = None,
         location: str | None = None,
-        credentials: Any | None = None,
+        credentials: VERTEX_CREDENTIALS_TYPES | None = None,
         api_endpoint: str | None = None,
         sanitize_error_detail: "bool | None" = True,
         **kwargs,
@@ -147,7 +148,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         else:
             return {"modelResponseData": {"text": content}}
 
-    def _extract_content_from_response(self, response: Any | ModelResponse) -> str:
+    def _extract_content_from_response(self, response: object) -> str:
         """
         Extract text content from model response.
 

@@ -42,9 +42,9 @@ class AnthropicResponsesStreamWrapper:
         self._pending_tool_ids: dict[str, str] = {}  # item_id -> call_id / name accumulator
         self._sent_message_start = False
         self._sent_message_stop = False
-        self._chunk_queue: deque = deque()
+        self._chunk_queue: deque[dict[str, object]] = deque()
 
-    def _make_message_start(self) -> dict[str, Any]:
+    def _make_message_start(self) -> dict[str, object]:
         return {
             "type": "message_start",
             "message": {
@@ -68,7 +68,7 @@ class AnthropicResponsesStreamWrapper:
         self._current_block_index += 1
         return self._current_block_index
 
-    def _open_block(self, item_id: str | None, content_block: Mapping[str, Any]) -> int:
+    def _open_block(self, item_id: str | None, content_block: Mapping[str, object]) -> int:
         block_idx = self._next_block_index()
         if item_id:
             self._item_id_to_block_index[item_id] = block_idx
@@ -81,7 +81,7 @@ class AnthropicResponsesStreamWrapper:
         )
         return block_idx
 
-    def _process_event(self, event: Any) -> None:
+    def _process_event(self, event: object) -> None:
         """Convert one Responses API event into zero or more Anthropic chunks queued for emission."""
         event_type = getattr(event, "type", None)
         if event_type is None and isinstance(event, dict):
@@ -247,7 +247,7 @@ class AnthropicResponsesStreamWrapper:
     def __aiter__(self) -> "AnthropicResponsesStreamWrapper":
         return self
 
-    async def __anext__(self) -> dict[str, Any]:
+    async def __anext__(self) -> dict[str, object]:
         # Return any queued chunks first
         if self._chunk_queue:
             return self._chunk_queue.popleft()

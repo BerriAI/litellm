@@ -20,6 +20,7 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 else:
     LiteLLMLoggingObj = Any
@@ -75,15 +76,15 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         litellm_params_dict: dict,
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout,
-        extra_headers: dict[str, Any] | None,
-        base_llm_http_handler: Any,
+        extra_headers: dict[str, object] | None,
+        base_llm_http_handler: "BaseLLMHTTPHandler",
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> Union[
         "HttpxBinaryResponseContent",
-        Coroutine[Any, Any, "HttpxBinaryResponseContent"],
+        Coroutine[object, object, "HttpxBinaryResponseContent"],
     ]:
         """
         Dispatch method to handle AWS Polly TTS requests
@@ -251,7 +252,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
 
     def _sign_polly_request(
         self,
-        request_body: dict[str, Any],
+        request_body: dict[str, object],
         endpoint_url: str,
         litellm_params: dict,
     ) -> tuple[dict[str, str], str]:
@@ -337,7 +338,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         engine: Final = optional_params.get("engine", self.DEFAULT_ENGINE)
 
         # Build request body
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "Engine": engine,
             "OutputFormat": output_format,
             "Text": input,

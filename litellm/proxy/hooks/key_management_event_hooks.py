@@ -1,7 +1,7 @@
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Any, Final
+from typing import Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -89,8 +89,8 @@ class KeyManagementEventHooks:
     @staticmethod
     async def async_key_updated_hook(
         data: UpdateKeyRequest,
-        existing_key_row: Any,
-        response: Any,
+        existing_key_row: LiteLLM_VerificationToken,
+        response: object,
         user_api_key_dict: UserAPIKeyAuth,
         litellm_changed_by: str | None = None,
     ):

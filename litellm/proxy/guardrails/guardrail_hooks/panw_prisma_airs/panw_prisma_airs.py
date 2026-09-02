@@ -721,7 +721,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             }
         }
 
-    def _record_scan_id(self, request_data: dict[str, Any], scan_result: Mapping[str, object]) -> None:
+    def _record_scan_id(self, request_data: dict[str, object], scan_result: Mapping[str, object]) -> None:
         """Surface the AIRS scan id on the response, so allowed calls are auditable too."""
         scan_id: Final = scan_result.get("scan_id")
         add_guardrail_scan_id(request_data=request_data, scan_id=str(scan_id) if scan_id else None)

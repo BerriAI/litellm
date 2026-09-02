@@ -266,7 +266,7 @@ def _make_synthetic_advisor_tool() -> dict:
     }
 
 
-def _find_advisor_tool_use(response: Any) -> dict | None:
+def _find_advisor_tool_use(response: object) -> dict | None:
     """Return the first tool_use block with name='advisor', or None."""
     content: Final = response.get("content") if isinstance(response, dict) else []
     if not isinstance(content, list):
@@ -277,7 +277,7 @@ def _find_advisor_tool_use(response: Any) -> dict | None:
     return None
 
 
-def _extract_response_text(response: Any) -> str:
+def _extract_response_text(response: object) -> str:
     """Extract concatenated text from all text blocks in a response."""
     content: Final = response.get("content") if isinstance(response, dict) else []
     if not isinstance(content, list):
@@ -291,7 +291,7 @@ _PROVIDER_SPECIFIC_KEYS: Final = frozenset({"provider_specific_fields"})
 
 def _build_advisor_context(
     messages: list[dict],
-    executor_response: Any,
+    executor_response: object,
     advisor_use_block: dict,
 ) -> list[dict]:
     """
@@ -327,7 +327,7 @@ def _build_advisor_context(
 
 def _inject_advisor_turn(
     messages: list[dict],
-    executor_response: Any,
+    executor_response: object,
     advisor_use_block: dict,
     advisor_text: str,
 ) -> list[dict]:
@@ -355,7 +355,7 @@ def _inject_advisor_turn(
 
 def _inject_max_uses_error(
     messages: list[dict],
-    executor_response: Any,
+    executor_response: object,
     advisor_use_block: dict,
 ) -> list[dict]:
     """

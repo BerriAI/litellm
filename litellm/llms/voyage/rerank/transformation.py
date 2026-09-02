@@ -43,7 +43,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         instruction: str | None = None,
     ) -> dict:
         # Voyage AI uses 'top_k' instead of 'top_n'
-        optional_params: Final[dict[str, Any]] = {"query": query, "documents": documents}
+        optional_params: Final[dict[str, object]] = {"query": query, "documents": documents}
         if top_n is not None:
             optional_params["top_k"] = top_n
         if return_documents is not None:
@@ -109,7 +109,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         # Transform to LiteLLM format
         transformed_results: Final = []
         for result in _results:
-            transformed_result: dict[str, Any] = {
+            transformed_result: dict[str, object] = {
                 "index": result["index"],
                 "relevance_score": result["relevance_score"],
             }

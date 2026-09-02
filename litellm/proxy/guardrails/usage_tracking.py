@@ -172,7 +172,7 @@ def _guardrail_status_to_action(status: str | None) -> str:
     return "passed"
 
 
-def _parse_guardrail_info_from_payload(payload: Mapping[str, Any]) -> Sequence[Mapping[str, Any]]:
+def _parse_guardrail_info_from_payload(payload: Mapping[str, object]) -> Sequence[Mapping[str, Any]]:
     """Extract guardrail_information from spend log payload metadata."""
     meta = payload.get("metadata")
     if not meta:
@@ -197,7 +197,7 @@ def _date_str(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
 
 
-def _parse_payload_start_time(payload: Mapping[str, Any]) -> datetime | None:
+def _parse_payload_start_time(payload: Mapping[str, object]) -> datetime | None:
     start_time: Final = payload.get("startTime")
     if isinstance(start_time, datetime):
         return start_time
@@ -209,7 +209,9 @@ def _parse_payload_start_time(payload: Mapping[str, Any]) -> datetime | None:
         return None
 
 
-def _iter_usage_unit_increments(logs_to_process: Sequence[Mapping[str, Any]]) -> Iterator[tuple[_UsageUnitKey, int]]:
+def _iter_usage_unit_increments(
+    logs_to_process: Sequence[Mapping[str, object]],
+) -> Iterator[tuple[_UsageUnitKey, int]]:
     for payload in logs_to_process:
         start_time = _parse_payload_start_time(payload)
         if not payload.get("request_id") or start_time is None:
@@ -227,7 +229,7 @@ def _iter_usage_unit_increments(logs_to_process: Sequence[Mapping[str, Any]]) ->
                     yield _UsageUnitKey(guardrail_id, date_key, team_id, api_key, str(unit_name)), units
 
 
-def _sum_usage_unit_increments(logs_to_process: Sequence[Mapping[str, Any]]) -> Mapping[_UsageUnitKey, int]:
+def _sum_usage_unit_increments(logs_to_process: Sequence[Mapping[str, object]]) -> Mapping[_UsageUnitKey, int]:
     ordered: Final = sorted(_iter_usage_unit_increments(logs_to_process), key=itemgetter(0))
     return MappingProxyType(
         {key: sum(units for _, units in group) for key, group in groupby(ordered, key=itemgetter(0))}
@@ -284,7 +286,7 @@ async def _upsert_metrics_row(prisma_client: PrismaClient, key: _MetricsKey, agg
 
 async def process_spend_logs_guardrail_usage(
     prisma_client: PrismaClient,
-    logs_to_process: list[dict[str, Any]],
+    logs_to_process: Sequence[Mapping[str, object]],
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     pending: PendingRollups = _PENDING_ROLLUPS,
 ) -> None:
@@ -295,7 +297,7 @@ async def process_spend_logs_guardrail_usage(
     if not logs_to_process:
         return
     # Aggregate daily metrics by (guardrail_id, date). Latency/score metrics dropped.
-    daily_guardrail: Final[dict[_MetricsKey, dict[str, Any]]] = defaultdict(
+    daily_guardrail: Final[dict[_MetricsKey, dict[str, int]]] = defaultdict(
         lambda: {
             "requests_evaluated": 0,
             "passed_count": 0,
@@ -303,7 +305,7 @@ async def process_spend_logs_guardrail_usage(
             "flagged_count": 0,
         }
     )
-    index_rows: Final[list[dict[str, Any]]] = []
+    index_rows: Final[list[dict[str, object]]] = []
 
     for payload in logs_to_process:
         request_id = payload.get("request_id")

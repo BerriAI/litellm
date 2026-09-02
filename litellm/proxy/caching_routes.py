@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -19,7 +19,7 @@ router: Final = APIRouter(
 )
 
 
-def _extract_cache_params() -> dict[str, Any]:
+def _extract_cache_params() -> dict[str, object]:
     """
     Safely extracts and cleans cache parameters.
 
@@ -56,8 +56,8 @@ async def cache_ping():
     """
     Endpoint for checking if cache can be pinged
     """
-    litellm_cache_params: dict[str, Any] = {}
-    cleaned_cache_params: dict[str, Any] = {}
+    litellm_cache_params: dict[str, object] = {}
+    cleaned_cache_params: dict[str, object] = {}
     if litellm.cache is None:
         raise ProxyException(
             message=safe_dumps(
@@ -162,7 +162,7 @@ async def cache_delete(request: Request):
         )
 
 
-def _get_redis_client_info(cache_instance) -> tuple[list, int]:
+def _get_redis_client_info(cache_instance: RedisCache) -> tuple[list[object], int]:
     """
     Helper function to safely get Redis client list information.
 

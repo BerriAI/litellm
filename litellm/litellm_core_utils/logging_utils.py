@@ -184,7 +184,7 @@ def _get_parent_otel_span_from_logging_obj(
 
 
 def convert_litellm_response_object_to_str(
-    response_obj: Any | LiteLLMModelResponse,
+    response_obj: object,
 ) -> str | None:
     """
     Get the string of the response object from LiteLLM

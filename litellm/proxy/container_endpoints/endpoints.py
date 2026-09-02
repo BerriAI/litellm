@@ -1,6 +1,6 @@
 #### Container Endpoints #####
 
-from typing import Any, Final
+from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse
@@ -208,7 +208,7 @@ async def list_containers(
 
     # Read query parameters
     query_params: Final = dict(request.query_params)
-    data: Final[dict[str, Any]] = {"query_params": query_params}
+    data: Final[dict[str, object]] = {"query_params": query_params}
 
     # Extract custom_llm_provider using priority chain
     custom_llm_provider: Final = (
@@ -312,7 +312,7 @@ async def retrieve_container(
     )
 
     # Include container_id in request data
-    data: Final[dict[str, Any]] = {"container_id": container_id}
+    data: Final[dict[str, object]] = {"container_id": container_id}
 
     # Extract custom_llm_provider using priority chain
     custom_llm_provider = (
@@ -417,7 +417,7 @@ async def delete_container(
     )
 
     # Include container_id in request data
-    data: Final[dict[str, Any]] = {"container_id": container_id}
+    data: Final[dict[str, object]] = {"container_id": container_id}
 
     # Extract custom_llm_provider using priority chain
     custom_llm_provider = (

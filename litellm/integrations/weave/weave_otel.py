@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from opentelemetry.trace import Status, StatusCode
@@ -59,7 +60,7 @@ class WeaveLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
         safe_set_attribute(span, OpenInferenceSpanAttributes.INPUT_VALUE, json.dumps(prompt))
 
 
-def _set_weave_specific_attributes(span: Span, kwargs: dict[str, Any], response_obj: Any):
+def _set_weave_specific_attributes(span: Span, kwargs: Mapping[str, Any], response_obj: Any):
     """
     Sets Weave-specific metadata attributes onto the OTEL span.
 
@@ -169,7 +170,7 @@ def get_weave_otel_config() -> WeaveOtelConfig:
     )
 
 
-def set_weave_otel_attributes(span: Span, kwargs: dict[str, Any], response_obj: Any):
+def set_weave_otel_attributes(span: Span, kwargs: Mapping[str, object], response_obj: object):
     """
     Sets OpenTelemetry span attributes for Weave observability.
     Uses the same attribute setting logic as other OTEL integrations for consistency.

@@ -7,6 +7,7 @@
 
 import fnmatch
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 import httpx
@@ -23,6 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import ChatCompletionToolParam
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
@@ -73,7 +75,7 @@ def _header_value_allowed(
 
 
 def _sanitize_inbound_headers(
-    headers: Any,
+    headers: object,
     extra_allowlist: set[str] | None = None,
 ) -> dict[str, str] | None:
     """
@@ -175,7 +177,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         headers: dict[str, Any] | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
-        additional_provider_specific_params: dict[str, Any] | None = None,
+        additional_provider_specific_params: Mapping[str, object] | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         fail_on_error: bool | None = True,
         extra_headers: list | None = None,
@@ -318,8 +320,8 @@ class GenericGuardrailAPI(CustomGuardrail):
         self,
         *,
         texts: list,
-        images: Any,
-        tools: Any,
+        images: list[str] | None,
+        tools: list[ChatCompletionToolParam] | None,
         guardrail_response: GenericGuardrailAPIResponse,
     ) -> GenericGuardrailAPIInputs:
         # Action is NONE or no modifications needed

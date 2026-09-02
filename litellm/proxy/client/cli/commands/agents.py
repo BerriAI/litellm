@@ -8,7 +8,7 @@ from typing import Final
 import click
 import requests
 
-from .auth import context_secret_vault, get_stored_api_key, login
+from .auth import CliContextObj, context_secret_vault, get_stored_api_key, login
 from .cmd_quoting import quote_for_cmd
 
 ANTHROPIC_BASE_URL_ENV: Final = "ANTHROPIC_BASE_URL"
@@ -289,8 +289,9 @@ def _is_interactive() -> bool:
 
 
 def resolve_api_key(ctx: click.Context) -> str:
-    base_url: Final = ctx.obj["base_url"]
-    api_key = ctx.obj.get("api_key")
+    ctx_obj: Final[CliContextObj] = ctx.obj
+    base_url: Final = ctx_obj["base_url"]
+    api_key = ctx_obj.get("api_key")
     if api_key:
         return api_key
 
@@ -312,7 +313,8 @@ _SKIP_VERIFY_HELP: Final = "Skip the pre-launch key check against the proxy."
 
 
 def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool) -> None:
-    base_url: Final = ctx.obj["base_url"]
+    ctx_obj: Final[CliContextObj] = ctx.obj
+    base_url: Final = ctx_obj["base_url"]
     started_interactive: Final = _is_interactive()
     api_key: Final = resolve_api_key(ctx)
 

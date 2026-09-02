@@ -36,7 +36,7 @@ class SCIMResource(BaseModel):
     schemas: list[str]
     id: str | None = None
     externalId: str | None = None
-    meta: dict[str, Any] | None = None
+    meta: dict[str, object] | None = None
 
 
 class SCIMUserName(BaseModel):
@@ -119,7 +119,7 @@ class SCIMUser(SCIMResource):
     )
 
     @model_serializer(mode="wrap")
-    def _omit_absent_optional_blocks(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+    def _omit_absent_optional_blocks(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
         dumped: Final = handler(self)
         if self.enterprise_user is None:
             dumped.pop(SCIM_ENTERPRISE_USER_SCHEMA, None)
@@ -169,7 +169,7 @@ class SCIMListResponse(BaseModel):
 class SCIMPatchOperation(BaseModel):
     op: str
     path: str | None = None
-    value: Any | None = None
+    value: object | None = None
 
     @field_validator("op", mode="before")
     @classmethod
@@ -203,7 +203,7 @@ class SCIMServiceProviderConfig(BaseModel):
     changePassword: SCIMFeature = SCIMFeature(supported=False)
     sort: SCIMFeature = SCIMFeature(supported=False)
     etag: SCIMFeature = SCIMFeature(supported=False)
-    authenticationSchemes: list[dict[str, Any]] | None = None
+    authenticationSchemes: list[dict[str, object]] | None = None
     meta: dict[str, Any] | None = None
 
 
@@ -231,7 +231,7 @@ class SCIMResourceType(BaseModel):
     schema_: str  # "schema" is a reserved name in Pydantic context
 
     schemaExtensions: list[SCIMSchemaExtension] | None = None
-    meta: dict[str, Any] | None = None
+    meta: dict[str, object] | None = None
 
     def model_dump(self, **kwargs):
         d: Final = super().model_dump(**kwargs)
@@ -266,4 +266,4 @@ class SCIMSchema(BaseModel):
     name: str
     description: str | None = None
     attributes: list[SCIMSchemaAttribute] = []
-    meta: dict[str, Any] | None = None
+    meta: dict[str, object] | None = None

@@ -4,7 +4,7 @@ import json
 import os
 import re
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from threading import Lock
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast, get_args
@@ -125,7 +125,7 @@ class BaseAWSLLM:
 
         return get_ssl_verify(ssl_verify=ssl_verify)
 
-    def get_cache_key(self, credential_args: dict[str, str | None]) -> str:
+    def get_cache_key(self, credential_args: Mapping[str, str | bool | None]) -> str:
         """
         Generate a unique cache key based on the credential arguments.
         """
@@ -135,8 +135,8 @@ class BaseAWSLLM:
 
     def _get_or_set_cached_credentials(
         self,
-        credential_args: dict[str, str | None],
-        credential_fetcher: Callable[[], tuple[Any, int | None]],
+        credential_args: Mapping[str, str | bool | None],
+        credential_fetcher: Callable[[], tuple[Credentials, int | None]],
     ) -> Any:
         """
         Read-through IAM cache on the process-wide ``DualCache``.
@@ -271,7 +271,19 @@ class BaseAWSLLM:
             aws_external_id,
         )
 
-        args: Final = {k: v for k, v in locals().items() if k.startswith("aws_") or k == "ssl_verify"}
+        args: Final = {
+            "aws_access_key_id": aws_access_key_id,
+            "aws_secret_access_key": aws_secret_access_key,
+            "aws_session_token": aws_session_token,
+            "aws_region_name": aws_region_name,
+            "aws_session_name": aws_session_name,
+            "aws_profile_name": aws_profile_name,
+            "aws_role_name": aws_role_name,
+            "aws_web_identity_token": aws_web_identity_token,
+            "aws_sts_endpoint": aws_sts_endpoint,
+            "aws_external_id": aws_external_id,
+            "ssl_verify": ssl_verify,
+        }
 
         #########################################################
         # Handle diff boto3 auth flows

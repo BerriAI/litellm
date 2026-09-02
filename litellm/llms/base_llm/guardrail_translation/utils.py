@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator, Sequence
-from typing import Any, Final, TypeVar
+from typing import Final, TypeVar
 
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
 
 
-def _anthropic_stream_chunk_events(item: Any) -> list[dict]:
+def _anthropic_stream_chunk_events(item: object) -> list[dict]:
     if isinstance(item, dict):
         return [item]
     if isinstance(item, bytes):
@@ -36,7 +36,7 @@ def _anthropic_stream_chunk_events(item: Any) -> list[dict]:
     return events
 
 
-def _usage_from_anthropic_stream_chunks(original_response: list[Any]) -> AnthropicUsage | None:
+def _usage_from_anthropic_stream_chunks(original_response: Sequence[object]) -> AnthropicUsage | None:
     input_tokens = 0
     output_tokens = 0
     found_usage = False
@@ -79,7 +79,7 @@ def _usage_tokens(usage_obj: object, key: str, fallback_key: str) -> int:
     return int(getattr(usage_obj, key, getattr(usage_obj, fallback_key, 0)) or 0)
 
 
-def blocked_response_usage(original_response: Any | None) -> AnthropicUsage:
+def blocked_response_usage(original_response: object) -> AnthropicUsage:
     """
     Token usage for a synthetic guardrail-blocked response.
 
@@ -179,7 +179,7 @@ def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsag
     return blocked_responses_api_usage(completed)
 
 
-def effective_skip_system_message_for_guardrail(guardrail_to_apply: Any) -> bool:
+def effective_skip_system_message_for_guardrail(guardrail_to_apply: object) -> bool:
     per: Final = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
     if per is not None:
         return bool(per)
@@ -188,7 +188,7 @@ def effective_skip_system_message_for_guardrail(guardrail_to_apply: Any) -> bool
     return bool(getattr(litellm, "skip_system_message_in_guardrail", False))
 
 
-def effective_skip_tool_message_for_guardrail(guardrail_to_apply: Any) -> bool:
+def effective_skip_tool_message_for_guardrail(guardrail_to_apply: object) -> bool:
     per: Final = getattr(guardrail_to_apply, "skip_tool_message_in_guardrail", None)
     if per is not None:
         return bool(per)
