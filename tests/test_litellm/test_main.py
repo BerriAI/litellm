@@ -3150,8 +3150,8 @@ def _stream_builder_logging_obj() -> LiteLLMLogging:
     return logging_obj
 
 
-def test_stream_chunk_builder_reports_streaming_usage_cost_when_enabled(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+def test_stream_chunk_builder_stamps_streaming_usage_cost_by_default(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
     chunks: Final = [
         _stream_builder_text_chunk("gpt-4o", "Hello "),
         _stream_builder_text_chunk("gpt-4o", "world.", finish_reason="stop"),
@@ -3168,11 +3168,45 @@ def test_stream_chunk_builder_reports_streaming_usage_cost_when_enabled(monkeypa
     assert response._hidden_params["response_cost"] == pytest.approx(usage_cost)
 
 
-def test_stream_chunk_builder_defers_cost_to_logging_obj_when_usage_cost_absent(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
+def test_stream_chunk_builder_skips_stamp_when_cost_is_unpriceable():
+    import time as time_module
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    logging_obj: Final = LiteLLMLogging(
+        model="us.anthropic.claude-opus-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=time_module.time(),
+        litellm_call_id="stream-builder-alias-unpriceable",
+        function_id="1",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "bedrock"
+    logging_obj.optional_params = {}
+    usage_chunk: Final = _stream_builder_text_chunk("bedrock-claude-opus-5", "")
+    usage_chunk.usage = Usage(prompt_tokens=40, completion_tokens=5, total_tokens=45)
+    chunks: Final = [
+        _stream_builder_text_chunk("bedrock-claude-opus-5", "Hello ", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=logging_obj
+    )
+
+    assert response is not None
+    assert getattr(response.usage, "cost", None) is None
+    assert response._hidden_params.get("response_cost") is None
+
+
+def test_stream_chunk_builder_keeps_provider_reported_usage_cost():
+    usage_chunk: Final = _stream_builder_text_chunk("gpt-4o", "")
+    usage_chunk.usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15, cost=0.5)
     chunks: Final = [
         _stream_builder_text_chunk("gpt-4o", "Hello "),
         _stream_builder_text_chunk("gpt-4o", "world.", finish_reason="stop"),
+        usage_chunk,
     ]
 
     response: Final = litellm.stream_chunk_builder(
@@ -3180,4 +3214,26 @@ def test_stream_chunk_builder_defers_cost_to_logging_obj_when_usage_cost_absent(
     )
 
     assert response is not None
-    assert response._hidden_params.get("response_cost") is None
+    assert getattr(response.usage, "cost", None) == pytest.approx(0.5)
+    assert response._hidden_params["response_cost"] == pytest.approx(0.5)
+
+
+def test_stream_chunk_builder_prices_alias_from_openai_sdk_usage_chunk():
+    from openai.types.completion_usage import CompletionUsage
+
+    usage_chunk: Final = _stream_builder_text_chunk("mantle-claude", "")
+    usage_chunk.usage = CompletionUsage(prompt_tokens=20, completion_tokens=60, total_tokens=80, cost=0.000704)
+    assert type(usage_chunk.usage) is CompletionUsage
+    chunks: Final = [
+        _stream_builder_text_chunk("mantle-claude", "Hello "),
+        _stream_builder_text_chunk("mantle-claude", "world.", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+    assert response is not None
+    assert response.usage.prompt_tokens == 20
+    assert response.usage.completion_tokens == 60
+    assert getattr(response.usage, "cost", None) == pytest.approx(0.000704)
+    assert response._hidden_params["response_cost"] == pytest.approx(0.000704)

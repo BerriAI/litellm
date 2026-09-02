@@ -17,6 +17,7 @@ from litellm.types.vector_stores import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.router import Router
 
     from ..chat.transformation import BaseLLMException as _BaseLLMException
 
@@ -57,6 +58,7 @@ class BaseVectorStoreConfig:
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: dict[str, Any] | None = None,
+        router: "Router | None" = None,
     ) -> tuple[str, dict]:
         pass
 
@@ -69,6 +71,7 @@ class BaseVectorStoreConfig:
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: dict[str, Any] | None = None,
+        router: "Router | None" = None,
     ) -> tuple[str, dict]:
         """
         Optional async version of transform_search_vector_store_request.
@@ -84,6 +87,7 @@ class BaseVectorStoreConfig:
             litellm_logging_obj=litellm_logging_obj,
             litellm_params=litellm_params,
             extra_body=extra_body,
+            router=router,
         )
 
     @abstractmethod
@@ -197,6 +201,7 @@ class BaseDirectVectorStoreConfig(BaseVectorStoreConfig):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
         extra_body: Mapping[str, object] | None = None,
+        router: "Router | None" = None,
     ) -> NoReturn:
         raise NotImplementedError("Direct vector store providers execute the search themselves; no HTTP request shape")
 
