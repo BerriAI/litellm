@@ -34,11 +34,7 @@ def effective_boundary(candidate: CapabilityRouterCandidate, score: CapabilityCa
 
 def calibrated_probability(candidate: CapabilityRouterCandidate, raw_probability: float) -> float:
     return next(
-        (
-            bucket.probability
-            for bucket in candidate.probability_calibration
-            if raw_probability <= bucket.upper_bound
-        ),
+        (bucket.probability for bucket in candidate.probability_calibration if raw_probability <= bucket.upper_bound),
         raw_probability,
     )
 

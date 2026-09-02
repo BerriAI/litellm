@@ -14,12 +14,12 @@ Capability-card training uses outcomes from the real task harness. It does not r
 Create one JSONL row for every `(task, candidate, run)`:
 
 ```json
-{"benchmark":"terminal-bench-2.1","task_id":"build-linux-kernel-qemu","split":"train","model":"efficient","primary_rule":"R3","raw_p_solve":0.72,"success":1.0,"estimated_cost":0.18}
+{"benchmark":"swe-bench-verified","task_id":"django__django-12345","task_family":"django/django","split":"train","model":"efficient","primary_rule":"R3","raw_p_solve":0.72,"success":1.0,"estimated_cost":0.18}
 ```
 
 `raw_p_solve` and `primary_rule` come from the capability classifier's routing decision. `success` must come from the benchmark's end-to-end verifier, not an LLM estimate. Repeated runs may use the same task and model; the trainer averages them when measuring routing quality
 
-Every benchmark task must have an explicit `train`, `validation`, or `test` split and outcomes for every configured candidate. A task cannot cross splits. For a general preset, assign entire benchmark families to a split and deduplicate related tasks before training. A random row split over near-duplicate tasks overstates generalization
+Every benchmark task must have an explicit `train`, `validation`, or `test` split and outcomes for every configured candidate. A task cannot cross splits. Set `task_family` to a repository, domain, task generator, or another shared origin when related tasks could leak. The trainer rejects a family found across splits. For a general preset, assign entire benchmark families to a split and deduplicate related tasks before training. A random row split over near-duplicate tasks overstates generalization
 
 Run:
 

@@ -96,6 +96,18 @@ def test_training_rejects_a_task_that_crosses_splits() -> None:
         train_capability_artifact(crossed, training_config())
 
 
+def test_training_rejects_a_task_family_that_crosses_splits() -> None:
+    source = records()
+    crossed = (
+        source[0].model_copy(update={"task_family": "shared-repository"}),
+        source[1].model_copy(update={"task_id": "different-task", "task_family": "shared-repository", "split": "test"}),
+        *source[2:],
+    )
+
+    with pytest.raises(ValueError, match="task family must not cross splits"):
+        train_capability_artifact(crossed, training_config())
+
+
 def test_training_cli_writes_a_ready_to_use_artifact(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     records_path = tmp_path / "outcomes.jsonl"
     config_path = tmp_path / "config.json"
