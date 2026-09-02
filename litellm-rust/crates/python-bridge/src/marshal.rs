@@ -20,6 +20,16 @@ pub(crate) fn optional_object_to_map(
     }
 }
 
+pub(crate) fn optional_object(
+    py: Python<'_>,
+    name: &'static str,
+    value: Option<Py<PyAny>>,
+) -> PyResult<Option<Map<String, Value>>> {
+    value
+        .map(|value| optional_object_to_map(py, name, Some(value)))
+        .transpose()
+}
+
 pub(crate) fn optional_timeout(timeout_seconds: Option<f64>) -> Option<Duration> {
     timeout_seconds.and_then(|secs| {
         if secs.is_finite() && secs > 0.0 {
