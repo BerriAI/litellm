@@ -92,6 +92,7 @@ from litellm.proxy.auth.auth_utils import (
     _has_user_setup_sso,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
@@ -1118,7 +1119,7 @@ async def google_login(
             request=request,
         )
         if sso_redirect is not None:
-            _persist_return_to_cookie(sso_redirect, return_to)
+            _persist_return_to_cookie(sso_redirect, return_to, request)
         return sso_redirect
 
     from fastapi.responses import HTMLResponse
@@ -1138,7 +1139,7 @@ async def google_login(
     # helper the SSO branch uses, so /login can resume the connect flow instead of dead-ending at the
     # dashboard. One implementation → the two sign-in branches cannot diverge (and the login form always
     # renders, since the helper never raises on a bad return_to).
-    _persist_return_to_cookie(form_response, return_to)
+    _persist_return_to_cookie(form_response, return_to, request)
     return form_response
 
 
@@ -2741,6 +2742,7 @@ async def _sso_return_to_redirect(
     jwt_token: str,
     redis_usage_cache,
     user_api_key_cache,
+    request: Request,
 ) -> RedirectResponse | None:
     """Resolve the post-SSO redirect for a ``return_to``, or None to fall through to the dashboard.
 
@@ -2759,7 +2761,7 @@ async def _sso_return_to_redirect(
 
     if _is_same_origin_return_path(return_to):
         redirect_response = RedirectResponse(url=return_to, status_code=303)
-        redirect_response.set_cookie(key="token", value=jwt_token)
+        _set_session_token_cookie(redirect_response, request, jwt_token)
         redirect_response.delete_cookie("litellm_cp_return_to")
         return redirect_response
 
@@ -2782,7 +2784,25 @@ async def _sso_return_to_redirect(
     return None
 
 
-def _persist_return_to_cookie(response: Response, return_to: str | None) -> None:
+def _set_session_token_cookie(response: Response, request: Request, jwt_token: str) -> None:
+    """Set the ``token`` session cookie shared by every sign-in path.
+
+    Not HttpOnly: the dashboard reads this cookie via ``document.cookie`` to
+    populate its own Authorization headers (see
+    ``ui/litellm-dashboard/src/utils/cookieUtils.ts``), so marking it
+    HttpOnly would break login. Secure is still required whenever the public
+    origin is HTTPS, resolved the same trust-aware way as every other
+    litellm cookie."""
+    response.set_cookie(
+        key="token",
+        value=jwt_token,
+        secure=IPAddressUtils.is_request_https(request),
+        httponly=False,
+        samesite="lax",
+    )
+
+
+def _persist_return_to_cookie(response: Response, return_to: str | None, request: Request) -> None:
     """Best-effort: persist a SAFE ``return_to`` on ``response`` as the one-shot ``litellm_cp_return_to``
     cookie so ANY sign-in path — SSO / Okta / generic OR the username/password form — can resume there
     afterwards. THIS is the single source of truth, called by every sign-in branch so they cannot
@@ -2803,6 +2823,7 @@ def _persist_return_to_cookie(response: Response, return_to: str | None) -> None
             max_age=600,
             httponly=True,
             samesite="lax",
+            secure=IPAddressUtils.is_request_https(request),
         )
 
 
@@ -3079,8 +3100,11 @@ class SSOAuthenticationHandler:
                     # incoming request is HTTP (local dev).  Without
                     # ``Secure`` the cookie is sent over plain HTTP,
                     # letting a network observer read and replay the
-                    # state value and bypass this protection.
-                    secure_flag: Final = request is None or request.url.scheme == "https"
+                    # state value and bypass this protection. Trust-aware:
+                    # honors PROXY_BASE_URL / a trusted reverse proxy's
+                    # X-Forwarded-Proto instead of only the literal scheme
+                    # litellm sees on the wire.
+                    secure_flag: Final = request is None or IPAddressUtils.is_request_https(request)
                     redirect_response.set_cookie(
                         key="litellm_oauth_state",
                         value=state_value,
@@ -3628,6 +3652,7 @@ class SSOAuthenticationHandler:
             jwt_token=jwt_token,
             redis_usage_cache=redis_usage_cache,
             user_api_key_cache=user_api_key_cache,
+            request=request,
         )
         if return_to_redirect is not None:
             return return_to_redirect
@@ -3636,7 +3661,7 @@ class SSOAuthenticationHandler:
             litellm_dashboard_ui += "?login=success"
         verbose_proxy_logger.info("Redirecting to %s", litellm_dashboard_ui)
         redirect_response: Final = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-        redirect_response.set_cookie(key="token", value=jwt_token)
+        _set_session_token_cookie(redirect_response, request, jwt_token)
         return redirect_response
 
     @staticmethod

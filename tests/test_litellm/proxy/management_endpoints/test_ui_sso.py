@@ -7605,6 +7605,112 @@ class TestPKCEStateCookieBinding:
         assert "Secure" not in cookie_str
 
     @pytest.mark.asyncio
+    async def test_redirect_response_sets_secure_flag_behind_trusted_tls_terminating_proxy(
+        self, monkeypatch
+    ):
+        """Regression: litellm sees a plain-HTTP hop when TLS terminates at a reverse
+        proxy. The Secure flag must still be set when the direct peer is a configured
+        trusted proxy and it reports X-Forwarded-Proto: https -- but NOT from an
+        unconfigured/untrusted caller spoofing the same header (see the sibling test
+        below)."""
+        from fastapi.responses import RedirectResponse
+
+        from litellm.proxy.management_endpoints.ui_sso import (
+            SSOAuthenticationHandler,
+        )
+
+        mock_redirect = RedirectResponse(
+            url="http://idp.internal/authorize?state=behind-proxy-state"
+        )
+        mock_generic_sso = MagicMock()
+        mock_generic_sso.__enter__ = MagicMock(return_value=mock_generic_sso)
+        mock_generic_sso.__exit__ = MagicMock(return_value=None)
+        mock_generic_sso.get_login_redirect = AsyncMock(return_value=mock_redirect)
+
+        proxied_request = MagicMock(spec=Request)
+        proxied_request.url.scheme = "http"
+        proxied_request.headers = {"X-Forwarded-Proto": "https"}
+        proxied_request.client = MagicMock()
+        proxied_request.client.host = "10.0.0.5"
+
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["10.0.0.0/8"]},
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "GENERIC_CLIENT_STATE": "behind-proxy-state",
+                "GENERIC_CLIENT_USE_PKCE": "true",
+            },
+        ):
+            response = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
+                generic_sso=mock_generic_sso,
+                state=None,
+                generic_authorization_endpoint="http://idp.internal/authorize",
+                request=proxied_request,
+            )
+
+        cookie_headers = response.headers.getlist("set-cookie")
+        cookie_str = next(
+            (c for c in cookie_headers if "litellm_oauth_state=" in c), None
+        )
+        assert cookie_str is not None
+        assert "Secure" in cookie_str
+
+    @pytest.mark.asyncio
+    async def test_redirect_response_ignores_spoofed_forwarded_proto_without_trust_config(
+        self, monkeypatch
+    ):
+        """The same X-Forwarded-Proto: https header must NOT flip Secure on when no
+        trusted-proxy config is present -- honoring it unconditionally would let any
+        client spoof the header and would not itself be the vulnerability the ticket
+        warns against."""
+        from fastapi.responses import RedirectResponse
+
+        from litellm.proxy.management_endpoints.ui_sso import (
+            SSOAuthenticationHandler,
+        )
+
+        mock_redirect = RedirectResponse(
+            url="http://idp.internal/authorize?state=spoofed-state"
+        )
+        mock_generic_sso = MagicMock()
+        mock_generic_sso.__enter__ = MagicMock(return_value=mock_generic_sso)
+        mock_generic_sso.__exit__ = MagicMock(return_value=None)
+        mock_generic_sso.get_login_redirect = AsyncMock(return_value=mock_redirect)
+
+        spoofed_request = MagicMock(spec=Request)
+        spoofed_request.url.scheme = "http"
+        spoofed_request.headers = {"X-Forwarded-Proto": "https"}
+        spoofed_request.client = MagicMock()
+        spoofed_request.client.host = "203.0.113.5"
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+        with patch.dict(
+            os.environ,
+            {
+                "GENERIC_CLIENT_STATE": "spoofed-state",
+                "GENERIC_CLIENT_USE_PKCE": "true",
+            },
+        ):
+            response = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
+                generic_sso=mock_generic_sso,
+                state=None,
+                generic_authorization_endpoint="http://idp.internal/authorize",
+                request=spoofed_request,
+            )
+
+        cookie_headers = response.headers.getlist("set-cookie")
+        cookie_str = next(
+            (c for c in cookie_headers if "litellm_oauth_state=" in c), None
+        )
+        assert cookie_str is not None
+        assert "Secure" not in cookie_str
+
+    @pytest.mark.asyncio
     async def test_pkce_callback_rejects_missing_cookie(self):
         """When PKCE is enabled and a code_verifier is in the cache, the
         callback must reject a request that has no ``litellm_oauth_state``
@@ -8586,6 +8692,24 @@ class TestSameOriginReturnPath:
         assert _is_same_origin_return_path("") is False
 
 
+def _make_https_request():
+    request = MagicMock(spec=Request)
+    request.url.scheme = "https"
+    request.headers = {}
+    request.client = MagicMock()
+    request.client.host = "203.0.113.5"
+    return request
+
+
+def _make_http_request():
+    request = MagicMock(spec=Request)
+    request.url.scheme = "http"
+    request.headers = {}
+    request.client = MagicMock()
+    request.client.host = "203.0.113.5"
+    return request
+
+
 class TestPersistReturnToCookieSharedHelper:
     """The single shared return_to helper used by EVERY sign-in branch (SSO / Okta / generic AND the
     username/password form). It must be best-effort and NEVER raise — a bad return_to can never block
@@ -8603,7 +8727,7 @@ class TestPersistReturnToCookieSharedHelper:
 
         monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
         resp = Response()
-        _persist_return_to_cookie(resp, "/mcp/authorize?client_id=llm_dcrc_abc")
+        _persist_return_to_cookie(resp, "/mcp/authorize?client_id=llm_dcrc_abc", _make_https_request())
         assert "litellm_cp_return_to=" in self._cookie(resp)
 
     def test_bad_absolute_with_control_plane_configured_does_not_raise_and_is_not_stored(self, monkeypatch):
@@ -8617,7 +8741,7 @@ class TestPersistReturnToCookieSharedHelper:
             "litellm.proxy.proxy_server.general_settings", {"control_plane_url": "https://cp.example.com"}
         )
         resp = Response()
-        _persist_return_to_cookie(resp, "https://evil.example.com/steal")  # must not raise
+        _persist_return_to_cookie(resp, "https://evil.example.com/steal", _make_https_request())  # must not raise
         assert "litellm_cp_return_to=" not in self._cookie(resp)
 
     def test_none_return_to_is_a_noop(self):
@@ -8626,7 +8750,7 @@ class TestPersistReturnToCookieSharedHelper:
         from litellm.proxy.management_endpoints.ui_sso import _persist_return_to_cookie
 
         resp = Response()
-        _persist_return_to_cookie(resp, None)
+        _persist_return_to_cookie(resp, None, _make_https_request())
         assert "litellm_cp_return_to=" not in self._cookie(resp)
 
     def test_control_plane_matching_absolute_is_stored(self, monkeypatch):
@@ -8638,5 +8762,126 @@ class TestPersistReturnToCookieSharedHelper:
             "litellm.proxy.proxy_server.general_settings", {"control_plane_url": "https://cp.example.com"}
         )
         resp = Response()
-        _persist_return_to_cookie(resp, "https://cp.example.com/ui?page=models")
+        _persist_return_to_cookie(resp, "https://cp.example.com/ui?page=models", _make_https_request())
         assert "litellm_cp_return_to=" in self._cookie(resp)
+
+    def test_cookie_is_secure_and_httponly_over_https(self, monkeypatch):
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import _persist_return_to_cookie
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        resp = Response()
+        _persist_return_to_cookie(resp, "/mcp/authorize", _make_https_request())
+        cookie = self._cookie(resp)
+        assert "Secure" in cookie
+        assert "HttpOnly" in cookie
+        assert "SameSite=lax" in cookie
+
+    def test_cookie_is_not_secure_over_plain_http_direct(self, monkeypatch):
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import _persist_return_to_cookie
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        resp = Response()
+        _persist_return_to_cookie(resp, "/mcp/authorize", _make_http_request())
+        assert "Secure" not in self._cookie(resp)
+
+    def test_cookie_is_secure_behind_trusted_tls_terminating_proxy(self, monkeypatch):
+        """Regression for the reported bug: TLS terminates at a reverse proxy, litellm only
+        sees a plain-HTTP hop, but a trusted X-Forwarded-Proto: https must still mark the
+        cookie Secure."""
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import _persist_return_to_cookie
+
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["10.0.0.0/8"]},
+        )
+        resp = Response()
+        request = _make_http_request()
+        request.client.host = "10.0.0.5"
+        request.headers = {"X-Forwarded-Proto": "https"}
+        _persist_return_to_cookie(resp, "/mcp/authorize", request)
+        assert "Secure" in self._cookie(resp)
+
+
+class TestSessionTokenCookie:
+    """Regression tests for the ``token`` session cookie set by every sign-in path
+    (username/password login, SSO callback, the CLI /v2, /v3 login exchange helpers).
+    It was previously set with no Secure/HttpOnly/SameSite attributes at all -- always
+    sent over plain HTTP and readable by any script on the page. HttpOnly must stay off
+    deliberately: the dashboard reads this cookie via document.cookie."""
+
+    @staticmethod
+    def _cookie(resp) -> str:
+        return resp.headers.get("set-cookie", "")
+
+    def test_secure_over_direct_https(self, monkeypatch):
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import _set_session_token_cookie
+
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        resp = Response()
+        _set_session_token_cookie(resp, _make_https_request(), "jwt-token-value")
+        cookie = self._cookie(resp)
+        assert "token=jwt-token-value" in cookie
+        assert "Secure" in cookie
+        assert "SameSite=lax" in cookie
+        assert "HttpOnly" not in cookie
+
+    def test_not_secure_over_direct_http(self, monkeypatch):
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import _set_session_token_cookie
+
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        resp = Response()
+        _set_session_token_cookie(resp, _make_http_request(), "jwt-token-value")
+        assert "Secure" not in self._cookie(resp)
+
+    def test_secure_behind_trusted_tls_terminating_proxy(self, monkeypatch):
+        """THE regression: TLS terminates at a reverse proxy, litellm only sees a
+        plain-HTTP hop, but the session cookie must still be marked Secure when the
+        operator has configured a trusted proxy that reports X-Forwarded-Proto: https."""
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import _set_session_token_cookie
+
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["10.0.0.0/8"]},
+        )
+        request = _make_http_request()
+        request.client.host = "10.0.0.5"
+        request.headers = {"X-Forwarded-Proto": "https"}
+        resp = Response()
+        _set_session_token_cookie(resp, request, "jwt-token-value")
+        assert "Secure" in self._cookie(resp)
+
+    def test_untrusted_spoofed_forwarded_proto_is_ignored(self, monkeypatch):
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import _set_session_token_cookie
+
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        request = _make_http_request()
+        request.headers = {"X-Forwarded-Proto": "https"}
+        resp = Response()
+        _set_session_token_cookie(resp, request, "jwt-token-value")
+        assert "Secure" not in self._cookie(resp)
+
+    def test_proxy_base_url_https_overrides_literal_http_scheme(self, monkeypatch):
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import _set_session_token_cookie
+
+        monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+        resp = Response()
+        _set_session_token_cookie(resp, _make_http_request(), "jwt-token-value")
+        assert "Secure" in self._cookie(resp)

@@ -591,3 +591,98 @@ class TestFilterServerIdsByIpWithInfo:
         )
         assert allowed == []
         assert blocked == 2
+
+
+def _make_scheme_request(scheme, client_host="203.0.113.5", headers=None):
+    request = MagicMock(spec=Request)
+    request.client = MagicMock()
+    request.client.host = client_host
+    request.headers = headers or {}
+    request.url = MagicMock()
+    request.url.scheme = scheme
+    return request
+
+
+class TestIsRequestHttps:
+    """Regression tests for the cookie Secure trust-boundary resolution.
+
+    litellm only sees a plain-HTTP hop when TLS terminates at a reverse
+    proxy, so a cookie's Secure attribute must not be derived from the
+    literal request scheme alone. It must also not blindly trust a
+    client-spoofable X-Forwarded-Proto header with no trust boundary.
+    """
+
+    def test_direct_https_is_secure(self, monkeypatch):
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        request = _make_scheme_request("https")
+        assert IPAddressUtils.is_request_https(request, general_settings={}) is True
+
+    def test_direct_http_is_not_secure(self, monkeypatch):
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        request = _make_scheme_request("http")
+        assert IPAddressUtils.is_request_https(request, general_settings={}) is False
+
+    def test_spoofed_forwarded_proto_without_trusted_proxy_config_is_ignored(
+        self, monkeypatch
+    ):
+        # Regression: an internal HTTP hop with an attacker-supplied
+        # X-Forwarded-Proto: https must NOT flip Secure on, because no
+        # trust boundary (use_x_forwarded_for + mcp_trusted_proxy_ranges)
+        # is configured. Blindly trusting this header is itself a
+        # vulnerability.
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        request = _make_scheme_request(
+            "http", headers={"X-Forwarded-Proto": "https"}
+        )
+        assert IPAddressUtils.is_request_https(request, general_settings={}) is False
+
+    def test_forwarded_proto_honored_only_from_trusted_proxy(self, monkeypatch):
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        request = _make_scheme_request(
+            "http",
+            client_host="10.0.0.5",
+            headers={"X-Forwarded-Proto": "https"},
+        )
+        general_settings = {
+            "use_x_forwarded_for": True,
+            "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+        }
+        assert IPAddressUtils.is_request_https(request, general_settings=general_settings) is True
+
+    def test_forwarded_proto_http_from_trusted_proxy_is_not_secure(self, monkeypatch):
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        request = _make_scheme_request(
+            "https",
+            client_host="10.0.0.5",
+            headers={"X-Forwarded-Proto": "http"},
+        )
+        general_settings = {
+            "use_x_forwarded_for": True,
+            "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+        }
+        assert IPAddressUtils.is_request_https(request, general_settings=general_settings) is False
+
+    def test_untrusted_direct_peer_falls_back_to_literal_scheme(self, monkeypatch):
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        request = _make_scheme_request(
+            "http",
+            client_host="203.0.113.5",
+            headers={"X-Forwarded-Proto": "https"},
+        )
+        general_settings = {
+            "use_x_forwarded_for": True,
+            "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+        }
+        assert IPAddressUtils.is_request_https(request, general_settings=general_settings) is False
+
+    def test_proxy_base_url_https_overrides_literal_http_scheme(self, monkeypatch):
+        monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+        request = _make_scheme_request("http")
+        assert IPAddressUtils.is_request_https(request, general_settings={}) is True
+
+    def test_proxy_base_url_http_overrides_literal_https_scheme(self, monkeypatch):
+        # An explicit operator-configured plain-http public origin wins over
+        # the literal connection scheme, same as the https direction above.
+        monkeypatch.setenv("PROXY_BASE_URL", "http://litellm.internal")
+        request = _make_scheme_request("https")
+        assert IPAddressUtils.is_request_https(request, general_settings={}) is False
