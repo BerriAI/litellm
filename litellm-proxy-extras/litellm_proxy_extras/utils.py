@@ -724,9 +724,12 @@ class ProxyExtrasDBManager:
         skipped or failed and will be retried on the next startup. Runs over
         DIRECT_URL when set: the session settings, the advisory lock and REINDEX
         CONCURRENTLY all need one server session, which a transaction pooler
-        does not give."""
-        database_url: Final = os.getenv("DIRECT_URL") or os.getenv("DATABASE_URL")
-        if not database_url:
+        does not give. The Prisma target schema still comes from DATABASE_URL
+        because that is the URL Prisma reads its `schema` param from, whereas
+        DIRECT_URL is typically the host-only pooler bypass and omits it."""
+        prisma_url: Final = os.getenv("DATABASE_URL")
+        connect_url: Final = os.getenv("DIRECT_URL") or prisma_url
+        if not connect_url:
             return False
 
         try:
@@ -739,8 +742,10 @@ class ProxyExtrasDBManager:
             )
             return False
 
-        schema: Final = ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"
-        cleaned_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
+        schema: Final = (
+            ProxyExtrasDBManager._prisma_schema_param(prisma_url) if prisma_url else None
+        ) or "public"
+        cleaned_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(connect_url)
         try:
             with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
                 conn.execute("SET statement_timeout = 0")

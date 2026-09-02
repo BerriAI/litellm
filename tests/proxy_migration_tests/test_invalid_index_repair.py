@@ -229,10 +229,9 @@ def test_repair_survives_an_unreachable_database(monkeypatch: pytest.MonkeyPatch
 @requires_db
 def test_repair_runs_over_direct_url_when_set(scratch_schema: str) -> None:
     _leave_invalid_index(scratch_schema, HEALTH_TABLE, HEALTH_INDEX, HEALTH_INDEX_COLUMNS)
-    direct_url: Final = os.environ["DATABASE_URL"]
     with pytest.MonkeyPatch.context() as env:
-        env.setenv("DIRECT_URL", direct_url)
-        env.setenv("DATABASE_URL", "postgresql://u:p@127.0.0.1:9/x?schema=whatever")
+        env.setenv("DIRECT_URL", _base_url())
+        env.setenv("DATABASE_URL", f"postgresql://u:p@127.0.0.1:9/x?schema={scratch_schema}")
         assert ProxyExtrasDBManager.repair_invalid_indexes() is True
 
     assert _index_validity(scratch_schema) == {HEALTH_INDEX: True}
