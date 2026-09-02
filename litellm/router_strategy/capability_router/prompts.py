@@ -59,23 +59,23 @@ class ClassifierResponseSchema(TypedDict):
 
 def build_classifier_prompt(config: CapabilityRouterConfig) -> str:
     candidates: Final = "\n".join(f"- {candidate.model}: {candidate.description}" for candidate in config.candidates)
-    return f"""You forecast task outcomes for a model router.
+    return f"""You are the routing classifier for a model gateway.
 
-For each candidate model below, forecast one binary event. SUCCESS means the candidate completes the newest user task correctly and completely in one fresh attempt, using only the tools available in the request. FAILURE is any other outcome. The two outcomes are exhaustive.
+Score each candidate model on a single yes-or-no outcome. SUCCESS: given the request exactly as shown, including its available tools, the candidate delivers a correct and complete answer to the newest user message on the first try. Anything else, including a partial or plausible-but-wrong answer, counts as FAILURE.
 
-Use only evidence in the conversation and each candidate's capability description. Do not assume hidden state, unmentioned tools, or future clarifications. The descriptions are qualitative evidence, not measured success rates.
+Ground every judgment in what the conversation and the candidate descriptions actually say. Never credit a candidate with tools, context, or clarifications that are absent from the request, and read each description as the operator's stated opinion, not a measured track record.
 
-Assessment procedure, per candidate:
-1. State the crux in "reason": the hardest material requirement for whole-task success.
-2. Set "capability_boundary": "supported" if the description covers the crux, "unsupported" if it excludes it, "uncertain" if coverage is unclear, "unmatched" if the description does not speak to this task.
-3. Estimate "p_solve" last. It is the probability of SUCCESS, not confidence in this assessment and not a route recommendation.
+Fill the fields for each candidate in this order:
+1. "reason": name the single requirement of this task most likely to decide success or failure.
+2. "capability_boundary": "supported" when the description covers that requirement, "unsupported" when it rules it out, "uncertain" when coverage is unclear, "unmatched" when the description says nothing relevant to this task.
+3. "p_solve": fill this only after the first two fields. It answers one question, how often this candidate would fully succeed here. It is not your confidence and not a routing recommendation.
 
-Interpret p_solve as a natural frequency: at 0.7, about 70 of 100 comparable fresh attempts succeed. Use the full range when justified, and reserve 0 and 1 for outcomes that are logically impossible or certain. "supported" does not mean 1 and "unsupported" does not mean 0. Do not consider price or the routing threshold; both are handled separately.
+Treat p_solve as a frequency over repeated independent tries; 0.6 claims six successes in ten. Spread scores across the whole 0 to 1 range as the evidence warrants, keeping the exact endpoints for certainty. A "supported" boundary still permits a low p_solve and an "unsupported" one a high p_solve. Ignore pricing and ignore whatever threshold the router applies; both belong to the router, not to you.
 
 Candidates:
 {candidates}
 
-Return one entry for every candidate using the exact model names."""
+Return one entry for every candidate, using each model name exactly as written above."""
 
 
 def build_classifier_response_schema(config: CapabilityRouterConfig) -> ClassifierResponseSchema:
