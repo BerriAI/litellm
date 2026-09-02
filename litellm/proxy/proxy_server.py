@@ -65,10 +65,15 @@ from litellm.constants import (
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
 )
+from litellm.litellm_core_utils.logging_callback_manager import (
+    get_dashboard_callback_name,
+    is_generic_api_callback,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     UI_TEAM_ID,
+    AllCallbacks,
     CallbackDelete,
     CallInfo,
     CommonProxyErrors,
@@ -16696,6 +16701,55 @@ def _apply_callback_role_gate(entries: list, is_full_admin: bool) -> list:
     return [{**entry, "variables": _redact_callback_env_vars(entry.get("variables") or {})} for entry in entries]
 
 
+def _get_configured_dashboard_callback_name(
+    callback_name: str,
+    callback_settings: object,
+) -> str | None:
+    dashboard_callback_name: Final = get_dashboard_callback_name(callback_name)
+    if dashboard_callback_name is not None:
+        return dashboard_callback_name
+    if is_generic_api_callback(
+        callback_name,
+        callback_settings
+        if isinstance(callback_settings, Mapping)
+        else {},  # mutable-ok: utility expects mapping-compatible settings
+    ):
+        return "generic_api"
+    return None
+
+
+def _get_read_only_runtime_callback_row(
+    callback_name: str,
+    callback_type: str,
+    environment_variables: dict,
+) -> dict:
+    callback_row: Final = process_callback(
+        callback_name,
+        callback_type,
+        environment_variables,
+    )
+    return callback_row | {"read_only": True}  # mutable-ok: HTTP response rows are mutable dictionaries
+
+
+def _get_runtime_callback_rows(
+    configured_callback_registrations: frozenset[tuple[str, str]],
+    environment_variables: dict,
+) -> tuple[dict, ...]:
+    return tuple(
+        _get_read_only_runtime_callback_row(callback_name, callback_type, environment_variables)
+        for callback_name, callback_type in litellm.logging_callback_manager.get_dashboard_callback_registrations()
+        if not (
+            (callback_name, "success_and_failure") in configured_callback_registrations
+            or (callback_name, callback_type) in configured_callback_registrations
+            or (
+                callback_type == "success_and_failure"
+                and (callback_name, "success") in configured_callback_registrations
+                and (callback_name, "failure") in configured_callback_registrations
+            )
+        )
+    )
+
+
 class _AlertingDestinationEntry(TypedDict):
     name: ReadOnly[str]
     variables: ReadOnly[Mapping[str, str | None]]
@@ -17314,6 +17368,21 @@ async def get_config(
 
         for _callback in _success_and_failure_callbacks:
             _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
+
+        callback_settings: Final = config_data.get("callback_settings")
+        configured_callback_registrations: Final = frozenset(
+            (canonical_callback_name, callback_type)
+            for callback_type, callback_group in (
+                ("success", _success_callbacks),
+                ("failure", _failure_callbacks),
+                ("success_and_failure", _success_and_failure_callbacks),
+            )
+            for callback in callback_group
+            if isinstance(callback, str)
+            for canonical_callback_name in (_get_configured_dashboard_callback_name(callback, callback_settings),)
+            if canonical_callback_name is not None
+        )
+        _data_to_return.extend(_get_runtime_callback_rows(configured_callback_registrations, environment_variables))
 
         _data_to_return = _apply_callback_role_gate(_data_to_return, is_full_admin)
 

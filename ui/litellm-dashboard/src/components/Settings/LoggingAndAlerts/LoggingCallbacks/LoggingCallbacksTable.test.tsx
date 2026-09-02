@@ -97,6 +97,18 @@ describe("LoggingCallbacksTable", () => {
     expect(onDelete).toHaveBeenCalledWith(callback);
   });
 
+  it("should not render actions for a read-only callback", () => {
+    const callback = {
+      name: "langsmith",
+      type: "success" as const,
+      read_only: true,
+      variables: baseVars,
+    };
+    render(<LoggingCallbacksTable callbacks={[callback]} availableCallbacks={{}} />);
+
+    expect(screen.queryByTestId("callback-actions-langsmith-success")).not.toBeInTheDocument();
+  });
+
   // Regression: `/get_callbacks` returns the same `name` twice when a
   // callback is registered for both success and failure (e.g. `generic_api`
   // → POST to spend-log on both 200 and 4xx/5xx). The UI used to ignore

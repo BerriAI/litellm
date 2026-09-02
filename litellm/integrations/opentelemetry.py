@@ -363,6 +363,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         logger_provider: object | None = None,
         meter_provider: object | None = None,
         max_dynamic_tracer_providers: int = _MAX_DYNAMIC_TRACER_PROVIDERS,
+        register_on_proxy: bool = True,
         **kwargs,
     ):
         team_metadata_keys_override: Final = kwargs.pop("baggage_team_metadata_keys", None)
@@ -414,7 +415,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         # Sample env-var / config / message_logging at init so subsequent
         # _capture_in_span / _capture_in_event calls are deterministic.
         self._capture_mode_cached = self._compute_capture_mode_from_init_state()
-        self._init_otel_logger_on_litellm_proxy()
+        if register_on_proxy:
+            self._init_otel_logger_on_litellm_proxy()
 
     @staticmethod
     def _get_litellm_resource(config: OpenTelemetryConfig) -> "_Resource":

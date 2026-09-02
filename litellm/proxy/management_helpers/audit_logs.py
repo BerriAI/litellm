@@ -85,6 +85,10 @@ def _resolve_audit_log_callback(name: str) -> CustomLogger | None:
             logging_integration=name,
             internal_usage_cache=None,
             llm_router=None,
+            custom_logger_init_args=None,
+            register_dashboard_provenance=False,
+            register_on_proxy=False,
+            cache_in_memory=False,
         )
 
     if instance is not None:
