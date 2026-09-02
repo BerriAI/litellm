@@ -361,7 +361,7 @@ def token_counter(
     messages: Sequence[AllMessageValues | Message] | None = None,
     count_response_tokens: bool | None = False,
     tools: list[ChatCompletionToolParam] | None = None,
-    tool_choice: ChatCompletionNamedToolChoiceParam | None = None,
+    tool_choice: ChatCompletionNamedToolChoiceParam | Literal["none", "auto", "required"] | None = None,
     use_default_image_token_count: bool | None = False,
     default_token_count: int | None = None,
 ) -> int:
@@ -507,7 +507,7 @@ def _count_messages(
 def _count_extra(
     count_function: TokenCounterFunction,
     tools: list[ChatCompletionToolParam] | None,
-    tool_choice: ChatCompletionNamedToolChoiceParam | None,
+    tool_choice: ChatCompletionNamedToolChoiceParam | Literal["none", "auto", "required"] | None,
     includes_system_message: bool,
 ) -> int:
     """Count extra tokens for function definitions and tool choices.

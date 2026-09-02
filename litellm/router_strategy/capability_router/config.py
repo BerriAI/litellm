@@ -1,21 +1,21 @@
 """Configuration and classifier output for capability routing."""
 
 import math
-from typing import Literal
+from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Self
 
 
 def _nonblank(value: str, field_name: str) -> str:
-    normalized = value.strip()
+    normalized: Final = value.strip()
     if not normalized:
         raise ValueError(f"{field_name} must not be blank")
     return normalized
 
 
 def _provider_model(value: str, field_name: str) -> str:
-    normalized = _nonblank(value, field_name)
+    normalized: Final = _nonblank(value, field_name)
     if normalized.startswith("auto_router/"):
         raise ValueError(f"{field_name} must name a provider model group")
     return normalized
@@ -83,15 +83,15 @@ class CapabilityRouterConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_candidates(self) -> Self:
-        models = tuple(candidate.model for candidate in self.candidates)
-        if len(models) != len(set(models)):
+        models: Final = tuple(candidate.model for candidate in self.candidates)
+        if len(models) != len(frozenset(models)):
             raise ValueError("candidate model names must be unique")
         if self.fallback_model not in models:
             raise ValueError("fallback_model must be one of the candidate models")
         return self
 
 
-CapabilityBoundary = Literal["supported", "uncertain", "unsupported", "unmatched"]
+CapabilityBoundary: TypeAlias = Literal["supported", "uncertain", "unsupported", "unmatched"]
 
 
 class CapabilityCandidateScore(BaseModel):
@@ -113,7 +113,7 @@ class CapabilityCandidateScore(BaseModel):
     @classmethod
     def validate_probability(cls, value: object) -> object:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError("p_solve must be a JSON number")
+            raise ValueError("p_solve must be a JSON number")  # noqa: TRY004  # pydantic needs ValueError
         if isinstance(value, float) and not math.isfinite(value):
             raise ValueError("p_solve must be finite")
         return value
@@ -128,13 +128,13 @@ class CapabilityClassifierVerdict(BaseModel):
 
     @model_validator(mode="after")
     def validate_unique_models(self) -> Self:
-        models = tuple(candidate.model for candidate in self.candidates)
-        if len(models) != len(set(models)):
+        models: Final = tuple(candidate.model for candidate in self.candidates)
+        if len(models) != len(frozenset(models)):
             raise ValueError("classifier candidate model names must be unique")
         return self
 
 
-CapabilitySelectionReason = Literal[
+CapabilitySelectionReason: TypeAlias = Literal[
     "cheapest_qualified",
     "no_qualified_candidate",
     "missing_candidate_price",
