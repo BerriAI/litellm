@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.100.0"
+version = "1.101.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.15"
@@ -67,8 +67,8 @@ proxy = [
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.28.1,<2.0",
-    "litellm-proxy-extras==0.4.91",
-    "litellm-enterprise==0.1.62",
+    "litellm-proxy-extras==0.4.92",
+    "litellm-enterprise==0.1.63",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -319,7 +319,7 @@ members = ["enterprise", "litellm-proxy-extras"]
 profile = "black"
 
 [tool.commitizen]
-version = "1.100.0"
+version = "1.101.0"
 version_files = [
     "pyproject.toml:^version",
 ]

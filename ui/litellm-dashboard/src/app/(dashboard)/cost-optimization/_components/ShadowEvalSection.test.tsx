@@ -97,11 +97,13 @@ import {
   useStopShadowEval,
   type ShadowEvalJob,
 } from "./useShadowEval";
+import { chooseSelectOption } from "../../../../../tests/test-utils";
 
 const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
   job_id: "job-1",
   status: "running",
   router_name: "claude-auto",
+  router_names: ["claude-auto"],
   direction: "forward",
   baseline_model: null,
   judge_model: "anthropic/claude-sonnet-5",
@@ -436,8 +438,7 @@ describe("ShadowEvalSection", () => {
     await user.click(within(keyList).getByText("prod-alpha"));
     await user.click(keyInput);
     await user.click(within(keyList).getByText("staging-beta"));
-    await user.click(screen.getByPlaceholderText("Select an auto-router"));
-    await user.click(await screen.findByText("gpt-auto"));
+    await chooseSelectOption(user, screen.getByPlaceholderText("Select up to 4 auto-routers"), "gpt-auto");
 
     expect(screen.getByText("Start shadow eval")).toBeDisabled();
 
@@ -449,7 +450,7 @@ describe("ShadowEvalSection", () => {
       api_key_ids: ["hash-alpha", "hash-beta"],
       team_ids: [],
       user_ids: [],
-      router_name: "gpt-auto",
+      router_names: ["gpt-auto"],
       direction: "forward",
       shadow_percentage: 10,
       duration_days: 7,
@@ -469,8 +470,7 @@ describe("ShadowEvalSection", () => {
     await user.click(screen.getByPlaceholderText("Search teams by alias"));
     const teamList = await screen.findByTestId("paginated-multi-select-list");
     await user.click(within(teamList).getByText("engineering"));
-    await user.click(screen.getByPlaceholderText("Select an auto-router"));
-    await user.click(await screen.findByText("gpt-auto"));
+    await chooseSelectOption(user, screen.getByPlaceholderText("Select up to 4 auto-routers"), "gpt-auto");
     await user.click(screen.getByPlaceholderText("Select a judge model"));
     await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
     await user.click(screen.getByText("Start shadow eval"));
@@ -479,7 +479,7 @@ describe("ShadowEvalSection", () => {
       api_key_ids: [],
       team_ids: ["team-eng"],
       user_ids: [],
-      router_name: "gpt-auto",
+      router_names: ["gpt-auto"],
       direction: "forward",
       shadow_percentage: 10,
       duration_days: 7,
@@ -501,8 +501,7 @@ describe("ShadowEvalSection", () => {
     await user.click(screen.getByPlaceholderText("Search keys by alias"));
     const keyList = await screen.findByTestId("paginated-multi-select-list");
     await user.click(within(keyList).getByText("prod-alpha"));
-    await user.click(screen.getByPlaceholderText("Select an auto-router"));
-    await user.click(await screen.findByText("gpt-auto"));
+    await chooseSelectOption(user, screen.getByPlaceholderText("Select up to 4 auto-routers"), "gpt-auto");
     await user.click(screen.getByPlaceholderText("Select a judge model"));
     await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
 
@@ -517,7 +516,7 @@ describe("ShadowEvalSection", () => {
       api_key_ids: ["hash-alpha"],
       team_ids: [],
       user_ids: [],
-      router_name: "gpt-auto",
+      router_names: ["gpt-auto"],
       direction: "reverse",
       baseline_model: "prod-claude",
       shadow_percentage: 10,
@@ -526,6 +525,119 @@ describe("ShadowEvalSection", () => {
       judge_model: "anthropic/claude-sonnet-5",
     };
     expect(start.mutate).toHaveBeenCalledWith(expectedBody);
+  });
+
+  it("submits every picked auto-router so one job compares them on the same traffic", async () => {
+    const user = userEvent.setup();
+    const { start } = mockHooks({});
+    render(<ShadowEvalSection />);
+
+    await user.click(screen.getByPlaceholderText("Search keys by alias"));
+    const keyList = await screen.findByTestId("paginated-multi-select-list");
+    await user.click(within(keyList).getByText("prod-alpha"));
+    const routerInput = screen.getByPlaceholderText("Select up to 4 auto-routers");
+    await user.click(routerInput);
+    await user.click(await screen.findByText("gpt-auto"));
+    await user.click(routerInput);
+    await user.click(await screen.findByText("claude-auto"));
+    expect(
+      screen.getByText("Every router sees the same sampled requests, judged against the same live responses"),
+    ).toBeInTheDocument();
+    await user.click(screen.getByPlaceholderText("Select a judge model"));
+    await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
+    await user.click(screen.getByText("Start shadow eval"));
+
+    const expectedBody = {
+      api_key_ids: ["hash-alpha"],
+      team_ids: [],
+      user_ids: [],
+      router_names: ["gpt-auto", "claude-auto"],
+      direction: "forward",
+      shadow_percentage: 10,
+      duration_days: 7,
+      max_budget: 10,
+      judge_model: "anthropic/claude-sonnet-5",
+    };
+    expect(start.mutate).toHaveBeenCalledWith(expectedBody);
+  });
+
+  it("blocks starting a reverse job with more than one router and says why", async () => {
+    const user = userEvent.setup();
+    mockHooks({});
+    render(<ShadowEvalSection />);
+
+    await user.click(screen.getByPlaceholderText("Search keys by alias"));
+    const keyList = await screen.findByTestId("paginated-multi-select-list");
+    await user.click(within(keyList).getByText("prod-alpha"));
+    const routerInput = screen.getByPlaceholderText("Select up to 4 auto-routers");
+    await user.click(routerInput);
+    await user.click(await screen.findByText("gpt-auto"));
+    await user.click(routerInput);
+    await user.click(await screen.findByText("claude-auto"));
+    await user.click(screen.getByText("Adoption check: key's traffic vs the router"));
+    await user.click(await screen.findByText("Regression check: router's picks vs a baseline"));
+    await user.click(screen.getByPlaceholderText("Select a judge model"));
+    await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
+    await user.click(screen.getByPlaceholderText("Select a baseline model"));
+    await user.click(screen.getByRole("option", { name: /prod-claude/ }));
+
+    expect(screen.getByText("A regression check compares one router to its baseline")).toBeInTheDocument();
+    expect(screen.getByText("Start shadow eval")).toBeDisabled();
+  });
+
+  it("renders a per-router comparison table only when the job ran several routers", () => {
+    const routerSlice = (group: string, wins: number) => ({
+      group,
+      turn_count: 20,
+      real_win_rate_pct: 100 - wins - 10,
+      shadow_win_rate_pct: wins,
+      tie_rate_pct: 10,
+      avg_judge_confidence: 0.8,
+      real_spend: 0.4,
+      shadow_spend: 0.2,
+      cache_hit_turns: 0,
+    });
+    const base = job();
+    const multi = job({
+      router_names: ["claude-auto", "gpt-auto"],
+      results: { ...base.results!, by_router: [routerSlice("claude-auto", 40), routerSlice("gpt-auto", 70)] },
+    });
+    mockHooks({ jobs: [multi], detailsById: { "job-1": multi } });
+    render(<ShadowEvalSection />);
+
+    expect(screen.getByText("Router")).toBeInTheDocument();
+    const rows = screen.getAllByRole("row").map((row) => row.textContent ?? "");
+    expect(rows.some((text) => text.includes("claude-auto") && text.includes("40.0%"))).toBe(true);
+    expect(rows.some((text) => text.includes("gpt-auto") && text.includes("70.0%"))).toBe(true);
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.textContent === "Shadowing 10% of prod-alpha traffic via claude-auto, gpt-auto" &&
+          element.tagName === "P",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("renders a job from an older proxy that predates router_names", () => {
+    const legacy = { ...job(), router_names: undefined } as unknown as ShadowEvalJob;
+    mockHooks({ jobs: [legacy], detailsById: { "job-1": legacy } });
+    render(<ShadowEvalSection />);
+
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.textContent === "Shadowing 10% of prod-alpha traffic via claude-auto" && element.tagName === "P",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the per-router table hidden for a single-router job", () => {
+    const base = job();
+    const single = job({ results: { ...base.results!, by_router: [] } });
+    mockHooks({ jobs: [single], detailsById: { "job-1": single } });
+    render(<ShadowEvalSection />);
+
+    expect(screen.queryByText("Router")).not.toBeInTheDocument();
   });
 
   it("flips the arm labels and headline for a reverse job's results", () => {

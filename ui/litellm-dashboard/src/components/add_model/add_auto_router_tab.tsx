@@ -342,6 +342,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     planModeMinTier: complexityRouterConfig.plan_mode_min_tier,
     classificationPrompt: complexityRouterConfig.classification_prompt,
     heuristicFirstMaxTier: complexityRouterConfig.heuristic_first_max_tier,
+    classificationMode: complexityRouterConfig.classification_mode,
     tierLabels: complexityRouterConfig.tier_labels,
     classifierType: complexityRouterConfig.classifier_type,
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
@@ -350,6 +351,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     classifierContextIncludeAssistantTurns: complexityRouterConfig.classifier_context_include_assistant_turns,
     classifierFallback: complexityRouterConfig.classifier_fallback,
     sessionAffinity: complexityRouterConfig.session_affinity ?? DEFAULT_SESSION_AFFINITY,
+    modalityRouting: complexityRouterConfig.modality_routing ?? false,
     deploymentAffinity: complexityRouterConfig.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
     customTechnicalKeywords,
     keywordTierRules,
@@ -546,7 +548,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                     "Select the team this auto router belongs to. Only keys for this team will be able to call it.",
                   )}
                 >
-                  {({ id, value, onChange }) => <TeamDropdown id={id} value={value} onChange={onChange} />}
+                  {({ id, value, onChange }) => (
+                    <TeamDropdown id={id} value={value} onChange={(next) => onChange(next ?? "")} />
+                  )}
                 </FormField>
               )}
 

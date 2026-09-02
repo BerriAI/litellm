@@ -555,10 +555,10 @@ def update_messages_with_model_file_ids(
 
 
 def update_responses_input_with_model_file_ids(
-    input: Any,
+    input: object,
     model_id: str | None = None,
     model_file_id_mapping: dict[str, dict[str, str]] | None = None,
-) -> str | list[dict[str, Any]]:
+) -> object:
     """
     Updates responses API input with provider-specific file IDs.
     File IDs are always inside the content array, not as direct input_file items.
@@ -639,8 +639,8 @@ def update_responses_input_with_model_file_ids(
 
 
 def _decode_vector_store_ids_in_tools(
-    tools: list[dict[str, Any]] | None,
-) -> list[dict[str, Any]] | None:
+    tools: list[dict[str, object]] | None,
+) -> list[dict[str, object]] | None:
     """
     Decodes unified (LiteLLM-managed) vector_store_ids in file_search tools to
     provider-native IDs.  Non-unified IDs are passed through unchanged.
@@ -692,10 +692,10 @@ def _decode_vector_store_ids_in_tools(
 
 
 def update_responses_tools_with_model_file_ids(
-    tools: list[dict[str, Any]] | None,
+    tools: list[dict[str, object]] | None,
     model_id: str | None = None,
     model_file_id_mapping: dict[str, dict[str, str]] | None = None,
-) -> list[dict[str, Any]] | None:
+) -> list[dict[str, object]] | None:
     """
     Updates responses API tools with provider-specific file IDs.
 
@@ -888,7 +888,7 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
 # ---------------------------------------------------------------------------
 
 
-def _estimate_json_bytes(obj: Any) -> int:
+def _estimate_json_bytes(obj: object) -> int:
     """Estimate the JSON-serialised byte size of ``obj`` without materialising
     JSON. Walks iteratively (no recursion stack risk).
 
@@ -1279,6 +1279,19 @@ def flatten_top_level_schema_combinators(schema: Mapping[str, object]) -> Mappin
     unchanged and the input is never mutated.
     """
     return _flatten_schema_against_root(schema, schema, frozenset(), 0, {})  # mutable-ok: fresh per-call $ref memo
+
+
+def tool_with_flattened_parameters(tool: Mapping[str, object]) -> Mapping[str, object]:
+    function: Final = tool.get("function")
+    if not isinstance(function, dict):
+        return tool
+    parameters: Final = function.get("parameters")
+    if not isinstance(parameters, dict):
+        return tool
+    flattened: Final = flatten_top_level_schema_combinators(parameters)
+    if flattened is parameters:
+        return tool
+    return {**tool, "function": {**function, "parameters": flattened}}  # mutable-ok: request tools are JSON dicts
 
 
 def _get_image_mime_type_from_url(url: str) -> str | None:
@@ -1979,7 +1992,7 @@ def drop_tool_reference_parts_from_tool_messages(
     return [_drop_tool_reference_parts(message) for message in messages]  # mutable-ok: pipelines mutate message lists
 
 
-def _attempt_json_repair(s: str) -> Any | None:
+def _attempt_json_repair(s: str) -> object | None:
     """
     Attempt to repair truncated JSON produced by LLM tool calls.
 
@@ -2095,7 +2108,7 @@ def parse_tool_call_arguments(
         raise ValueError(error_message) from original_error
 
 
-def split_concatenated_json_objects(raw: str) -> list[dict[str, Any]]:
+def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
     """
     Split a string that contains one or more concatenated JSON objects into
     a list of parsed dicts.
@@ -2131,7 +2144,7 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, Any]]:
         return []
 
     decoder: Final = json.JSONDecoder()
-    results: Final[list[dict[str, Any]]] = []
+    results: Final[list[dict[str, object]]] = []
     idx = 0
     length: Final = len(raw)
 
