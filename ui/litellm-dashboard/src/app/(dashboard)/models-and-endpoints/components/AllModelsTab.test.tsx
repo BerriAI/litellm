@@ -1,5 +1,5 @@
 import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { configure, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -96,6 +96,11 @@ const setModelsInfo = (rows: Record<string, unknown>[], totalCount = rows.length
 };
 
 const lastModelsInfoCall = (): ModelsInfoArgs => modelsInfoCalls[modelsInfoCalls.length - 1];
+
+// Each interaction here waits on a debounced refetch, so the 1s default that
+// @testing-library/react gives waitFor/findBy* leaves no headroom on a loaded
+// CI runner. The same assertions take ~2.5s locally.
+configure({ asyncUtilTimeout: 10_000 });
 
 const SEARCH_SETTLE_MS = 400;
 
