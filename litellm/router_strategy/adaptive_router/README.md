@@ -82,7 +82,31 @@ router continues to explore without paying the cost on every request.
   requests and a Thompson sample for exploration requests. Score with
   `quality_weight·estimate + cost_weight·normalized_cost`, then pick the argmax.
   `exploration_rate` defaults to 1 for backward compatibility. Offline training
-  emits the recommended value of 0.05.
+emits the recommended value of 0.05.
+
+## Run an evaluation suite
+
+Create one JSON object per prompt. `reference_answer` and `grading_criteria`
+are optional:
+
+```json
+{"case_id":"code-1","request_type":"code_generation","prompt":"Write a stable sort","reference_answer":"A correct implementation and explanation"}
+```
+
+Run every prompt against each candidate model, then grade each answer with a
+judge model:
+
+```shell
+python -m litellm.router_strategy.adaptive_router.evaluation cases.jsonl \
+  --models openai/gpt-5.2 anthropic/claude-sonnet-5 \
+  --judge-model openai/gpt-5.2 \
+  --records-output evaluations.jsonl > adaptive-router-priors.json
+```
+
+The records file contains the judge quality, candidate response cost, and
+candidate latency for each `(case_id, model)` pair. The JSON written to stdout
+is the ready-to-use `adaptive_router_config` fragment. Calls run with bounded
+concurrency, configurable through `--concurrency`.
 - **Previous-response attribution.** Post-call, feedback from the current user
   message is attributed to the model that produced the previous response, while
   response signals are attributed to the current model. Contexts expire after

@@ -19,9 +19,12 @@ EvaluationKey: TypeAlias = tuple[RequestType, str]
 class AdaptiveRouterEvaluationRecord(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    case_id: str | None = None
     request_type: RequestType
     model: str
     quality: float = Field(ge=0.0, le=1.0)
+    cost: float | None = Field(default=None, ge=0.0)
+    latency_ms: float | None = Field(default=None, ge=0.0)
 
 
 class AdaptiveRouterTrainingResult(BaseModel):
@@ -59,7 +62,11 @@ def load_evaluation_records(path: Path) -> tuple[AdaptiveRouterEvaluationRecord,
 
 
 def training_config_fragment(path: Path) -> AdaptiveRouterTrainingResult:
-    priors: Final = aggregate_evaluation_records(load_evaluation_records(path))
+    return training_config(load_evaluation_records(path))
+
+
+def training_config(records: Iterable[AdaptiveRouterEvaluationRecord]) -> AdaptiveRouterTrainingResult:
+    priors: Final = aggregate_evaluation_records(records)
     return AdaptiveRouterTrainingResult(evaluation_priors=priors)
 
 
