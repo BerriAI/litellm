@@ -658,6 +658,19 @@ class TestClientKeyDerivation:
         assert key.socket_timeout_ms == 3_000
         assert key.connect_timeout_ms == 3_000
 
+    def test_a_short_timeout_also_shortens_server_selection(self):
+        """Server selection runs before the connect attempt, so leaving it at the 10s default
+        would let a caller asking for a 3s budget block for 10s before anything is tried."""
+        key = MongoDBVectorStoreConfig._client_key(_MongoDBSearchParams.model_validate(BASE_PARAMS), 3.0)
+
+        assert key.server_selection_timeout_ms == 3_000
+
+    def test_a_generous_timeout_does_not_raise_server_selection_above_the_default(self):
+        key = MongoDBVectorStoreConfig._client_key(_MongoDBSearchParams.model_validate(BASE_PARAMS), 120.0)
+
+        assert key.socket_timeout_ms == 120_000
+        assert key.server_selection_timeout_ms == 10_000
+
     def test_an_httpx_timeout_maps_connect_and_read_separately(self):
         key = MongoDBVectorStoreConfig._client_key(
             _MongoDBSearchParams.model_validate(BASE_PARAMS), httpx.Timeout(connect=2.0, read=45.0, write=5.0, pool=5.0)
@@ -691,6 +704,16 @@ class TestErrorTranslation:
 
         translated = self._translate(OperationFailure("not authorized", code=13))
 
+        assert "sample_mflix.embedded_movies" in str(translated)
+
+    def test_code_13_alone_is_enough_without_a_recognisable_message(self):
+        """The other unauthorized case carries "not authorized", which the message markers also
+        match, so it cannot tell whether the code is still being checked at all."""
+        from pymongo.errors import OperationFailure
+
+        translated = self._translate(OperationFailure("user lacks privileges on this namespace", code=13))
+
+        assert "rejected the credentials" in str(translated)
         assert "sample_mflix.embedded_movies" in str(translated)
 
     def test_a_missing_index_names_the_index_and_the_collection(self):
