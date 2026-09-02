@@ -39,7 +39,7 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
-from pydantic import BaseModel, Json, JsonValue, ValidationError
+from pydantic import BaseModel, Json, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, assert_never
 
 from litellm._uuid import uuid
@@ -60,6 +60,7 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
+    RUNTIME_UPDATABLE_ROUTER_SETTINGS,
 )
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
@@ -16207,6 +16208,7 @@ async def invitation_delete(
 )
 async def update_config(
     config_info: ConfigYAML,
+    request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -16218,6 +16220,23 @@ async def update_config(
     a side effect of an unrelated update.
     """
     global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key, prisma_client
+    request_body: Final[Mapping[str, JsonValue]] = TypeAdapter(Mapping[str, JsonValue]).validate_python(
+        await request.json()
+    )
+    raw_router_settings: Final = request_body.get("router_settings")
+    if isinstance(raw_router_settings, dict):
+        unsupported_router_settings: Final = sorted(set(raw_router_settings) - RUNTIME_UPDATABLE_ROUTER_SETTINGS)
+        if unsupported_router_settings:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        f"Unsupported router settings: {', '.join(unsupported_router_settings)} "
+                        "are not runtime-updatable router settings"
+                    )
+                },
+            )
+
     try:
         if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
             raise HTTPException(status_code=403, detail="Only proxy admins can update config")

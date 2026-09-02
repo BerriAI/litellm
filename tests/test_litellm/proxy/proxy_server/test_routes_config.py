@@ -60,6 +60,45 @@ def test_config_update_happy_admin(client, auth_as, mock_prisma, monkeypatch):
     assert normalize(response.json()) == {"message": "Config updated successfully"}
 
 
+def test_config_update_persists_optional_pre_call_checks(client, auth_as, mock_prisma, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.add_deployment = AsyncMock()
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(
+            "/config/update",
+            json={"router_settings": {"optional_pre_call_checks": ["prompt_caching"]}},
+        )
+
+    assert response.status_code == 200
+    persisted = json.loads(table.upsert.call_args.kwargs["data"]["create"]["param_value"])
+    assert persisted["optional_pre_call_checks"] == ["prompt_caching"]
+
+
+def test_config_update_rejects_unknown_router_setting(client, auth_as, mock_prisma, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(
+            "/config/update",
+            json={"router_settings": {"optional_precall_checks": ["prompt_caching"]}},
+        )
+
+    assert response.status_code == 400
+    assert "optional_precall_checks" in response.json()["detail"]["error"]
+    table.upsert.assert_not_called()
+
+
 def test_config_update_non_admin_forbidden(client, auth_as, mock_prisma, monkeypatch):
     """POST /config/update by a non-admin caller is rejected; the error
     surfaces as a ProxyException with the admin-only message."""

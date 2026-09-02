@@ -26,8 +26,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import ValidationError
 
-
 import litellm
+from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import PromptCachingDeploymentCheck
 from litellm.types.router import RetryPolicy, UpdateRouterConfig
 
 # ---------------------------------------------------------------------------
@@ -98,6 +98,19 @@ def _build_router() -> litellm.Router:
             }
         ]
     )
+
+
+def test_update_settings_adds_optional_pre_call_check_once():
+    router = _build_router()
+
+    router.update_settings(num_retries=7, optional_pre_call_checks=["prompt_caching"])
+    router.update_settings(optional_pre_call_checks=["prompt_caching"])
+
+    prompt_caching_callbacks = [
+        callback for callback in router.optional_callbacks if isinstance(callback, PromptCachingDeploymentCheck)
+    ]
+    assert len(prompt_caching_callbacks) == 1
+    assert router.num_retries == 7
 
 
 def test_update_settings_persists_retry_policy_dict():
@@ -228,7 +241,7 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
     """The exact global retry_policy save the UI performs must survive the
     real ``/config/update`` -> DB -> apply -> ``/get/config/callbacks`` path,
     not snap back to the ``num_retries`` fallback the ticket reported."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
     from litellm.proxy._types import ConfigYAML, LitellmUserRoles, UserAPIKeyAuth
 
     router = _build_router()
@@ -255,8 +268,12 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
             RateLimitErrorRetries=7,
         )
     )
+    request = MagicMock()
+    request.json = AsyncMock(return_value={"router_settings": {"retry_policy": posted.model_dump()}})
+
     await proxy_server.update_config(
         config_info=ConfigYAML(router_settings=posted),
+        request=request,
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"),
     )
 
