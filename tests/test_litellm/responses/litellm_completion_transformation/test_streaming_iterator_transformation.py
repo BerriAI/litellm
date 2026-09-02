@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import litellm
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
@@ -915,16 +916,11 @@ def test_reused_index_with_new_call_id_preserves_first_streamed_identity(
     ("replacement_type", "replacement_name"),
     (("function", "tool_b"), ("custom", "tool_a")),
 )
-def test_reused_index_with_changed_tool_metadata_starts_separate_identity(
+def test_reused_index_with_changed_tool_metadata_fails_closed(
     replacement_type: str,
     replacement_name: str,
 ):
-    iterator = LiteLLMCompletionStreamingIterator(
-        model="test-model",
-        litellm_custom_stream_wrapper=AsyncMock(),
-        request_input="Test input",
-        responses_api_request={},
-    )
+    iterator = _build_iterator([])
 
     iterator._queue_tool_call_delta_events(
         [
@@ -956,11 +952,34 @@ def test_reused_index_with_changed_tool_metadata_starts_separate_identity(
             }
         ]
     )
+    events = []
+    with pytest.raises(litellm.InternalServerError, match="changed tool metadata at tool call index 0"):
+        while True:
+            events.append(next(iterator))
+
+    added_items = [event.item for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
+    done_items = [event.item for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
+    delta_events = [event for event in events if event.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA]
+
+    assert [(item.id, item.call_id, item.name) for item in added_items] == [("fc_call_a", "call_a", "tool_a")]
+    assert [(item.id, item.call_id, item.name, item.status) for item in done_items] == [
+        ("fc_call_a", "call_a", "tool_a", "incomplete")
+    ]
+    assert "".join(event.delta for event in delta_events) == '{"safe":'
+    assert all(event.type != ResponsesAPIStreamEvents.RESPONSE_COMPLETED for event in events)
+
+
+def test_terminal_tool_metadata_drift_fails_closed():
+    iterator = _build_iterator([])
     iterator._queue_tool_call_delta_events(
-        [{"index": 0, "id": "call_b", "function": {"arguments": "true}"}}]
-    )
-    iterator._queue_tool_call_delta_events(
-        [{"index": 0, "function": {"arguments": "ignored"}}]
+        [
+            {
+                "index": 0,
+                "id": "call_stream",
+                "type": "function",
+                "function": {"name": "tool_a", "arguments": '{"safe":true}'},
+            }
+        ]
     )
     terminal_response = ModelResponse(
         id="chatcmpl-terminal",
@@ -977,12 +996,9 @@ def test_reused_index_with_changed_tool_metadata_starts_separate_identity(
                     "tool_calls": [
                         {
                             "index": 0,
-                            "id": "call_b",
+                            "id": "call_terminal",
                             "type": "function",
-                            "function": {
-                                "name": replacement_name,
-                                "arguments": '{"privileged":true}',
-                            },
+                            "function": {"name": "tool_b", "arguments": '{"privileged":true}'},
                         }
                     ],
                 },
@@ -990,38 +1006,20 @@ def test_reused_index_with_changed_tool_metadata_starts_separate_identity(
         ],
     )
     iterator._queue_final_tool_call_done_events(terminal_response)
-    completed = iterator._emit_response_completed_event(terminal_response)
 
-    added_items = [
-        event.item
-        for event in iterator._pending_tool_events
-        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
-    ]
-    delta_events = [
-        event
-        for event in iterator._pending_tool_events
-        if event.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
-    ]
-    done_item = next(
-        event.item
-        for event in iterator._pending_tool_events
-        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
-    )
+    events = []
+    with pytest.raises(litellm.InternalServerError, match="changed tool metadata at tool call index 0"):
+        while True:
+            events.append(next(iterator))
 
-    assert completed is not None
-    assert [(item.id, item.call_id) for item in added_items] == [
-        ("fc_call_a", "call_a"),
-        ("fc_call_b", "call_b"),
+    added_items = [event.item for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
+    done_items = [event.item for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
+
+    assert [(item.id, item.call_id, item.name) for item in added_items] == [("fc_call_stream", "call_stream", "tool_a")]
+    assert [(item.id, item.call_id, item.name, item.status) for item in done_items] == [
+        ("fc_call_stream", "call_stream", "tool_a", "incomplete")
     ]
-    assert "".join(event.delta for event in delta_events if event.item_id == "fc_call_a") == '{"safe":'
-    assert "".join(event.delta for event in delta_events if event.item_id == "fc_call_b") == '{"privileged":true}'
-    assert (done_item.id, done_item.call_id, done_item.name) == ("fc_call_b", "call_b", replacement_name)
-    completed_call = next(item for item in completed.response.output if item.type == "function_call")
-    assert (completed_call.id, completed_call.call_id, completed_call.name) == (
-        "fc_call_b",
-        "call_b",
-        replacement_name,
-    )
+    assert all(event.type != ResponsesAPIStreamEvents.RESPONSE_COMPLETED for event in events)
 
 
 @pytest.mark.asyncio

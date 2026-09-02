@@ -57,7 +57,6 @@ class _StreamedToolCallMetadata:
     call_type: str | None
     tool_name: str | None
     tool_namespace: str | None
-    ambiguous: bool = False
 
     def matches(self, incoming: "_StreamedToolCallMetadata") -> bool:
         return all(
@@ -73,15 +72,6 @@ class _StreamedToolCallMetadata:
             call_type=self.call_type or incoming.call_type,
             tool_name=self.tool_name or incoming.tool_name,
             tool_namespace=self.tool_namespace or incoming.tool_namespace,
-            ambiguous=self.ambiguous,
-        )
-
-    def marked_ambiguous(self) -> "_StreamedToolCallMetadata":
-        return _StreamedToolCallMetadata(
-            call_type=self.call_type,
-            tool_name=self.tool_name,
-            tool_namespace=self.tool_namespace,
-            ambiguous=True,
         )
 
 
@@ -157,6 +147,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._streamed_tool_call_ids_in_order: list[str] = []  # mutable-ok: accumulates call ids across stream chunks
         self._resolved_tool_call_id_by_position: dict[int, str] = {}  # mutable-ok: terminal correlation state
         self._streamed_call_id_by_terminal_id: dict[str, str] = {}  # mutable-ok: terminal identity correlation
+        self._pending_tool_call_error: litellm.InternalServerError | None = None
         self._next_tool_output_index: int = 1  # output_index=0 reserved for the message item
         self._final_tool_events_queued: bool = False
         self._sequence_number: int = 0
@@ -195,9 +186,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return None
 
     def _streamed_tool_call_id_at_position(self, position: int) -> str | None:
-        indexed_metadata: Final = self._tool_call_metadata_by_index.get(position)
-        if indexed_metadata is not None and indexed_metadata.ambiguous:
-            return None
         indexed_call_id: Final = self._tool_call_id_by_index.get(position)
         if indexed_call_id is not None:
             return indexed_call_id
@@ -212,17 +200,23 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     def _streamed_tool_call_id_for_terminal_call(self, tool_call: object, position: int) -> str | None:
         """Match a terminal aggregate tool call to the identity emitted while streaming."""
+        tool_call_index: Final = self._normalize_tool_call_index(tool_call)
+        metadata_index: Final = tool_call_index if tool_call_index is not None else position
+        streamed_metadata: Final = self._tool_call_metadata_by_index.get(metadata_index)
+        terminal_metadata: Final = self._tool_call_metadata(tool_call)
+        if streamed_metadata is not None and not streamed_metadata.matches(terminal_metadata):
+            streamed_call_id: Final = self._tool_call_id_by_index.get(metadata_index)
+            if streamed_call_id is not None:
+                self._queue_tool_call_metadata_error(streamed_call_id, streamed_metadata, metadata_index)
+            return None
+
         call_id_raw: Final = tool_call.get("id") if isinstance(tool_call, dict) else getattr(tool_call, "id", None)
         if call_id_raw:
             call_id_match: Final = self._streamed_call_id_by_terminal_id.get(str(call_id_raw))
             if call_id_match is not None:
                 return call_id_match
 
-        tool_call_index: Final = self._normalize_tool_call_index(tool_call)
         if tool_call_index is not None:
-            indexed_metadata: Final = self._tool_call_metadata_by_index.get(tool_call_index)
-            if indexed_metadata is not None and indexed_metadata.ambiguous:
-                return None
             indexed_call_id: Final = self._tool_call_id_by_index.get(tool_call_index)
             if indexed_call_id is not None:
                 return indexed_call_id
@@ -250,25 +244,23 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
         indexed_call_id: Final = self._tool_call_id_by_index.get(tool_call_index)
         if indexed_call_id is not None:
-            if known_call_id is not None and known_call_id != indexed_call_id:
-                return known_call_id
             indexed_metadata: Final = self._tool_call_metadata_by_index.get(
                 tool_call_index,
                 _StreamedToolCallMetadata(None, None, None),
             )
+            if known_call_id is not None and known_call_id != indexed_call_id:
+                self._queue_tool_call_metadata_error(indexed_call_id, indexed_metadata, tool_call_index)
+                return None
             if incoming_call_id is None:
-                return None if indexed_metadata.ambiguous else indexed_call_id
+                return indexed_call_id
 
             if indexed_metadata.matches(metadata):
                 self._tool_call_metadata_by_index[tool_call_index] = indexed_metadata.merged_with(metadata)
                 self._streamed_call_id_by_terminal_id[incoming_call_id] = indexed_call_id
                 return indexed_call_id
 
-            self._tool_call_metadata_by_index[tool_call_index] = indexed_metadata.marked_ambiguous()
-            if incoming_call_id == indexed_call_id:
-                return None
-            self._streamed_call_id_by_terminal_id[incoming_call_id] = incoming_call_id
-            return incoming_call_id
+            self._queue_tool_call_metadata_error(indexed_call_id, indexed_metadata, tool_call_index)
+            return None
 
         if incoming_call_id is None:
             return None
@@ -279,6 +271,64 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._tool_call_metadata_by_index[tool_call_index] = metadata
         self._streamed_call_id_by_terminal_id[incoming_call_id] = incoming_call_id
         return incoming_call_id
+
+    def _tool_call_metadata(self, tool_call: object) -> _StreamedToolCallMetadata:
+        function: Final = (
+            tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
+        )
+        function_name_raw: Final = (
+            function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
+        )
+        tool_name, tool_namespace = self._responses_namespace_tool_call_fields(str(function_name_raw or ""))
+        call_type_raw: Final = (
+            tool_call.get("type") if isinstance(tool_call, dict) else getattr(tool_call, "type", None)
+        )
+        return _StreamedToolCallMetadata(
+            call_type=str(call_type_raw) if call_type_raw else None,
+            tool_name=tool_name or None,
+            tool_namespace=tool_namespace,
+        )
+
+    def _queue_tool_call_metadata_error(
+        self,
+        call_id: str,
+        metadata: _StreamedToolCallMetadata,
+        tool_call_index: int,
+    ) -> None:
+        if self._pending_tool_call_error is not None:
+            return
+
+        output_index: Final = self._get_or_assign_tool_output_index(call_id)
+        arguments: Final = self._tool_args_by_call_id.get(call_id, "")
+        item_kwargs: Final = build_tool_call_item_kwargs(
+            call_id,
+            metadata.tool_name or "",
+            arguments,
+            "incomplete",
+            self._custom_tool_names,
+        )
+        item_kwargs["id"] = self._tool_item_id_by_call_id.get(call_id, item_kwargs["id"])
+        if metadata.tool_namespace:
+            item_kwargs["namespace"] = metadata.tool_namespace
+
+        self._sequence_number += 1
+        self._pending_tool_events.append(
+            OutputItemDoneEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                output_index=output_index,
+                sequence_number=self._sequence_number,
+                item=BaseLiteLLMOpenAIResponseObject(**item_kwargs),
+            )
+        )
+        self._pending_tool_call_error = litellm.InternalServerError(
+            message=f"Provider changed tool metadata at tool call index {tool_call_index}",
+            llm_provider=self.custom_llm_provider or "",
+            model=self.model,
+        )
+
+    def _raise_pending_tool_call_error(self) -> None:
+        if self._pending_tool_call_error is not None:
+            raise self._pending_tool_call_error
 
     def _responses_namespace_tool_call_fields(self, fn_name: str) -> tuple[str, str | None]:
         mapped: Final = self._namespace_tool_names.get(fn_name)
@@ -343,7 +393,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         Note: Some providers (like Bedrock) send tool call arguments in one large chunk.
         We split these into smaller deltas to match OpenAI's token-by-token streaming behavior.
         """
-        if not isinstance(tool_calls, list):
+        if self._pending_tool_call_error is not None or not isinstance(tool_calls, list):
             return
 
         for tc in tool_calls:
@@ -359,14 +409,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 fn_name = str(getattr(fn, "name", "") or "")
                 fn_args_delta = serialize_tool_call_arguments(getattr(fn, "arguments", ""))
             tool_name, tool_namespace = self._responses_namespace_tool_call_fields(fn_name)
-            call_type_raw = tc.get("type") if isinstance(tc, dict) else getattr(tc, "type", None)
-            metadata = _StreamedToolCallMetadata(
-                call_type=str(call_type_raw) if call_type_raw else None,
-                tool_name=tool_name or None,
-                tool_namespace=tool_namespace,
-            )
+            metadata = self._tool_call_metadata(tc)
             call_id = self._resolve_streamed_tool_call_id(tc_index, call_id_raw, metadata)
             if call_id is None:
+                if self._pending_tool_call_error is not None:
+                    return
                 continue
 
             output_index = self._get_or_assign_tool_output_index(call_id)
@@ -400,7 +447,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         """
         Ensure tool calls that were not streamed as deltas still get emitted before response.completed.
         """
-        if self._final_tool_events_queued:
+        if self._final_tool_events_queued or self._pending_tool_call_error is not None:
             return
         self._final_tool_events_queued = True
 
@@ -419,6 +466,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 continue
             terminal_call_id = str(call_id_raw)
             call_id = self._streamed_tool_call_id_for_terminal_call(tc, position) or terminal_call_id
+            if self._pending_tool_call_error is not None:
+                return
             self._resolved_tool_call_id_by_position[position] = call_id
             self._streamed_call_id_by_terminal_id[terminal_call_id] = call_id
             output_index = self._get_or_assign_tool_output_index(call_id)
@@ -937,6 +986,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 self._queue_final_tool_call_done_events(self.litellm_model_response)
             if self._pending_tool_events:
                 return self._pending_tool_events.pop(0)
+            self._raise_pending_tool_call_error()
 
             done_event: Final = self.return_default_done_events(self.litellm_model_response)
             if done_event:
@@ -1044,6 +1094,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 # Emit any pending tool events before reading a new chunk
                 if self._pending_tool_events:
                     return self._pending_tool_events.pop(0)
+                self._raise_pending_tool_call_error()
 
                 try:
                     chunk = self._take_buffered_chunk()
@@ -1151,6 +1202,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 # Emit any pending tool events before reading a new chunk
                 if self._pending_tool_events:
                     return self._pending_tool_events.pop(0)
+                self._raise_pending_tool_call_error()
                 try:
                     buffered_chunk = self._take_buffered_chunk()
                     if buffered_chunk is not None:
