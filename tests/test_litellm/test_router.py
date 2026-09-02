@@ -8680,6 +8680,27 @@ class TestClaudeCodeSubagentSessionRouterBinding:
         assert subagent_kwargs["metadata"]["routing_decision"]["routed_model"] == "cheap-model"
 
     @pytest.mark.asyncio
+    async def test_subagent_can_use_the_bound_router_name_fallback(self):
+        router = self._router(
+            cheap_response="litellm.RateLimitError",
+            fallbacks=[{"smart-router": ["expensive-model"]}],
+        )
+
+        await router.acompletion(
+            model="smart-router",
+            messages=[{"role": "user", "content": "main turn"}],
+            **self._request_kwargs(),
+        )
+
+        response = await router.acompletion(
+            model="expensive-model",
+            messages=[{"role": "user", "content": "subagent turn"}],
+            **self._request_kwargs(agent_id="agent-1234"),
+        )
+
+        assert response.choices[0].message.content == "expensive response"
+
+    @pytest.mark.asyncio
     async def test_session_router_binding_is_scoped_to_the_authenticated_key(self):
         router = self._router()
 
