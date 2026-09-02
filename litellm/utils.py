@@ -5159,6 +5159,16 @@ def get_utc_datetime():
         return datetime.utcnow()
 
 
+def utc_epoch_minute(value: datetime.datetime | None = None) -> int:
+    current_time: Final = value if value is not None else get_utc_datetime()
+    normalized_time: Final = (
+        current_time.replace(tzinfo=datetime.timezone.utc)
+        if current_time.tzinfo is None or current_time.utcoffset() is None
+        else current_time
+    )
+    return int(normalized_time.timestamp()) // 60
+
+
 def get_max_tokens(model: str) -> int | None:
     """
     Get the maximum number of output tokens allowed for a given model.

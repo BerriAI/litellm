@@ -32,7 +32,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
 )
 from litellm.types.router import RouterErrors
 from litellm.types.utils import StandardLoggingPayload
-from litellm.utils import get_utc_datetime
+from litellm.utils import get_utc_datetime, utc_epoch_minute
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -126,13 +126,13 @@ class ModelRateLimitingCheck(CustomLogger):
 
         return tpm, rpm
 
-    def _get_cache_keys(self, deployment: dict, current_minute: str) -> tuple[str, str]:
+    def _get_cache_keys(self, deployment: dict, window_id: int) -> tuple[str, str]:
         """Get the cache keys for TPM and RPM tracking."""
         model_id: Final = deployment.get("model_info", {}).get("id")
         deployment_name: Final = deployment.get("litellm_params", {}).get("model")
 
-        tpm_key: Final = f"{model_id}:{deployment_name}:tpm:{current_minute}"
-        rpm_key: Final = f"{model_id}:{deployment_name}:rpm:{current_minute}"
+        tpm_key: Final = f"{model_id}:{deployment_name}:tpm:v2:{window_id}"
+        rpm_key: Final = f"{model_id}:{deployment_name}:rpm:v2:{window_id}"
 
         return tpm_key, rpm_key
 
@@ -159,8 +159,8 @@ class ModelRateLimitingCheck(CustomLogger):
                 return deployment
 
             dt: Final = get_utc_datetime()
-            current_minute: Final = dt.strftime("%H-%M")
-            tpm_key, rpm_key = self._get_cache_keys(deployment, current_minute)
+            window_id: Final = utc_epoch_minute(dt)
+            tpm_key, rpm_key = self._get_cache_keys(deployment, window_id)
 
             model_id: Final = deployment.get("model_info", {}).get("id")
             model_name: Final = deployment.get("litellm_params", {}).get("model")
@@ -240,8 +240,8 @@ class ModelRateLimitingCheck(CustomLogger):
                 return deployment
 
             dt: Final = get_utc_datetime()
-            current_minute: Final = dt.strftime("%H-%M")
-            tpm_key, rpm_key = self._get_cache_keys(deployment, current_minute)
+            window_id: Final = utc_epoch_minute(dt)
+            tpm_key, rpm_key = self._get_cache_keys(deployment, window_id)
 
             model_id: Final = deployment.get("model_info", {}).get("id")
             model_name: Final = deployment.get("litellm_params", {}).get("model")
@@ -348,8 +348,8 @@ class ModelRateLimitingCheck(CustomLogger):
                 return
 
             dt: Final = get_utc_datetime()
-            current_minute: Final = dt.strftime("%H-%M")
-            tpm_key: Final = f"{model_id}:{model}:tpm:{current_minute}"
+            window_id: Final = utc_epoch_minute(dt)
+            tpm_key: Final = f"{model_id}:{model}:tpm:v2:{window_id}"
 
             verbose_router_logger.debug("[TPM TRACKING] Incrementing %s by %s", tpm_key, total_tokens)
 
@@ -408,8 +408,8 @@ class ModelRateLimitingCheck(CustomLogger):
                 return
 
             dt: Final = get_utc_datetime()
-            current_minute: Final = dt.strftime("%H-%M")
-            tpm_key: Final = f"{model_id}:{model}:tpm:{current_minute}"
+            window_id: Final = utc_epoch_minute(dt)
+            tpm_key: Final = f"{model_id}:{model}:tpm:v2:{window_id}"
 
             self.dual_cache.increment_cache(
                 key=tpm_key,

@@ -2,11 +2,11 @@
 #    This tests the router's ability to pick deployment with lowest tpm using 'usage-based-routing-v2-v2'
 
 import asyncio
+from datetime import datetime, timezone
 import os
 import random
 import time
 import traceback
-from datetime import datetime
 from typing import Dict
 from dotenv import load_dotenv
 
@@ -15,14 +15,14 @@ load_dotenv()
 from unittest.mock import AsyncMock, MagicMock, patch
 from litellm.types.utils import StandardLoggingPayload
 import pytest
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import DeploymentTypedDict, RouterCacheEnum
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.router_strategy.lowest_tpm_rpm_v2 import (
     LowestTPMLoggingHandler_v2 as LowestTPMLoggingHandler,
 )
-from litellm.utils import get_utc_datetime
+from litellm.utils import get_utc_datetime, utc_epoch_minute
 from create_mock_standard_logging_payload import create_standard_logging_payload
 
 ### UNIT TESTS FOR TPM/RPM ROUTING ###
@@ -73,15 +73,116 @@ def test_tpm_rpm_updated():
         end_time=end_time,
     )
     dt = get_utc_datetime()
-    current_minute = dt.strftime("%H-%M")
-    tpm_count_api_key = f"{deployment_id}:{deployment}:tpm:{current_minute}"
-    rpm_count_api_key = f"{deployment_id}:{deployment}:rpm:{current_minute}"
+    window_id = utc_epoch_minute(dt)
+    tpm_count_api_key = f"{deployment_id}:{deployment}:tpm:v2:{window_id}"
+    rpm_count_api_key = f"{deployment_id}:{deployment}:rpm:v2:{window_id}"
 
     print(f"tpm_count_api_key={tpm_count_api_key}")
     assert response_obj["usage"]["total_tokens"] == test_cache.get_cache(
         key=tpm_count_api_key
     )
     assert 1 == test_cache.get_cache(key=rpm_count_api_key)
+
+
+def test_rate_limit_window_changes_at_utc_midnight():
+    before_midnight = datetime(2024, 1, 1, 23, 59, 59, tzinfo=timezone.utc)
+    after_midnight = datetime(2024, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
+
+    before_window = utc_epoch_minute(before_midnight)
+    after_window = utc_epoch_minute(after_midnight)
+    before_key = f"deployment:model:rpm:v2:{before_window}"
+    after_key = f"deployment:model:rpm:v2:{after_window}"
+
+    assert after_window == before_window + 1
+    assert before_key != after_key
+
+
+def test_rate_limit_windows_do_not_share_cache_values():
+    test_cache = DualCache()
+    before_window = utc_epoch_minute(datetime(2024, 1, 1, 23, 59, tzinfo=timezone.utc))
+    after_window = utc_epoch_minute(datetime(2024, 1, 2, 0, 0, tzinfo=timezone.utc))
+    before_key = f"deployment:model:tpm:v2:{before_window}"
+    after_key = f"deployment:model:tpm:v2:{after_window}"
+
+    test_cache.set_cache(key=before_key, value=99, local_only=True)
+
+    assert test_cache.get_cache(key=before_key, local_only=True) == 99
+    assert test_cache.get_cache(key=after_key, local_only=True) is None
+
+
+def test_router_does_not_read_legacy_hh_mm_key():
+    test_cache = DualCache()
+    legacy_key = "deployment:model:rpm:23-59"
+    test_cache.set_cache(key=legacy_key, value=100, local_only=True)
+    deployment = {
+        "model_name": "model-group",
+        "litellm_params": {"model": "model"},
+        "model_info": {"id": "deployment"},
+    }
+    fixed_datetime = datetime(2024, 1, 1, 23, 59, 30, tzinfo=timezone.utc)
+    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
+
+    with (
+        patch(
+            "litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime",
+            return_value=fixed_datetime,
+        ),
+        patch.object(test_cache, "batch_get_cache", wraps=test_cache.batch_get_cache) as batch_get,
+    ):
+        assert (
+            lowest_tpm_logger.get_available_deployments(
+                model_group="model-group",
+                healthy_deployments=[deployment],
+            )
+            == deployment
+        )
+
+    requested_keys = [key for call in batch_get.call_args_list for key in call.kwargs["keys"]]
+    assert legacy_key not in requested_keys
+    assert all(":v2:" in key for key in requested_keys)
+
+
+def test_router_uses_one_window_id_for_tpm_and_rpm_batches():
+    test_cache = DualCache()
+    deployments = [
+        {
+            "model_name": "model-group",
+            "litellm_params": {"model": "model"},
+            "model_info": {"id": "deployment-1"},
+        },
+        {
+            "model_name": "model-group",
+            "litellm_params": {"model": "model"},
+            "model_info": {"id": "deployment-2"},
+        },
+    ]
+    fixed_datetime = datetime(2024, 1, 1, 23, 59, 30, tzinfo=timezone.utc)
+    expected_window = utc_epoch_minute(fixed_datetime)
+    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
+
+    with (
+        patch(
+            "litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime",
+            return_value=fixed_datetime,
+        ),
+        patch.object(test_cache, "batch_get_cache", wraps=test_cache.batch_get_cache) as batch_get,
+    ):
+        lowest_tpm_logger.get_available_deployments(
+            model_group="model-group",
+            healthy_deployments=deployments,
+        )
+
+    assert len(batch_get.call_args_list) == 2
+    requested_keys = [key for call in batch_get.call_args_list for key in call.kwargs["keys"]]
+    assert {key.rsplit(":", 1)[-1] for key in requested_keys} == {str(expected_window)}
+
+
+@pytest.mark.parametrize("cache_type", list(RouterCacheEnum))
+def test_router_cache_enum_uses_versioned_epoch_window(cache_type):
+    key = cache_type.value.format(id="deployment", model="model", window_id=123456)
+
+    assert ":v2:123456" in key
+    assert "23-59" not in key
 
 
 # test_tpm_rpm_updated()
@@ -475,7 +576,7 @@ async def test_router_completion_streaming():
         ## CALL 3
         await asyncio.sleep(1)  # let the token update happen
         dt = get_utc_datetime()
-        current_minute = dt.strftime("%H-%M")
+        window_id = utc_epoch_minute(dt)
         picked_deployment = router.lowesttpm_logger_v2.get_available_deployments(
             model_group=model,
             healthy_deployments=router.healthy_deployments,
@@ -483,8 +584,8 @@ async def test_router_completion_streaming():
         )
         final_response = await router.acompletion(model=model, messages=messages)
         print(f"min deployment id: {picked_deployment}")
-        tpm_key = f"{model}:tpm:{current_minute}"
-        rpm_key = f"{model}:rpm:{current_minute}"
+        tpm_key = f"{model}:tpm:v2:{window_id}"
+        rpm_key = f"{model}:rpm:v2:{window_id}"
 
         tpm_dict = router.cache.get_cache(key=tpm_key)
         print(f"tpm_dict: {tpm_dict}")

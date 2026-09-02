@@ -251,6 +251,7 @@ from litellm.utils import (
     is_region_allowed,
     provider_rejectable_params,
     set_live_deployment_replay,
+    utc_epoch_minute,
 )
 
 from .router_utils.pattern_match_deployments import PatternMatchRouter
@@ -7715,9 +7716,9 @@ class Router:
                 # Setup values
                 # ------------
                 dt: Final = get_utc_datetime()
-                current_minute: Final = dt.strftime("%H-%M")  # use the same timezone regardless of system clock
+                window_id: Final = utc_epoch_minute(dt)
 
-                tpm_key = RouterCacheEnum.TPM.value.format(id=id, current_minute=current_minute, model=deployment_name)
+                tpm_key = RouterCacheEnum.TPM.value.format(id=id, window_id=window_id, model=deployment_name)
                 # ------------
                 # Update usage
                 # ------------
@@ -7734,7 +7735,7 @@ class Router:
                 )
 
                 ## RPM
-                rpm_key = RouterCacheEnum.RPM.value.format(id=id, current_minute=current_minute, model=deployment_name)
+                rpm_key = RouterCacheEnum.RPM.value.format(id=id, window_id=window_id, model=deployment_name)
                 pipeline_operations.append(
                     RedisPipelineIncrementOperation(
                         key=rpm_key,
@@ -7896,10 +7897,10 @@ class Router:
         parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
 
         dt: Final = get_utc_datetime()
-        current_minute: Final = dt.strftime("%H-%M")  # use the same timezone regardless of system clock
+        window_id: Final = utc_epoch_minute(dt)
 
         ## RPM
-        rpm_key: Final = RouterCacheEnum.RPM.value.format(id=id, current_minute=current_minute, model=deployment_name)
+        rpm_key: Final = RouterCacheEnum.RPM.value.format(id=id, window_id=window_id, model=deployment_name)
         await self.cache.async_increment_cache(
             key=rpm_key,
             value=1,
@@ -10356,7 +10357,7 @@ class Router:
         - usage: Tuple[tpm, rpm]
         """
         dt: Final = get_utc_datetime()
-        current_minute: Final = dt.strftime("%H-%M")  # use the same timezone regardless of system clock
+        window_id: Final = utc_epoch_minute(dt)
         tpm_keys: Final[list[str]] = []
         rpm_keys: Final[list[str]] = []
 
@@ -10375,14 +10376,14 @@ class Router:
                 RouterCacheEnum.TPM.value.format(
                     id=id,
                     model=litellm_model,
-                    current_minute=current_minute,
+                    window_id=window_id,
                 )
             )
             rpm_keys.append(
                 RouterCacheEnum.RPM.value.format(
                     id=id,
                     model=litellm_model,
-                    current_minute=current_minute,
+                    window_id=window_id,
                 )
             )
         combined_tpm_rpm_keys: Final = tpm_keys + rpm_keys
@@ -10417,7 +10418,7 @@ class Router:
         Returns current ITPM/OTPM usage for a model group (sum across deployments).
         """
         dt: Final = get_utc_datetime()
-        current_minute: Final = dt.strftime("%H-%M")
+        window_id: Final = utc_epoch_minute(dt)
         itpm_keys: Final[list[str]] = []
         otpm_keys: Final[list[str]] = []
 
@@ -10434,14 +10435,14 @@ class Router:
                 RouterCacheEnum.ITPM.value.format(
                     id=model_id,
                     model=litellm_model,
-                    current_minute=current_minute,
+                    window_id=window_id,
                 )
             )
             otpm_keys.append(
                 RouterCacheEnum.OTPM.value.format(
                     id=model_id,
                     model=litellm_model,
-                    current_minute=current_minute,
+                    window_id=window_id,
                 )
             )
 
@@ -11588,8 +11589,8 @@ class Router:
 
         ## get model group RPM ##
         dt: Final = get_utc_datetime()
-        current_minute: Final = dt.strftime("%H-%M")
-        rpm_key: Final = f"{model}:rpm:{current_minute}"
+        window_id: Final = utc_epoch_minute(dt)
+        rpm_key: Final = f"{model}:rpm:v2:{window_id}"
         model_group_cache: Final = (
             self.cache.get_cache(key=rpm_key, local_only=True, parent_otel_span=parent_otel_span) or {}
         )  # check the in-memory cache used by lowest_latency and usage-based routing. Only check the local cache.

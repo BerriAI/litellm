@@ -843,10 +843,10 @@ class RoutingStrategy(enum.Enum):
 
 
 class RouterCacheEnum(enum.Enum):
-    TPM = "global_router:{id}:{model}:tpm:{current_minute}"
-    RPM = "global_router:{id}:{model}:rpm:{current_minute}"
-    ITPM = "global_router:{id}:{model}:itpm:{current_minute}"
-    OTPM = "global_router:{id}:{model}:otpm:{current_minute}"
+    TPM = "global_router:{id}:{model}:tpm:v2:{window_id}"
+    RPM = "global_router:{id}:{model}:rpm:v2:{window_id}"
+    ITPM = "global_router:{id}:{model}:itpm:v2:{window_id}"
+    OTPM = "global_router:{id}:{model}:otpm:v2:{window_id}"
 
 
 class GenericBudgetWindowDetails(BaseModel):

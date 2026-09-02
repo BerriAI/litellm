@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,6 +16,18 @@ def redis_no_ping():
         # Either raise an exception or return a mock that will handle the task creation
         mock_get_loop.side_effect = RuntimeError("No running event loop")
         yield
+
+
+def test_utc_epoch_minute_normalizes_naive_and_aware_datetimes():
+    from litellm.utils import utc_epoch_minute
+
+    naive_utc = datetime(2024, 1, 1, 23, 59, 30)
+    aware_utc = naive_utc.replace(tzinfo=timezone.utc)
+    aware_local = datetime(2024, 1, 2, 7, 59, 30, tzinfo=timezone(timedelta(hours=8)))
+
+    assert utc_epoch_minute(naive_utc) == utc_epoch_minute(aware_utc)
+    assert utc_epoch_minute(aware_local) == utc_epoch_minute(aware_utc)
+    assert utc_epoch_minute(datetime(2024, 1, 2, 0, 0, 0, tzinfo=timezone.utc)) != utc_epoch_minute(aware_utc)
 
 
 @pytest.mark.parametrize(

@@ -1002,7 +1002,7 @@ async def test_get_model_group_io_token_usage_sums_across_deployments():
     cache keys the pre-call reservation writes to.
     """
     from litellm.types.router import RouterCacheEnum
-    from litellm.utils import get_utc_datetime
+    from litellm.utils import get_utc_datetime, utc_epoch_minute
 
     router = Router(
         model_list=[
@@ -1027,29 +1027,29 @@ async def test_get_model_group_io_token_usage_sums_across_deployments():
         ]
     )
 
-    minute = get_utc_datetime().strftime("%H-%M")
+    window_id = utc_epoch_minute(get_utc_datetime())
     keys_and_values = [
         (
             RouterCacheEnum.ITPM.value.format(
-                id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute
+                id="io-usage-dep-1", model="openai/gpt-4o-mini", window_id=window_id
             ),
             30,
         ),
         (
             RouterCacheEnum.OTPM.value.format(
-                id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute
+                id="io-usage-dep-1", model="openai/gpt-4o-mini", window_id=window_id
             ),
             10,
         ),
         (
             RouterCacheEnum.ITPM.value.format(
-                id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute
+                id="io-usage-dep-2", model="openai/gpt-4o", window_id=window_id
             ),
             70,
         ),
         (
             RouterCacheEnum.OTPM.value.format(
-                id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute
+                id="io-usage-dep-2", model="openai/gpt-4o", window_id=window_id
             ),
             20,
         ),

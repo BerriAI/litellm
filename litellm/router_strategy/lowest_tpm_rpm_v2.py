@@ -13,7 +13,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.router import RouterErrors
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
-from litellm.utils import get_utc_datetime, print_verbose
+from litellm.utils import get_utc_datetime, print_verbose, utc_epoch_minute
 
 from .base_routing_strategy import BaseRoutingStrategy
 
@@ -71,10 +71,10 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             # ------------
 
             dt: Final = get_utc_datetime()
-            current_minute: Final = dt.strftime("%H-%M")
+            window_id: Final = utc_epoch_minute(dt)
             model_id: Final = deployment.get("model_info", {}).get("id")
             deployment_name: Final = deployment.get("litellm_params", {}).get("model")
-            rpm_key: Final = f"{model_id}:{deployment_name}:rpm:{current_minute}"
+            rpm_key: Final = f"{model_id}:{deployment_name}:rpm:v2:{window_id}"
 
             local_result: Final = self.router_cache.get_cache(key=rpm_key, local_only=True)  # check local result first
 
@@ -149,11 +149,11 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             # Setup values
             # ------------
             dt: Final = get_utc_datetime()
-            current_minute: Final = dt.strftime("%H-%M")
+            window_id: Final = utc_epoch_minute(dt)
             model_id: Final = deployment.get("model_info", {}).get("id")
             deployment_name: Final = deployment.get("litellm_params", {}).get("model")
 
-            rpm_key: Final = f"{model_id}:{deployment_name}:rpm:{current_minute}"
+            rpm_key: Final = f"{model_id}:{deployment_name}:rpm:v2:{window_id}"
             local_result: Final = await self.router_cache.async_get_cache(
                 key=rpm_key, local_only=True
             )  # check local result first
@@ -230,9 +230,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             # Setup values
             # ------------
             dt: Final = get_utc_datetime()
-            current_minute: Final = dt.strftime("%H-%M")  # use the same timezone regardless of system clock
+            window_id: Final = utc_epoch_minute(dt)
 
-            tpm_key: Final = f"{id}:{model}:tpm:{current_minute}"
+            tpm_key: Final = f"{id}:{model}:tpm:v2:{window_id}"
             # ------------
             # Update usage
             # ------------
@@ -268,9 +268,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             # Setup values
             # ------------
             dt: Final = get_utc_datetime()
-            current_minute: Final = dt.strftime("%H-%M")  # use the same timezone regardless of system clock
+            window_id: Final = utc_epoch_minute(dt)
 
-            tpm_key: Final = f"{id}:{model}:tpm:{current_minute}"
+            tpm_key: Final = f"{id}:{model}:tpm:v2:{window_id}"
             # ------------
             # Update usage
             # ------------
@@ -426,7 +426,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         )
 
         dt: Final = get_utc_datetime()
-        current_minute: Final = dt.strftime("%H-%M")
+        window_id: Final = utc_epoch_minute(dt)
 
         tpm_keys: Final = []
         rpm_keys: Final = []
@@ -436,8 +436,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                     "id"
                 )  # a deployment should always have an 'id'. this is set in router.py
                 deployment_name = m.get("litellm_params", {}).get("model")
-                tpm_key = f"{id}:{deployment_name}:tpm:{current_minute}"
-                rpm_key = f"{id}:{deployment_name}:rpm:{current_minute}"
+                tpm_key = f"{id}:{deployment_name}:tpm:v2:{window_id}"
+                rpm_key = f"{id}:{deployment_name}:rpm:v2:{window_id}"
 
                 tpm_keys.append(tpm_key)
                 rpm_keys.append(rpm_key)
@@ -543,7 +543,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         )
 
         dt: Final = get_utc_datetime()
-        current_minute: Final = dt.strftime("%H-%M")
+        window_id: Final = utc_epoch_minute(dt)
         tpm_keys: Final = []
         rpm_keys: Final = []
         for m in healthy_deployments:
@@ -552,8 +552,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                     "id"
                 )  # a deployment should always have an 'id'. this is set in router.py
                 deployment_name = m.get("litellm_params", {}).get("model")
-                tpm_key = f"{id}:{deployment_name}:tpm:{current_minute}"
-                rpm_key = f"{id}:{deployment_name}:rpm:{current_minute}"
+                tpm_key = f"{id}:{deployment_name}:tpm:v2:{window_id}"
+                rpm_key = f"{id}:{deployment_name}:rpm:v2:{window_id}"
 
                 tpm_keys.append(tpm_key)
                 rpm_keys.append(rpm_key)
