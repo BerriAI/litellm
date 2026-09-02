@@ -29,7 +29,6 @@ from typing import (
     NoReturn,
     Optional,
     Protocol,
-    TypeVar,
     Union,
     cast,
     overload,
@@ -112,9 +111,10 @@ from litellm.proxy.management_endpoints.sso_helper_utils import (
 )
 from litellm.proxy.management_endpoints.team_endpoints import new_team, team_member_add
 from litellm.proxy.management_endpoints.types import (
-    ROLE_PRIVILEGE_ORDER,
+    LITELLM_USER_ROLE_HIERARCHY,
     CustomOpenID,
     get_litellm_user_role,
+    highest_privilege_role,
     is_valid_litellm_user_role,
 )
 from litellm.proxy.utils import (
@@ -123,6 +123,7 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_server_root_path,
 )
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SSOConfigRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
@@ -172,51 +173,16 @@ _CLI_SSO_SECRET_KEY_FRAGMENTS: Final = frozenset(
     }
 )
 
-_DbRecordT: Final = TypeVar("_DbRecordT", covariant=True)
-
-
-class _PrismaTableActions(Protocol[_DbRecordT]):
-    async def find_unique(
-        self,
-        where: Mapping[str, object],
-    ) -> _DbRecordT | None: ...
-
-    async def find_first(
-        self,
-        where: Mapping[str, object] | None = None,
-    ) -> _DbRecordT | None: ...
-
-    async def find_many(
-        self,
-        where: Mapping[str, object] | None = None,
-        include: Mapping[str, bool] | None = None,
-    ) -> Sequence[_DbRecordT]: ...
-
-    async def update(
-        self,
-        where: Mapping[str, object],
-        data: Mapping[str, object],
-    ) -> _DbRecordT: ...
-
-    async def update_many(
-        self,
-        where: Mapping[str, object],
-        data: Mapping[str, object],
-    ) -> int: ...
-
 
 class _UserMetadataRow(Protocol):
     @property
     def metadata(self) -> Mapping[str, object] | None: ...
 
 
-class _HasUserMetadataTable(Protocol):
-    @property
-    def table(self) -> "_PrismaTableActions[_UserMetadataRow]": ...
-
-
-def _user_meta_db(repo: "_HasUserMetadataTable") -> "_PrismaTableActions[_UserMetadataRow]":
-    return repo.table
+def _user_meta_db(repo: UserRepository) -> "TableActions[_UserMetadataRow]":
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
+        "TableActions[_UserMetadataRow]", repo.table
+    )
 
 
 class _SsoConfigRow(Protocol):
@@ -224,25 +190,17 @@ class _SsoConfigRow(Protocol):
     def sso_settings(self) -> Mapping[str, object] | None: ...
 
 
-class _HasSsoConfigTable(Protocol):
-    @property
-    def table(self) -> "_PrismaTableActions[_SsoConfigRow]": ...
-
-
-def _sso_config_db(repo: "_HasSsoConfigTable") -> "_PrismaTableActions[_SsoConfigRow]":
-    return repo.table
+def _sso_config_db(repo: SSOConfigRepository) -> "TableActions[_SsoConfigRow]":
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
+        "TableActions[_SsoConfigRow]", repo.table
+    )
 
 
 class _TeamDetailRow(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
 
 
-class _HasTeamDetailTable(Protocol):
-    @property
-    def table(self) -> "_PrismaTableActions[_TeamDetailRow]": ...
-
-
-def _team_detail_db(repo: "_HasTeamDetailTable") -> "_PrismaTableActions[_TeamDetailRow]":
+def _team_detail_db(repo: TeamRepository) -> "TableActions[_TeamDetailRow]":
     return repo.table
 
 
@@ -546,7 +504,7 @@ def _set_nested_metadata_value(metadata: dict[str, object], key_path: str, value
     placeholder: Final = "\x00"
     parts = key_path.replace("\\.", placeholder).split(".")
     parts = [p.replace(placeholder, ".") for p in parts]
-    current: Any = metadata
+    current: dict[str, object] = metadata
     for part in parts[:-1]:
         existing = current.get(part)
         if not isinstance(existing, dict):
@@ -852,6 +810,7 @@ def normalize_email(email: str | None) -> str | None:
     return email.lower() if isinstance(email, str) else email
 
 
+
 def determine_role_from_groups(
     user_groups: list[str],
     role_mappings: "RoleMappings",
@@ -880,7 +839,7 @@ def determine_role_from_groups(
     user_groups_set: Final = set(user_groups) if isinstance(user_groups, list) else set()
 
     # Find the highest privilege role the user belongs to
-    for role in ROLE_PRIVILEGE_ORDER:
+    for role in LITELLM_USER_ROLE_HIERARCHY:
         if role in role_mappings.roles:
             role_groups = role_mappings.roles[role]
             if isinstance(role_groups, list) and user_groups_set.intersection(set(role_groups)):
@@ -4111,7 +4070,7 @@ class SSOAuthenticationHandler:
                 )
                 if resp.status_code == 200:
                     try:
-                        userinfo_raw: Final = resp.json()
+                        userinfo_raw: Final[dict[str, object] | None] = resp.json()
                         if not userinfo_raw:
                             # JSON null (None) or empty dict ({}) — no identity claims.
                             # Treat as failure so id_token fallback can be attempted.
@@ -4272,9 +4231,7 @@ class MicrosoftSSOHandler:
         verbose_proxy_logger.debug("Extracted app roles from id_token: %s", app_roles)
 
         # Combine groups and app roles
-        user_role: Final = get_litellm_user_role(app_roles) if app_roles else None
-        if user_role is not None:
-            verbose_proxy_logger.debug("Resolved role '%s' from app_roles %s", user_role.value, app_roles)
+        user_role: Final = MicrosoftSSOHandler.get_user_role_from_app_roles(app_roles)
 
         verbose_proxy_logger.debug("Combined team_ids (groups + app roles): %s", user_team_ids)
 
@@ -4311,6 +4268,22 @@ class MicrosoftSSOHandler:
         )
         verbose_proxy_logger.debug("Microsoft SSO OpenID Response: %s", openid_response)
         return openid_response
+
+    @staticmethod
+    def get_user_role_from_app_roles(
+        app_roles: Sequence[str] | None,
+    ) -> LitellmUserRoles | None:
+        """
+        Resolve the one role LiteLLM stores for a user from their Entra app roles.
+
+        Entra does not guarantee `roles` claim ordering, so a user holding several app
+        roles resolves to the highest privilege one rather than whichever the claim
+        listed first. Roles the hierarchy does not rank (org_admin, team, customer)
+        resolve by name to stay deterministic
+        """
+        return highest_privilege_role(
+            role for role in (get_litellm_user_role(role_str) for role_str in app_roles or ()) if role is not None
+        )
 
     @staticmethod
     def get_app_roles_from_id_token(id_token: str | None) -> list[str]:
@@ -4422,7 +4395,7 @@ class MicrosoftSSOHandler:
     ) -> tuple[list[str], str | None]:
         """Helper function to fetch and parse group data from a URL"""
         response: Final = await async_client.get(url, headers=headers)
-        response_json: Final = response.json()
+        response_json: Final[dict[str, object]] = response.json()
         response_typed: Final = await MicrosoftSSOHandler._cast_graph_api_response_dict(response=response_json)
         group_ids: Final = MicrosoftSSOHandler._get_group_ids_from_graph_api_response(response=response_typed)
         return group_ids, response_typed.get("odata_nextLink")

@@ -1171,6 +1171,294 @@ def test_create_s3_batch_logging_element_flat_key_for_arn_response_id():
 
 
 # --------------------------------------------------------------
+# object keys bounded to S3's 1024 UTF-8 byte limit
+# --------------------------------------------------------------
+def _oversized_response_id() -> str:
+    return "resp_" + "A" * 1100
+
+
+def test_s3_object_key_at_the_byte_limit_is_left_alone():
+    """A key that still fits is left byte-identical."""
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+    from litellm.integrations.s3 import get_s3_object_key
+
+    start_time = datetime(2026, 8, 24, 6, 18, 41, 948021)
+    fixed_len = len("input/2026-08-24/.json")
+    file_name = "x" * (MAX_S3_OBJECT_KEY_BYTES - fixed_len)
+
+    key = get_s3_object_key(s3_path="input", prefix="", start_time=start_time, s3_file_name=file_name)
+
+    assert key == f"input/2026-08-24/{file_name}.json"
+    assert len(key.encode("utf-8")) == MAX_S3_OBJECT_KEY_BYTES
+
+
+def test_s3_object_key_is_bounded_for_oversized_response_id():
+    """An oversized Responses API id is shortened to a readable head plus a digest."""
+    import hashlib
+
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+    from litellm.integrations.s3 import get_s3_object_key
+
+    start_time = datetime(2026, 8, 24, 6, 18, 41, 948021)
+    file_name = f"time-06-18-41-948021_{_oversized_response_id()}"
+
+    key = get_s3_object_key(s3_path="input", prefix="DefaultTeamProd/", start_time=start_time, s3_file_name=file_name)
+
+    assert len(key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+    assert key.startswith("input/DefaultTeamProd/2026-08-24/time-06-18-41-948021_resp_")
+    assert key.endswith(f"_{hashlib.sha256(file_name.encode('utf-8')).hexdigest()}.json")
+
+
+@pytest.mark.parametrize(
+    "s3_path,prefix",
+    [
+        ("input", ""),
+        ("a" * 900, ""),
+        ("input", "team-" + "b" * 900 + "/"),
+        ("c" * 600, "team-" + "d" * 600 + "/key-" + "e" * 600 + "/"),
+        # many short segments, so the trim lands exactly on the budget edge
+        ("", "ssss/" * 200),
+    ],
+)
+def test_s3_object_key_is_bounded_for_long_paths_and_aliases(s3_path: str, prefix: str):
+    """Long paths, team aliases and key aliases stay within the cap."""
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+    from litellm.integrations.s3 import get_s3_object_key
+
+    key = get_s3_object_key(
+        s3_path=s3_path,
+        prefix=prefix,
+        start_time=datetime(2026, 8, 24, 6, 18, 41, 948021),
+        s3_file_name=f"time-06-18-41-948021_{_oversized_response_id()}",
+    )
+
+    assert len(key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+    assert key.endswith(".json")
+    assert "/2026-08-24/" in key or key.startswith("2026-08-24/")
+    assert "/" not in key.rsplit("2026-08-24/", 1)[1]
+
+
+def test_s3_object_key_trimmed_prefixes_stay_distinct_per_operator():
+    """Prefixes that differ only past the trim point keep separate folders."""
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+    from litellm.integrations.s3 import get_s3_object_key
+
+    start_time = datetime(2026, 8, 24, 6, 18, 41, 948021)
+    keys = [
+        get_s3_object_key(
+            s3_path="input",
+            prefix="team-" + "b" * 1000 + suffix + "/",
+            start_time=start_time,
+            s3_file_name=f"time-06-18-41-948021_{_oversized_response_id()}",
+        )
+        for suffix in ("-one", "-two")
+    ]
+
+    assert keys[0] != keys[1]
+    assert all(key.startswith("input/team-" + "b" * 900) for key in keys)
+    assert all(len(key.encode("utf-8")) == MAX_S3_OBJECT_KEY_BYTES for key in keys)
+
+
+def test_s3_object_key_bounded_prefix_never_splits_a_multibyte_character():
+    """A multibyte prefix is trimmed on a character boundary."""
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+    from litellm.integrations.s3 import get_s3_object_key
+
+    s3_path = "\u65e5\u672c\u8a9e" * 200
+
+    key = get_s3_object_key(
+        s3_path=s3_path,
+        prefix="\u30c1\u30fc\u30e0" * 200 + "/",
+        start_time=datetime(2026, 8, 24, 6, 18, 41, 948021),
+        s3_file_name=f"time-06-18-41-948021_{_oversized_response_id()}",
+    )
+
+    assert len(key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+    assert key.startswith(s3_path[:100])
+    assert "\ufffd" not in key
+
+
+def test_s3_object_key_stays_unique_for_ids_sharing_a_head():
+    """Ids sharing a visible head still get distinct keys."""
+    from litellm.integrations.s3 import get_s3_object_key
+
+    start_time = datetime(2026, 8, 24, 6, 18, 41, 948021)
+    keys = {
+        get_s3_object_key(
+            s3_path="input",
+            prefix="",
+            start_time=start_time,
+            s3_file_name=f"time-06-18-41-948021_{_oversized_response_id()}{suffix}",
+        )
+        for suffix in ("first", "second", "third")
+    }
+
+    assert len(keys) == 3
+
+
+def test_s3_object_key_bounding_matches_the_documented_layout():
+    """The bounded key is `<prefix>/<date>/<head>_<sha256>.json`."""
+    import hashlib
+
+    from litellm.integrations.s3 import get_s3_object_key
+
+    file_name = f"time-06-18-41-948021_{_oversized_response_id()}"
+
+    key = get_s3_object_key(
+        s3_path="input",
+        prefix="team/",
+        start_time=datetime(2026, 8, 24, 6, 18, 41, 948021),
+        s3_file_name=file_name,
+    )
+
+    digest = hashlib.sha256(file_name.encode("utf-8")).hexdigest()
+    assert key == f"input/team/2026-08-24/{file_name[:64]}_{digest}.json"
+
+
+def test_s3_object_key_keeps_the_configured_prefix_when_only_the_id_overflows():
+    """A 940 byte configured prefix survives whole when only the id overflows."""
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+    from litellm.integrations.s3 import get_s3_object_key
+
+    prefix = "team-" + "b" * 934 + "/"
+
+    key = get_s3_object_key(
+        s3_path="",
+        prefix=prefix,
+        start_time=datetime(2026, 8, 24, 6, 18, 41, 948021),
+        s3_file_name=f"time-06-18-41-948021_{_oversized_response_id()}",
+    )
+
+    assert key.startswith(prefix + "2026-08-24/")
+    assert len(key.encode("utf-8")) == MAX_S3_OBJECT_KEY_BYTES
+
+
+def test_s3_object_key_spends_the_whole_budget_when_the_prefix_must_be_trimmed():
+    """A trimmed prefix keeps every byte the budget allows, not whole segments."""
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+    from litellm.integrations.s3 import get_s3_object_key
+
+    s3_path = "p" * 400 + "/" + "q" * 600
+
+    key = get_s3_object_key(
+        s3_path=s3_path,
+        prefix="",
+        start_time=datetime(2026, 8, 24, 6, 18, 41, 948021),
+        s3_file_name="time-06-18-41-948021_abc",
+    )
+
+    assert len(key.encode("utf-8")) == MAX_S3_OBJECT_KEY_BYTES
+    assert key.startswith("p" * 400 + "/" + "q" * 500)
+
+
+def test_s3_object_key_keeps_a_single_segment_path_as_far_as_it_fits():
+    """A path with no separator is kept as far as it fits, never dropped to the bucket root."""
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+    from litellm.integrations.s3 import get_s3_object_key
+
+    key = get_s3_object_key(
+        s3_path="a" * 1050,
+        prefix="",
+        start_time=datetime(2026, 8, 24, 6, 18, 41, 948021),
+        s3_file_name="time-06-18-41-948021_chatcmpl-xyz",
+    )
+
+    assert len(key.encode("utf-8")) == MAX_S3_OBJECT_KEY_BYTES
+    assert key.startswith("a" * 900)
+
+
+def test_create_s3_batch_logging_element_bounds_key_and_keeps_full_response_id():
+    """The batch element bounds the key and keeps the full response id in the payload."""
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+
+    logger = S3Logger(s3_use_team_prefix=True, s3_use_key_prefix=True)
+    response_id = _oversized_response_id()
+    payload = StandardLoggingPayload(
+        id=response_id,
+        metadata={"user_api_key_team_alias": "DefaultTeamProd", "user_api_key_alias": "prod-key"},
+        messages=[],
+    )
+
+    result = logger.create_s3_batch_logging_element(datetime(2026, 8, 24, 6, 18, 41, 948021), payload)
+
+    assert result is not None
+    assert len(result.s3_object_key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+    assert result.s3_object_key.startswith("DefaultTeamProd/prod-key/2026-08-24/")
+    assert result.payload["id"] == response_id
+
+
+def test_s3_object_download_filename_is_bounded_for_oversized_response_id():
+    """The Content-Disposition filename is bounded too, or the PUT fails with MetadataTooLarge."""
+    from litellm.constants import MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES
+    from litellm.integrations.s3 import get_s3_object_download_filename
+
+    file_name = get_s3_object_download_filename(datetime(2026, 8, 24, 6, 18, 41, 948021), _oversized_response_id())
+
+    assert len(file_name.encode("utf-8")) <= MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES
+    assert file_name.startswith("time-2026-08-24T06-18-41-948021_resp_")
+    assert file_name.endswith(".json")
+
+
+def test_s3_object_download_filenames_stay_distinct_when_shortened():
+    """Shortened filenames stay distinct."""
+    from litellm.integrations.s3 import get_s3_object_download_filename
+
+    start_time = datetime(2026, 8, 24, 6, 18, 41, 948021)
+    file_names = {
+        get_s3_object_download_filename(start_time, _oversized_response_id() + suffix)
+        for suffix in ("first", "second", "third")
+    }
+
+    assert len(file_names) == 3
+
+
+def test_s3_object_download_filename_short_id_is_unchanged():
+    """An ordinary response id keeps the filename it had before."""
+    from litellm.integrations.s3 import get_s3_object_download_filename
+
+    file_name = get_s3_object_download_filename(datetime(2026, 8, 24, 6, 18, 41, 948021), "resp_abc123")
+
+    assert file_name == "time-2026-08-24T06-18-41-948021_resp_abc123.json"
+
+
+def test_create_s3_batch_logging_element_bounds_the_download_filename():
+    """The batch element carries a bounded Content-Disposition filename."""
+    from litellm.constants import MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES
+
+    logger = S3Logger()
+    payload = StandardLoggingPayload(id=_oversized_response_id(), metadata={}, messages=[])
+
+    result = logger.create_s3_batch_logging_element(datetime(2026, 8, 24, 6, 18, 41, 948021), payload)
+
+    assert result is not None
+    assert len(result.s3_object_download_filename.encode("utf-8")) <= MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES
+
+
+@pytest.mark.asyncio
+async def test_audit_log_object_key_is_bounded_for_a_long_configured_path():
+    """Audit log keys are bounded by the same builder."""
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+
+    logger = S3Logger()
+    logger.s3_path = "audit-archive/" + "z" * 1100
+
+    await logger.async_log_audit_log_event({"id": "1a4f7bd0-6f1e-4d0a-9b3c-9f2e1d5a7c88"})
+
+    assert len(logger.log_queue) == 1
+    assert len(logger.log_queue[0].s3_object_key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+    assert logger.log_queue[0].s3_object_key.startswith("audit-archive/" + "z" * 900)
+
+
+def test_s3_object_download_filename_drops_characters_that_break_the_header():
+    """A quote or separator in the response id cannot escape the quoted header value."""
+    from litellm.integrations.s3 import get_s3_object_download_filename
+
+    file_name = get_s3_object_download_filename(datetime(2026, 8, 24, 6, 18, 41, 948021), 'resp_a"b/c')
+
+    assert file_name == "time-2026-08-24T06-18-41-948021_resp_a_b_c.json"
+
+
+# --------------------------------------------------------------
 # params_source / s3_callback_params_override (audit-log decoupling)
 # --------------------------------------------------------------
 def test_s3_callback_params_override_uses_alternate_dict(monkeypatch):
@@ -1647,15 +1935,27 @@ def _signature_for(signer_cls, url: str, method: str, body: bytes | None, header
     return signer.signature(signer.string_to_sign(request, canonical_request), request)
 
 
+def _as_s3_canonicalizes(url: str) -> str:
+    """
+    The path S3 rebuilds from the wire path: percent-encode everything outside the unreserved
+    set, without normalizing or double-encoding. `=` becomes `%3D`, `%20` stays `%20`.
+    """
+    from urllib.parse import quote, unquote, urlsplit, urlunsplit
+
+    split = urlsplit(url)
+    return urlunsplit(split._replace(path=quote(unquote(split.path), safe="/~")))
+
+
 def _assert_signed_for_s3_canonicalization(url: str, method: str, body: bytes | None, headers: dict[str, str]) -> None:
     """
     S3 rebuilds the canonical request from the wire path with single percent-encoding, which
     botocore models as S3SigV4Auth; plain SigV4Auth double-encodes it (%2520 for a space) and S3
-    answers 403 SignatureDoesNotMatch. Assert we signed the path the way S3 reads it.
+    answers 403 SignatureDoesNotMatch. Assert we sent an already-encoded path and signed it the
+    way S3 reads it.
     """
     from botocore.auth import S3SigV4Auth, SigV4Auth
 
-    assert "%20" in url
+    assert url == _as_s3_canonicalizes(url)
     sent_signature = headers["Authorization"].split("Signature=")[1].strip()
     assert sent_signature == _signature_for(S3SigV4Auth, url, method, body, headers)
     assert sent_signature != _signature_for(SigV4Auth, url, method, body, headers)
@@ -1744,3 +2044,132 @@ async def test_download_signs_object_key_with_space_the_way_s3_does():
         body=None,
         headers=call.kwargs["headers"],
     )
+
+_RESERVED_CHAR_KEYS = (
+    "2026-08-21/time-05-29-36_resp_bGl0ZWxsbTpjdXN0b20=.json",
+    "session=logs/2026-08-21/time-05-29-36_abc.json",
+    "a+b/2026-08-21/time-05-29-36_abc.json",
+    "a&b/2026-08-21/time-05-29-36_abc.json",
+    "a#b/2026-08-21/time-05-29-36_abc.json",
+    "a?b/2026-08-21/time-05-29-36_abc.json",
+    "a%b/2026-08-21/time-05-29-36_abc.json",
+    _KEY_WITH_SPACE,
+)
+
+
+def _element_for(s3_object_key: str):
+    from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+    return s3BatchLoggingElement(
+        s3_object_key=s3_object_key,
+        payload={"test": "sigv4"},
+        s3_object_download_filename="log.json",
+    )
+
+
+def _expected_wire_url(s3_object_key: str) -> str:
+    """The URL boto3 itself would put on the wire for this key."""
+    from urllib.parse import quote
+
+    return f"https://logs-bucket.s3.us-east-1.amazonaws.com/{quote(s3_object_key, safe='/')}"
+
+
+@pytest.mark.parametrize("s3_object_key", _RESERVED_CHAR_KEYS)
+@pytest.mark.asyncio
+async def test_async_upload_percent_encodes_reserved_characters_in_object_key(s3_object_key):
+    from unittest.mock import AsyncMock, MagicMock
+
+    logger = _logger_for_signing()
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put.return_value = response
+
+    await logger.async_upload_data_to_s3(_element_for(s3_object_key))
+
+    call = logger.async_httpx_client.put.call_args
+    assert call[0][0] == _expected_wire_url(s3_object_key)
+    _assert_signed_for_s3_canonicalization(
+        url=call[0][0],
+        method="PUT",
+        body=call.kwargs["data"].encode("utf-8"),
+        headers=call.kwargs["headers"],
+    )
+
+
+@pytest.mark.parametrize("s3_object_key", _RESERVED_CHAR_KEYS)
+def test_sync_upload_percent_encodes_reserved_characters_in_object_key(s3_object_key):
+    from unittest.mock import MagicMock
+
+    logger = _logger_for_signing()
+    response = MagicMock()
+    response.status_code = 200
+    response.raise_for_status = MagicMock()
+    mock_sync_client = MagicMock()
+    mock_sync_client.put.return_value = response
+
+    with patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client):
+        logger.upload_data_to_s3(_element_for(s3_object_key))
+
+    call = mock_sync_client.put.call_args
+    assert call[0][0] == _expected_wire_url(s3_object_key)
+    _assert_signed_for_s3_canonicalization(
+        url=call[0][0],
+        method="PUT",
+        body=call.kwargs["data"].encode("utf-8"),
+        headers=call.kwargs["headers"],
+    )
+
+
+@pytest.mark.parametrize("s3_object_key", _RESERVED_CHAR_KEYS)
+@pytest.mark.asyncio
+async def test_download_percent_encodes_reserved_characters_in_object_key(s3_object_key):
+    from unittest.mock import AsyncMock, MagicMock
+
+    logger = _logger_for_signing()
+    response = MagicMock()
+    response.status_code = 200
+    response.json = MagicMock(return_value={"downloaded": "data"})
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.get.return_value = response
+
+    assert await logger._download_object_from_s3(s3_object_key) == {"downloaded": "data"}
+
+    call = logger.async_httpx_client.get.call_args
+    assert call[0][0] == _expected_wire_url(s3_object_key)
+    _assert_signed_for_s3_canonicalization(
+        url=call[0][0],
+        method="GET",
+        body=None,
+        headers=call.kwargs["headers"],
+    )
+
+
+def _s3_logger_for_region(region_name: str) -> S3Logger:
+    logger = S3Logger.__new__(S3Logger)
+    logger.s3_endpoint_url = None
+    logger.s3_bucket_name = "my-litellm-audit"
+    logger.s3_region_name = region_name
+    return logger
+
+
+@pytest.mark.parametrize(
+    "region_name,expected_url",
+    [
+        (
+            "cn-northwest-1",
+            "https://my-litellm-audit.s3.cn-northwest-1.amazonaws.com.cn/2025-01-01/key.json",
+        ),
+        (
+            "us-gov-west-1",
+            "https://my-litellm-audit.s3.us-gov-west-1.amazonaws.com/2025-01-01/key.json",
+        ),
+        (
+            "us-east-1",
+            "https://my-litellm-audit.s3.us-east-1.amazonaws.com/2025-01-01/key.json",
+        ),
+    ],
+)
+def test_build_object_url_uses_partition_dns_suffix(region_name: str, expected_url: str) -> None:
+    assert _s3_logger_for_region(region_name)._build_object_url("2025-01-01/key.json") == expected_url

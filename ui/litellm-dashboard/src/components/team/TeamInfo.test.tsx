@@ -4,7 +4,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
-import TeamInfoView from "./TeamInfo";
+import TeamInfoView, { type TeamData } from "./TeamInfo";
 
 const authState = vi.hoisted(() => ({ userRole: "Admin" }));
 
@@ -21,7 +21,10 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   }),
 }));
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 vi.mock("@/components/networking", () => ({
+  serverRootPath: "",
   teamInfoCall: vi.fn(),
   teamMemberDeleteCall: vi.fn(),
   teamMemberAddCall: vi.fn(),
@@ -276,6 +279,36 @@ describe("TeamInfoView", () => {
         const teamNameElements = screen.queryAllByText("Test Team");
         expect(teamNameElements.length).toBeGreaterThan(0);
       });
+    });
+
+    it("links direct and access-group model badges to the models page filtered to that group", async () => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          models: ["gpt-4.1"],
+          access_group_models: ["claude-sonnet-5"],
+          access_group_details: [{ access_group_id: "ag-1", access_group_name: "prod", models: ["claude-sonnet-5"] }],
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      expect(await screen.findByRole("link", { name: "gpt-4.1" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/models-and-endpoints?model_group=gpt-4.1"),
+      );
+      expect(screen.getByRole("link", { name: "claude-sonnet-5" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/models-and-endpoints?model_group=claude-sonnet-5"),
+      );
+    });
+
+    it("keeps the all-proxy-models badge non-clickable", async () => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["all-proxy-models"] }));
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      expect(await screen.findByText("All proxy models")).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "All proxy models" })).not.toBeInTheDocument();
     });
 
     it("should display loading state while fetching team data", () => {
@@ -1613,10 +1646,18 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     vi.clearAllMocks();
   });
 
-  const openEditor = async (user: ReturnType<typeof userEvent.setup>) => {
+  const openEditor = async (
+    user: ReturnType<typeof userEvent.setup>,
+    teamMemberBudgetTable: TeamData["team_info"]["team_member_budget_table"] = {
+      max_budget: 42,
+      budget_duration: "30d",
+      tpm_limit: 11,
+      rpm_limit: 22,
+    },
+  ) => {
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
       createMockTeamData({
-        team_member_budget_table: { max_budget: 42, budget_duration: "30d", tpm_limit: 11, rpm_limit: 22 },
+        team_member_budget_table: teamMemberBudgetTable,
         default_team_member_models: ["gpt-4"],
       }),
     );
@@ -1665,6 +1706,46 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     expect(payload.team_member_tpm_limit).toBe(11);
     expect(payload.team_member_rpm_limit).toBe(22);
     expect(payload.default_team_member_models).toEqual(["gpt-4"]);
+  });
+
+  it("sends a null team_member_budget_duration when Default Budget Duration is set to never reset", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    await chooseSelectOption(user, screen.getByLabelText("Default Budget Duration"), "Never resets");
+
+    const payload = await save(user);
+
+    expect(payload.team_member_budget_duration).toBeNull();
+    expect(payload.team_member_budget).toBe(42);
+    expect(JSON.stringify(payload)).toContain('"team_member_budget_duration":null');
+  });
+
+  it("shows Never resets for a stored member budget whose duration is null", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user, { max_budget: 42, budget_duration: null, tpm_limit: null, rpm_limit: null });
+
+    await user.click(screen.getByText("Team Member Settings"));
+
+    expect(await screen.findByLabelText("Default Budget Duration")).toHaveTextContent("Never resets");
+  });
+
+  it("omits team_member_budget_duration when the dropdown is left untouched on a team with no member budget", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user, null);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    const durationSelect = await screen.findByLabelText("Default Budget Duration");
+    expect(durationSelect).toHaveTextContent("Inherit team reset period");
+    expect(durationSelect).not.toHaveTextContent("Never resets");
+    await user.type(screen.getByLabelText("Default Budget (USD)"), "100");
+
+    const payload = await save(user);
+
+    expect(payload.team_member_budget).toBe(100);
+    expect(JSON.parse(JSON.stringify(payload))).not.toHaveProperty("team_member_budget_duration");
   });
 
   it("omits object_permission.search_tools while Search Tool Settings is closed", async () => {

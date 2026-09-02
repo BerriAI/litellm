@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { chooseSelectOption, fireEvent, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import KeyLifecycleSettings from "./KeyLifecycleSettings";
 
 const CREATE_PLACEHOLDER = "e.g., 30d or leave empty to never expire";
@@ -167,8 +167,7 @@ describe("KeyLifecycleSettings", () => {
       await user.click(screen.getByRole("switch"));
       expect(await screen.findByText("Rotation Interval")).toBeInTheDocument();
 
-      await user.click(screen.getByRole("combobox"));
-      await user.click(await screen.findByText("90 days"));
+      await chooseSelectOption(user, screen.getByRole("combobox"), "90 days");
 
       await waitFor(() => expect(screen.getAllByTitle("90 days").some(isRenderedSelection)).toBe(true));
       expect(screen.getByTestId("rotation-interval-value")).toHaveTextContent("90d");
@@ -181,8 +180,7 @@ describe("KeyLifecycleSettings", () => {
       await user.click(screen.getByRole("switch"));
       expect(await screen.findByText("Rotation Interval")).toBeInTheDocument();
 
-      await user.click(screen.getByRole("combobox"));
-      await user.click(await screen.findByText("Custom interval"));
+      await chooseSelectOption(user, screen.getByRole("combobox"), "Custom interval");
 
       expect(await screen.findByPlaceholderText("e.g., 1s, 5m, 2h, 14d")).toBeInTheDocument();
       expect(screen.getByText("Supported formats: seconds (s), minutes (m), hours (h), days (d)")).toBeInTheDocument();
@@ -196,8 +194,7 @@ describe("KeyLifecycleSettings", () => {
       await user.click(screen.getByRole("switch"));
       expect(await screen.findByText("Rotation Interval")).toBeInTheDocument();
 
-      await user.click(screen.getByRole("combobox"));
-      await user.click(await screen.findByText("Custom interval"));
+      await chooseSelectOption(user, screen.getByRole("combobox"), "Custom interval");
 
       const customInput = await screen.findByPlaceholderText("e.g., 1s, 5m, 2h, 14d");
       fireEvent.change(customInput, { target: { value: "14d" } });
@@ -213,14 +210,12 @@ describe("KeyLifecycleSettings", () => {
       await user.click(screen.getByRole("switch"));
       expect(await screen.findByText("Rotation Interval")).toBeInTheDocument();
 
-      await user.click(screen.getByRole("combobox"));
-      await user.click(await screen.findByText("Custom interval"));
+      await chooseSelectOption(user, screen.getByRole("combobox"), "Custom interval");
       const customInput = await screen.findByPlaceholderText("e.g., 1s, 5m, 2h, 14d");
       fireEvent.change(customInput, { target: { value: "14d" } });
       await waitFor(() => expect(screen.getByTestId("rotation-interval-value")).toHaveTextContent("14d"));
 
-      await user.click(screen.getByRole("combobox"));
-      await user.click(await screen.findByText("7 days"));
+      await chooseSelectOption(user, screen.getByRole("combobox"), "7 days");
 
       await waitFor(() => expect(screen.getByTestId("rotation-interval-value")).toHaveTextContent("7d"));
       expect(screen.queryByPlaceholderText("e.g., 1s, 5m, 2h, 14d")).not.toBeInTheDocument();

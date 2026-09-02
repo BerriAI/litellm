@@ -381,6 +381,6 @@ describe("KeyInfoView budget reset visibility", () => {
     await waitFor(() => {
       expect(screen.getByText("Budget Reset")).toBeInTheDocument();
     });
-    expect(screen.getByText("Budget Reset").parentElement).toHaveTextContent("Never");
+    expect(screen.getByTestId("budget-reset-value")).toHaveTextContent("Never");
   });
 });

@@ -11,12 +11,14 @@
 # these true defaults before every test, preventing cross-test contamination
 # under xdist where module reload is skipped.
 
+import asyncio
 import importlib
 import os
 
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
 # ``litellm.model_cost`` is loaded at import time from the URL pinned to ``main``
 # (``LITELLM_MODEL_COST_MAP_URL``).  The in-tree backup ships with this branch
@@ -88,6 +90,7 @@ _VCR_INCOMPATIBLE_FILES = frozenset(
 #   carry no real provider cost.
 _VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = (
     "test_router.py::test_router_text_completion_client",
+    "test_embedding.py::test_encoding_format_omitted_by_default_for_openai_sdk",
 )
 
 
@@ -220,6 +223,7 @@ def isolate_litellm_state():
     yield
 
     # ---- Teardown: restore saved state ----
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
     if hasattr(litellm, "in_memory_llm_clients_cache"):
         litellm.in_memory_llm_clients_cache.flush_cache()
 

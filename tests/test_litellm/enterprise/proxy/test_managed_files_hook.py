@@ -527,13 +527,33 @@ async def test_afile_list_orders_newest_first_and_breaks_ties_on_the_cursor_colu
 
 
 @pytest.mark.asyncio
-async def test_afile_list_denies_a_caller_without_a_user_or_team():
+async def test_afile_list_scopes_a_keyless_key_to_its_own_hashed_token():
+    caller = UserAPIKeyAuth(api_key="sk-test", parent_otel_span=None)
+    managed_files, table = _make_managed_files_over_rows(
+        [
+            _make_managed_file_row("unified-mine", created_by=f"key:{caller.token}"),
+            _make_managed_file_row("unified-theirs", created_by="other-user"),
+        ]
+    )
+
+    response = await managed_files.afile_list(
+        purpose=None,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=caller,
+    )
+
+    assert [file.id for file in response.data] == ["unified-mine"]
+    assert table.find_many_calls[0]["where"] == {"created_by": f"key:{caller.token}"}
+
+
+@pytest.mark.asyncio
+async def test_afile_list_denies_a_caller_with_no_identity_at_all():
     managed_files, table = _make_managed_files_over_rows([_make_managed_file_row("unified-mine")])
 
     response = await managed_files.afile_list(
         purpose=None,
         litellm_parent_otel_span=None,
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", parent_otel_span=None),
+        user_api_key_dict=UserAPIKeyAuth(parent_otel_span=None),
     )
 
     assert response.data == []
