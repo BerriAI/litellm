@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -495,7 +496,7 @@ PRESIDIO_SIBLINGS_GID = "55555555-5555-5555-5555-555555555555"
 PRESIDIO_SIBLINGS_NAME = "presidio-siblings"
 
 
-def _presidio_db_guardrail(pii_entities_config: dict) -> Guardrail:
+def _presidio_db_guardrail(pii_entities_config: dict[str, str]) -> Guardrail:
     return Guardrail(
         guardrail_id=PRESIDIO_SIBLINGS_GID,
         guardrail_name=PRESIDIO_SIBLINGS_NAME,
@@ -512,7 +513,7 @@ def _presidio_db_guardrail(pii_entities_config: dict) -> Guardrail:
     )
 
 
-def _presidio_callbacks_in(cb_list) -> list:
+def _presidio_callbacks_in(cb_list: Iterable[object]) -> list[CustomGuardrail]:
     return [
         callback
         for callback in cb_list
