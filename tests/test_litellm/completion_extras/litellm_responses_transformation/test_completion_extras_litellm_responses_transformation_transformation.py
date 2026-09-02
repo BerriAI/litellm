@@ -3954,7 +3954,7 @@ def test_empty_argument_delta_is_forwarded_instead_of_killing_the_stream(event_t
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    chunk = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+    chunk: Final = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
         {
             "type": event_type,
             "item_id": "fc_0217883343023450",
@@ -3965,7 +3965,7 @@ def test_empty_argument_delta_is_forwarded_instead_of_killing_the_stream(event_t
         tool_call_index_map={},
     )
 
-    tool_calls = chunk.choices[0].delta.tool_calls
+    tool_calls: Final = chunk.choices[0].delta.tool_calls
     assert tool_calls is not None, f"{event_type} with an empty delta produced no tool_calls: {chunk}"
     assert tool_calls[0].function is not None
     assert tool_calls[0].function.arguments == ""
@@ -3978,8 +3978,8 @@ def test_stream_carrying_an_empty_argument_delta_still_yields_the_whole_tool_cal
         OpenAiResponsesToChatCompletionStreamIterator,
     )
 
-    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=iter([]), sync_stream=True)
-    stream = (
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=iter([]), sync_stream=True)
+    stream: Final = (
         {
             "type": "response.output_item.added",
             "output_index": 2,
@@ -4001,9 +4001,9 @@ def test_stream_carrying_an_empty_argument_delta_still_yields_the_whole_tool_cal
         {"type": "response.completed", "response": {"output": [{"type": "function_call"}]}},
     )
 
-    parsed = tuple(iterator.chunk_parser(dict(chunk)) for chunk in stream)
+    parsed: Final = tuple(iterator.chunk_parser(dict(chunk)) for chunk in stream)
 
-    arguments = "".join(
+    arguments: Final = "".join(
         tool_call.function.arguments or ""
         for chunk in parsed
         for tool_call in (chunk.choices[0].delta.tool_calls or ())
