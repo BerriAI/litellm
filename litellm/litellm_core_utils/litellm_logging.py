@@ -5169,25 +5169,27 @@ class StandardLoggingPayloadSetup:
     def append_system_prompt_messages(kwargs: dict | None = None, messages: Any | None = None):
         """
         Append system prompt messages to the messages
-        """
-        if kwargs is not None:
-            if kwargs.get("system") is not None and isinstance(kwargs.get("system"), str):
-                if messages is None:
-                    return [{"role": "system", "content": kwargs.get("system")}]
-                elif isinstance(messages, list):
-                    if len(messages) == 0:
-                        return [{"role": "system", "content": kwargs.get("system")}]
-                    # check for duplicates
-                    if messages[0].get("role") == "system" and messages[0].get("content") == kwargs.get("system"):
-                        return messages
-                    messages = [{"role": "system", "content": kwargs.get("system")}] + messages
-                elif isinstance(messages, str):
-                    messages = [
-                        {"role": "system", "content": kwargs.get("system")},
-                        {"role": "user", "content": messages},
-                    ]
-                return messages
 
+        Anthropic's /v1/messages accepts ``system`` as a string or as a list of
+        content blocks; both shapes are logged.
+        """
+        if kwargs is None:
+            return messages
+        system: Final = kwargs.get("system")
+        if not isinstance(system, (str, list)) or (isinstance(system, list) and not system):
+            return messages
+        system_message: Final = {"role": "system", "content": system}
+        if messages is None:
+            return [system_message]
+        if isinstance(messages, list):
+            if len(messages) == 0:
+                return [system_message]
+            first: Final = messages[0]
+            if isinstance(first, dict) and first.get("role") == "system" and first.get("content") == system:
+                return messages
+            return [system_message, *messages]
+        if isinstance(messages, str):
+            return [system_message, {"role": "user", "content": messages}]
         return messages
 
     @staticmethod
