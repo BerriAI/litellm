@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from typing_extensions import ReadOnly, Required
 
 import litellm
+from litellm.llms.litellm_proxy.skills.skill_search import DEFAULT_SKILL_SEARCH_TOP_K
 from litellm.proxy.agent_endpoints.agent_search import DEFAULT_AGENT_SEARCH_TOP_K
 from litellm.proxy.common_utils.semantic_text_index import (
     Embedder,
@@ -30,7 +31,10 @@ MCP_TOOL_SEARCH_SETTINGS_KEY: Final[str] = "mcp_tool_search"
 MCP_TOOL_SEARCH_TOOL_NAME: Final[str] = "mcp_tool_search"
 MCP_TOOL_CALL_TOOL_NAME: Final[str] = "mcp_tool_call"
 AGENT_SEARCH_TOOL_NAME: Final[str] = "agent_search"
-VIRTUAL_TOOL_NAMES: Final = frozenset((MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME, AGENT_SEARCH_TOOL_NAME))
+SKILL_SEARCH_TOOL_NAME: Final[str] = "skill_search"
+VIRTUAL_TOOL_NAMES: Final = frozenset(
+    (MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME, AGENT_SEARCH_TOOL_NAME, SKILL_SEARCH_TOOL_NAME)
+)
 
 
 def coerce_top_k(value: Any, default: int = 5) -> int:
@@ -199,8 +203,28 @@ _AGENT_SEARCH_DEFINITION: Final[VirtualToolDefinition] = {
 }
 
 
+_SKILL_SEARCH_DEFINITION: Final[VirtualToolDefinition] = {
+    "name": SKILL_SEARCH_TOOL_NAME,
+    "description": "Find registered skills by describing what you need in natural language. Returns the best "
+    "matching skills you can access, ranked by semantic similarity, each with its skill_id, display_title, "
+    "description, and score.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "What you need the skill to do, in natural language."},
+            "top_k": {
+                "type": "integer",
+                "description": "Maximum number of skills to return.",
+                "default": DEFAULT_SKILL_SEARCH_TOP_K,
+            },
+        },
+        "required": _json_array("query"),
+    },
+}
+
+
 def get_virtual_tool_definitions() -> tuple[VirtualToolDefinition, ...]:
-    return (_MCP_TOOL_SEARCH_DEFINITION, _MCP_TOOL_CALL_DEFINITION, _AGENT_SEARCH_DEFINITION)
+    return (_MCP_TOOL_SEARCH_DEFINITION, _MCP_TOOL_CALL_DEFINITION, _AGENT_SEARCH_DEFINITION, _SKILL_SEARCH_DEFINITION)
 
 
 def _text_tool_result(text: str, is_error: bool) -> CallToolResult:
@@ -240,6 +264,38 @@ async def handle_agent_search(query: str, top_k: int, user_api_key_dict: UserAPI
             results: Final = tuple(agent_search_result(hit).model_dump() for hit in hits)
             return _text_tool_result(json.dumps(results), is_error=False)
         case AgentSearchNotConfigured(reason) | AgentSearchEmbeddingFailed(reason):
+            return _text_tool_result(reason, is_error=True)
+        case _:
+            assert_never(outcome)
+
+
+async def handle_skill_search(query: str, top_k: int, user_api_key_dict: UserAPIKeyAuth) -> CallToolResult:
+    from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+    from litellm.llms.litellm_proxy.skills.skill_search import (
+        MAX_SKILL_SEARCH_TOP_K,
+        SkillSearchEmbeddingFailed,
+        SkillSearchHits,
+        SkillSearchNotConfigured,
+        global_skill_search_index,
+        search_skills,
+        skill_search_result,
+    )
+    from litellm.proxy.proxy_server import llm_router
+
+    outcome: Final = await search_skills(
+        query=query,
+        skills=await LiteLLMSkillsHandler.list_skills_for_search(user_api_key_dict),
+        top_k=min(max(top_k, 1), MAX_SKILL_SEARCH_TOP_K),
+        router=llm_router,
+        embedding_model=litellm.skill_search_embedding_model,
+        index=global_skill_search_index,
+        user_api_key_dict=user_api_key_dict,
+    )
+    match outcome:
+        case SkillSearchHits(hits):
+            results: Final = tuple(skill_search_result(hit).model_dump() for hit in hits)
+            return _text_tool_result(json.dumps(results), is_error=False)
+        case SkillSearchNotConfigured(reason) | SkillSearchEmbeddingFailed(reason):
             return _text_tool_result(reason, is_error=True)
         case _:
             assert_never(outcome)

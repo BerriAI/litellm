@@ -2,11 +2,22 @@
 Anthropic Skills API endpoints - /v1/skills
 """
 
-from typing import Final
+from types import MappingProxyType
+from typing import Annotated, Final, assert_never
 
 import orjson
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from typing_extensions import ReadOnly, TypedDict
 
+import litellm
+from litellm.llms.litellm_proxy.skills.skill_search import (
+    DEFAULT_SKILL_SEARCH_TOP_K,
+    SkillSearchEmbeddingFailed,
+    SkillSearchHits,
+    SkillSearchNotConfigured,
+    global_skill_search_index,
+    search_skills,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -19,8 +30,51 @@ from litellm.types.llms.anthropic_skills import (
     ListSkillsResponse,
     Skill,
 )
+from litellm.types.utils import LlmProviders
 
 router: Final = APIRouter()
+
+
+class _SkillSearchErrorDetail(TypedDict):
+    error: ReadOnly[str]
+    message: ReadOnly[str]
+
+
+def _skill_search_error(status_code: int, error: str, message: str) -> HTTPException:
+    detail: Final[_SkillSearchErrorDetail] = {"error": error, "message": message}
+    return HTTPException(status_code=status_code, detail=detail)
+
+
+async def _search_litellm_skills(query: str, top_k: int, user_api_key_dict: UserAPIKeyAuth) -> ListSkillsResponse:
+    from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+    from litellm.llms.litellm_proxy.skills.transformation import (
+        LiteLLMSkillsTransformationHandler,
+    )
+    from litellm.proxy.proxy_server import llm_router
+
+    db_skills: Final = await LiteLLMSkillsHandler.list_skills_for_search(user_api_key_dict=user_api_key_dict)
+    outcome: Final = await search_skills(
+        query=query,
+        skills=db_skills,
+        top_k=top_k,
+        router=llm_router,
+        embedding_model=litellm.skill_search_embedding_model,
+        index=global_skill_search_index,
+        user_api_key_dict=user_api_key_dict,
+    )
+    to_response: Final = LiteLLMSkillsTransformationHandler().db_skill_to_response
+    match outcome:
+        case SkillSearchHits(hits):
+            skills: Final = [  # mutable-ok: ListSkillsResponse.data requires list[Skill]; never mutated after
+                to_response(hit.skill).model_copy(update=MappingProxyType({"search_score": hit.score})) for hit in hits
+            ]
+            return ListSkillsResponse(data=skills, has_more=False, next_page=None)
+        case SkillSearchNotConfigured(reason):
+            raise _skill_search_error(400, "skill_search_not_configured", reason)
+        case SkillSearchEmbeddingFailed(reason):
+            raise _skill_search_error(503, "skill_search_unavailable", reason)
+        case _:
+            assert_never(outcome)
 
 
 @router.post(
@@ -134,32 +188,62 @@ async def list_skills(
     after_id: str | None = None,
     before_id: str | None = None,
     custom_llm_provider: str | None = "anthropic",
+    query: Annotated[
+        str | None,
+        Query(
+            min_length=1,
+            description="Describe what you need in natural language to rank the skills you can access by "
+            "semantic similarity over their title and description. Each result carries a search_score. "
+            "Only supported for custom_llm_provider=litellm_proxy. Requires "
+            "litellm_settings.skill_search_embedding_model.",
+        ),
+    ] = None,
+    top_k: Annotated[
+        int,
+        Query(ge=1, le=100, description="With query: the maximum number of ranked skills to return."),
+    ] = DEFAULT_SKILL_SEARCH_TOP_K,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     List skills on Anthropic.
-    
+
     Requires `?beta=true` query parameter.
-    
+
     Model-based routing (for multi-account support):
     - Pass model via header: `x-litellm-model: claude-account-1`
     - Pass model via query: `?model=claude-account-1`
     - Pass model via body: `{"model": "claude-account-1"}`
-    
+
     Example usage:
     ```bash
     # Basic usage
     curl "http://localhost:4000/v1/skills?beta=true&limit=10" \
       -H "Authorization: Bearer your-key"
-    
+
     # With model-based routing
     curl "http://localhost:4000/v1/skills?beta=true&limit=10" \
       -H "Authorization: Bearer your-key" \
       -H "x-litellm-model: claude-account-1"
     ```
-    
+
+    Pass `?custom_llm_provider=litellm_proxy&query=<task>` to rank the LiteLLM-hosted skills you can
+    access by semantic similarity instead of paging through the whole registry:
+    ```bash
+    curl "http://localhost:4000/v1/skills?custom_llm_provider=litellm_proxy&query=summarize+a+pdf&top_k=5" \
+      -H "Authorization: Bearer your-key"
+    ```
+
     Returns: ListSkillsResponse with list of skills
     """
+    if query is not None:
+        if custom_llm_provider != LlmProviders.LITELLM_PROXY.value:
+            raise _skill_search_error(
+                400,
+                "skill_search_unsupported_provider",
+                "query is only supported for custom_llm_provider=litellm_proxy",
+            )
+        return await _search_litellm_skills(query=query, top_k=top_k, user_api_key_dict=user_api_key_dict)
+
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,

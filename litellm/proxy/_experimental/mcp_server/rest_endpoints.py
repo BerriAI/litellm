@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 import anyio
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, ConfigDict
 
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT
@@ -92,6 +93,9 @@ def _connection_error_message(exc: BaseException) -> str:
 
 
 if MCP_AVAILABLE:
+    from litellm.llms.litellm_proxy.skills.skill_search import (
+        DEFAULT_SKILL_SEARCH_TOP_K,
+    )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
         global_mcp_server_manager,
@@ -159,6 +163,12 @@ if MCP_AVAILABLE:
             request_path=request.scope.get("_original_path") or request.url.path,
         )
 
+    class _SkillSearchToolArguments(BaseModel):
+        model_config = ConfigDict(extra="ignore")
+
+        query: str = ""
+        top_k: int = DEFAULT_SKILL_SEARCH_TOP_K
+
     async def _handle_virtual_mcp_tool(
         request: Request,
         data: dict[str, Any],
@@ -176,10 +186,12 @@ if MCP_AVAILABLE:
             AGENT_SEARCH_TOOL_NAME,
             DEFAULT_AGENT_SEARCH_TOP_K,
             MCP_TOOL_SEARCH_TOOL_NAME,
+            SKILL_SEARCH_TOOL_NAME,
             coerce_top_k,
             handle_agent_search,
             handle_mcp_tool_call,
             handle_mcp_tool_search,
+            handle_skill_search,
         )
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
         from litellm.proxy.proxy_server import general_settings, proxy_config, proxy_logging_obj
@@ -196,6 +208,13 @@ if MCP_AVAILABLE:
                 top_k=coerce_top_k(
                     tool_arguments.get("top_k", DEFAULT_AGENT_SEARCH_TOP_K), default=DEFAULT_AGENT_SEARCH_TOP_K
                 ),
+                user_api_key_dict=user_api_key_dict,
+            )
+        if tool_name == SKILL_SEARCH_TOOL_NAME:
+            skill_search_args: Final = _SkillSearchToolArguments.model_validate(tool_arguments)
+            return await handle_skill_search(
+                query=skill_search_args.query,
+                top_k=skill_search_args.top_k,
                 user_api_key_dict=user_api_key_dict,
             )
         rest_client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)

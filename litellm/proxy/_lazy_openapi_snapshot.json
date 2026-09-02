@@ -4618,6 +4618,17 @@
               "title": "Created At",
               "type": "string"
             },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
             "display_title": {
               "anyOf": [
                 {
@@ -4643,6 +4654,17 @@
                 }
               ],
               "title": "Latest Version"
+            },
+            "search_score": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search Score"
             },
             "source": {
               "title": "Source",
@@ -4712,7 +4734,7 @@
     "paths": {
       "/v1/skills": {
         "get": {
-          "description": "List skills on Anthropic.\n\nRequires `?beta=true` query parameter.\n\nModel-based routing (for multi-account support):\n- Pass model via header: `x-litellm-model: claude-account-1`\n- Pass model via query: `?model=claude-account-1`\n- Pass model via body: `{\"model\": \"claude-account-1\"}`\n\nExample usage:\n```bash\n# Basic usage\ncurl \"http://localhost:4000/v1/skills?beta=true&limit=10\"       -H \"Authorization: Bearer your-key\"\n\n# With model-based routing\ncurl \"http://localhost:4000/v1/skills?beta=true&limit=10\"       -H \"Authorization: Bearer your-key\"       -H \"x-litellm-model: claude-account-1\"\n```\n\nReturns: ListSkillsResponse with list of skills",
+          "description": "List skills on Anthropic.\n\nRequires `?beta=true` query parameter.\n\nModel-based routing (for multi-account support):\n- Pass model via header: `x-litellm-model: claude-account-1`\n- Pass model via query: `?model=claude-account-1`\n- Pass model via body: `{\"model\": \"claude-account-1\"}`\n\nExample usage:\n```bash\n# Basic usage\ncurl \"http://localhost:4000/v1/skills?beta=true&limit=10\"       -H \"Authorization: Bearer your-key\"\n\n# With model-based routing\ncurl \"http://localhost:4000/v1/skills?beta=true&limit=10\"       -H \"Authorization: Bearer your-key\"       -H \"x-litellm-model: claude-account-1\"\n```\n\nPass `?custom_llm_provider=litellm_proxy&query=<task>` to rank the LiteLLM-hosted skills you can\naccess by semantic similarity instead of paging through the whole registry:\n```bash\ncurl \"http://localhost:4000/v1/skills?custom_llm_provider=litellm_proxy&query=summarize+a+pdf&top_k=5\"       -H \"Authorization: Bearer your-key\"\n```\n\nReturns: ListSkillsResponse with list of skills",
           "operationId": "list_skills_v1_skills_get",
           "parameters": [
             {
@@ -4779,6 +4801,39 @@
                 ],
                 "default": "anthropic",
                 "title": "Custom Llm Provider"
+              }
+            },
+            {
+              "description": "Describe what you need in natural language to rank the skills you can access by semantic similarity over their title and description. Each result carries a search_score. Only supported for custom_llm_provider=litellm_proxy. Requires litellm_settings.skill_search_embedding_model.",
+              "in": "query",
+              "name": "query",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Describe what you need in natural language to rank the skills you can access by semantic similarity over their title and description. Each result carries a search_score. Only supported for custom_llm_provider=litellm_proxy. Requires litellm_settings.skill_search_embedding_model.",
+                "title": "Query"
+              }
+            },
+            {
+              "description": "With query: the maximum number of ranked skills to return.",
+              "in": "query",
+              "name": "top_k",
+              "required": false,
+              "schema": {
+                "default": 5,
+                "description": "With query: the maximum number of ranked skills to return.",
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Top K",
+                "type": "integer"
               }
             }
           ],

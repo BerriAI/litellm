@@ -19780,6 +19780,12 @@ export interface paths {
          *     curl "http://localhost:4000/v1/skills?beta=true&limit=10"       -H "Authorization: Bearer your-key"       -H "x-litellm-model: claude-account-1"
          *     ```
          *
+         *     Pass `?custom_llm_provider=litellm_proxy&query=<task>` to rank the LiteLLM-hosted skills you can
+         *     access by semantic similarity instead of paging through the whole registry:
+         *     ```bash
+         *     curl "http://localhost:4000/v1/skills?custom_llm_provider=litellm_proxy&query=summarize+a+pdf&top_k=5"       -H "Authorization: Bearer your-key"
+         *     ```
+         *
          *     Returns: ListSkillsResponse with list of skills
          */
         get: operations["list_skills_v1_skills_get"];
@@ -35733,12 +35739,16 @@ export interface components {
         Skill: {
             /** Created At */
             created_at: string;
+            /** Description */
+            description?: string | null;
             /** Display Title */
             display_title?: string | null;
             /** Id */
             id: string;
             /** Latest Version */
             latest_version?: string | null;
+            /** Search Score */
+            search_score?: number | null;
             /** Source */
             source: string;
             /**
@@ -63886,6 +63896,10 @@ export interface operations {
                 after_id?: string | null;
                 before_id?: string | null;
                 custom_llm_provider?: string | null;
+                /** @description Describe what you need in natural language to rank the skills you can access by semantic similarity over their title and description. Each result carries a search_score. Only supported for custom_llm_provider=litellm_proxy. Requires litellm_settings.skill_search_embedding_model. */
+                query?: string | null;
+                /** @description With query: the maximum number of ranked skills to return. */
+                top_k?: number;
             };
             header?: never;
             path?: never;
