@@ -24,12 +24,20 @@ def test_size_over_cap_rejected_for_bytes():
     assert check_upload_file_size(content, 1) == UploadedFileTooLarge(size_bytes=len(content), limit_mb=1)
 
 
-def test_size_over_cap_rejected_for_binaryio_and_resets_position():
+def test_size_over_cap_rejected_for_binaryio_and_restores_caller_position():
+    """The handle is caller-owned; inspecting its size must not discard where the caller had it."""
     content = b"x" * (2 * MB)
     handle = io.BytesIO(content)
     handle.seek(17)
     assert check_upload_file_size(handle, 1) == UploadedFileTooLarge(size_bytes=len(content), limit_mb=1)
-    assert handle.tell() == 0
+    assert handle.tell() == 17
+
+
+def test_size_under_cap_allowed_for_binaryio_restores_caller_position():
+    handle = io.BytesIO(b"x" * 100)
+    handle.seek(42)
+    assert check_upload_file_size(handle, 1) is None
+    assert handle.tell() == 42
 
 
 def test_size_exactly_at_cap_allowed():

@@ -60,9 +60,10 @@ UploadValidationFailure = UploadedFileTooLarge | UploadedFileBlockedExtension | 
 def _file_size_bytes(file_source: bytes | BinaryIO) -> int:
     if isinstance(file_source, bytes):
         return len(file_source)
+    original_position: Final = file_source.tell()
     file_source.seek(0, 2)
     size: Final = file_source.tell()
-    file_source.seek(0)
+    file_source.seek(original_position)
     return size
 
 
