@@ -10,7 +10,6 @@ import sys
 import wave
 from collections.abc import Awaitable
 from dataclasses import dataclass
-from itertools import zip_longest
 from pathlib import Path
 from typing import Final, Protocol, cast
 
@@ -221,28 +220,17 @@ def trace_diff(python: tuple[FunctionTraceEvent, ...], rust: tuple[FunctionTrace
     )
 
 
-_PYTHON_COLUMN_WIDTH: Final = 52
 _PYTHON_ONLY_COLOR: Final = "\033[34m"
 _RUST_ONLY_COLOR: Final = "\033[33m"
 _RESET: Final = "\033[0m"
 
 
-def _tree_lines(
-    events: tuple[FunctionTraceEvent, ...], only: frozenset[str], marker: str
-) -> tuple[tuple[str, bool], ...]:
-    return tuple(
-        (
-            f"{'  ' * event.depth}{event.function}" + (f"  {marker}" if event.function in only else ""),
-            event.function in only,
-        )
-        for event in events
-    )
-
-
-def _cell(line: tuple[str, bool], width: int, color: str, *, colorize: bool) -> str:
-    text, marked = line
-    padded: Final = f"{text:<{width}}"
-    return f"{color}{padded}{_RESET}" if colorize and marked else padded
+def _print_tree(
+    events: tuple[FunctionTraceEvent, ...], only: frozenset[str], marker: str, color: str, *, colorize: bool
+) -> None:
+    for event in events:
+        line = f"{'  ' * event.depth}{event.function}" + (f"  {marker}" if event.function in only else "")
+        sys.stdout.write(f"{color}{line}{_RESET}\n" if colorize and event.function in only else f"{line}\n")
 
 
 def report(route: str, *, asynchronous: bool, full: bool) -> None:
@@ -253,27 +241,26 @@ def report(route: str, *, asynchronous: bool, full: bool) -> None:
     rust_steps: Final = rust_events if full else pipeline_steps(route, "rust", rust_events)
     diff: Final = trace_diff(python_steps, rust_steps)
     sys.stdout.write(f"route: {route}    provider: {case.label}    mode: {'async' if asynchronous else 'sync'}\n\n")
-    if full:
-        sys.stdout.write("python runtime events\n")
-        for event in python_steps:
-            sys.stdout.write(f"{'  ' * event.depth}{event.function}\n")
-        sys.stdout.write("rust runtime events\n")
-        for event in rust_steps:
-            sys.stdout.write(f"{'  ' * event.depth}{event.function}\n\n")
-        return
-    sys.stdout.write(f"{'python':<{_PYTHON_COLUMN_WIDTH}}rust\n")
     colorize: Final = sys.stdout.isatty() and "NO_COLOR" not in os.environ
-    paired: Final = zip_longest(
-        _tree_lines(python_steps, frozenset(diff.python_only), "<- python only"),
-        _tree_lines(rust_steps, frozenset(diff.rust_only), "<- rust only"),
-        fillvalue=("", False),
+    sys.stdout.write(f"python ({len(python_steps)} steps)\n\n")
+    _print_tree(
+        python_steps,
+        frozenset() if full else frozenset(diff.python_only),
+        "<- python only",
+        _PYTHON_ONLY_COLOR,
+        colorize=colorize,
     )
-    for python_line, rust_line in paired:
-        python_cell = _cell(python_line, _PYTHON_COLUMN_WIDTH, _PYTHON_ONLY_COLOR, colorize=colorize)
-        rust_cell = _cell(rust_line, 0, _RUST_ONLY_COLOR, colorize=colorize)
-        sys.stdout.write(f"{python_cell}{rust_cell}\n")
+    sys.stdout.write(f"\nrust ({len(rust_steps)} steps)\n\n")
+    _print_tree(
+        rust_steps,
+        frozenset() if full else frozenset(diff.rust_only),
+        "<- rust only",
+        _RUST_ONLY_COLOR,
+        colorize=colorize,
+    )
     order: Final = "the same" if diff.shared_order_matches else "a different"
-    sys.stdout.write(f"\nshared steps appear in {order} order\n")
+    sys.stdout.write("\ndiff\n\n")
+    sys.stdout.write(f"shared steps appear in {order} order\n")
     sys.stdout.write(f"python-only: {', '.join(diff.python_only) or 'none'}\n")
     sys.stdout.write(f"rust-only: {', '.join(diff.rust_only) or 'none'}\n\n")
 
