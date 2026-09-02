@@ -4674,7 +4674,11 @@ async def test_store_mcp_oauth_user_credential_blocked_when_identity_binding_enf
         name=server_id,
         url="https://mcp.example.com",
         transport=MCPTransport.http,
-        oauth_identity_binding=MCPOAuthIdentityBinding(mode="enforce", issuer="https://idp.example.com"),
+        oauth_identity_binding=MCPOAuthIdentityBinding(
+            mode="enforce",
+            issuer="https://idp.example.com",
+            audiences=["litellm-client"],
+        ),
     )
     store_mock = AsyncMock(return_value=None)
 

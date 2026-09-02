@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
@@ -52,7 +52,7 @@ class MCPOAuthIdentityBinding(BaseModel):
     mode: Literal["disabled", "audit", "enforce"] = "disabled"
     issuer: str
     jwks_url: str | None = None
-    audiences: list[str] = []
+    audiences: list[str] = Field(min_length=1)
     principal_claim: str = "email"
     caller_field: Literal["user_email", "user_id"] = "user_email"
     require_email_verified: bool = True

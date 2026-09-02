@@ -7,8 +7,11 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
+    RefreshOwnershipProven,
+    RefreshTokenPresented,
     enforce_oauth_identity_binding,
 )
 from litellm.types.mcp import MCPTransport
@@ -54,6 +57,13 @@ def _caller_loader(email: str | None):
     return load
 
 
+def _stored_refresh_token_loader(refresh_token: str | None):
+    async def load(_user_id: str, _server_id: str) -> str | None:
+        return refresh_token
+
+    return load
+
+
 def _server(mode: str = "enforce", **binding_overrides: object) -> MCPServer:
     return MCPServer(
         server_id="srv-1",
@@ -77,6 +87,7 @@ async def test_matching_principal_passes():
         token_response={"access_token": "at", "id_token": token},
         litellm_user_id="user-a",
         grant_type="authorization_code",
+        refresh_ownership=None,
         jwks_fetcher=_jwks_fetcher,
         caller_principal_loader=_caller_loader("alice@example.com"),
     )
@@ -92,6 +103,7 @@ async def test_mismatched_principal_rejected():
             token_response={"access_token": "at", "id_token": token},
             litellm_user_id="user-a",
             grant_type="authorization_code",
+            refresh_ownership=None,
             jwks_fetcher=_jwks_fetcher,
             caller_principal_loader=_caller_loader("alice@example.com"),
         )
@@ -108,6 +120,7 @@ async def test_missing_id_token_rejected_on_authorization_code():
             token_response={"access_token": "at"},
             litellm_user_id="user-a",
             grant_type="authorization_code",
+            refresh_ownership=None,
             jwks_fetcher=_jwks_fetcher,
             caller_principal_loader=_caller_loader("alice@example.com"),
         )
@@ -116,16 +129,87 @@ async def test_missing_id_token_rejected_on_authorization_code():
 
 
 @pytest.mark.asyncio
-async def test_refresh_without_id_token_allowed():
+async def test_refresh_without_id_token_allowed_when_presented_token_matches_stored_credential():
     result: Final = await enforce_oauth_identity_binding(
         server=_server(),
         token_response={"access_token": "at"},
         litellm_user_id="user-a",
         grant_type="refresh_token",
+        refresh_ownership=RefreshTokenPresented("rt-1"),
         jwks_fetcher=_jwks_fetcher,
         caller_principal_loader=_caller_loader("alice@example.com"),
+        stored_refresh_token_loader=_stored_refresh_token_loader("rt-1"),
     )
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_refresh_without_id_token_rejects_different_presented_token():
+    with pytest.raises(HTTPException) as exc_info:
+        await enforce_oauth_identity_binding(
+            server=_server(),
+            token_response={"access_token": "at"},
+            litellm_user_id="user-a",
+            grant_type="refresh_token",
+            refresh_ownership=RefreshTokenPresented("rt-stolen"),
+            jwks_fetcher=_jwks_fetcher,
+            caller_principal_loader=_caller_loader("alice@example.com"),
+            stored_refresh_token_loader=_stored_refresh_token_loader("rt-1"),
+        )
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["error"] == "oauth_identity_binding_failed"
+
+
+@pytest.mark.asyncio
+async def test_refresh_without_id_token_rejects_missing_stored_token():
+    with pytest.raises(HTTPException) as exc_info:
+        await enforce_oauth_identity_binding(
+            server=_server(),
+            token_response={"access_token": "at"},
+            litellm_user_id="user-a",
+            grant_type="refresh_token",
+            refresh_ownership=RefreshTokenPresented("rt-1"),
+            jwks_fetcher=_jwks_fetcher,
+            caller_principal_loader=_caller_loader("alice@example.com"),
+            stored_refresh_token_loader=_stored_refresh_token_loader(None),
+        )
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["error"] == "oauth_identity_binding_failed"
+
+
+@pytest.mark.asyncio
+async def test_refresh_without_id_token_passes_when_bridge_proves_ownership():
+    async def fail_if_called(_user_id: str, _server_id: str) -> str | None:
+        raise AssertionError("stored refresh token loader should not be called")
+
+    result: Final = await enforce_oauth_identity_binding(
+        server=_server(),
+        token_response={"access_token": "at"},
+        litellm_user_id="user-a",
+        grant_type="refresh_token",
+        refresh_ownership=RefreshOwnershipProven(),
+        jwks_fetcher=_jwks_fetcher,
+        caller_principal_loader=_caller_loader("alice@example.com"),
+        stored_refresh_token_loader=fail_if_called,
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_refresh_without_id_token_rejects_without_ownership_proof():
+    with pytest.raises(HTTPException) as exc_info:
+        await enforce_oauth_identity_binding(
+            server=_server(),
+            token_response={"access_token": "at"},
+            litellm_user_id="user-a",
+            grant_type="refresh_token",
+            refresh_ownership=None,
+            jwks_fetcher=_jwks_fetcher,
+            caller_principal_loader=_caller_loader("alice@example.com"),
+            stored_refresh_token_loader=_stored_refresh_token_loader("rt-1"),
+        )
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["error"] == "oauth_identity_binding_failed"
 
 
 @pytest.mark.asyncio
@@ -137,6 +221,7 @@ async def test_refresh_with_mismatched_id_token_rejected():
             token_response={"access_token": "at", "id_token": token},
             litellm_user_id="user-a",
             grant_type="refresh_token",
+            refresh_ownership=None,
             jwks_fetcher=_jwks_fetcher,
             caller_principal_loader=_caller_loader("alice@example.com"),
         )
@@ -150,6 +235,7 @@ async def test_audit_mode_logs_but_does_not_reject():
         token_response={"access_token": "at", "id_token": token},
         litellm_user_id="user-a",
         grant_type="authorization_code",
+        refresh_ownership=None,
         jwks_fetcher=_jwks_fetcher,
         caller_principal_loader=_caller_loader("alice@example.com"),
     )
@@ -165,6 +251,7 @@ async def test_unverified_email_rejected():
             token_response={"access_token": "at", "id_token": token},
             litellm_user_id="user-a",
             grant_type="authorization_code",
+            refresh_ownership=None,
             jwks_fetcher=_jwks_fetcher,
             caller_principal_loader=_caller_loader("alice@example.com"),
         )
@@ -187,6 +274,7 @@ async def test_wrong_issuer_rejected():
             token_response={"access_token": "at", "id_token": token},
             litellm_user_id="user-a",
             grant_type="authorization_code",
+            refresh_ownership=None,
             jwks_fetcher=_jwks_fetcher,
             caller_principal_loader=_caller_loader("alice@example.com"),
         )
@@ -202,6 +290,7 @@ async def test_no_litellm_identity_rejected():
             token_response={"access_token": "at", "id_token": token},
             litellm_user_id=None,
             grant_type="authorization_code",
+            refresh_ownership=None,
             jwks_fetcher=_jwks_fetcher,
             caller_principal_loader=_caller_loader("alice@example.com"),
         )
@@ -215,6 +304,7 @@ async def test_disabled_binding_is_noop():
         token_response={"access_token": "at"},
         litellm_user_id=None,
         grant_type="authorization_code",
+        refresh_ownership=None,
         jwks_fetcher=_jwks_fetcher,
         caller_principal_loader=_caller_loader(None),
     )
@@ -234,7 +324,32 @@ async def test_no_binding_is_noop():
         token_response={"access_token": "at"},
         litellm_user_id=None,
         grant_type="authorization_code",
+        refresh_ownership=None,
         jwks_fetcher=_jwks_fetcher,
         caller_principal_loader=_caller_loader(None),
     )
     assert result is None
+
+
+def test_identity_binding_requires_non_empty_audiences():
+    with pytest.raises(ValidationError):
+        MCPOAuthIdentityBinding(mode="enforce", issuer=ISSUER, audiences=[])
+    with pytest.raises(ValidationError):
+        MCPOAuthIdentityBinding(mode="enforce", issuer=ISSUER)
+
+
+@pytest.mark.asyncio
+async def test_wrong_audience_rejected():
+    token: Final = _sign_id_token({"aud": "other-client", "email": "alice@example.com", "email_verified": True})
+    with pytest.raises(HTTPException) as exc_info:
+        await enforce_oauth_identity_binding(
+            server=_server(),
+            token_response={"access_token": "at", "id_token": token},
+            litellm_user_id="user-a",
+            grant_type="authorization_code",
+            refresh_ownership=None,
+            jwks_fetcher=_jwks_fetcher,
+            caller_principal_loader=_caller_loader("alice@example.com"),
+        )
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["error"] == "oauth_identity_binding_failed"
