@@ -45,3 +45,44 @@ async def test_cost_routing_breaks_input_output_tie_on_cache_read_cost(cheaper_c
     )
 
     assert selected["model_info"]["id"] == "cheaper-cache"
+
+
+@pytest.mark.parametrize("free_cache_first", [True, False])
+@pytest.mark.asyncio
+async def test_cost_routing_honors_zero_deployment_cache_read_cost(free_cache_first):
+    """
+    A deployment-level cache_read_input_token_cost of 0 is a price, not a missing value.
+
+    Truthiness checks treat it as unset and fall through to the cost map / input-cost
+    fallback, which ranks a deployment whose cache reads are free as the priciest one
+    in a tie. Providers that do not charge for cache reads make this a real config.
+    """
+    free = {
+        "model_name": "cache-zero-test",
+        "litellm_params": {
+            "model": "openai/zero-model-not-in-cost-map",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 2e-06,
+            "cache_read_input_token_cost": 0.0,
+        },
+        "model_info": {"id": "free-cache"},
+    }
+    paid = {
+        "model_name": "cache-zero-test",
+        "litellm_params": {
+            "model": "openai/zero-model-not-in-cost-map",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 2e-06,
+            "cache_read_input_token_cost": 1e-08,
+        },
+        "model_info": {"id": "paid-cache"},
+    }
+    model_list = [free, paid] if free_cache_first else [paid, free]
+
+    logger = LowestCostLoggingHandler(router_cache=DualCache())
+
+    selected = await logger.async_get_available_deployments(
+        model_group="cache-zero-test", healthy_deployments=model_list
+    )
+
+    assert selected["model_info"]["id"] == "free-cache"
