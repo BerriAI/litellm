@@ -1172,6 +1172,62 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert events[5]["response"]["output"][0]["content"][0]["text"] == "hello [MASKED]"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("terminal_type", ["response.incomplete", "response.failed"])
+    async def test_deliver_ended_stream_rewrites_syncs_non_completed_terminals(self, terminal_type):
+        handler = OpenAIResponsesHandler()
+        events = self._ended_stream_events()
+        events[-1]["type"] = terminal_type
+        events[-1]["response"]["status"] = terminal_type.split(".")[-1]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is events
+        assert events[0]["delta"] == "hello [MASKED]"
+        assert events[1]["delta"] == ""
+        assert events[2]["text"] == "hello [MASKED]"
+        assert events[3]["part"]["text"] == "hello [MASKED]"
+        assert events[4]["item"]["content"][0]["text"] == "hello [MASKED]"
+        assert events[5]["response"]["output"][0]["content"][0]["text"] == "hello [MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_fallback_rewrite_with_delivery_expected_fails_closed(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        handler = OpenAIResponsesHandler()
+        events = [
+            {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "hello "},
+            {"type": "response.output_text.done", "output_index": 0, "content_index": 0, "text": "hello world"},
+        ]
+
+        with pytest.raises(UndeliverableStreamRewrite):
+            await handler.process_output_streaming_response(
+                responses_so_far=events,
+                guardrail_to_apply=self._masking_guardrail(),
+                litellm_logging_obj=None,
+                deliver_ended_stream_rewrites=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_fallback_rewrite_without_delivery_expected_does_not_raise(self):
+        handler = OpenAIResponsesHandler()
+        events = [
+            {"type": "response.output_text.done", "output_index": 0, "content_index": 0, "text": "hello world"},
+        ]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=None,
+        )
+
+        assert result is events
+
+    @pytest.mark.asyncio
     async def test_ended_stream_rewrite_leaves_delta_events_untouched_by_default(self):
         handler = OpenAIResponsesHandler()
         events = self._ended_stream_events()

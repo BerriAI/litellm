@@ -86,6 +86,15 @@ class ResponsesStreamChunk(TypedDict, total=False):
     text: ReadOnly[str]
 
 
+_TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
+    {
+        ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value,
+        ResponsesAPIStreamEvents.RESPONSE_FAILED.value,
+        ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE.value,
+    }
+)
+
+
 def _next_stream_sequence_number(responses_so_far: Sequence[Any] | None) -> int:
     sequence_numbers: Final = (
         item.get("sequence_number") if isinstance(item, dict) else getattr(item, "sequence_number", None)
@@ -507,14 +516,17 @@ class OpenAIResponsesHandler(BaseTranslation):
         chunk, apply the guardrail, then write the result back in-place so the
         caller sees the modified content (e.g. PII tokens replaced).
 
-        For ``response.completed`` events (the normal end-of-stream signal) we
-        use the same per-item extraction + task-mapping approach as
-        ``process_output_response`` so that unmasking / blocking works correctly
-        for every output item. With ``deliver_ended_stream_rewrites`` the earlier
-        text-carrying events (``response.output_text.delta`` / ``.done``,
+        For terminal envelope events (``response.completed``, and equally
+        ``response.incomplete`` / ``response.failed``, whose envelopes carry the
+        partial output) we use the same per-item extraction + task-mapping
+        approach as ``process_output_response`` so that unmasking / blocking
+        works correctly for every output item. With
+        ``deliver_ended_stream_rewrites`` the earlier text-carrying events
+        (``response.output_text.delta`` / ``.done``,
         ``response.content_part.done``, ``response.output_item.done``) are synced
-        to the rewritten completed response too, so a client reading deltas sees
-        the rewrite instead of the raw model output.
+        to the rewritten envelope too, so a client reading deltas sees the
+        rewrite instead of the raw model output; a rewrite observed where no
+        write-back is possible fails closed instead of releasing raw output.
         """
         if not responses_so_far:
             return responses_so_far
@@ -526,14 +538,16 @@ class OpenAIResponsesHandler(BaseTranslation):
             return responses_so_far
 
         # ------------------------------------------------------------------ #
-        # Case 1: response.completed — full response is available in the      #
-        # final chunk; iterate output items, apply guardrail, write back.     #
+        # Case 1: terminal envelope events (completed/incomplete/failed).     #
+        # the accumulated response is available in the final chunk; iterate   #
+        # output items, apply guardrail, write back. Falls through to the     #
+        # string fallback when the envelope yields nothing to check.          #
         # ------------------------------------------------------------------ #
-        if final_chunk.get("type") == "response.completed":
+        if final_chunk.get("type") in _TERMINAL_ENVELOPE_EVENT_TYPES:
             response_obj: Final[ResponseOutputEnvelope] = final_chunk.get("response") or {}
-            if not hasattr(response_obj, "get"):
-                return responses_so_far
-            outputs: Final[Sequence[object]] = response_obj.get("output") or []
+            outputs: Final[Sequence[object]] = (
+                (response_obj.get("output") or []) if hasattr(response_obj, "get") else []
+            )
 
             texts_to_check: Final[list[str]] = []
             tool_calls_to_check: Final[list[ChatCompletionToolCallChunk]] = []
@@ -596,8 +610,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                             stream_events=responses_so_far[:-1],
                             rewrites_by_position=rewrites_by_position,
                         )
-
-            return responses_so_far
+                return responses_so_far
 
         # ------------------------------------------------------------------ #
         # Case 2: response.output_item.done — extract tool calls only.        #
@@ -623,7 +636,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         # ------------------------------------------------------------------ #
         # Fallback: apply guardrail to the accumulated text string.           #
         # No structured write-back is possible here; guardrails that only     #
-        # need to block/flag (not rewrite) still work correctly.             #
+        # need to block/flag (not rewrite) still work correctly, and a        #
+        # rewrite a caller expects delivered fails closed instead.            #
         # ------------------------------------------------------------------ #
         string_so_far: Final = self.get_streaming_string_so_far(responses_so_far)
         if string_so_far:
@@ -633,12 +647,17 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
             if response_model:
                 fallback_inputs["model"] = response_model
-            await guardrail_to_apply.apply_guardrail(
+            fallback_outputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=fallback_inputs,
                 request_data=request_data if request_data is not None else {},
                 input_type="response",
                 logging_obj=litellm_logging_obj,
             )
+            fallback_texts: Final = fallback_outputs.get("texts")
+            if deliver_ended_stream_rewrites and fallback_texts and tuple(fallback_texts) != (string_so_far,):
+                from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+                raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name or "unknown")
         return responses_so_far
 
     @staticmethod
@@ -704,12 +723,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
         if not responses_so_far:
             return False
-        terminal_types: Final = {
-            ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value,
-            ResponsesAPIStreamEvents.RESPONSE_FAILED.value,
-            ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE.value,
-        }
-        return responses_so_far[-1].get("type") in terminal_types
+        return responses_so_far[-1].get("type") in _TERMINAL_ENVELOPE_EVENT_TYPES
 
     def build_stream_error_items(
         self,
