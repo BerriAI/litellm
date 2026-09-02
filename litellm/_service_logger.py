@@ -313,9 +313,17 @@ class ServiceLogging(CustomLogger):
         start_time: datetime | float | None = None,
         end_time: float | datetime | None = None,
         event_metadata: dict | None = None,
+        error_message_override: str | None = None,
     ):
         """
         - For counting if the redis, postgres call is unsuccessful
+
+        ``error_message_override`` replaces the text derived from ``error`` in
+        everything that leaves this process (payload, Datadog, OTel). Callers use
+        it when the exception message is known to embed request data that must
+        not be exported -- see ``litellm.caching.redis_cache._redact_redis_error``.
+        ``error`` itself is still forwarded to Prometheus, which labels the metric
+        with the exception class and never reads the message.
         """
         if self.mock_testing:
             self.mock_testing_async_failure_hook += 1
@@ -325,6 +333,8 @@ class ServiceLogging(CustomLogger):
             error_message = str(error)
         elif isinstance(error, str):
             error_message = error
+        if error_message_override is not None:
+            error_message = error_message_override
 
         payload: Final = ServiceLoggerPayload(
             is_error=True,
@@ -358,8 +368,7 @@ class ServiceLogging(CustomLogger):
             else:
                 _otel_logger_to_use = self._resolve_otel_service_logger(callback)
 
-                if not isinstance(error, str):
-                    error = str(error)
+                error = error_message
 
                 # See the success hook: no parent gate, so background failures
                 # are traced too. V1 no-ops without a parent; V2 emits a root.
