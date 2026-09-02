@@ -58055,7 +58055,6 @@
     "azure/us-gov/gpt-5.1": {
         "cache_read_input_token_cost": 1.71875e-07,
         "default_reasoning_effort": "none",
-        "deprecation_date": "2027-05-15",
         "input_cost_per_token": 1.71875e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 272000,
@@ -58090,7 +58089,6 @@
     },
     "azure/us-gov/o3-mini": {
         "cache_read_input_token_cost": 7.57e-07,
-        "deprecation_date": "2026-10-01",
         "input_cost_per_token": 1.513e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 200000,
@@ -58105,7 +58103,6 @@
         "supports_vision": false
     },
     "azure/us-gov/text-embedding-3-large": {
-        "deprecation_date": "2028-02-09",
         "input_cost_per_token": 1.63e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 8191,
@@ -58114,7 +58111,6 @@
         "output_cost_per_token": 0.0
     },
     "azure/us-gov/text-embedding-3-small": {
-        "deprecation_date": "2028-02-09",
         "input_cost_per_token": 2.5e-08,
         "litellm_provider": "azure",
         "max_input_tokens": 8191,
