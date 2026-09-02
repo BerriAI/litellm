@@ -201,6 +201,11 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         path_prefixes=("/v1/skills", "/skills"),
     ),
     LazyFeature(
+        name="claude_code_gateway",
+        module_path="litellm.proxy.anthropic_endpoints.gateway_endpoints",
+        path_prefixes=("/claude_code_gateway",),
+    ),
+    LazyFeature(
         name="langfuse_passthrough",
         module_path="litellm.proxy.vertex_ai_endpoints.langfuse_endpoints",
         path_prefixes=("/langfuse",),
