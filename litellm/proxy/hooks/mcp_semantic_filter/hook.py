@@ -5,7 +5,7 @@ Pre-call hook that filters MCP tools semantically before LLM inference.
 Reduces context window size and improves tool selection accuracy.
 """
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Optional
 
 from fastapi import HTTPException
@@ -173,7 +173,11 @@ class SemanticToolFilterHook(CustomLogger):
         return [name for name in names if name]
 
     @staticmethod
-    def _narrow_mcp_references(tools: Sequence[Mapping[str, object]], selected_tool_names: list[str]) -> list[object]:
+    async def _narrow_mcp_references(
+        tools: Sequence[Mapping[str, object]],
+        selected_tool_names: list[str],
+        served_names: Callable[[Collection[str]], Awaitable[frozenset[str]]] | None = None,
+    ) -> list[object]:
         """
         Restrict each litellm_proxy MCP reference to the semantically selected tools.
 
@@ -192,13 +196,14 @@ class SemanticToolFilterHook(CustomLogger):
             LiteLLM_Proxy_MCP_Handler,
         )
 
+        via_gateway: Final = await (
+            LiteLLM_Proxy_MCP_Handler._routes_through_gateway(tools, served_names)
+            if served_names is not None
+            else LiteLLM_Proxy_MCP_Handler._routes_through_gateway(tools)
+        )
         return [
-            (
-                {**tool, "allowed_tools": selected_tool_names}
-                if isinstance(tool, dict) and LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway([tool])
-                else tool
-            )
-            for tool in tools
+            {**tool, "allowed_tools": selected_tool_names} if isinstance(tool, dict) and routed else tool
+            for tool, routed in zip(tools, via_gateway, strict=True)
         ]
 
     def _is_mcp_tool(self, tool: object) -> bool:
@@ -325,7 +330,7 @@ class SemanticToolFilterHook(CustomLogger):
                 filtered_expanded_tools = await self._filter_expanded_tools(data=data, expanded_tools=expanded_tools)
 
                 selected_tool_names: Final = self._selected_tool_names(filtered_expanded_tools)
-                narrowed_tools: Final = self._narrow_mcp_references(tools, selected_tool_names)
+                narrowed_tools: Final = await self._narrow_mcp_references(tools, selected_tool_names)
                 data["tools"] = narrowed_tools
                 self._emit_filter_metadata_safe(
                     data=data,

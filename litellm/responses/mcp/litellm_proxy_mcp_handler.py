@@ -11,6 +11,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._experimental.mcp_server.utils import (
+    iter_known_server_prefixes,
     logging_safe_mcp_headers,
     split_server_prefix_from_name,
     strip_known_server_prefix,
@@ -87,8 +88,10 @@ def _registered_mcp_servers() -> Collection[MCPServer]:
 
 
 def _registry_serves(name: str, servers: Collection[MCPServer]) -> bool:
+    requested: Final = name.lower()
     return any(
-        name in (server.alias, server.server_name, server.name) or name in (server.access_groups or ())
+        requested in (known.lower() for known in (*iter_known_server_prefixes(server), server.name))
+        or name in (server.access_groups or ())
         for server in servers
     )
 
@@ -115,6 +118,13 @@ async def _gateway_served_names(
 ) -> frozenset[str]:
     registered: Final = tuple(servers()) if names else ()
     return frozenset([name for name in names if _registry_serves(name, registered) or await toolset_exists(name)])
+
+
+async def _served_mcp_path_names(
+    tools: Collection[ToolParam], served_names: Callable[[Collection[str]], Awaitable[frozenset[str]]]
+) -> frozenset[str]:
+    names: Final = frozenset(name for name in map(_proxy_path_mcp_name, tools) if name is not None)
+    return await served_names(names) if names else frozenset[str]()
 
 
 class LiteLLM_Proxy_MCP_Handler:
@@ -156,15 +166,25 @@ class LiteLLM_Proxy_MCP_Handler:
         tools: Iterable[Mapping[str, object]] | None,
         served_names: Callable[[Collection[str]], Awaitable[frozenset[str]]] = _gateway_served_names,
     ) -> SplitTools:
-        resolved: Final = tuple((tool, _proxy_path_mcp_name(tool)) for tool in tools or ())
-        names: Final = frozenset(name for _, name in resolved if name is not None)
-        served: Final = await served_names(names) if names else frozenset[str]()
+        items: Final = tuple(tools or ())
+        served: Final = await _served_mcp_path_names(items, served_names)
         return LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(
             [
-                {**tool, "server_url": f"{LITELLM_PROXY_MCP_SERVER_URL_PREFIX}{name}"} if name in served else tool
-                for tool, name in resolved
+                {**tool, "server_url": f"{LITELLM_PROXY_MCP_SERVER_URL_PREFIX}{name}"}
+                if (name := _proxy_path_mcp_name(tool)) in served
+                else tool
+                for tool in items
             ]
         )
+
+    @staticmethod
+    async def _routes_through_gateway(
+        tools: Iterable[Mapping[str, object]] | None,
+        served_names: Callable[[Collection[str]], Awaitable[frozenset[str]]] = _gateway_served_names,
+    ) -> tuple[bool, ...]:
+        items: Final = tuple(tools or ())
+        served: Final = await _served_mcp_path_names(items, served_names)
+        return tuple(_names_gateway_explicitly(tool) or _proxy_path_mcp_name(tool) in served for tool in items)
 
     @staticmethod
     async def _apply_toolset_permissions(

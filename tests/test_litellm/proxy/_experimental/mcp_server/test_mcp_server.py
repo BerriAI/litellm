@@ -1398,6 +1398,33 @@ async def test_scoped_list_denied_by_agent_binding_raises_403_naming_agent():
 
 
 @pytest.mark.asyncio
+async def test_empty_scope_lists_nothing_instead_of_raising_a_nameless_denial():
+    """An empty ``x-mcp-servers`` header scopes to no servers; that is an empty listing, not a 403."""
+    pytest.importorskip("litellm.proxy._experimental.mcp_server.server")
+    from litellm.proxy._experimental.mcp_server.server import _get_tools_from_mcp_servers
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    resolver = AsyncMock(return_value=[])
+
+    with (
+        patch(  # test-quality-ok: the permission resolver is a module-level function; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            resolver,
+        ),
+        patch(  # test-quality-ok: the server registry is a module-level singleton; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            _denied_scope_manager({"github": "srv-github"}),
+        ),
+    ):
+        listing = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth, mcp_auth_header=None, mcp_servers=[]
+        )
+
+    assert listing.tools == []
+    resolver.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_scoped_list_denied_for_non_agent_key_raises_generic_403():
     """A denial for a key with no agent binding stays generic and skips the agent-stripped rerun."""
     pytest.importorskip("litellm.proxy._experimental.mcp_server.server")

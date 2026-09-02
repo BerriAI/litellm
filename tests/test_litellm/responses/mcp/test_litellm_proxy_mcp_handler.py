@@ -778,6 +778,37 @@ async def test_gateway_served_names_matches_alias_server_name_name_access_group_
 
 
 @pytest.mark.asyncio
+async def test_gateway_served_names_matches_server_id_short_prefix_and_alias_case_like_the_gateway():
+    from litellm.proxy._experimental.mcp_server.utils import compute_short_server_prefix
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import _gateway_served_names
+
+    server_id = "0b9ae4ca-1bd2-4faa-b183-7dd812597e3b"
+    short_prefix = compute_short_server_prefix(server_id)
+    servers = (_registered(server_id, "github-name", alias="github", access_groups=["prod-group"]),)
+
+    served = await _gateway_served_names(
+        {server_id, short_prefix, "GitHub", "PROD-GROUP", "nope"}, servers=lambda: servers, toolset_exists=_no_toolset
+    )
+
+    assert served == {server_id, short_prefix, "GitHub"}
+
+
+@pytest.mark.asyncio
+async def test_routes_through_gateway_flags_explicit_and_served_tools_only():
+    served_tool = {"type": "mcp", "server_label": "github", "server_url": "http://localhost:4000/mcp/github"}
+
+    async def served_names(names):
+        assert names == {"github", "mcp"}
+        return frozenset({"github"})
+
+    flags = await LiteLLM_Proxy_MCP_Handler._routes_through_gateway(
+        [ZAPIER_TOOL, EXPLICIT_GATEWAY_TOOL, served_tool, FUNCTION_TOOL], served_names=served_names
+    )
+
+    assert flags == (False, True, True, False)
+
+
+@pytest.mark.asyncio
 async def test_split_mcp_tools_leaves_external_mcp_path_urls_for_the_provider():
 
     async def served_names(names):

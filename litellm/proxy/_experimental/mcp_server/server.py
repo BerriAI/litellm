@@ -2037,7 +2037,7 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
                 client_ip=client_ip,
             )
-            if mcp_servers is not None and not allowed_mcp_servers:
+            if mcp_servers and not allowed_mcp_servers:
                 await _raise_denied_scoped_mcp_access(
                     requested_names=mcp_servers,
                     user_api_key_auth=user_api_key_auth,
