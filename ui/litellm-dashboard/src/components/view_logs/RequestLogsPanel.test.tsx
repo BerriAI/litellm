@@ -298,6 +298,36 @@ describe("RequestLogsPanel", () => {
       expect(byIdCall.page_size).toBe(1);
     });
 
+    it("opens the drawer when ?log_id= is the log's litellm_call_id rather than its request_id", async () => {
+      respondWith([logEntry({ request_id: "chatcmpl-provider", litellm_call_id: "call-1" })]);
+      renderPanel("?log_id=call-1");
+
+      await waitFor(() => {
+        expect(drawer()).toHaveTextContent("open");
+      });
+      expect(drawer()).toHaveAttribute("data-log-id", "chatcmpl-provider");
+    });
+
+    it("fetches by litellm_call_id and opens the drawer when that log is not in the loaded page", async () => {
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ params }) =>
+        params?.request_id === "call-old"
+          ? {
+              data: [logEntry({ request_id: "chatcmpl-old", litellm_call_id: "call-old" })],
+              total: 1,
+              page: 1,
+              page_size: 1,
+              total_pages: 1,
+            }
+          : { data: [], total: 0, page: 1, page_size: 50, total_pages: 0 },
+      );
+      renderPanel("?log_id=call-old");
+
+      await waitFor(() => {
+        expect(drawer()).toHaveTextContent("open");
+      });
+      expect(drawer()).toHaveAttribute("data-log-id", "chatcmpl-old");
+    });
+
     it("closing the drawer removes ?log_id= from the URL and closes the drawer", async () => {
       const user = userEvent.setup();
       respondWith([logEntry({ request_id: "req-1" })]);

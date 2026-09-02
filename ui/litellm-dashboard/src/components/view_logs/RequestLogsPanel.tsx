@@ -26,6 +26,7 @@ import { RequestLogsTable } from "./RequestLogsTable";
 
 const PAGE_SIZE = 50;
 const DEFAULT_INTERVAL = { value: 24, unit: "hours" };
+const matchesLogId = (log: LogEntry, logId: string) => log.request_id === logId || log.litellm_call_id === logId;
 
 interface RequestLogsPanelProps {
   accessToken: string;
@@ -133,9 +134,9 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         page_size: 1,
         params: { request_id: urlLogId },
       });
-      return response.data.find((log) => log.request_id === urlLogId) ?? null;
+      return response.data.find((log) => matchesLogId(log, urlLogId)) ?? null;
     },
-    enabled: urlLogId !== null && selectedLog?.request_id !== urlLogId,
+    enabled: urlLogId !== null && !(selectedLog !== null && matchesLogId(selectedLog, urlLogId)),
     staleTime: Infinity,
   };
 
@@ -143,8 +144,8 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   const displayLog = useMemo<LogEntry | null>(() => {
     if (urlLogId === null) return null;
-    if (selectedLog?.request_id === urlLogId) return selectedLog;
-    return filteredLogs.data.find((log) => log.request_id === urlLogId) ?? urlLog ?? null;
+    if (selectedLog !== null && matchesLogId(selectedLog, urlLogId)) return selectedLog;
+    return filteredLogs.data.find((log) => matchesLogId(log, urlLogId)) ?? urlLog ?? null;
   }, [urlLogId, selectedLog, filteredLogs.data, urlLog]);
 
   const displaySessionId = useMemo<string | null>(() => {

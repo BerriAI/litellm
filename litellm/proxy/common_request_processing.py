@@ -25,6 +25,7 @@ from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
+    MAX_LITELLM_CALL_ID_LENGTH,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     NON_INFERENCE_CALL_TYPES,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
@@ -208,6 +209,12 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInforma
 
 def _withheld_provider_output(response: object) -> bool:
     return getattr(response, "has_buffered_provider_output", False) is True
+
+
+def resolve_litellm_call_id(client_call_id: str | None) -> str:
+    if client_call_id is not None and 0 < len(client_call_id) <= MAX_LITELLM_CALL_ID_LENGTH:
+        return client_call_id
+    return str(uuid.uuid4())
 
 
 def _should_return_raw_model_name(request_data: dict[str, object]) -> bool:
@@ -1923,7 +1930,7 @@ class ProxyBaseLLMRequestProcessing:
                 if alias_target is not None:
                     self.data["model"] = alias_target
 
-        self.data["litellm_call_id"] = request.headers.get("x-litellm-call-id", str(uuid.uuid4()))
+        self.data["litellm_call_id"] = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
         DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
         DDSpanTagger.tag_request(
             user_api_key_dict=user_api_key_dict,
