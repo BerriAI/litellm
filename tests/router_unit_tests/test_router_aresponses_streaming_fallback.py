@@ -10,11 +10,11 @@ Targets the four helpers introduced on Router:
   - _aresponses_streaming_iterator
 """
 
-from typing import Any, AsyncIterator, List
+from collections.abc import AsyncIterator
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 from litellm import Router
 from litellm.types.llms.openai import (
@@ -46,9 +46,7 @@ def _make_router() -> Router:
     )
 
 
-def _make_completed_event(
-    input_tokens: int, output_tokens: int, total_tokens: int
-) -> ResponseCompletedEvent:
+def _make_completed_event(input_tokens: int, output_tokens: int, total_tokens: int) -> ResponseCompletedEvent:
     response = ResponsesAPIResponse.model_construct(
         usage=ResponseAPIUsage(
             input_tokens=input_tokens,
@@ -145,9 +143,7 @@ def test_combine_responses_fallback_usage_passthrough_for_unknown_event():
 
 
 def test_build_responses_continuation_input_from_string():
-    out = Router._build_responses_continuation_input(
-        "Hello world", "partial assistant text"
-    )
+    out = Router._build_responses_continuation_input("Hello world", "partial assistant text")
     assert len(out) == 3
     assert out[0]["role"] == "user"
     assert out[0]["content"][0]["text"] == "Hello world"
@@ -157,7 +153,7 @@ def test_build_responses_continuation_input_from_string():
 
 
 def test_build_responses_continuation_input_from_list_preserves_items():
-    existing: List[Any] = [
+    existing: list[Any] = [
         {
             "type": "message",
             "role": "user",
@@ -227,9 +223,7 @@ async def test_aresponses_streaming_iterator_passthrough():
     router = _make_router()
     source = _FakeSource()
 
-    wrapper = await router._aresponses_streaming_iterator(
-        source, initial_kwargs={"model": "primary"}
-    )
+    wrapper = await router._aresponses_streaming_iterator(source, initial_kwargs={"model": "primary"})
     assert isinstance(wrapper, BaseResponsesAPIStreamingIterator)
 
     collected = [ev async for ev in wrapper]
@@ -276,15 +270,18 @@ async def test_aresponses_with_streaming_fallbacks_wraps_streaming_iterator():
     async def fake_original(**_kwargs):
         return streaming_iter
 
-    with patch.object(
-        router,
-        "_ageneric_api_call_with_fallbacks",
-        new=AsyncMock(return_value=streaming_iter),
-    ), patch.object(
-        router,
-        "_aresponses_streaming_iterator",
-        new=AsyncMock(return_value=wrapped),
-    ) as mock_wrap:
+    with (
+        patch.object(
+            router,
+            "_ageneric_api_call_with_fallbacks",
+            new=AsyncMock(return_value=streaming_iter),
+        ),
+        patch.object(
+            router,
+            "_aresponses_streaming_iterator",
+            new=AsyncMock(return_value=wrapped),
+        ) as mock_wrap,
+    ):
         out = await router._aresponses_with_streaming_fallbacks(
             original_function=fake_original,
             model="primary",
