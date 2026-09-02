@@ -5,7 +5,7 @@ import os
 import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, cast, get_args
 
 from pydantic import TypeAdapter
 
@@ -135,6 +135,23 @@ def updated_litellm_param(litellm_params: "LitellmParams | Mapping[str, object]"
 GUARDRAIL_MODE_ADAPTER: Final[TypeAdapter[GuardrailEventHooks | list[GuardrailEventHooks] | Mode]] = TypeAdapter(
     GuardrailEventHooks | list[GuardrailEventHooks] | Mode
 )
+
+
+def event_hook_as_constructed(
+    validated_mode: GuardrailEventHooks | list[GuardrailEventHooks] | Mode,
+) -> GuardrailEventHooks | list[GuardrailEventHooks] | Mode:
+    """
+    Return the shape ``__init__`` stores for the same mode: ``LitellmParams``
+    coerces enum members to plain strings, so a resynced ``event_hook`` must
+    hold plain strings too or workers end up disagreeing on ``str(event_hook)``.
+    """
+    if isinstance(validated_mode, Mode):
+        return validated_mode
+    if isinstance(validated_mode, list):
+        return cast(  # cast-ok: __init__ stores the plain strings LitellmParams.mode carries
+            list[GuardrailEventHooks], [hook.value for hook in validated_mode]
+        )
+    return cast(GuardrailEventHooks, validated_mode.value)  # cast-ok: same parity as the list branch
 
 
 def get_session_id_from_request_data(request_data: dict[str, Any]) -> str | None:
@@ -1378,7 +1395,7 @@ class CustomGuardrail(CustomLogger):
             if value is not None:
                 setattr(self, key, value)
         if new_event_hook is not None:
-            self.event_hook = new_event_hook
+            self.event_hook = event_hook_as_constructed(new_event_hook)
 
     def get_guardrails_messages_for_call_type(
         self, call_type: CallTypes, data: dict | None = None
@@ -1407,8 +1424,6 @@ class CustomGuardrail(CustomLogger):
         # User/System messages are stored in the "input" key, use litellm transformation to get the messages
         #########################################################
         if call_type == CallTypes.responses.value or call_type == CallTypes.aresponses.value:
-            from typing import cast
-
             from litellm.responses.litellm_completion_transformation.transformation import (
                 LiteLLMCompletionResponsesConfig,
             )

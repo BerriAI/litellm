@@ -37,6 +37,7 @@ from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     GUARDRAIL_MODE_ADAPTER,
     CustomGuardrail,
+    event_hook_as_constructed,
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
@@ -1641,12 +1642,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if self.event_hook == GuardrailEventHooks.logging_only:
             return
         if self.apply_to_output:
-            self.event_hook = GuardrailEventHooks.post_call
+            self.event_hook = event_hook_as_constructed(GuardrailEventHooks.post_call)
             return
         if not self.output_parse_pii:
             return
         current_hook: Final = self.event_hook
         if isinstance(current_hook, str) and current_hook != "post_call":
-            self.event_hook = GUARDRAIL_MODE_ADAPTER.validate_python((current_hook, GuardrailEventHooks.post_call))
+            self.event_hook = event_hook_as_constructed(
+                GUARDRAIL_MODE_ADAPTER.validate_python((current_hook, GuardrailEventHooks.post_call))
+            )
         elif isinstance(current_hook, list) and "post_call" not in current_hook:
-            self.event_hook = GUARDRAIL_MODE_ADAPTER.validate_python((*current_hook, GuardrailEventHooks.post_call))
+            self.event_hook = event_hook_as_constructed(
+                GUARDRAIL_MODE_ADAPTER.validate_python((*current_hook, GuardrailEventHooks.post_call))
+            )

@@ -176,7 +176,7 @@ def test_update_in_memory_guardrail():
         )
         is True
     )
-    assert handler.guardrail_id_to_custom_guardrail["123"].event_hook is GuardrailEventHooks.pre_call
+    assert handler.guardrail_id_to_custom_guardrail["123"].event_hook == "pre_call"
 
 
 def test_update_in_memory_guardrail_raw_db_dict_resyncs_event_hook():
@@ -199,7 +199,7 @@ def test_update_in_memory_guardrail_raw_db_dict_resyncs_event_hook():
     handler.update_in_memory_guardrail("123", updated_row)
 
     callback = handler.guardrail_id_to_custom_guardrail["123"]
-    assert callback.event_hook is GuardrailEventHooks.post_call
+    assert callback.event_hook == "post_call"
     assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_call) is True
     assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is False
     assert handler.IN_MEMORY_GUARDRAILS["123"] == updated_row

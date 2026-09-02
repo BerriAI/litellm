@@ -3179,7 +3179,8 @@ def test_update_in_memory_output_callback_keeps_forced_post_call():
 
     guardrail.update_in_memory_litellm_params({"guardrail": "presidio", "mode": "pre_call", "default_on": True})
 
-    assert guardrail.event_hook is GuardrailEventHooks.post_call
+    assert guardrail.event_hook == "post_call"
+    assert type(guardrail.event_hook) is str
     assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_call) is True
     assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is False
 
