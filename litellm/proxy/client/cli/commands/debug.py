@@ -11,6 +11,7 @@ import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import click
@@ -146,7 +147,7 @@ class SpendLogsFetcher:
     def _page(self, session_id: str, page: int) -> SessionLogsPage:
         raw: Final = self._get(
             "/spend/logs/session/ui",
-            {"session_id": session_id, "page": page, "page_size": _SESSION_PAGE_SIZE},
+            MappingProxyType({"session_id": session_id, "page": page, "page_size": _SESSION_PAGE_SIZE}),
         )
         try:
             return _SESSION_PAGE.validate_python(raw)
@@ -224,7 +225,7 @@ def render_report(
         f"- generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
         f"- turns: {len(rows)}, failed: {len(failures)}",
         f"- total spend: ${sum(r.spend for r in rows):.6f}",
-        f"- models: {', '.join(sorted({r.model or r.model_group or '?' for r in rows})) or 'n/a'}",
+        f"- models: {', '.join(sorted(frozenset(r.model or r.model_group or '?' for r in rows))) or 'n/a'}",
         "",
         "Bodies are included for failed turns and the most recent turns. "
         "Bodies are empty unless the proxy runs with `general_settings.store_prompts_in_spend_logs: true`.",
@@ -255,7 +256,7 @@ def build_report(
     wanted: Final = frozenset(r.request_id for r in rows if r.failed) | frozenset(
         r.request_id for r in rows[-recent_bodies:] if recent_bodies > 0
     )
-    payloads: Final = {rid: fetcher.payload(rid) for rid in wanted}
+    payloads: Final = MappingProxyType({rid: fetcher.payload(rid) for rid in wanted})
     return render_report(session_id=session_id, base_url=base_url, rows=rows, payloads=payloads, max_chars=max_chars)
 
 
