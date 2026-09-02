@@ -18,6 +18,7 @@ from models import (
     ChatBody,
     ChatMessage,
     ChatResponse,
+    ChatTool,
     KeyGenerateBody,
     LiteLLMParamsBody,
     TeamDeleteBody,
@@ -83,12 +84,33 @@ class PresidioParamsBody(GuardrailParamsBase):
     output_parse_pii: bool | None = None
 
 
+class ToolPermissionRuleBody(BaseModel):
+    """One tool_permission rule: a decision for the tool named by `tool_name`."""
+
+    id: str
+    tool_name: str
+    decision: Literal["allow", "deny"]
+
+
+class ToolPermissionParamsBody(GuardrailParamsBase):
+    """Tool-permission guardrail params. `default_action="deny"` makes the rules
+    an allow-list, and `on_disallowed_action="block"` turns a disallowed tool into
+    a 400 instead of rewriting the request; "rewrite" is a different product
+    promise and belongs to its own scenario."""
+
+    guardrail: Literal["tool_permission"] = "tool_permission"
+    rules: list[ToolPermissionRuleBody]
+    default_action: Literal["allow", "deny"] = "deny"
+    on_disallowed_action: Literal["block", "rewrite"] = "block"
+
+
 GuardrailParamsBody = (
     ContentFilterParamsBody
     | BedrockGuardrailParamsBody
     | OpenAIModerationParamsBody
     | BlockCodeExecutionParamsBody
     | PresidioParamsBody
+    | ToolPermissionParamsBody
 )
 
 
@@ -200,9 +222,7 @@ class GuardrailsClient:
             self.proxy.transport.post(
                 "/guardrails",
                 headers=self.proxy.transport.master,
-                json=GuardrailCreateBody(
-                    guardrail=GuardrailSpecBody(guardrail_name=name, litellm_params=params)
-                ),
+                json=GuardrailCreateBody(guardrail=GuardrailSpecBody(guardrail_name=name, litellm_params=params)),
                 response_type=GuardrailCreateResponse,
             )
         ).guardrail_id
@@ -241,9 +261,7 @@ class GuardrailsClient:
         )
 
     def create_key_in_team(self, team_id: str) -> str:
-        return self.proxy.generate_key(
-            KeyGenerateBody(team_id=team_id, user_id="e2e-guardrails-user")
-        )
+        return self.proxy.generate_key(KeyGenerateBody(team_id=team_id, user_id="e2e-guardrails-user"))
 
     def chat(
         self,
@@ -253,6 +271,7 @@ class GuardrailsClient:
         *,
         guardrails: list[str] | None = None,
         max_tokens: int = 16,
+        tools: list[ChatTool] | None = None,
     ) -> Result[ChatResponse]:
         """Drive a chat call, optionally opting into named guardrails for this
         request only (the per-request `guardrails` selector). With `guardrails`
@@ -266,6 +285,33 @@ class GuardrailsClient:
                 messages=[ChatMessage(role="user", content=text)],
                 max_tokens=max_tokens,
                 guardrails=guardrails,
+                tools=tools,
+            ),
+        )
+
+    def chat_raw(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        guardrails: list[str] | None = None,
+        max_tokens: int = 16,
+        tools: list[ChatTool] | None = None,
+    ) -> StreamingResponse:
+        """Drive /chat/completions returning the raw HTTP outcome, for the
+        assertions a typed body cannot carry: the `x-litellm-applied-guardrails`
+        response header, which is how an ALLOW scenario proves the guardrail ran
+        rather than being absent."""
+        return self.proxy.transport.send(
+            "/chat/completions",
+            headers=self.proxy.transport.bearer(key),
+            json=ChatBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=text)],
+                max_tokens=max_tokens,
+                guardrails=guardrails,
+                tools=tools,
             ),
         )
 
@@ -323,9 +369,7 @@ class GuardrailsClient:
         return self.proxy.transport.send(
             "/v1/responses",
             headers=self.proxy.transport.bearer(key),
-            json=_ResponsesGuardrailBody(
-                model=model, input=text, guardrails=guardrails
-            ),
+            json=_ResponsesGuardrailBody(model=model, input=text, guardrails=guardrails),
         )
 
     def apply_guardrail(self, key: str, *, name: str, text: str) -> Result[ApplyGuardrailResponse]:
@@ -349,9 +393,7 @@ class GuardrailsClient:
             if isinstance(last, Success):
                 return
             time.sleep(POLL_INTERVAL)
-        raise AssertionError(
-            f"team {team_id!r} was created but /team/info never returned it: {last}"
-        )
+        raise AssertionError(f"team {team_id!r} was created but /team/info never returned it: {last}")
 
 
 def build_client(proxy: ProxyClient) -> GuardrailsClient:
