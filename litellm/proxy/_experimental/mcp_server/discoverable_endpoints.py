@@ -56,6 +56,8 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     revoke_refresh_token,
 )
 from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
+    RefreshOwnershipProven,
+    RefreshTokenPresented,
     enforce_oauth_identity_binding,
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
@@ -1046,7 +1048,13 @@ async def exchange_token_with_server(
         refresh_request_scope = scope or bridge_upstream_scope
         if refresh_request_scope:
             token_data["scope"] = refresh_request_scope
+        refresh_ownership = (
+            RefreshOwnershipProven()
+            if bridge_upstream_refresh is not None
+            else RefreshTokenPresented(upstream_refresh_token)
+        )
     else:
+        refresh_ownership = None
         if not code:
             raise HTTPException(
                 status_code=400,
@@ -1145,6 +1153,7 @@ async def exchange_token_with_server(
             token_response=token_response,
             litellm_user_id=resolved_user_id,
             grant_type=grant_type,
+            refresh_ownership=refresh_ownership,
         )
 
     # Store server-side when the server is configured for per-user OAuth and
