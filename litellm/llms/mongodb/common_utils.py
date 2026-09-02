@@ -11,8 +11,10 @@ TLS handshake and topology discovery: measured at ~890ms against Atlas versus
 import asyncio
 import weakref
 from asyncio import AbstractEventLoop
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 from litellm.exceptions import BadRequestError, Timeout
 
@@ -54,13 +56,17 @@ class MongoClientKey:
     server_selection_timeout_ms: int
 
 
-_sync_clients: dict[MongoClientKey, "MongoClient"] = {}  # mutable-ok: process-level connection cache, see module docstring
-# The value carries a weak reference to the loop the client was built on: CPython recycles
-# id() aggressively (measured: 200 of 200 fresh loops landed on an id already in this cache),
-# so the id alone would hand a new loop a client bound to a closed one.
-_async_clients: dict[  # mutable-ok: same cache, keyed per event loop
-    tuple[MongoClientKey, int], tuple["weakref.ref[AbstractEventLoop]", "AsyncMongoClient"]
-] = {}
+SyncClientFactory: TypeAlias = Callable[..., "MongoClient"]
+AsyncClientFactory: TypeAlias = Callable[..., "AsyncMongoClient"]
+
+_AsyncClientCacheKey: TypeAlias = tuple[MongoClientKey, int]
+# The entry carries a weak reference to the loop the client was built on: CPython recycles id()
+# aggressively (measured: 200 of 200 fresh loops landed on an id already in this cache), so the
+# id alone would hand a new loop a client bound to a closed one.
+_AsyncClientEntry: TypeAlias = tuple["weakref.ref[AbstractEventLoop]", "AsyncMongoClient"]
+
+_sync_clients: Final[dict[MongoClientKey, "MongoClient"]] = {}  # mutable-ok: process-level client cache
+_async_clients: Final[dict[_AsyncClientCacheKey, _AsyncClientEntry]] = {}  # mutable-ok: same cache, per loop
 
 
 def import_sync_mongo_client() -> "type[MongoClient]":
@@ -79,33 +85,39 @@ def import_async_mongo_client() -> "type[AsyncMongoClient]":
     return AsyncMongoClientClass
 
 
-def _client_kwargs(key: MongoClientKey) -> dict[str, object]:
-    return {  # mutable-ok: pymongo's client constructor takes keyword arguments
-        "connectTimeoutMS": key.connect_timeout_ms,
-        "socketTimeoutMS": key.socket_timeout_ms,
-        "serverSelectionTimeoutMS": key.server_selection_timeout_ms,
-        "appname": _APP_NAME,
-    }
+def _client_kwargs(key: MongoClientKey) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "connectTimeoutMS": key.connect_timeout_ms,
+            "socketTimeoutMS": key.socket_timeout_ms,
+            "serverSelectionTimeoutMS": key.server_selection_timeout_ms,
+            "appname": _APP_NAME,
+        }
+    )
 
 
-def get_sync_client(key: MongoClientKey) -> "MongoClient":
+def get_sync_client(key: MongoClientKey, client_class: SyncClientFactory | None = None) -> "MongoClient":
+    """``client_class`` is the injection seam the tests build fake clients through; left unset the
+    real pymongo class is imported at call time, keeping pymongo out of import-time dependencies."""
     cached: Final = _sync_clients.get(key)
     if cached is not None:
         return cached
-    client: Final = import_sync_mongo_client()(key.connection_string, **_client_kwargs(key))
+    build: Final = client_class if client_class is not None else import_sync_mongo_client()
+    client: Final = build(key.connection_string, **_client_kwargs(key))
     if len(_sync_clients) < _MAX_CACHED_CLIENTS:
         _sync_clients[key] = client
     return client
 
 
-def get_async_client(key: MongoClientKey) -> "AsyncMongoClient":
+def get_async_client(key: MongoClientKey, client_class: AsyncClientFactory | None = None) -> "AsyncMongoClient":
     """Async clients bind to the loop that created them, so the cache is keyed per loop."""
     loop: Final = asyncio.get_running_loop()
     loop_key: Final = (key, id(loop))
     cached: Final = _async_clients.get(loop_key)
     if cached is not None and cached[0]() is loop:
         return cached[1]
-    client: Final = import_async_mongo_client()(key.connection_string, **_client_kwargs(key))
+    build: Final = client_class if client_class is not None else import_async_mongo_client()
+    client: Final = build(key.connection_string, **_client_kwargs(key))
     if len(_async_clients) < _MAX_CACHED_CLIENTS or loop_key in _async_clients:
         _async_clients[loop_key] = (weakref.ref(loop), client)
     return client
@@ -221,8 +233,7 @@ def translate_mongo_error(error: Exception, index_name: str, database: str, coll
                 f"cluster name against the URI Atlas shows under Connect, Drivers. Driver detail: {error}"
             )
         return config_error(
-            "mongodb_connection_string is not a usable MongoDB connection string. "
-            f"Driver detail: {error}"
+            f"mongodb_connection_string is not a usable MongoDB connection string. Driver detail: {error}"
         )
     if isinstance(error, InvalidOperation):
         return config_error(f"The MongoDB client was already closed or is unusable. Driver detail: {error}")

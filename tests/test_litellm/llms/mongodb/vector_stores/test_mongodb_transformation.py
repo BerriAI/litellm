@@ -39,6 +39,15 @@ BASE_PARAMS = {
 READY_INDEX = [{"name": INDEX, "status": "READY", "queryable": True}]
 
 
+class RecordingClient:
+    """Stands in for pymongo's client class so the cache tests inject a fake rather than
+    patching the importer, and so they can assert what the client was actually built with."""
+
+    def __init__(self, connection_string, **kwargs):
+        self.connection_string = connection_string
+        self.kwargs = kwargs
+
+
 class FakeCollection:
     def __init__(self, documents, error=None, search_indexes=None):
         self.documents = documents
@@ -171,10 +180,20 @@ def test_search_builds_vector_search_stage_against_the_named_index():
     assert _stage(collection, "$vectorSearch") == {
         "index": INDEX,
         "path": "embedding",
-        "queryVector": [0.1, 0.2, 0.3],
+        "queryVector": (0.1, 0.2, 0.3),
         "numCandidates": 100,
         "limit": 5,
     }
+
+
+def test_the_pipeline_reaches_pymongo_as_a_list():
+    """pymongo's common.validate_list rejects any other sequence with
+    'pipeline must be a list, not <class ...>', so the outer container is part of the contract."""
+    config, _, collection = _config()
+
+    _search(config)
+
+    assert isinstance(collection.pipeline, list)
 
 
 def test_search_projects_the_text_field_and_the_similarity_score():
@@ -273,6 +292,38 @@ def test_response_reads_a_dotted_text_field_path():
     response = _search(config, litellm_params={"mongodb_text_field": "metadata.body"})
 
     assert response["data"][0]["content"][0]["text"] == "nested text"
+
+
+def test_a_dotted_path_resolves_three_levels_deep():
+    config, _, _ = _config(documents=[{"_id": 1, "a": {"b": {"c": "deep text"}}, "score": 0.5}])
+
+    response = _search(config, litellm_params={"mongodb_text_field": "a.b.c"})
+
+    assert response["data"][0]["content"][0]["text"] == "deep text"
+
+
+def test_a_dotted_path_that_runs_through_a_scalar_counts_as_absent():
+    """Walking 'plot.nope' when plot is a string must report the misconfiguration, not
+    stringify the scalar and hand the model text from the wrong field."""
+    config, _, _ = _config(documents=[{"_id": 1, "plot": "a plain string", "score": 0.5}])
+
+    with pytest.raises(BadRequestError, match=r"has a 'plot\.nope' field"):
+        _search(config, litellm_params={"mongodb_text_field": "plot.nope"})
+
+
+def test_a_non_string_text_field_is_stringified():
+    config, _, _ = _config(documents=[{"_id": 1, "year": 1979, "score": 0.5}])
+
+    response = _search(config, litellm_params={"mongodb_text_field": "year"})
+
+    assert response["data"][0]["content"][0]["text"] == "1979"
+
+
+def test_a_null_text_field_counts_as_absent():
+    config, _, _ = _config(documents=[{"_id": 1, "text": None, "score": 0.5}])
+
+    with pytest.raises(BadRequestError, match="has a 'text' field"):
+        _search(config)
 
 
 def test_response_tolerates_a_sparse_document_missing_the_text_field():
@@ -489,7 +540,7 @@ async def test_async_search_builds_the_same_pipeline_and_maps_the_response():
     assert client.requested_database == "sample_mflix"
     assert client.database.requested_collection == "embedded_movies"
     assert _stage(collection, "$vectorSearch")["limit"] == 3
-    assert _stage(collection, "$vectorSearch")["queryVector"] == [0.1, 0.2, 0.3]
+    assert _stage(collection, "$vectorSearch")["queryVector"] == (0.1, 0.2, 0.3)
     assert response["data"][0]["content"][0]["text"] == "an astronaut adrift"
     assert response["data"][0]["score"] == 0.94
 
@@ -524,42 +575,36 @@ class TestClientCache:
         )
 
     def test_the_same_connection_reuses_one_client(self):
-        with patch("litellm.llms.mongodb.common_utils.import_sync_mongo_client") as importer:
-            importer.return_value = lambda *args, **kwargs: MagicMock()
-
-            first = get_sync_client(self._key())
-            second = get_sync_client(self._key())
+        first = get_sync_client(self._key(), RecordingClient)
+        second = get_sync_client(self._key(), RecordingClient)
 
         assert first is second
-        assert importer.return_value
+        assert first.connection_string == CONNECTION_STRING
+        assert first.kwargs["socketTimeoutMS"] == 30_000
+        assert first.kwargs["connectTimeoutMS"] == 10_000
+        assert first.kwargs["appname"] == "litellm"
 
     def test_a_different_connection_gets_its_own_client(self):
-        with patch("litellm.llms.mongodb.common_utils.import_sync_mongo_client") as importer:
-            importer.return_value = lambda *args, **kwargs: MagicMock()
-
-            first = get_sync_client(self._key())
-            second = get_sync_client(self._key(connection_string="mongodb://other.example.test"))
+        first = get_sync_client(self._key(), RecordingClient)
+        second = get_sync_client(self._key(connection_string="mongodb://other.example.test"), RecordingClient)
 
         assert first is not second
+        assert second.connection_string == "mongodb://other.example.test"
 
     def test_a_different_timeout_gets_its_own_client(self):
-        with patch("litellm.llms.mongodb.common_utils.import_sync_mongo_client") as importer:
-            importer.return_value = lambda *args, **kwargs: MagicMock()
-
-            first = get_sync_client(self._key())
-            second = get_sync_client(self._key(socket_timeout_ms=5_000))
+        first = get_sync_client(self._key(), RecordingClient)
+        second = get_sync_client(self._key(socket_timeout_ms=5_000), RecordingClient)
 
         assert first is not second
+        assert second.kwargs["socketTimeoutMS"] == 5_000
 
     @pytest.mark.asyncio
     async def test_async_clients_are_cached_per_event_loop(self):
-        with patch("litellm.llms.mongodb.common_utils.import_async_mongo_client") as importer:
-            importer.return_value = lambda *args, **kwargs: MagicMock()
-
-            first = get_async_client(self._key())
-            second = get_async_client(self._key())
+        first = get_async_client(self._key(), RecordingClient)
+        second = get_async_client(self._key(), RecordingClient)
 
         assert first is second
+        assert first.connection_string == CONNECTION_STRING
 
 
     def test_a_new_loop_never_inherits_a_closed_loop_client(self):
@@ -579,19 +624,16 @@ class TestClientCache:
         clients_handed_out = []
 
         async def fetch():
-            return get_async_client(key)
+            return get_async_client(key, LoopAgnosticClient)
 
-        with patch("litellm.llms.mongodb.common_utils.import_async_mongo_client") as importer:
-            importer.return_value = LoopAgnosticClient
-
-            for _ in range(20):
-                loop = asyncio.new_event_loop()
-                client = loop.run_until_complete(fetch())
-                clients_handed_out.append((client, client.built_on, loop.is_closed()))
-                client.built_on = weakref.ref(loop)
-                loop.close()
-                del loop
-                gc.collect()
+        for _ in range(20):
+            loop = asyncio.new_event_loop()
+            client = loop.run_until_complete(fetch())
+            clients_handed_out.append((client, client.built_on, loop.is_closed()))
+            client.built_on = weakref.ref(loop)
+            loop.close()
+            del loop
+            gc.collect()
 
         stale = [
             handed_out

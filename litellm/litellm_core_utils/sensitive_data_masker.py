@@ -1,13 +1,13 @@
 from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
 from typing import Any, Final
 
 from pydantic import BaseModel
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 
-
 _DEFAULT_SENSITIVE_PATTERNS: Final = frozenset(
-    {
+    (
         "password",
         "secret",
         "key",
@@ -23,20 +23,20 @@ _DEFAULT_SENSITIVE_PATTERNS: Final = frozenset(
         "certificate",
         "fingerprint",
         "tenancy",
-    }
+    )
 )
 
 
 class SensitiveDataMasker:
     def __init__(
         self,
-        sensitive_patterns: set[str] | None = None,
-        extra_sensitive_patterns: set[str] | None = None,
-        non_sensitive_overrides: set[str] | None = None,
+        sensitive_patterns: AbstractSet[str] | None = None,
+        non_sensitive_overrides: AbstractSet[str] | None = None,
         visible_prefix: int = 4,
         visible_suffix: int = 4,
         mask_char: str = "*",
         mask_short_values: bool = True,
+        extra_sensitive_patterns: AbstractSet[str] | None = None,
     ):
         self.sensitive_patterns = (sensitive_patterns or _DEFAULT_SENSITIVE_PATTERNS) | (
             extra_sensitive_patterns or frozenset()
@@ -44,7 +44,7 @@ class SensitiveDataMasker:
         # If any key segment matches one of these, the key is not considered sensitive
         # even if it also matches a sensitive pattern. For example, "input_cost_per_token"
         # contains "token" but "cost" overrides that — it's a pricing field, not a secret.
-        self.non_sensitive_overrides = non_sensitive_overrides or {"cost"}
+        self.non_sensitive_overrides = non_sensitive_overrides or frozenset(("cost",))
 
         self.visible_prefix = visible_prefix
         self.visible_suffix = visible_suffix
