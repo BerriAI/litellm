@@ -4011,6 +4011,50 @@ class TestStrategyRouterWriteValidation:
             is None
         )
 
+    def test_heuristic_v2_is_reserved_for_proxy_admins(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _heuristic_v2_admin_violation,
+        )
+
+        config = {"classifier_type": "heuristic_v2"}
+        violation = _heuristic_v2_admin_violation(
+            effective_config=config,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        assert violation is not None
+        assert "Only proxy admins" in violation
+        assert (
+            _heuristic_v2_admin_violation(
+                effective_config=config,
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+            )
+            is None
+        )
+
+    def test_team_admins_can_still_configure_heuristic_v1(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _heuristic_v2_admin_violation,
+        )
+
+        assert (
+            _heuristic_v2_admin_violation(
+                effective_config={"classifier_type": "heuristic"},
+                user_role=LitellmUserRoles.INTERNAL_USER,
+            )
+            is None
+        )
+
+    def test_database_singleton_violation_is_recognized(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            HEURISTIC_V2_SINGLETON_INDEX,
+            _is_heuristic_v2_slot_unique_violation,
+        )
+
+        assert _is_heuristic_v2_slot_unique_violation(
+            Exception(f'duplicate key violates unique constraint "{HEURISTIC_V2_SINGLETON_INDEX}"')
+        )
+        assert not _is_heuristic_v2_slot_unique_violation(Exception("unrelated database error"))
+
     def test_double_prefix_rejected_against_stored_params(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             _strategy_router_write_violation,
