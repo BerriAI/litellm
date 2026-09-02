@@ -26,7 +26,10 @@ finish any sooner. Migrate deploy therefore runs under its own budget.
 All three budgets are overridable so an operator can widen them without a
 release: ``LITELLM_PRISMA_BOOTSTRAP_TIMEOUT`` for the toolchain install,
 ``LITELLM_PRISMA_MIGRATE_DEPLOY_TIMEOUT`` for ``prisma migrate deploy`` and
-``LITELLM_PRISMA_COMMAND_TIMEOUT`` for every other Prisma command.
+``LITELLM_PRISMA_COMMAND_TIMEOUT`` for every other Prisma command. The
+per-command budget used to bound migrate deploy as well, so a deployment that
+raised it above the deploy default keeps that larger budget for deploy unless
+the deploy override says otherwise.
 """
 
 import math
@@ -102,9 +105,11 @@ def prisma_bootstrap_timeout() -> float:
 
 def prisma_migrate_deploy_timeout() -> float:
     """Seconds one ``prisma migrate deploy`` may run for, however many migrations are pending."""
-    return _timeout_from_env(
-        PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR, DEFAULT_PRISMA_MIGRATE_DEPLOY_TIMEOUT
-    )
+    if os.getenv(PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR) is not None:
+        return _timeout_from_env(
+            PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR, DEFAULT_PRISMA_MIGRATE_DEPLOY_TIMEOUT
+        )
+    return max(DEFAULT_PRISMA_MIGRATE_DEPLOY_TIMEOUT, prisma_command_timeout())
 
 
 def nodeenv_cache_dir() -> Optional[Path]:

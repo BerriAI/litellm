@@ -16,11 +16,13 @@ the proxy gave up after four identical timeouts.
 
 import ast
 import json
+import logging
 import os
 import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -52,10 +54,10 @@ import time
 args = sys.argv[1:]
 cache_dir = os.environ["PRISMA_NODEENV_CACHE_DIR"]
 log_path = pathlib.Path(os.environ["FAKE_PRISMA_LOG"])
-earlier_deploys = sum(
+earlier_same_command = sum(
     1
     for line in (log_path.read_text().splitlines() if log_path.exists() else [])
-    if json.loads(line)["args"][:2] == ["migrate", "deploy"]
+    if json.loads(line)["args"][:2] == args[:2]
 )
 with log_path.open("a") as log:
     log.write(
@@ -64,12 +66,14 @@ with log_path.open("a") as log:
     )
 time.sleep(float(os.environ.get("FAKE_PRISMA_SLEEP", "0")))
 if args[:2] == ["migrate", "deploy"]:
-    if earlier_deploys == 0:
+    if earlier_same_command == 0:
         time.sleep(float(os.environ.get("FAKE_PRISMA_FIRST_DEPLOY_SLEEP", "0")))
     elif os.environ.get("FAKE_PRISMA_LATER_DEPLOY_STDERR"):
         print(os.environ["FAKE_PRISMA_LATER_DEPLOY_STDERR"], file=sys.stderr)
         sys.exit(1)
     print("No pending migrations to apply")
+if args[:2] == ["db", "push"] and earlier_same_command == 0:
+    time.sleep(float(os.environ.get("FAKE_PRISMA_FIRST_PUSH_SLEEP", "0")))
 sys.exit(0)
 """
 
@@ -267,6 +271,47 @@ def test_migrate_deploy_stops_at_its_own_timeout(
 
     assert len(_deploy_calls(log_path)) == 2
     assert elapsed < 30
+
+
+def test_db_push_timeout_hint_names_the_per_command_budget(
+    toolchain_env: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``db push`` keeps the per-command budget, so its timeout hint has to name that variable."""
+    _, log_path = toolchain_env
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+    monkeypatch.setenv(PRISMA_COMMAND_TIMEOUT_ENV_VAR, "1")
+    monkeypatch.setenv("FAKE_PRISMA_FIRST_PUSH_SLEEP", "3")
+
+    with caplog.at_level(logging.WARNING, logger="litellm_proxy_extras"):
+        assert ProxyExtrasDBManager.setup_database(use_migrate=False, use_v2_resolver=False) is True
+
+    assert [call["args"][:2] for call in _fake_prisma_calls(log_path)].count(["db", "push"]) == 2
+    assert [record.getMessage() for record in caplog.records if "timed out" in record.getMessage()] == [
+        f"Attempt 1 timed out. Raise {PRISMA_COMMAND_TIMEOUT_ENV_VAR} if this database needs longer to apply its schema."
+    ]
+
+
+@pytest.mark.parametrize(
+    ("command_timeout", "deploy_timeout", "expected"),
+    [
+        ("900", None, 900.0),
+        ("12", None, DEFAULT_PRISMA_MIGRATE_DEPLOY_TIMEOUT),
+        ("900", "1200", 1200.0),
+        ("900", "300", 300.0),
+    ],
+    ids=["raised_command_budget_carries_over", "lowered_command_budget_does_not", "override_wins_upward", "override_wins_downward"],
+)
+def test_migrate_deploy_budget_keeps_a_raised_command_budget(
+    command_timeout: str, deploy_timeout: Optional[str], expected: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deployments that raised the per-command budget to survive a long deploy keep that budget for deploy."""
+    monkeypatch.setenv(PRISMA_COMMAND_TIMEOUT_ENV_VAR, command_timeout)
+    if deploy_timeout is None:
+        monkeypatch.delenv(PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR, raising=False)
+    else:
+        monkeypatch.setenv(PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR, deploy_timeout)
+
+    assert prisma_migrate_deploy_timeout() == expected
 
 
 @pytest.mark.parametrize(

@@ -15,6 +15,7 @@ from litellm_proxy_extras.replica_identity import (
     apply_replica_identity_full,
 )
 from litellm_proxy_extras.prisma_toolchain import (
+    PRISMA_COMMAND_TIMEOUT_ENV_VAR,
     PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR,
     ensure_prisma_toolchain,
     prisma_command_timeout,
@@ -1135,9 +1136,9 @@ class ProxyExtrasDBManager:
                     return True
             except subprocess.TimeoutExpired:
                 logger.warning(
-                    "Attempt %s timed out. Raise %s if this database needs longer to apply its pending migrations.",
+                    "Attempt %s timed out. Raise %s if this database needs longer to apply its schema.",
                     attempt + 1,
-                    PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR,
+                    PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR if use_migrate else PRISMA_COMMAND_TIMEOUT_ENV_VAR,
                 )
                 time.sleep(random.randrange(5, 15))
             except subprocess.CalledProcessError as e:
