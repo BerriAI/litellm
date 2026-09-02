@@ -758,12 +758,13 @@ def build_mantle_messages_url(
     """Build the bedrock-mantle Anthropic /messages URL.
 
     Honors an explicit endpoint override (``api_base``, then
-    ``aws_bedrock_runtime_endpoint``) so private VPC / VPCE / GovCloud Mantle
-    endpoints are reachable; otherwise falls back to the public regional host.
+    ``aws_bedrock_runtime_endpoint``, then ``BEDROCK_MANTLE_API_BASE``) so
+    private VPC / VPCE / GovCloud Mantle endpoints are reachable; otherwise
+    falls back to the public regional host.
     The mantle messages path is appended unless the override already carries it,
     so callers can pass either the host or the full messages URL.
     """
-    override: Final = api_base or aws_bedrock_runtime_endpoint
+    override: Final = api_base or aws_bedrock_runtime_endpoint or get_secret_str("BEDROCK_MANTLE_API_BASE")
     if override:
         base: Final = override.rstrip("/")
         if base.endswith(MANTLE_MESSAGES_PATH):
