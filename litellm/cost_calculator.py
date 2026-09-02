@@ -4,6 +4,7 @@ import logging
 import time
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from httpx import Response
@@ -1164,6 +1165,12 @@ def _store_cost_breakdown_in_logging_obj(
         # Don't fail the main cost calculation if breakdown storage fails
 
 
+def _without_provider_stated_cost(usage: Usage | None) -> Usage | None:
+    if usage is None or getattr(usage, "cost", None) is None:
+        return usage
+    return usage.model_copy(update=MappingProxyType({"cost": None}))
+
+
 def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
@@ -1243,7 +1250,10 @@ def completion_cost(
         cache_creation_input_tokens: int | None = None
         cache_read_input_tokens: int | None = None
         audio_transcription_file_duration: float = 0.0
-        cost_per_token_usage_object: Final[Usage | None] = _get_usage_object(completion_response=completion_response)
+        provider_usage_object: Final = _get_usage_object(completion_response=completion_response)
+        cost_per_token_usage_object: Final[Usage | None] = (
+            _without_provider_stated_cost(provider_usage_object) if custom_pricing else provider_usage_object
+        )
         rerank_billed_units: RerankBilledUnits | None = None
 
         # Extract service_tier from optional_params if not provided directly

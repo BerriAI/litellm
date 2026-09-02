@@ -7,7 +7,10 @@ import os
 
 import litellm
 from litellm.types.utils import (
+    Choices,
     CompletionTokensDetailsWrapper,
+    Message,
+    ModelResponse,
     PromptTokensDetailsWrapper,
     Usage,
 )
@@ -575,6 +578,48 @@ class TestXAICostCalculator:
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+    def test_custom_pricing_beats_the_reported_cost(self):
+        response = ModelResponse(
+            id="chatcmpl-xai",
+            model="grok-4-latest",
+            choices=[Choices(index=0, message=Message(role="assistant", content="x"), finish_reason="stop")],
+            usage=Usage(prompt_tokens=198, completion_tokens=353, total_tokens=551, cost=0.0009956),
+        )
+
+        billed = litellm.completion_cost(
+            completion_response=response,
+            model="xai/grok-4-latest",
+            custom_llm_provider="xai",
+            custom_cost_per_token={"input_cost_per_token": 0.001, "output_cost_per_token": 0.001},
+            custom_pricing=True,
+        )
+
+        assert math.isclose(billed, 0.551, rel_tol=1e-10)
+
+    def test_deployment_custom_pricing_beats_the_reported_cost(self, monkeypatch):
+        deployment_id = "xai-deployment-priced-by-the-operator"
+        monkeypatch.setitem(
+            litellm.model_cost,
+            deployment_id,
+            {"input_cost_per_token": 0.001, "output_cost_per_token": 0.001, "litellm_provider": "xai", "mode": "chat"},
+        )
+        response = ModelResponse(
+            id="chatcmpl-xai",
+            model="grok-4-latest",
+            choices=[Choices(index=0, message=Message(role="assistant", content="x"), finish_reason="stop")],
+            usage=Usage(prompt_tokens=198, completion_tokens=353, total_tokens=551, cost=0.0009956),
+        )
+
+        billed = litellm.completion_cost(
+            completion_response=response,
+            model="xai/grok-4-latest",
+            custom_llm_provider="xai",
+            custom_pricing=True,
+            router_model_id=deployment_id,
+        )
+
+        assert math.isclose(billed, 0.551, rel_tol=1e-10)
 
 
 class TestXAIWebSearchCostHelpers:

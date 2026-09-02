@@ -3181,3 +3181,22 @@ def test_stream_chunk_builder_defers_cost_to_logging_obj_when_usage_cost_absent(
 
     assert response is not None
     assert response._hidden_params.get("response_cost") is None
+
+
+def test_stream_chunk_builder_defers_provider_reported_cost_to_logging_obj(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
+    usage_chunk: Final = _stream_builder_text_chunk("gpt-4o", "")
+    usage_chunk.usage = Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7, cost=0.42)
+    chunks: Final = [
+        _stream_builder_text_chunk("gpt-4o", "Hello "),
+        _stream_builder_text_chunk("gpt-4o", "world.", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=_stream_builder_logging_obj()
+    )
+
+    assert response is not None
+    assert response.usage.cost == 0.42
+    assert response._hidden_params.get("response_cost") is None
