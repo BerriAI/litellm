@@ -25,6 +25,7 @@ from litellm.types.utils import (
     CallTypes,
     Delta,
     LlmProviders,
+    Message,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     StreamingChoices,
@@ -5182,6 +5183,102 @@ def test_completion_does_not_leak_rust_flag_into_provider_request_body():
     create_kwargs = mock_client.chat.completions.with_raw_response.create.call_args.kwargs
     assert "rust" not in create_kwargs
     assert "rust" not in (create_kwargs.get("extra_body") or {})
+
+
+_TOOL_CALL_ONLY_TURN_TOOL_CALLS: Final = [
+    {"id": "call_1", "type": "function", "function": {"name": "get_answer", "arguments": "{}"}}
+]
+
+
+def _assistant_turn_reaching_the_openai_sdk(assistant_turn: object) -> dict:
+    mock_response: Final = MagicMock()
+    mock_response.model_dump.return_value = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "gpt-4o-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "42"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+    mock_raw_response: Final = MagicMock()
+    mock_raw_response.headers = {}
+    mock_raw_response.parse.return_value = mock_response
+
+    mock_client: Final = MagicMock()
+    mock_client.chat.completions.with_raw_response.create.return_value = mock_raw_response
+
+    litellm.completion(
+        model="openai/gpt-4o-mini",
+        messages=[
+            {"role": "user", "content": "what is the answer"},
+            assistant_turn,
+            {"role": "tool", "tool_call_id": "call_1", "content": "42"},
+        ],
+        api_key="sk-test",
+        client=mock_client,
+    )
+
+    return mock_client.chat.completions.with_raw_response.create.call_args.kwargs["messages"][1]
+
+
+@pytest.mark.parametrize(
+    "assistant_turn",
+    [
+        pytest.param(
+            {"role": "assistant", "content": None, "tool_calls": _TOOL_CALL_ONLY_TURN_TOOL_CALLS},
+            id="plain_dict",
+        ),
+        pytest.param(
+            Message(role="assistant", content=None, tool_calls=_TOOL_CALL_ONLY_TURN_TOOL_CALLS),
+            id="pydantic_message",
+        ),
+    ],
+)
+def test_assistant_tool_call_only_turn_keeps_its_null_content(assistant_turn: object) -> None:
+    """OpenAI's schema makes content nullable on an assistant turn that only called a tool, which is the
+    shape every agent framework replays. Dropping the key makes strict OpenAI-compatible backends reject
+    the whole conversation with `missing field content`, so no multi-turn tool-calling run can continue.
+    https://github.com/BerriAI/litellm/issues/37711"""
+    sent: Final = _assistant_turn_reaching_the_openai_sdk(assistant_turn)
+
+    assert "content" in sent, f"content key was dropped from the assistant tool-call turn: {sent}"
+    assert sent["content"] is None
+
+
+def test_assistant_turn_without_a_content_key_does_not_gain_one() -> None:
+    sent: Final = _assistant_turn_reaching_the_openai_sdk(
+        {"role": "assistant", "tool_calls": _TOOL_CALL_ONLY_TURN_TOOL_CALLS}
+    )
+
+    assert "content" not in sent, f"content was invented for a caller that never sent the key: {sent}"
+
+
+def test_message_fields_other_than_content_are_still_stripped_when_none() -> None:
+    """None-valued message fields are dropped because providers reject e.g. function_call: None. Only
+    content is exempt, so widening the exemption would regress that."""
+    sent: Final = _assistant_turn_reaching_the_openai_sdk(
+        {
+            "role": "assistant",
+            "content": None,
+            "name": None,
+            "function_call": None,
+            "reasoning_content": None,
+            "tool_calls": _TOOL_CALL_ONLY_TURN_TOOL_CALLS,
+        }
+    )
+
+    assert sent == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": _TOOL_CALL_ONLY_TURN_TOOL_CALLS,
+    }
 
 
 class _RecordingDeploymentFailureLogger(CustomLogger):

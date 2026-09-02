@@ -7803,6 +7803,10 @@ def convert_to_dict(message: BaseModel | dict) -> dict:
     """
     Converts a message to a dictionary if it's a Pydantic model.
 
+    An explicitly set content=None survives the dump: OpenAI's schema makes content nullable on an
+    assistant tool-call turn, and strict deserializers reject the key being absent
+    (https://github.com/BerriAI/litellm/issues/37711).
+
     Args:
         message: The message, which may be a Pydantic model or a dictionary.
 
@@ -7810,7 +7814,10 @@ def convert_to_dict(message: BaseModel | dict) -> dict:
         dict: The converted message.
     """
     if isinstance(message, BaseModel):
-        return message.model_dump(exclude_none=True)
+        dumped: Final = message.model_dump(exclude_none=True)
+        if "content" in dumped or "content" not in message.model_fields_set:
+            return dumped
+        return {**dumped, "content": None}
     elif isinstance(message, dict):
         return message
     else:
@@ -7890,9 +7897,11 @@ def cleanup_none_field_in_message(message: AllMessageValues):
     Cleans up the message by removing the none field.
 
     remove None fields in the message - e.g. {"function": None} - some providers raise validation errors
+
+    content is exempt: OpenAI's schema makes it nullable on an assistant tool-call turn, and strict
+    deserializers reject the key being absent (https://github.com/BerriAI/litellm/issues/37711).
     """
-    new_message: Final = message.copy()
-    return {k: v for k, v in new_message.items() if v is not None}
+    return {k: v for k, v in message.items() if v is not None or k == "content"}
 
 
 def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
