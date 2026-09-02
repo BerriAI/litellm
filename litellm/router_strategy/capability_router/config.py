@@ -3,7 +3,7 @@
 import math
 from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 from typing_extensions import Self
 
 
@@ -38,12 +38,29 @@ class CapabilityRule(BaseModel):
         return _nonblank(value, "capability rule")
 
 
+class CapabilityCalibrationBin(BaseModel):
+    """One monotonic post-hoc calibration bucket learned from end-to-end outcomes."""
+
+    upper_bound: float = Field(ge=0.0, le=1.0)
+    probability: float = Field(ge=0.0, le=1.0)
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    @field_validator("upper_bound", "probability", mode="before")
+    @classmethod
+    def validate_finite_value(cls, value: object) -> object:
+        if isinstance(value, (int, float)) and not math.isfinite(value):
+            raise ValueError("calibration values must be finite")
+        return value
+
+
 class CapabilityRouterCandidate(BaseModel):
     """A model group and the operator's description of when it succeeds."""
 
     model: str
     description: str
     rules: tuple[CapabilityRule, ...] = ()
+    probability_calibration: tuple[CapabilityCalibrationBin, ...] = ()
 
     model_config = ConfigDict(extra="forbid")
 
@@ -56,6 +73,18 @@ class CapabilityRouterCandidate(BaseModel):
     @classmethod
     def validate_description(cls, value: str) -> str:
         return _nonblank(value, "candidate description")
+
+    @model_validator(mode="after")
+    def validate_probability_calibration(self) -> Self:
+        upper_bounds: Final = tuple(bucket.upper_bound for bucket in self.probability_calibration)
+        probabilities: Final = tuple(bucket.probability for bucket in self.probability_calibration)
+        if any(right <= left for left, right in zip(upper_bounds, upper_bounds[1:])):
+            raise ValueError("calibration upper bounds must be strictly increasing")
+        if any(right < left for left, right in zip(probabilities, probabilities[1:])):
+            raise ValueError("calibration probabilities must be nondecreasing")
+        if upper_bounds and upper_bounds[-1] != 1.0:
+            raise ValueError("the final calibration upper bound must be 1")
+        return self
 
 
 def indexed_rules(candidate: CapabilityRouterCandidate) -> tuple[tuple[str, CapabilityRule], ...]:
@@ -130,8 +159,8 @@ class CapabilityCandidateScore(BaseModel):
 
     @field_validator("model", "reason", "primary_rule")
     @classmethod
-    def validate_nonblank(cls, value: str, info) -> str:
-        return _nonblank(value, info.field_name)
+    def validate_nonblank(cls, value: str, info: ValidationInfo) -> str:
+        return _nonblank(value, info.field_name or "classifier field")
 
     @field_validator("p_solve", mode="before")
     @classmethod

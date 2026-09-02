@@ -24699,6 +24699,16 @@ export interface components {
             status: "cancelled";
         };
         /**
+         * CapabilityCalibrationBin
+         * @description One monotonic post-hoc calibration bucket learned from end-to-end outcomes.
+         */
+        CapabilityCalibrationBin: {
+            /** Probability */
+            probability: number;
+            /** Upper Bound */
+            upper_bound: number;
+        };
+        /**
          * CapabilityClassifierConfig
          * @description The model used to estimate each candidate's probability of success.
          */
@@ -24730,6 +24740,11 @@ export interface components {
             description: string;
             /** Model */
             model: string;
+            /**
+             * Probability Calibration
+             * @default []
+             */
+            probability_calibration: components["schemas"]["CapabilityCalibrationBin"][];
             /**
              * Rules
              * @default []
@@ -36099,6 +36114,10 @@ export interface components {
         StandardLoggingRoutingDecision: {
             /** Cached */
             cached?: boolean;
+            /** Candidate Boundaries */
+            candidate_boundaries?: {
+                [key: string]: string;
+            };
             /** Candidate Costs */
             candidate_costs?: {
                 [key: string]: number;
@@ -36106,6 +36125,10 @@ export interface components {
             /** Candidate Probabilities */
             candidate_probabilities?: {
                 [key: string]: number;
+            };
+            /** Candidate Rules */
+            candidate_rules?: {
+                [key: string]: string;
             };
             /**
              * Cause
@@ -36134,6 +36157,10 @@ export interface components {
             probability_threshold?: number;
             /** Qualified Models */
             qualified_models?: string[];
+            /** Raw Candidate Probabilities */
+            raw_candidate_probabilities?: {
+                [key: string]: number;
+            };
             /** Reasoning Override Min Score */
             reasoning_override_min_score?: number;
             /** Request Type */

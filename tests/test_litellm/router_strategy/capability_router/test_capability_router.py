@@ -41,6 +41,14 @@ def test_config_requires_unique_candidates_and_candidate_fallback() -> None:
     with pytest.raises(ValidationError, match="one of the candidate"):
         CapabilityRouterConfig.model_validate(missing_fallback)
 
+    invalid_calibration = config()
+    invalid_calibration["candidates"][0]["probability_calibration"] = [
+        {"upper_bound": 0.5, "probability": 0.8},
+        {"upper_bound": 1.0, "probability": 0.4},
+    ]
+    with pytest.raises(ValidationError, match="nondecreasing"):
+        CapabilityRouterConfig.model_validate(invalid_calibration)
+
 
 def test_policy_selects_cheapest_model_above_global_threshold() -> None:
     parsed = CapabilityRouterConfig.model_validate(config())
@@ -178,7 +186,34 @@ async def test_same_user_turn_reuses_cached_decision() -> None:
     assert first.model == second.model == "small"
     assert first.routing_decision is not None and first.routing_decision["cached"] is False
     assert second.routing_decision is not None and second.routing_decision["cached"] is True
+    assert first.routing_decision["raw_candidate_probabilities"] == {"small": 0.9, "frontier": 0.95}
+    assert first.routing_decision["candidate_rules"] == {"small": "none", "frontier": "none"}
     strategy._new_decision.assert_awaited_once()
+
+
+def test_policy_qualifies_on_calibrated_probability_and_keeps_raw_forecast() -> None:
+    configured = config()
+    configured["candidates"][0]["probability_calibration"] = [
+        {"upper_bound": 0.8, "probability": 0.4},
+        {"upper_bound": 1.0, "probability": 0.9},
+    ]
+    parsed = CapabilityRouterConfig.model_validate(configured)
+    verdict = CapabilityClassifierVerdict.model_validate(
+        {
+            "candidates": [
+                {"model": "small", "capability_boundary": "supported", "p_solve": 0.78, "reason": "raw optimism"},
+                {"model": "frontier", "capability_boundary": "supported", "p_solve": 0.95, "reason": "covered"},
+            ]
+        }
+    )
+
+    decision = select_capability_model(parsed, verdict, {"small": 0.01, "frontier": 0.05})
+
+    small = decision.candidates[0]
+    assert small.raw_p_solve == 0.78
+    assert small.p_solve == 0.4
+    assert small.qualified is False
+    assert decision.selected_model == "frontier"
 
 
 def test_boundary_buckets_step_the_effective_threshold() -> None:
