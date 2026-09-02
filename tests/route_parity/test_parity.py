@@ -23,6 +23,10 @@ class _DifferentResponse(BaseModel):
     value: str
 
 
+class _FloatResponse(BaseModel):
+    values: list[float]
+
+
 class _PublicError(ValueError):
     status_code: Final = 400
 
@@ -69,7 +73,7 @@ def test_parity_rejects_error_difference() -> None:
             error_type=None,
             param=None,
             model="test-model",
-            llm_provider="mistral",
+            llm_provider="test-provider",
         ),
     )
     rust: Final = python.model_copy(update={"report": python.report.model_copy(update={"status_code": 500})})
@@ -116,3 +120,19 @@ def test_model_parity_rejects_public_value_difference() -> None:
 def test_model_parity_rejects_type_difference() -> None:
     with pytest.raises(AssertionError):
         assert_model_parity(_ComparableResponse(value="same"), _DifferentResponse(value="same"))
+
+
+def test_model_parity_rejects_wire_float_rounding_difference() -> None:
+    with pytest.raises(AssertionError, match=r"\$\.values\[0\]"):
+        assert_model_parity(
+            _FloatResponse(values=[0.22590550796036835]),
+            _FloatResponse(values=[0.22590550796036837]),
+        )
+
+
+def test_model_parity_rejects_meaningful_float_difference() -> None:
+    with pytest.raises(AssertionError, match=r"\$\.values\[0\]"):
+        assert_model_parity(
+            _FloatResponse(values=[0.22590550796036835]),
+            _FloatResponse(values=[0.2259]),
+        )

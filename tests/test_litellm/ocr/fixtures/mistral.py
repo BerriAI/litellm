@@ -5,10 +5,10 @@ from typing import Final, Literal, cast
 
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
-from pydantic import Field, model_validator
+from pydantic import model_validator
 from typing_extensions import Self
 
-from tests.route_parity.fixtures.recording import ProviderSpec
+from tests.route_parity.fixtures.recording import UpstreamEndpoint
 from tests.test_litellm.ocr.fixtures.base import (
     JsonSchemaResponseFormat,
     OcrDocument,
@@ -20,11 +20,7 @@ from tests.test_litellm.ocr.fixtures.common import (
     annotation_format,
     document_transport_strategy,
     invoke_with_api_key,
-    parameter_strategy,
     pdf_document,
-    sampled_list_strategy,
-    sampled_parameter_group_strategy,
-    sampled_scalar_strategy,
 )
 
 MistralModel = Literal[
@@ -43,6 +39,7 @@ MistralModel = Literal[
     "mistral-ocr-4",
     "mistral-ocr-latest",
 ]
+MistralFixtureModel = MistralModel | Literal["mistral/invalid-ocr-model-for-parity"]
 
 MISTRAL_MODELS: Final[tuple[MistralModel, ...]] = (
     "mistral/mistral-ocr-3",
@@ -79,8 +76,8 @@ class MistralCompatibleOcrSdkInput(OcrSdkInputBase):
 
 
 class MistralOcrSdkInput(MistralCompatibleOcrSdkInput):
-    boundary: str = Field(default="mistral", pattern=r"^mistral$")
-    model: MistralModel
+    contract: Literal["mistral"] = "mistral"
+    model: MistralFixtureModel
     custom_llm_provider: Literal["mistral"] | None = None
 
     @model_validator(mode="after")
@@ -90,15 +87,9 @@ class MistralOcrSdkInput(MistralCompatibleOcrSdkInput):
         return self
 
 
-class MistralProviderRejectedOcrSdkInput(MistralCompatibleOcrSdkInput):
-    boundary: str = Field(default="mistral", pattern=r"^mistral$")
-    model: Literal["mistral/invalid-ocr-model-for-parity"]
-    custom_llm_provider: Literal["mistral"] | None = None
-
-
 MISTRAL_MODEL: Final[MistralModel] = "mistral/mistral-ocr-latest"
-MISTRAL_PROVIDER_REJECTED_INPUTS: Final[tuple[MistralProviderRejectedOcrSdkInput, ...]] = (
-    MistralProviderRejectedOcrSdkInput(
+MISTRAL_PROVIDER_REJECTED_INPUTS: Final[tuple[MistralOcrSdkInput, ...]] = (
+    MistralOcrSdkInput(
         model="mistral/invalid-ocr-model-for-parity",
         document=pdf_document(),
     ),
@@ -135,40 +126,35 @@ def _optional_param_strategies(
 ]:
     annotation: Final = annotation_format("document_title")
     common: Final[tuple[SearchStrategy[dict[str, object]], ...]] = (
-        parameter_strategy("pages", sampled_list_strategy(((0,), (0, 1)))),
-        parameter_strategy("include_image_base64", sampled_scalar_strategy((False, True))),
-        parameter_strategy("image_limit", sampled_scalar_strategy((1,))),
-        parameter_strategy("image_min_size", sampled_scalar_strategy((300,))),
-        parameter_strategy(
-            "bbox_annotation_format",
-            sampled_scalar_strategy((annotation_format("bounding_boxes"),)),
-        ),
-        parameter_strategy("document_annotation_format", sampled_scalar_strategy((annotation,))),
+        st.sampled_from(((0,), (0, 1))).map(list).map(lambda value: {"pages": value}),
+        st.sampled_from((False, True)).map(lambda value: {"include_image_base64": value}),
+        st.just({"image_limit": 1}),
+        st.just({"image_min_size": 300}),
+        st.just({"bbox_annotation_format": annotation_format("bounding_boxes")}),
+        st.just({"document_annotation_format": annotation}),
         *(
             (
-                sampled_parameter_group_strategy(
-                    (
-                        (
-                            ("document_annotation_format", annotation),
-                            ("document_annotation_prompt", "Extract the visible title"),
-                        ),
-                    )
+                st.just(
+                    {
+                        "document_annotation_format": annotation,
+                        "document_annotation_prompt": "Extract the visible title",
+                    }
                 ),
             )
             if include_document_annotation_prompt
             else ()
         ),
-        parameter_strategy("confidence_scores_granularity", sampled_scalar_strategy(("page", "word"))),
+        st.sampled_from(("page", "word")).map(lambda value: {"confidence_scores_granularity": value}),
     )
     feature_2512: Final[tuple[SearchStrategy[dict[str, object]], ...]] = (
-        parameter_strategy("extract_header", sampled_scalar_strategy((False, True))),
-        parameter_strategy("extract_footer", sampled_scalar_strategy((False, True))),
-        parameter_strategy("table_format", sampled_scalar_strategy(("markdown", "html"))),
+        st.sampled_from((False, True)).map(lambda value: {"extract_header": value}),
+        st.sampled_from((False, True)).map(lambda value: {"extract_footer": value}),
+        st.sampled_from(("markdown", "html")).map(lambda value: {"table_format": value}),
     )
     feature_4: Final[tuple[SearchStrategy[dict[str, object]], ...]] = (
-        parameter_strategy("pages", sampled_scalar_strategy(("0-2",))),
-        parameter_strategy("include_blocks", sampled_scalar_strategy((False, True))),
-        sampled_parameter_group_strategy(((("include_blocks", True), ("confidence_scores_granularity", "block")),)),
+        st.just({"pages": "0-2"}),
+        st.sampled_from((False, True)).map(lambda value: {"include_blocks": value}),
+        st.just({"include_blocks": True, "confidence_scores_granularity": "block"}),
     )
     return common, feature_2512, feature_4
 
@@ -237,7 +223,7 @@ def _mistral_recording_strategy(inline_image_data_uri: str) -> SearchStrategy[Mi
     feature_2512_options: Final[SearchStrategy[dict[str, object]]] = st.one_of(*feature_2512)
     feature_4_options: Final[SearchStrategy[dict[str, object]]] = st.one_of(*feature_4)
     return st.one_of(
-        sampled_scalar_strategy(baseline_models).map(lambda model: _mistral_input(model, document)),
+        st.sampled_from(baseline_models).map(lambda model: _mistral_input(model, document)),
         document_transport_strategy(inline_image_data_uri).map(
             lambda selected_document: _mistral_input(MISTRAL_MODEL, selected_document)
         ),
@@ -258,11 +244,11 @@ def mistral_recording_targets(
     if not api_key:
         return ()
     configured: Final = environ.get("MISTRAL_API_BASE", "https://api.mistral.ai").rstrip("/")
-    upstream_base: Final = configured.removesuffix("/v1")
+    base_url: Final = configured.removesuffix("/v1")
     return (
         OcrRecordingTarget(
             name="mistral-ocr",
-            provider_spec=ProviderSpec(upstream_base=upstream_base),
+            upstream=UpstreamEndpoint(base_url=base_url),
             strategy=cast(
                 SearchStrategy[OcrSdkInputBase],
                 _mistral_recording_strategy(inline_image_data_uri),

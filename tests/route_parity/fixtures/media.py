@@ -19,9 +19,9 @@ def dummy_image_url(text: str, font_size: int, width: int = 800, height: int = 3
 
 
 _GLYPHS: Final = {
+    "D": ("11110", "10001", "10001", "10001", "10001", "10001", "11110"),
     "O": ("01110", "10001", "10001", "10001", "10001", "10001", "01110"),
     "C": ("01111", "10000", "10000", "10000", "10000", "10000", "01111"),
-    "R": ("11110", "10001", "10001", "11110", "10100", "10010", "10001"),
     "1": ("00100", "01100", "00100", "00100", "00100", "00100", "01110"),
     "2": ("01110", "10001", "00001", "00010", "00100", "01000", "11111"),
     "3": ("11110", "00001", "00001", "01110", "00001", "00001", "11110"),
@@ -34,7 +34,7 @@ def structured_image_bytes() -> bytes:
     draw: Final = ImageDraw.Draw(image)
     scale: Final = 8
     cursor_x = 24
-    for character in "OCR 123":
+    for character in "DOC 123":
         if character == " ":
             cursor_x += scale * 3
             continue
@@ -108,7 +108,7 @@ def _draw_table_page(pdf: canvas.Canvas) -> None:
             (
                 ("Item", "Quantity", "Amount", 707),
                 ("Document analysis", "2", "120.00", 672),
-                ("OCR verification", "1", "80.00", 637),
+                ("Document verification", "1", "80.00", 637),
             ),
         ),
         (
@@ -200,9 +200,9 @@ def structured_pdf_bytes() -> bytes:
     output: Final = BytesIO()
     pdf: Final = canvas.Canvas(output, pagesize=letter, pageCompression=0, invariant=1)
     pdf.setTitle("Quarterly Operations Report")
-    pdf.setAuthor("LiteLLM OCR fixture generator")
-    pdf.setSubject("Semantic OCR coverage for tables, figures, annotations, and metadata")
-    pdf.setKeywords("OCR, invoice, table, figure, annotation")
+    pdf.setAuthor("LiteLLM parity fixture generator")
+    pdf.setSubject("Semantic document coverage for tables, figures, annotations, and metadata")
+    pdf.setKeywords("document, invoice, table, figure, annotation")
     pages: Final = (
         ("Invoice Summary and Line Items", _draw_table_page),
         ("Revenue Chart and Formula Review", _draw_chart_page),

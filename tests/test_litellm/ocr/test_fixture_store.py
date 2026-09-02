@@ -7,7 +7,7 @@ from typing import Final, Protocol, cast
 
 import pytest
 
-from tests.route_parity.fixtures.store import parametrize_recorded_fixtures
+from tests.route_parity.fixtures.pytest_support import parametrize_recorded_fixtures
 from tests.test_litellm.ocr.conftest import ocr_fixture_id, ocr_fixture_marks
 from tests.test_litellm.ocr.fixtures.models import OcrParityCase
 
@@ -45,7 +45,7 @@ def test_recorded_fixture_parametrization_applies_case_specific_marks() -> None:
     reducto_parameters: Final = tuple(
         parameter
         for parameter in parameters
-        if parameter.values[0].litellm_input.boundary in {"reducto_v3", "reducto_legacy"}
+        if parameter.values[0].litellm_input.contract in {"reducto_v3", "reducto_legacy"}
     )
     supported_parameters: Final = tuple(parameter for parameter in parameters if parameter not in reducto_parameters)
 

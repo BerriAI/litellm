@@ -12,16 +12,13 @@ from typing_extensions import Self
 
 from tests.route_parity.fixture_models import FixtureModel, JsonObject
 from tests.route_parity.fixtures.media import structured_pdf_data_uri
-from tests.route_parity.fixtures.recording import ProviderSpec
+from tests.route_parity.fixtures.recording import UpstreamEndpoint
 from tests.test_litellm.ocr.fixtures.base import OcrSdkInputBase
 from tests.test_litellm.ocr.fixtures.common import (
     OcrFixtureClient,
     OcrRecordingTarget,
     image_data_document,
     invoke_with_api_key,
-    parameter_strategy,
-    sampled_list_strategy,
-    sampled_scalar_strategy,
 )
 
 
@@ -204,7 +201,7 @@ class ReductoSettings(FixtureModel):
 
 
 class ReductoParseV3SdkInput(OcrSdkInputBase):
-    boundary: str = Field(default="reducto_v3", pattern=r"^reducto_v3$")
+    contract: Literal["reducto_v3"] = "reducto_v3"
     model: ReductoV3Model
     document: ReductoDocument
     custom_llm_provider: Literal["reducto"] | None = None
@@ -220,7 +217,7 @@ class ReductoParseV3SdkInput(OcrSdkInputBase):
 
 
 class ReductoParseLegacySdkInput(OcrSdkInputBase):
-    boundary: str = Field(default="reducto_legacy", pattern=r"^reducto_legacy$")
+    contract: Literal["reducto_legacy"] = "reducto_legacy"
     model: ReductoLegacyModel
     document: ReductoDocument
     custom_llm_provider: Literal["reducto"] | None = None
@@ -233,28 +230,44 @@ class ReductoParseLegacySdkInput(OcrSdkInputBase):
         return self
 
 
+_REDUCTO_PROVIDER_REJECTED_DOCUMENT: Final = ReductoDocumentUrlDocument(
+    type="document_url",
+    document_url="reducto://invalid-document-for-parity",
+)
+REDUCTO_V3_PROVIDER_REJECTED_INPUTS: Final[tuple[ReductoParseV3SdkInput, ...]] = (
+    ReductoParseV3SdkInput(
+        model="reducto/parse-v3",
+        document=_REDUCTO_PROVIDER_REJECTED_DOCUMENT,
+    ),
+)
+REDUCTO_LEGACY_PROVIDER_REJECTED_INPUTS: Final[tuple[ReductoParseLegacySdkInput, ...]] = (
+    ReductoParseLegacySdkInput(
+        model="reducto/parse-legacy",
+        document=_REDUCTO_PROVIDER_REJECTED_DOCUMENT,
+    ),
+)
+
+
 _REDUCTO_API_BASE: Final = "https://platform.reducto.ai"
 
 
 def _formatting_strategy() -> SearchStrategy[ReductoFormatting]:
     values: Final = st.one_of(
-        parameter_strategy(
-            "table_output_format",
-            sampled_scalar_strategy(("dynamic", "html", "md", "json", "csv", "jsonbbox")),
+        st.sampled_from(("dynamic", "html", "md", "json", "csv", "jsonbbox")).map(
+            lambda value: {"table_output_format": value}
         ),
-        parameter_strategy("add_page_markers", sampled_scalar_strategy((False, True))),
-        parameter_strategy("merge_tables", sampled_scalar_strategy((False, True))),
-        parameter_strategy(
-            "include",
-            sampled_list_strategy(
-                (
-                    (),
-                    ("hyperlinks",),
-                    ("change_tracking", "highlight", "comments"),
-                    ("signatures", "ignore_watermarks"),
-                )
-            ),
-        ),
+        st.sampled_from((False, True)).map(lambda value: {"add_page_markers": value}),
+        st.sampled_from((False, True)).map(lambda value: {"merge_tables": value}),
+        st.sampled_from(
+            (
+                (),
+                ("hyperlinks",),
+                ("change_tracking", "highlight", "comments"),
+                ("signatures", "ignore_watermarks"),
+            )
+        )
+        .map(list)
+        .map(lambda value: {"include": value}),
     )
     return values.map(ReductoFormatting.model_validate)
 
@@ -265,21 +278,22 @@ def _chunking_strategy() -> SearchStrategy[ReductoChunking]:
             lambda mode: ReductoChunking(chunk_mode=mode)
         ),
         st.just(ReductoChunking(chunk_mode="variable")),
-        sampled_scalar_strategy((250, 1000, 1500)).map(
-            lambda size: ReductoChunking(chunk_mode="variable", chunk_size=size)
-        ),
-        sampled_scalar_strategy((32, 128)).map(
+        st.sampled_from((250, 1000, 1500)).map(lambda size: ReductoChunking(chunk_mode="variable", chunk_size=size)),
+        st.sampled_from((32, 128)).map(
             lambda overlap: ReductoChunking(chunk_mode="variable", chunk_size=1000, chunk_overlap=overlap)
         ),
     )
 
 
 def _retrieval_strategy() -> SearchStrategy[ReductoRetrieval]:
-    filter_blocks: Final[SearchStrategy[list[ReductoBlockType]]] = sampled_list_strategy(_REDUCTO_FILTER_BLOCK_GROUPS)
+    filter_blocks: Final = cast(
+        SearchStrategy[list[ReductoBlockType]],
+        st.sampled_from(_REDUCTO_FILTER_BLOCK_GROUPS).map(list),
+    )
     return st.one_of(
         _chunking_strategy().map(lambda chunking: ReductoRetrieval(chunking=chunking)),
         filter_blocks.map(lambda selected_blocks: ReductoRetrieval(filter_blocks=selected_blocks)),
-        sampled_scalar_strategy((False, True)).map(
+        st.sampled_from((False, True)).map(
             lambda optimized: ReductoRetrieval(
                 chunking=ReductoChunking(chunk_mode="variable"),
                 embedding_optimized=optimized,
@@ -291,18 +305,20 @@ def _retrieval_strategy() -> SearchStrategy[ReductoRetrieval]:
 def _settings_strategy() -> SearchStrategy[ReductoSettings]:
     # force_url_result stays model-compatible but is not recorded until the
     # response transform follows and downloads result.url.
-    return_images: Final[SearchStrategy[list[ReductoReturnImage]]] = sampled_list_strategy(_REDUCTO_RETURN_IMAGE_GROUPS)
+    return_images: Final[SearchStrategy[list[ReductoReturnImage]]] = st.sampled_from(_REDUCTO_RETURN_IMAGE_GROUPS).map(
+        list
+    )
     page_ranges: Final = st.one_of(
         st.just(ReductoPageRange(start=1, end=1)),
         st.just(ReductoPageRange(start=1, end=3)),
-        sampled_list_strategy(
+        st.sampled_from(
             (
                 (
                     ReductoPageRange(start=1, end=2),
                     ReductoPageRange(start=4, end=5),
                 ),
             )
-        ),
+        ).map(list),
     )
     return st.one_of(
         st.just(ReductoSettings(model="r-1")),
@@ -311,10 +327,10 @@ def _settings_strategy() -> SearchStrategy[ReductoSettings]:
         st.just(ReductoSettings(return_ocr_data=True)),
         return_images.map(lambda selected_images: ReductoSettings(return_images=selected_images)),
         st.just(ReductoSettings(embed_pdf_metadata=True)),
-        sampled_scalar_strategy((50, 100, 250)).map(
+        st.sampled_from((50, 100, 250)).map(
             lambda dpi: ReductoSettings(embed_pdf_metadata=True, embed_pdf_metadata_dpi=dpi)
         ),
-        sampled_scalar_strategy((300.0,)).map(lambda timeout: ReductoSettings(timeout=timeout)),
+        st.just(ReductoSettings(timeout=300.0)),
         page_ranges.map(lambda page_range: ReductoSettings(page_range=page_range)),
     )
 
@@ -403,20 +419,22 @@ def reducto_recording_targets(
     api_key: Final = environ.get("REDUCTO_API_KEY")
     if not api_key:
         return ()
-    upstream_base: Final = environ.get("REDUCTO_API_BASE", _REDUCTO_API_BASE).rstrip("/")
+    base_url: Final = environ.get("REDUCTO_API_BASE", _REDUCTO_API_BASE).rstrip("/")
     document: Final = ReductoDocumentUrlDocument(type="document_url", document_url=structured_pdf_data_uri())
     invocation: Final = invoke_with_api_key(client, api_key)
     return (
         OcrRecordingTarget(
             name="reducto-v3",
-            provider_spec=ProviderSpec(upstream_base=upstream_base),
+            upstream=UpstreamEndpoint(base_url=base_url),
             strategy=cast(SearchStrategy[OcrSdkInputBase], reducto_v3_input_strategy(inline_image_data_uri, document)),
             invocation=invocation,
+            required_inputs=REDUCTO_V3_PROVIDER_REJECTED_INPUTS,
         ),
         OcrRecordingTarget(
             name="reducto-legacy",
-            provider_spec=ProviderSpec(upstream_base=upstream_base),
+            upstream=UpstreamEndpoint(base_url=base_url),
             strategy=cast(SearchStrategy[OcrSdkInputBase], reducto_legacy_input_strategy(document)),
             invocation=invocation,
+            required_inputs=REDUCTO_LEGACY_PROVIDER_REJECTED_INPUTS,
         ),
     )

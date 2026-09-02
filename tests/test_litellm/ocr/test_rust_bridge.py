@@ -368,6 +368,18 @@ def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
 def test_timeout_to_seconds_handles_float_timeout_and_none():
     assert rust_bridge._timeout_to_seconds(12.5) == 12.5
     assert rust_bridge._timeout_to_seconds(None) is None
+
+
+def test_ocr_provider_error_uses_resolved_request_url():
+    error = rust_bridge._OcrProviderError(
+        429,
+        "rate limited",
+        "https://example.azure.com/documentintelligence/documentModels/read:analyze",
+    )
+
+    assert str(error.response.request.url) == (
+        "https://example.azure.com/documentintelligence/documentModels/read:analyze"
+    )
     assert rust_bridge._timeout_to_seconds(httpx.Timeout(30.0, read=42.0)) == 42.0
 
 

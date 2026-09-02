@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import cache
-from typing import Final, Literal, Protocol, TypeVar
+from typing import Final, Literal, Protocol
 
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
-from tests.route_parity.fixtures.media import dummy_image_url, structured_pdf_data_uri
 from tests.route_parity.fixtures.pipeline import RecordingTarget
+from tests.route_parity.fixtures.media import dummy_image_url, structured_pdf_data_uri
 from tests.test_litellm.ocr.fixtures.base import (
     DocumentUrlDocument,
     ImageUrlDocument,
@@ -18,7 +18,6 @@ from tests.test_litellm.ocr.fixtures.base import (
 )
 
 OcrRecordingTarget = RecordingTarget[OcrSdkInputBase]
-ValueT = TypeVar("ValueT")
 
 
 class OcrFixtureClient(Protocol):
@@ -79,27 +78,6 @@ def document_transport_strategy(inline_image_data_uri: str) -> SearchStrategy[Im
         return pdf_document()
 
     return st.sampled_from(transports).map(as_document)
-
-
-def sampled_scalar_strategy(values: tuple[ValueT, ...]) -> SearchStrategy[ValueT]:
-    return st.sampled_from(values)
-
-
-def sampled_list_strategy(values: tuple[tuple[ValueT, ...], ...]) -> SearchStrategy[list[ValueT]]:
-    return st.sampled_from(values).map(list)
-
-
-def sampled_parameter_group_strategy(
-    values: tuple[tuple[tuple[str, object], ...], ...],
-) -> SearchStrategy[dict[str, object]]:
-    return st.sampled_from(values).map(dict)
-
-
-def parameter_strategy(name: str, values: SearchStrategy[ValueT]) -> SearchStrategy[dict[str, object]]:
-    def as_parameter(value: ValueT) -> dict[str, object]:
-        return {name: value}
-
-    return values.map(as_parameter)
 
 
 def annotation_format(name: str) -> JsonSchemaResponseFormat:

@@ -185,16 +185,16 @@ def normalize_chunk(chunk: object) -> object:
 
 
 def assert_stream_parity(
-    python: StreamOutcome,
-    accelerated: StreamOutcome,
+    baseline: StreamOutcome,
+    candidate: StreamOutcome,
     *,
     normalize: ChunkNormalizer = normalize_chunk,
 ) -> None:
-    assert python.wrapper_type is accelerated.wrapper_type
-    assert python.supports_sync_iteration is accelerated.supports_sync_iteration
-    assert python.supports_async_iteration is accelerated.supports_async_iteration
-    assert python.chunk_types == accelerated.chunk_types
-    assert len(python.chunks) == len(accelerated.chunks)
-    for python_chunk, accelerated_chunk in zip(python.chunks, accelerated.chunks, strict=True):
-        assert normalize(python_chunk) == normalize(accelerated_chunk)
-    assert python.terminal == accelerated.terminal
+    assert baseline.wrapper_type is candidate.wrapper_type
+    assert baseline.supports_sync_iteration is candidate.supports_sync_iteration
+    assert baseline.supports_async_iteration is candidate.supports_async_iteration
+    assert baseline.chunk_types == candidate.chunk_types
+    assert len(baseline.chunks) == len(candidate.chunks)
+    for baseline_chunk, candidate_chunk in zip(baseline.chunks, candidate.chunks, strict=True):
+        assert normalize(baseline_chunk) == normalize(candidate_chunk)
+    assert baseline.terminal == candidate.terminal

@@ -84,10 +84,6 @@
             "value": "DYNAMIC"
           },
           {
-            "name": "set-cookie",
-            "value": "__cf_bm=xoadxKi40.IFnjiaqOmRs2WH6OMEVyT3As6eFw.vBvY-1788292456.4529853-1.0.1.1-jbao7uSuL.oLriQMYYO4SXltYHP3IPGIYg7yiRKk3Xqlwsc3xaQu0ES59EpMR3XVjJADyl9rHQfnKY3HvKRxXdGIA8Jerdfcu68wRUZNHcXd_epa4pcO5nnks7YPh93z; HttpOnly; SameSite=None; Secure; Path=/; Domain=mistral.ai; Expires=Tue, 01 Sep 2026 20:24:17 GMT"
-          },
-          {
             "name": "Strict-Transport-Security",
             "value": "max-age=15552000; includeSubDomains; preload"
           },

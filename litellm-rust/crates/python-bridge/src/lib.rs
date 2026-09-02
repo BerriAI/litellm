@@ -60,9 +60,6 @@ fn chat_completions_response_to_py(
 
 fn core_error_to_pyerr(err: CoreError) -> PyErr {
     match err {
-        CoreError::MissingField("document_url") => {
-            PyValueError::new_err("Document URL is required")
-        }
         CoreError::Auth(message) => PyValueError::new_err(message),
         CoreError::InvalidProvider(_)
         | CoreError::InvalidRequest(_)
@@ -74,6 +71,9 @@ fn core_error_to_pyerr(err: CoreError) -> PyErr {
 
 fn ocr_error_to_pyerr(err: CoreError) -> PyErr {
     match err {
+        CoreError::MissingField("document_url" | "image_url") => {
+            PyValueError::new_err("Document URL is required")
+        }
         CoreError::Http { status, body } => RustUpstreamError::new_err((status, body)),
         other => core_error_to_pyerr(other),
     }

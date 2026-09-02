@@ -3,48 +3,69 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Annotated, Final, cast
 
-from pydantic import Discriminator, Tag
+from pydantic import Field, model_validator
 
 from tests.route_parity.fixture_models import ParityCase
 from tests.test_litellm.ocr.fixtures.azure import (
     AzureDocumentIntelligenceOcrSdkInput,
     AzureMistralOcrSdkInput,
 )
-from tests.test_litellm.ocr.fixtures.base import OcrSdkInputBase
-from tests.test_litellm.ocr.fixtures.mistral import MistralOcrSdkInput, MistralProviderRejectedOcrSdkInput
+from tests.test_litellm.ocr.fixtures.mistral import MistralOcrSdkInput
 from tests.test_litellm.ocr.fixtures.reducto import ReductoParseLegacySdkInput, ReductoParseV3SdkInput
 from tests.test_litellm.ocr.fixtures.vertex import VertexDeepSeekOcrSdkInput, VertexMistralOcrSdkInput
 
 __all__ = ("OcrParityCase", "OcrSdkInput")
 
 
-def _ocr_boundary(value: object) -> str | None:
-    if isinstance(value, Mapping):
-        mapping: Final = cast(Mapping[object, object], value)
-        boundary: Final = mapping.get("boundary")
-        model: Final = mapping.get("model")
-        if boundary == "mistral" and model == "mistral/invalid-ocr-model-for-parity":
-            return "mistral_provider_rejected"
-        return boundary if isinstance(boundary, str) else None
-    if isinstance(value, OcrSdkInputBase):
-        if isinstance(value, MistralProviderRejectedOcrSdkInput):
-            return "mistral_provider_rejected"
-        return value.boundary
-    return None
-
-
 OcrSdkInput = Annotated[
-    Annotated[MistralOcrSdkInput, Tag("mistral")]
-    | Annotated[MistralProviderRejectedOcrSdkInput, Tag("mistral_provider_rejected")]
-    | Annotated[AzureMistralOcrSdkInput, Tag("azure_mistral")]
-    | Annotated[VertexMistralOcrSdkInput, Tag("vertex_mistral")]
-    | Annotated[AzureDocumentIntelligenceOcrSdkInput, Tag("azure_document_intelligence")]
-    | Annotated[VertexDeepSeekOcrSdkInput, Tag("vertex_deepseek")]
-    | Annotated[ReductoParseV3SdkInput, Tag("reducto_v3")]
-    | Annotated[ReductoParseLegacySdkInput, Tag("reducto_legacy")],
-    Discriminator(_ocr_boundary),
+    MistralOcrSdkInput
+    | AzureMistralOcrSdkInput
+    | VertexMistralOcrSdkInput
+    | AzureDocumentIntelligenceOcrSdkInput
+    | VertexDeepSeekOcrSdkInput
+    | ReductoParseV3SdkInput
+    | ReductoParseLegacySdkInput,
+    Field(discriminator="contract"),
 ]
 
 
 class OcrParityCase(ParityCase[OcrSdkInput]):
-    pass
+    @model_validator(mode="before")
+    @classmethod
+    def load_legacy_contract(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+        fixture: Final = cast(Mapping[str, object], value)
+        litellm_input: Final = fixture.get("litellm_input")
+        if not isinstance(litellm_input, Mapping) or "contract" in litellm_input:
+            return fixture
+        legacy_input: Final = cast(Mapping[str, object], litellm_input)
+        legacy_contract: Final = legacy_input.get("boundary")
+        if isinstance(legacy_contract, str):
+            return {
+                **fixture,
+                "litellm_input": {
+                    "contract": legacy_contract,
+                    **{key: item for key, item in legacy_input.items() if key != "boundary"},
+                },
+            }
+        model: Final = legacy_input.get("model")
+        if not isinstance(model, str):
+            return fixture
+        return {**fixture, "litellm_input": {"contract": _legacy_contract(model), **legacy_input}}
+
+
+def _legacy_contract(model: str) -> str:
+    if model.startswith("azure_ai/doc-intelligence/"):
+        return "azure_document_intelligence"
+    if model.startswith("azure_ai/"):
+        return "azure_mistral"
+    if model.startswith("vertex_ai/deepseek"):
+        return "vertex_deepseek"
+    if model.startswith("vertex_ai/"):
+        return "vertex_mistral"
+    if model.endswith("parse-v3"):
+        return "reducto_v3"
+    if model.endswith("parse-legacy"):
+        return "reducto_legacy"
+    return "mistral"

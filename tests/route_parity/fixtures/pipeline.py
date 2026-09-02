@@ -1,19 +1,17 @@
 from __future__ import annotations
 
-import argparse
 import logging
-from collections.abc import Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Generic, Literal, Protocol, TypeVar, cast
+from typing import Final, Generic, Literal, Protocol, TypeVar
 
 from hypothesis.strategies import SearchStrategy
 from pydantic import BaseModel
 
 from tests.route_parity.fixtures.inputs import generate_case_inputs
-from tests.route_parity.fixtures.recording import ProviderSpec, record_upstream_responses
+from tests.route_parity.fixtures.recording import UpstreamEndpoint, record_upstream_responses
 from tests.route_parity.fixtures.store import (
     FixtureInput,
     canonical_json,
@@ -30,13 +28,6 @@ InputT_contra = TypeVar("InputT_contra", bound=FixtureInput, contravariant=True)
 CaseT = TypeVar("CaseT", bound=BaseModel)
 
 
-@dataclass(frozen=True, slots=True)
-class RecordingArgs:
-    concurrency: int
-    examples: int
-    fixture_dir: Path | None
-
-
 class RecordingInvocation(Protocol[InputT_contra]):
     def execute(self, provider_url: str, case_input: InputT_contra) -> None: ...
 
@@ -44,7 +35,7 @@ class RecordingInvocation(Protocol[InputT_contra]):
 @dataclass(frozen=True, slots=True)
 class RecordingTarget(Generic[InputT]):
     name: str
-    provider_spec: ProviderSpec
+    upstream: UpstreamEndpoint
     strategy: SearchStrategy[InputT]
     invocation: RecordingInvocation[InputT] = field(repr=False)
     required_inputs: tuple[InputT, ...] = ()
@@ -54,7 +45,7 @@ class RecordingTarget(Generic[InputT]):
 class RecordingJob(Generic[InputT]):
     target_name: str
     directory: Path
-    provider_spec: ProviderSpec
+    upstream: UpstreamEndpoint
     case_input: InputT
     invocation: RecordingInvocation[InputT] = field(repr=False)
 
@@ -118,7 +109,7 @@ def build_recording_jobs(
         RecordingJob(
             target_name=target.name,
             directory=root / target.name,
-            provider_spec=target.provider_spec,
+            upstream=target.upstream,
             case_input=case_input,
             invocation=target.invocation,
         )
@@ -136,7 +127,7 @@ def _record_job(job: RecordingJob[InputT], case_type: type[CaseT]) -> RecordedFi
             path=fixture_path(job.directory, job.case_input),
         )
     provider_responses: Final = record_upstream_responses(
-        job.provider_spec,
+        job.upstream,
         job.case_input,
         job.invocation.execute,
     )
@@ -199,23 +190,3 @@ def record_fixtures(
         len(summary.failed),
     )
     return summary
-
-
-def _positive_int(value: str) -> int:
-    parsed: Final = int(value)
-    if parsed < 1:
-        raise argparse.ArgumentTypeError("must be at least 1")
-    return parsed
-
-
-def parse_recording_args(argv: Sequence[str] | None = None) -> RecordingArgs:
-    parser: Final = argparse.ArgumentParser()
-    parser.add_argument("--concurrency", type=_positive_int, default=4)
-    parser.add_argument("--examples", type=_positive_int, default=4)
-    parser.add_argument("--fixture-dir", type=Path)
-    namespace: Final = parser.parse_args(argv)
-    return RecordingArgs(
-        concurrency=cast(int, namespace.concurrency),
-        examples=cast(int, namespace.examples),
-        fixture_dir=cast(Path | None, namespace.fixture_dir),
-    )

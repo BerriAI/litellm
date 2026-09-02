@@ -281,18 +281,6 @@ def rust_chat_completions_accepts(
     return True
 
 
-def _rust_bridge_exceptions() -> tuple[type[BaseException], type[BaseException]] | None:
-    """`(declined, upstream_failed)` from the native module, or None when absent."""
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    declined: Final = getattr(native_bridge, "RustBridgeDeclined", None)
-    upstream: Final = getattr(native_bridge, "RustUpstreamError", None)
-    if declined is None or upstream is None:
-        return None
-    return declined, upstream
-
-
 def _reraise_or_decline(
     rust_error: BaseException,
     *,
@@ -306,25 +294,25 @@ def _reraise_or_decline(
     second attempt bills for it twice. Those surface as an `APIError` carrying
     the upstream status, which LiteLLM's exception mapping already understands.
     """
-    exceptions: Final = _rust_bridge_exceptions()
+    from litellm.rust_bridge.errors import native_bridge_exceptions, rust_upstream_failure
+
+    native_bridge: Final = get_native_bridge()
+    exceptions: Final = native_bridge_exceptions(native_bridge)
     if exceptions is None:
         verbose_logger.debug(
             "Rust chat completions bridge raised %s; falling back to Python path",
             type(rust_error).__name__,
         )
         return
-    declined, upstream_failed = exceptions
-    if isinstance(rust_error, upstream_failed):
-        args: Final = rust_error.args
-        status: Final = args[0] if args else 0
-        message: Final = args[1] if len(args) > 1 else ""
+    upstream_failure: Final = rust_upstream_failure(rust_error, native_bridge)
+    if upstream_failure is not None:
         raise APIError(
-            status_code=int(status) or 500,
-            message=f"litellm rust chat completions: {message}",
+            status_code=upstream_failure.status_code,
+            message=f"litellm rust chat completions: {upstream_failure.message}",
             llm_provider=custom_llm_provider or "",
             model=model,
         )
-    if not isinstance(rust_error, declined):
+    if not isinstance(rust_error, exceptions.declined):
         raise rust_error
     verbose_logger.debug(
         "Rust chat completions declined before calling the provider (%s); using the Python path",

@@ -20,10 +20,6 @@
             "value": "application/json"
           },
           {
-            "name": "set-cookie",
-            "value": "__cf_bm=0BJujMXEX2uflOAjZGqeTJi9lXNgGJmX61YbHtpbRKI-1788292452.9600976-1.0.1.1-7idLuOz.nd3kpO10lpC8IkPMArZ8M9iDs13Z.kTwKLTBHVm4.lyUeSqedg4EQV_Mo3D6JLf6TJgvdhWHsemZe6NyIzTBQwA3cwyM0cMQ5Aw68sVgtDOuGBaqhtelZ0RW; HttpOnly; SameSite=None; Secure; Path=/; Domain=mistral.ai; Expires=Tue, 01 Sep 2026 20:24:13 GMT"
-          },
-          {
             "name": "mistral-correlation-id",
             "value": "01a05e89-52b4-7e7b-983e-5bc4e5469b39"
           },

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 import traceback
 from collections.abc import Awaitable, Callable, Coroutine, Generator
@@ -32,17 +31,20 @@ from tests.route_parity.models import (
 )
 from tests.route_parity.replay import replay_server
 from tests.route_parity.runner import (
-    PythonScriptRunner,
-    PythonScriptWorker,
+    ExecutionVariant,
+    SubprocessRunner,
+    SubprocessWorker,
     execution_worker_pair,
     parity_worker_main,
     run_execution,
 )
+from tests.test_litellm.ocr.fixtures.config import configured_fixture_directory
 from tests.test_litellm.ocr.fixtures.models import OcrParityCase, OcrSdkInput
 
 API_KEY: Final = "test-key"
 PYTHON_HTTP_SENTINEL: Final = "python-ocr-parity-fallback"
-FIXTURE_DIR_ENV: Final = "LITELLM_OCR_FIXTURE_DIR"
+PYTHON_VARIANT: Final = ExecutionVariant(name="Python", environment=(("LITELLM_USE_RUST_OCR", "0"),))
+RUST_VARIANT: Final = ExecutionVariant(name="Rust", environment=(("LITELLM_USE_RUST_OCR", "1"),))
 
 
 class SDKRoute(str, Enum):
@@ -115,6 +117,15 @@ INVALID_OCR_CASES: Final = (
         name="missing_document_url",
         model="azure_ai/doc-intelligence/prebuilt-read",
         document={"type": "document_url"},
+        expected_exception_type="litellm.exceptions.APIConnectionError",
+        expected_status_code=500,
+        expected_message="Document URL is required",
+        expected_rust_calls=1,
+    ),
+    InvalidOcrCase(
+        name="missing_image_url",
+        model="azure_ai/doc-intelligence/prebuilt-read",
+        document={"type": "image_url"},
         expected_exception_type="litellm.exceptions.APIConnectionError",
         expected_status_code=500,
         expected_message="Document URL is required",
@@ -304,22 +315,19 @@ def _native_spies() -> tuple[_RustOcrSpy, _RustAocrSpy]:
 
 
 @pytest.fixture(scope="module")
-def sdk_workers() -> Generator[tuple[PythonScriptWorker, PythonScriptWorker]]:
-    runner: Final = PythonScriptRunner(
+def sdk_workers() -> Generator[tuple[SubprocessWorker, SubprocessWorker]]:
+    runner: Final = SubprocessRunner(
         entrypoint=Path(__file__),
-        rust_env_var="LITELLM_USE_RUST_OCR",
-        python_user_agent=PYTHON_HTTP_SENTINEL,
+        baseline_user_agent=PYTHON_HTTP_SENTINEL,
         route_label="OCR",
     )
-    with execution_worker_pair(runner) as workers:
+    with execution_worker_pair(runner, PYTHON_VARIANT, RUST_VARIANT) as workers:
         yield workers
 
 
 @pytest.fixture(scope="module")
 def startup_ocr_fixture() -> OcrParityCase:
-    default_directory: Final = Path(__file__).with_name("fixtures") / "data"
-    configured: Final = os.environ.get(FIXTURE_DIR_ENV)
-    directory: Final = Path(configured).expanduser() if configured is not None else default_directory
+    directory: Final = configured_fixture_directory()
     fixtures: Final = recorded_fixtures(directory, OcrParityCase)
     if not fixtures:
         pytest.skip(f"no recorded fixtures in {directory}")
@@ -404,7 +412,7 @@ def test_invalid_ocr_sdk_parity(case: InvalidOcrCase, route: SDKRoute) -> None:
 def test_ocr_subprocess_startup_smoke(
     startup_ocr_fixture: OcrParityCase,
     tmp_path: Path,
-    sdk_workers: tuple[PythonScriptWorker, PythonScriptWorker],
+    sdk_workers: tuple[SubprocessWorker, SubprocessWorker],
 ) -> None:
     case_file: Final = tmp_path / "ocr-startup-smoke.json"
     case_file.write_text(startup_ocr_fixture.model_dump_json(indent=2, exclude_unset=True), encoding="utf-8")

@@ -47,7 +47,7 @@ from tests.test_litellm.ocr.fixtures.base import (
     OcrSdkInputBase,
 )
 from tests.test_litellm.ocr.fixtures.mistral import MISTRAL_MODELS, MistralOcrSdkInput, mistral_input_strategy
-from tests.test_litellm.ocr.fixtures.models import OcrParityCase
+from tests.test_litellm.ocr.fixtures.models import OcrParityCase, OcrSdkInput
 from tests.test_litellm.ocr.fixtures.reducto import (
     REDUCTO_LEGACY_MODELS,
     REDUCTO_V3_MODELS,
@@ -73,7 +73,7 @@ from tests.test_litellm.ocr.fixtures.vertex import (
 )
 
 COMMON_FIELDS: Final = frozenset(
-    {"boundary", "model", "document", "custom_llm_provider", "vertex_project", "vertex_location"}
+    {"contract", "model", "document", "custom_llm_provider", "vertex_project", "vertex_location"}
 )
 SUPPORTED_OCR_PROVIDERS: Final = frozenset({"mistral", "azure_ai", "reducto", "vertex_ai"})
 ACTIVE_OCR_MODELS: Final = frozenset(
@@ -342,9 +342,23 @@ def test_fixture_fields_match_provider_config(
         ),
     ),
 )
-def test_provider_boundary_is_explicit_but_not_forwarded(sdk_input: OcrSdkInputBase) -> None:
-    assert sdk_input.canonical_input()["boundary"] == sdk_input.boundary
-    assert "boundary" not in sdk_input.as_sdk_kwargs()
+def test_provider_contract_is_explicit_but_not_forwarded(sdk_input: OcrSdkInput) -> None:
+    assert sdk_input.canonical_input()["contract"] == sdk_input.contract
+    assert "contract" not in sdk_input.as_sdk_kwargs()
+
+
+@pytest.mark.parametrize("legacy_key", ("boundary", None))
+def test_ocr_parity_case_migrates_legacy_contract_metadata(legacy_key: str | None) -> None:
+    litellm_input: Final[dict[str, object]] = {
+        "model": "mistral/mistral-ocr-latest",
+        "document": {"type": "document_url", "document_url": "https://example.com/document.pdf"},
+    }
+    if legacy_key is not None:
+        litellm_input[legacy_key] = "mistral"
+
+    fixture: Final = OcrParityCase.model_validate({"litellm_input": litellm_input, "provider_responses": ()})
+
+    assert fixture.litellm_input.contract == "mistral"
 
 
 def test_mistral_input_preserves_omission_and_explicit_boolean_values() -> None:
@@ -478,6 +492,7 @@ def test_vertex_deepseek_request_maps_both_document_types_to_image_content(
     data: Final = cast(dict[str, object], request.data)
     messages: Final = cast(list[dict[str, object]], data["messages"])
     content: Final = cast(list[dict[str, object]], messages[0]["content"])
+    assert data["model"] == "deepseek-ai/deepseek-ocr-maas"
     assert content == [{"type": "image_url", "image_url": document[source_key]}]
 
 
@@ -1139,7 +1154,7 @@ def test_azure_document_intelligence_strategy_only_generates_litellm_inputs(
 ) -> None:
     assert sdk_input.req_format == "litellm"
     assert sdk_input.model in AZURE_DOCUMENT_INTELLIGENCE_RECORDING_MODELS
-    assert "boundary" not in sdk_input.as_sdk_kwargs()
+    assert "contract" not in sdk_input.as_sdk_kwargs()
     optional_fields: Final = frozenset(sdk_input.model_fields_set) - {"model", "document"}
     assert optional_fields in {
         frozenset[str](),
@@ -1361,7 +1376,7 @@ def test_vertex_deepseek_strategy_only_generates_litellm_inputs(
     sdk_input: VertexDeepSeekOcrSdkInput,
 ) -> None:
     assert sdk_input.vertex_project == "project-1"
-    assert "boundary" not in sdk_input.as_sdk_kwargs()
+    assert "contract" not in sdk_input.as_sdk_kwargs()
     assert _document_transport(sdk_input.document) == ("image_url", "data")
 
 

@@ -66,25 +66,21 @@ _rust_aocr_impl: RustAocr | None = None
 
 
 class _OcrProviderError(Exception):
-    def __init__(self, status_code: int, message: str, api_base: str | None) -> None:
+    def __init__(self, status_code: int, message: str, request_url: str | None) -> None:
         super().__init__(message)
         self.status_code: Final = status_code
-        self.response: Final = httpx.Response(
-            status_code=status_code,
-            request=httpx.Request("POST", api_base or "https://api.mistral.ai/v1/ocr"),
-        )
+        request: Final = httpx.Request("POST", request_url) if request_url is not None else None
+        self.response: Final = httpx.Response(status_code=status_code, request=request)
 
 
-def _raise_provider_error(error: BaseException, api_base: str | None) -> None:
+def _raise_provider_error(error: BaseException, request_url: str | None) -> None:
     from litellm.rust_bridge import get_native_bridge
+    from litellm.rust_bridge.errors import rust_upstream_failure
 
-    native_bridge: Final = get_native_bridge()
-    upstream_error: Final = getattr(native_bridge, "RustUpstreamError", None) if native_bridge is not None else None
-    if upstream_error is None or not isinstance(error, upstream_error):
+    failure: Final = rust_upstream_failure(error, get_native_bridge())
+    if failure is None:
         raise error
-    status: Final = error.args[0] if error.args else 0
-    message: Final = error.args[1] if len(error.args) > 1 else ""
-    raise _OcrProviderError(int(status) or 500, str(message), api_base) from error
+    raise _OcrProviderError(failure.status_code, failure.message, request_url) from error
 
 
 def use_litellm_rust(
@@ -170,6 +166,7 @@ def ocr(
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
+    request_url: str | None = None,
 ) -> dict[str, object] | None:
     rust_ocr: Final = load_rust_ocr()
     if rust_ocr is None:
@@ -186,7 +183,7 @@ def ocr(
             timeout_seconds=_timeout_to_seconds(timeout),
         )
     except Exception as error:
-        _raise_provider_error(error, api_base)
+        _raise_provider_error(error, request_url)
 
 
 async def aocr(
@@ -199,6 +196,7 @@ async def aocr(
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
+    request_url: str | None = None,
 ) -> dict[str, object] | None:
     rust_aocr: Final = load_rust_aocr()
     if rust_aocr is None:
@@ -215,4 +213,4 @@ async def aocr(
             timeout_seconds=_timeout_to_seconds(timeout),
         )
     except Exception as error:
-        _raise_provider_error(error, api_base)
+        _raise_provider_error(error, request_url)

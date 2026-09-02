@@ -14,7 +14,7 @@ from hypothesis import strategies as st
 from pydantic import BaseModel, ConfigDict
 
 from tests.route_parity.fixtures.pipeline import RecordingTarget, record_fixtures
-from tests.route_parity.fixtures.recording import ProviderSpec, record_upstream_responses
+from tests.route_parity.fixtures.recording import UpstreamEndpoint, record_upstream_responses
 from tests.route_parity.fixtures.store import (
     FIXTURE_SCHEMA_VERSION,
     fixture_path,
@@ -97,7 +97,7 @@ class _ControlledUpstreamHandler(BaseHTTPRequestHandler):
         length: Final = int(self.headers.get("content-length") or "0")
         self.rfile.read(length)
         if self.path == "/upload":
-            self._send_json(200, b'{"file_id":"reducto://fixture.pdf"}')
+            self._send_json(200, b'{"file_id":"fixture://document.pdf"}')
             return
         if self.path == "/parse":
             self._send_json(200, b'{"result":{"chunks":[]}}')
@@ -131,6 +131,7 @@ class _ControlledUpstreamHandler(BaseHTTPRequestHandler):
             body: Final = b"{}"
             self.send_response(200)
             self.send_header("content-type", "application/json")
+            self.send_header("set-cookie", "session=must-not-be-recorded")
             self.send_header("content-length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -142,6 +143,15 @@ class _ControlledUpstreamHandler(BaseHTTPRequestHandler):
             self._send_json(200, b'{"status":"succeeded","analyzeResult":{"pages":[]}}')
             return
         self.send_error(404)
+
+    def do_PUT(self) -> None:
+        self.do_POST()
+
+    def do_PATCH(self) -> None:
+        self.do_POST()
+
+    def do_DELETE(self) -> None:
+        self.do_POST()
 
     def _send_json(self, status: int, body: bytes) -> None:
         self.send_response(status)
@@ -172,7 +182,7 @@ def _case(identifier: str) -> _FixtureInput:
 
 
 def _sdk_call(api_base: str, case_input: _FixtureInput) -> object:
-    return httpx.post(f"{api_base}/v1/ocr", content=b"{}", timeout=5)
+    return httpx.post(f"{api_base}/v1/operation", content=b"{}", timeout=5)
 
 
 def _stream_sdk_call(api_base: str, case_input: _FixtureInput) -> object:
@@ -183,6 +193,13 @@ def _error_sdk_call(api_base: str, case_input: _FixtureInput) -> object:
     response: Final = httpx.post(f"{api_base}/error", content=b"{}", timeout=5)
     response.raise_for_status()
     return response
+
+
+def _method_sdk_call(method: str) -> Callable[[str, _FixtureInput], object]:
+    def call(api_base: str, case_input: _FixtureInput) -> object:
+        return httpx.request(method, f"{api_base}/method", json={"id": case_input.identifier}, timeout=5)
+
+    return call
 
 
 def _multi_sdk_call(api_base: str, case_input: _FixtureInput) -> object:
@@ -204,18 +221,18 @@ def _polling_sdk_call(api_base: str, case_input: _FixtureInput) -> object:
 def test_recording_deduplicates_per_target_and_caps_global_concurrency(tmp_path: Path) -> None:
     shared_input: Final = _case("shared")
     with _controlled_upstream() as upstream:
-        spec: Final = ProviderSpec(upstream_base=upstream.url)
+        spec: Final = UpstreamEndpoint(base_url=upstream.url)
         targets: Final = (
             RecordingTarget(
                 name="first",
-                provider_spec=spec,
+                upstream=spec,
                 strategy=st.just(shared_input),
                 invocation=_Invocation(_sdk_call),
                 required_inputs=(shared_input, shared_input),
             ),
             RecordingTarget(
                 name="second",
-                provider_spec=spec,
+                upstream=spec,
                 strategy=st.just(shared_input),
                 invocation=_Invocation(_sdk_call),
                 required_inputs=(shared_input,),
@@ -244,7 +261,7 @@ def test_pipeline_rejects_stale_fixture_before_provider_call(tmp_path: Path) -> 
     path.write_text('{"schema_version": 0}\n', encoding="utf-8")
     target: Final = RecordingTarget(
         name="stale-target",
-        provider_spec=ProviderSpec(upstream_base="http://127.0.0.1:1"),
+        upstream=UpstreamEndpoint(base_url="http://127.0.0.1:1"),
         strategy=st.just(case_input),
         invocation=_Invocation(_sdk_call),
     )
@@ -271,7 +288,7 @@ def test_cached_fixture_is_reported_without_provider_call(tmp_path: Path) -> Non
     with _controlled_upstream() as upstream:
         target: Final = RecordingTarget(
             name="cached-target",
-            provider_spec=ProviderSpec(upstream_base=upstream.url),
+            upstream=UpstreamEndpoint(base_url=upstream.url),
             strategy=st.just(case_input),
             invocation=_Invocation(_sdk_call),
         )
@@ -286,7 +303,7 @@ def test_cached_fixture_is_reported_without_provider_call(tmp_path: Path) -> Non
 def test_streaming_response_records_and_replays_chunks() -> None:
     with _controlled_upstream() as upstream:
         responses: Final = record_upstream_responses(
-            ProviderSpec(upstream_base=upstream.url),
+            UpstreamEndpoint(base_url=upstream.url),
             _case("stream"),
             _stream_sdk_call,
         )
@@ -308,13 +325,41 @@ def test_streaming_response_records_and_replays_chunks() -> None:
 def test_non_successful_provider_response_is_recorded() -> None:
     with _controlled_upstream() as upstream:
         responses: Final = record_upstream_responses(
-            ProviderSpec(upstream_base=upstream.url),
+            UpstreamEndpoint(base_url=upstream.url),
             _case("provider-error"),
             _error_sdk_call,
         )
 
     response: Final = responses[0]
     assert response.status_code == 429
+
+
+def test_sensitive_response_headers_are_not_recorded() -> None:
+    with _controlled_upstream() as upstream:
+        responses: Final = record_upstream_responses(
+            UpstreamEndpoint(base_url=upstream.url),
+            _case("headers"),
+            _sdk_call,
+        )
+
+    assert all(header.name.lower() != "set-cookie" for header in responses[0].headers)
+
+
+@pytest.mark.parametrize("method", ("PUT", "PATCH", "DELETE"))
+def test_recording_and_replay_support_mutating_http_methods(method: str) -> None:
+    sdk_call: Final = _method_sdk_call(method)
+    with _controlled_upstream() as upstream:
+        responses: Final = record_upstream_responses(
+            UpstreamEndpoint(base_url=upstream.url),
+            _case(method),
+            sdk_call,
+        )
+    with replay_server() as provider:
+        provider.enqueue_response(responses[0])
+        sdk_call(provider.url, _case(method))
+        requests: Final = provider.take_requests(1)
+
+    assert requests[0].method == method
 
 
 def test_stream_response_model_rejects_buffered_body() -> None:
@@ -336,7 +381,7 @@ def test_multiple_provider_calls_record_and_replay_in_order(
 ) -> None:
     with _controlled_upstream() as upstream:
         responses: Final = record_upstream_responses(
-            ProviderSpec(upstream_base=upstream.url),
+            UpstreamEndpoint(base_url=upstream.url),
             _case(sdk_call.__name__),
             sdk_call,
         )

@@ -11,6 +11,11 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from tests.provider_record_replay.http import (
+    dropped_request_headers,
+    dropped_response_headers,
+    is_streaming_response,
+)
 from tests.route_parity.recorded_http import (
     HttpHeader,
     RecordedHttpResponse,
@@ -21,39 +26,17 @@ from tests.route_parity.recorded_http import (
 
 _PARITY_PROVIDER_HOST: Final = "parity-provider.invalid"
 
-_HOP_BY_HOP_HEADERS: Final = frozenset(
-    {
-        "connection",
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "te",
-        "trailer",
-        "transfer-encoding",
-        "upgrade",
-    }
-)
-
-
 InputT = TypeVar("InputT")
 
 
 @dataclass(frozen=True, slots=True)
-class ProviderSpec:
-    upstream_base: str
-
-
-def _excluded_headers(headers: tuple[tuple[str, str], ...]) -> frozenset[str]:
-    connection_values: Final = tuple(value for name, value in headers if name.lower() == "connection")
-    connection_headers: Final = frozenset(
-        token.strip().lower() for value in connection_values for token in value.split(",") if token.strip()
-    )
-    return _HOP_BY_HOP_HEADERS | connection_headers
+class UpstreamEndpoint:
+    base_url: str
 
 
 def _end_to_end_headers(headers: httpx.Headers) -> tuple[HttpHeader, ...]:
     decoded: Final = tuple((name.decode("ascii"), value.decode("latin-1")) for name, value in headers.raw)
-    excluded: Final = _excluded_headers(decoded) | {"content-encoding", "content-length"}
+    excluded: Final = dropped_response_headers(decoded)
     return tuple(
         HttpHeader(name=name, value=_normalized_response_header(name, value))
         for name, value in decoded
@@ -82,7 +65,7 @@ def local_response_header(name: str, value: str, provider_url: str) -> str:
 class _RecordingProvider(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, spec: ProviderSpec) -> None:
+    def __init__(self, spec: UpstreamEndpoint) -> None:
         super().__init__(("127.0.0.1", 0), _RecordingHandler)
         self.spec: Final = spec
         self.responses: queue.Queue[RecordedResponse] = queue.Queue()
@@ -109,15 +92,24 @@ class _RecordingHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         self._forward()
 
+    def do_PUT(self) -> None:
+        self._forward()
+
+    def do_PATCH(self) -> None:
+        self._forward()
+
+    def do_DELETE(self) -> None:
+        self._forward()
+
     def _forward(self) -> None:
         provider: Final = self.server
         assert isinstance(provider, _RecordingProvider)
         length: Final = int(self.headers.get("content-length") or "0")
         request_body: Final = self.rfile.read(length) if length else b""
         raw_headers: Final = tuple(self.headers.raw_items())
-        excluded: Final = _excluded_headers(raw_headers) | {"host", "content-length"}
+        excluded: Final = dropped_request_headers(raw_headers)
         forwarded_headers: Final = tuple((name, value) for name, value in raw_headers if name.lower() not in excluded)
-        upstream_url: Final = f"{provider.spec.upstream_base.rstrip('/')}{self.path}"
+        upstream_url: Final = f"{provider.spec.base_url.rstrip('/')}{self.path}"
 
         try:
             with httpx.stream(
@@ -145,7 +137,7 @@ class _RecordingHandler(BaseHTTPRequestHandler):
         headers: tuple[HttpHeader, ...],
     ) -> RecordedResponse:
         content_type: Final = cast(str, upstream.headers.get("content-type", ""))
-        if content_type.lower().startswith("text/event-stream"):
+        if is_streaming_response(content_type):
             return self._record_stream(upstream, headers)
         response_body: Final = b"".join(upstream.iter_bytes())
         return RecordedHttpResponse.from_bytes(
@@ -199,7 +191,7 @@ class _RecordingHandler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def _recording_provider(spec: ProviderSpec) -> Generator[_RecordingProvider]:
+def _recording_provider(spec: UpstreamEndpoint) -> Generator[_RecordingProvider]:
     server: Final = _RecordingProvider(spec)
     thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -227,7 +219,7 @@ def _invoke_and_take_responses(
 
 
 def record_upstream_responses(
-    spec: ProviderSpec,
+    spec: UpstreamEndpoint,
     case_input: InputT,
     sdk_call: Callable[[str, InputT], object],
 ) -> tuple[RecordedResponse, ...]:

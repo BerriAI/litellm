@@ -29,10 +29,9 @@ WORKER_RESULT_ADAPTER: Final[TypeAdapter[WorkerResult]] = TypeAdapter(WorkerResu
 
 
 @dataclass(frozen=True, slots=True)
-class PythonScriptRunner:
+class SubprocessRunner:
     entrypoint: Path
-    rust_env_var: str
-    python_user_agent: str
+    baseline_user_agent: str
     route_label: str
 
     def command(self, provider_url: str) -> tuple[str, ...]:
@@ -44,17 +43,23 @@ class PythonScriptRunner:
         )
 
 
-class PythonScriptWorker:
-    def __init__(self, runner: PythonScriptRunner, provider: ReplayServer, rust_enabled: bool) -> None:
+@dataclass(frozen=True, slots=True)
+class ExecutionVariant:
+    name: str
+    environment: tuple[tuple[str, str], ...]
+
+
+class SubprocessWorker:
+    def __init__(self, runner: SubprocessRunner, provider: ReplayServer, variant: ExecutionVariant) -> None:
         project_root: Final = str(runner.entrypoint.resolve().parents[3])
         existing_pythonpath: Final = os.environ.get("PYTHONPATH")
         env: Final = {
             **os.environ,
-            runner.rust_env_var: "1" if rust_enabled else "0",
-            "LITELLM_USER_AGENT": runner.python_user_agent,
+            **dict(variant.environment),
+            "LITELLM_USER_AGENT": runner.baseline_user_agent,
             "PYTHONPATH": os.pathsep.join(path for path in (project_root, existing_pythonpath) if path),
         }
-        self.mode: Final = "Rust" if rust_enabled else "Python"
+        self.mode: Final = variant.name
         self.route_label: Final = runner.route_label
         self.provider: Final = provider
         self.process: Final = subprocess.Popen(
@@ -146,11 +151,11 @@ class PythonScriptWorker:
 
 @contextmanager
 def execution_worker(
-    runner: PythonScriptRunner,
-    rust_enabled: bool,
-) -> Generator[PythonScriptWorker]:
+    runner: SubprocessRunner,
+    variant: ExecutionVariant,
+) -> Generator[SubprocessWorker]:
     with replay_server() as provider:
-        worker: Final = PythonScriptWorker(runner, provider, rust_enabled)
+        worker: Final = SubprocessWorker(runner, provider, variant)
         try:
             yield worker
         finally:
@@ -158,7 +163,7 @@ def execution_worker(
 
 
 def run_execution(
-    worker: PythonScriptWorker,
+    worker: SubprocessWorker,
     case_file: Path,
     route: str,
     responses: tuple[RecordedResponse, ...],
@@ -168,11 +173,13 @@ def run_execution(
 
 @contextmanager
 def execution_worker_pair(
-    runner: PythonScriptRunner,
-) -> Generator[tuple[PythonScriptWorker, PythonScriptWorker]]:
-    with execution_worker(runner, rust_enabled=False) as python_worker:
-        with execution_worker(runner, rust_enabled=True) as accelerated_worker:
-            yield python_worker, accelerated_worker
+    runner: SubprocessRunner,
+    baseline: ExecutionVariant,
+    candidate: ExecutionVariant,
+) -> Generator[tuple[SubprocessWorker, SubprocessWorker]]:
+    with execution_worker(runner, baseline) as baseline_worker:
+        with execution_worker(runner, candidate) as candidate_worker:
+            yield baseline_worker, candidate_worker
 
 
 def parity_worker_main(

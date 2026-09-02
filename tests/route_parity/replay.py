@@ -65,6 +65,15 @@ class _ReplayHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         self._replay()
 
+    def do_PUT(self) -> None:
+        self._replay()
+
+    def do_PATCH(self) -> None:
+        self._replay()
+
+    def do_DELETE(self) -> None:
+        self._replay()
+
     def _replay(self) -> None:
         provider: Final = self.server
         assert isinstance(provider, ReplayServer)

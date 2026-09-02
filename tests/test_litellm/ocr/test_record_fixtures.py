@@ -10,12 +10,14 @@ import pytest
 from hypothesis import find, settings
 from hypothesis.strategies import SearchStrategy
 
+from tests.route_parity.fixtures.cli import parse_recording_args
 from tests.route_parity.fixtures.inputs import generate_case_inputs
 from tests.route_parity.fixtures.media import structured_pdf_data_uri
-from tests.route_parity.fixtures.pipeline import parse_recording_args
 from tests.test_litellm.ocr.fixtures.azure import (
+    AZURE_DOCUMENT_INTELLIGENCE_PROVIDER_REJECTED_INPUTS,
     AZURE_DOCUMENT_INTELLIGENCE_RECORDING_MODELS,
     AZURE_MISTRAL_MODELS,
+    AZURE_MISTRAL_PROVIDER_REJECTED_INPUTS,
 )
 from tests.test_litellm.ocr.fixtures.base import OcrSdkInputBase
 from tests.test_litellm.ocr.fixtures.common import OcrFixtureClient, OcrRecordingTarget
@@ -26,8 +28,18 @@ from tests.test_litellm.ocr.fixtures.record import (
 from tests.test_litellm.ocr.fixtures.record import (
     require_targets,
 )
-from tests.test_litellm.ocr.fixtures.reducto import REDUCTO_LEGACY_MODELS, REDUCTO_V3_MODELS
-from tests.test_litellm.ocr.fixtures.vertex import VERTEX_DEEPSEEK_MODELS, VERTEX_MISTRAL_MODELS
+from tests.test_litellm.ocr.fixtures.reducto import (
+    REDUCTO_LEGACY_MODELS,
+    REDUCTO_LEGACY_PROVIDER_REJECTED_INPUTS,
+    REDUCTO_V3_MODELS,
+    REDUCTO_V3_PROVIDER_REJECTED_INPUTS,
+)
+from tests.test_litellm.ocr.fixtures.vertex import (
+    VERTEX_DEEPSEEK_MODELS,
+    VERTEX_MISTRAL_MODELS,
+    vertex_deepseek_provider_rejected_inputs,
+    vertex_mistral_provider_rejected_inputs,
+)
 
 
 class _UnusedOcrClient:
@@ -186,7 +198,7 @@ def test_mistral_target_uses_canonical_model_and_normalized_base(
     assert len(targets) == 1
     target: Final = targets[0]
     assert target.name == "mistral-ocr"
-    assert target.provider_spec.upstream_base == expected
+    assert target.upstream.base_url == expected
     assert "mistral-secret" not in repr(target)
     case_inputs: Final = generate_case_inputs(target.strategy, examples=1)
     assert len(case_inputs) == 1
@@ -316,11 +328,21 @@ def test_only_intentional_provider_failures_are_fixed_inputs() -> None:
         _UNUSED_OCR_CLIENT,
     )
 
-    mistral: Final = next(target for target in targets if target.name == "mistral-ocr")
-    assert mistral.required_inputs == MISTRAL_PROVIDER_REJECTED_INPUTS
-    generated: Final = generate_case_inputs(mistral.strategy, examples=20)
-    assert all(case_input not in mistral.required_inputs for case_input in generated)
-    assert all(target.required_inputs == () for target in targets if target is not mistral)
+    expected: Final[dict[str, tuple[OcrSdkInputBase, ...]]] = {
+        "mistral-ocr": MISTRAL_PROVIDER_REJECTED_INPUTS,
+        "azure-mistral": AZURE_MISTRAL_PROVIDER_REJECTED_INPUTS,
+        "azure-document-intelligence": AZURE_DOCUMENT_INTELLIGENCE_PROVIDER_REJECTED_INPUTS,
+        "vertex-mistral": vertex_mistral_provider_rejected_inputs("project-1", "us-central1", _INLINE_IMAGE_DATA_URI),
+        "vertex-deepseek": vertex_deepseek_provider_rejected_inputs("project-1", "us-central1", _INLINE_IMAGE_DATA_URI),
+        "reducto-v3": REDUCTO_V3_PROVIDER_REJECTED_INPUTS,
+        "reducto-legacy": REDUCTO_LEGACY_PROVIDER_REJECTED_INPUTS,
+    }
+
+    assert {target.name for target in targets} == expected.keys()
+    for target in targets:
+        assert target.required_inputs == expected[target.name]
+        generated: Final = generate_case_inputs(target.strategy, examples=20)
+        assert all(case_input not in target.required_inputs for case_input in generated)
 
 
 def test_mistral_adapters_preserve_omitted_optional_params() -> None:

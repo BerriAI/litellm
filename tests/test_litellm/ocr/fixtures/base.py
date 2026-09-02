@@ -21,7 +21,9 @@ __all__ = (
     "OcrSdkInputBase",
 )
 
-OcrSdkInputBase = SdkInputBase
+
+class OcrSdkInputBase(SdkInputBase):
+    fixture_only_fields = ("contract",)
 
 
 class ImageUrlValue(FixtureModel):

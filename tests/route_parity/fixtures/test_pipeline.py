@@ -20,7 +20,7 @@ from tests.route_parity.fixtures.pipeline import (
     build_recording_jobs,
     record_fixtures,
 )
-from tests.route_parity.fixtures.recording import ProviderSpec
+from tests.route_parity.fixtures.recording import UpstreamEndpoint
 from tests.route_parity.fixtures.store import fixture_path
 from tests.route_parity.recorded_http import RecordedResponse
 
@@ -117,7 +117,7 @@ def _target(
 ) -> RecordingTarget[_FixtureInput]:
     return RecordingTarget(
         name=name,
-        provider_spec=ProviderSpec(upstream_base=upstream_url),
+        upstream=UpstreamEndpoint(base_url=upstream_url),
         strategy=st.just(case_input),
         invocation=invocation,
         required_inputs=(case_input,),
@@ -129,7 +129,7 @@ def test_build_jobs_keeps_required_inputs_before_generated_inputs_and_deduplicat
     generated: Final = _FixtureInput(identifier="generated")
     target: Final = RecordingTarget(
         name="ordered",
-        provider_spec=ProviderSpec(upstream_base="https://provider.invalid"),
+        upstream=UpstreamEndpoint(base_url="https://provider.invalid"),
         strategy=st.just(generated),
         invocation=_Invocation(),
         required_inputs=(required, required),
