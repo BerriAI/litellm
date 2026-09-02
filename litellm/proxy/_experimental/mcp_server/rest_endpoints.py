@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 import anyio
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, ConfigDict
 
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT
@@ -163,12 +162,6 @@ if MCP_AVAILABLE:
             request_path=request.scope.get("_original_path") or request.url.path,
         )
 
-    class _SkillSearchToolArguments(BaseModel):
-        model_config = ConfigDict(extra="ignore")
-
-        query: str = ""
-        top_k: int = DEFAULT_SKILL_SEARCH_TOP_K
-
     async def _handle_virtual_mcp_tool(
         request: Request,
         data: dict[str, Any],
@@ -211,10 +204,11 @@ if MCP_AVAILABLE:
                 user_api_key_dict=user_api_key_dict,
             )
         if tool_name == SKILL_SEARCH_TOOL_NAME:
-            skill_search_args: Final = _SkillSearchToolArguments.model_validate(tool_arguments)
             return await handle_skill_search(
-                query=skill_search_args.query,
-                top_k=skill_search_args.top_k,
+                query=str(tool_arguments.get("query", "")),
+                top_k=coerce_top_k(
+                    tool_arguments.get("top_k", DEFAULT_SKILL_SEARCH_TOP_K), default=DEFAULT_SKILL_SEARCH_TOP_K
+                ),
                 user_api_key_dict=user_api_key_dict,
             )
         rest_client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)

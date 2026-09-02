@@ -745,6 +745,31 @@ class TestCallToolRestApiVirtualTools:
         assert mock_search.await_args.kwargs["agents"] == (translator,)
 
     @pytest.mark.asyncio
+    async def test_skill_search_call_tolerates_malformed_top_k(self) -> None:
+        """Regression: a caller-supplied non-numeric top_k must be coerced to the default,
+        the same as agent_search, instead of raising a pydantic ValidationError that the
+        endpoint's catch-all turns into an HTTP 500."""
+        from mcp.types import CallToolResult, TextContent
+
+        from litellm.llms.litellm_proxy.skills.skill_search import DEFAULT_SKILL_SEARCH_TOP_K
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
+        request = self._make_request(
+            {"name": SKILL_SEARCH_TOOL_NAME, "arguments": {"query": "translate a document", "top_k": "not-a-number"}}
+        )
+        fake_result = CallToolResult(content=[TextContent(type="text", text="[]")], isError=False)
+        with patch(  # test-quality-ok: the embedding router only resolves via proxy_server globals, no injection seam
+            "litellm.proxy._experimental.mcp_server.tool_search.handle_skill_search",
+            new_callable=AsyncMock,
+            return_value=fake_result,
+        ) as mock_search:
+            result = await self._get_call_fn()(request=request, user_api_key_dict=user_api_key_dict)
+
+        assert result.isError is False
+        assert mock_search.await_args.kwargs["top_k"] == DEFAULT_SKILL_SEARCH_TOP_K
+        assert mock_search.await_args.kwargs["query"] == "translate a document"
+
+    @pytest.mark.asyncio
     async def test_agent_search_call_reports_missing_embedding_model_as_tool_error(self) -> None:
         from litellm.proxy.agent_endpoints.agent_search import AgentSearchNotConfigured
 
@@ -817,7 +842,9 @@ class TestCallToolRestApiVirtualTools:
         assert "mcp_tool_search.embedding_model" in result.content[0].text
 
     @pytest.mark.asyncio
-    async def test_mcp_tool_search_reports_invalid_settings_as_tool_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_mcp_tool_search_reports_invalid_settings_as_tool_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(litellm, "mcp_tool_search", {"top_k": 0})
         user_api_key_dict = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         result = await self._get_call_fn()(request=self._semantic_request(), user_api_key_dict=user_api_key_dict)
