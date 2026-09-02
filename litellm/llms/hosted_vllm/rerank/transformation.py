@@ -3,6 +3,7 @@ Transformation logic for Hosted VLLM rerank
 """
 
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
@@ -13,6 +14,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
+    HostedVLLMRerankTruncationParams,
     OptionalRerankParams,
     RerankBilledUnits,
     RerankRequest,
@@ -62,7 +64,11 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
             "top_n",
             "rank_fields",
             "return_documents",
+            "max_tokens_per_doc",
             "instruction",
+            "truncate_prompt_tokens",
+            "truncation_side",
+            "max_tokens_per_query",
         ]
 
     def map_cohere_rerank_params(
@@ -100,7 +106,15 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         if instruction is not None:
             mapped_params["instruction"] = instruction
 
-        return dict(mapped_params)
+        truncation: Final = HostedVLLMRerankTruncationParams.model_validate(non_default_params or MappingProxyType({}))
+        forwarded: Final[OptionalRerankParams] = {
+            **mapped_params,
+            "max_tokens_per_doc": max_tokens_per_doc,
+            "truncate_prompt_tokens": truncation.truncate_prompt_tokens,
+            "truncation_side": truncation.truncation_side,
+            "max_tokens_per_query": truncation.max_tokens_per_query,
+        }
+        return dict(forwarded)
 
     def validate_environment(
         self,
@@ -138,6 +152,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for Hosted VLLM rerank")
 
+        truncation: Final = HostedVLLMRerankTruncationParams.model_validate(optional_rerank_params)
         rerank_request: Final = RerankRequest(
             model=model,
             query=optional_rerank_params["query"],
@@ -146,6 +161,10 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
             rank_fields=optional_rerank_params.get("rank_fields", None),
             return_documents=optional_rerank_params.get("return_documents", None),
             instruction=optional_rerank_params.get("instruction", None),
+            max_tokens_per_doc=truncation.max_tokens_per_doc,
+            truncate_prompt_tokens=truncation.truncate_prompt_tokens,
+            truncation_side=truncation.truncation_side,
+            max_tokens_per_query=truncation.max_tokens_per_query,
         )
         return rerank_request.model_dump(exclude_none=True)
 
