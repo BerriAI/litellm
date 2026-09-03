@@ -23,9 +23,11 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use litellm_core::providers::openai::realtime::transformation::OPENAI_REALTIME_CONFIG;
+
+use crate::io::tls::connect_upstream;
 
 /// Environment variable holding the OpenAI API key (last-resort fallback).
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
@@ -84,7 +86,7 @@ pub(crate) async fn dial_upstream(
             .map_err(|err| Error::Auth(err.to_string()))?,
     );
 
-    let (upstream, _response) = connect_async(request)
+    let (upstream, _response) = connect_upstream(request)
         .await
         .map_err(|err| Error::Network(err.to_string()))?;
     Ok(upstream)

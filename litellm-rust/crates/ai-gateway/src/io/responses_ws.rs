@@ -14,7 +14,9 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::header::{AUTHORIZATION, HeaderName};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+
+use crate::io::tls::connect_upstream;
 
 use crate::constants::{
     DEFAULT_RESPONSES_WS_CONNECT_TIMEOUT_SECS, DEFAULT_RESPONSES_WS_IDLE_TIMEOUT_SECS,
@@ -49,14 +51,14 @@ impl ResponsesWebSocketConnection {
                 .map_err(|error| Error::InvalidRequest(error.to_string()))?;
             request.headers_mut().insert(header_name, header_value);
         }
-        let connect = connect_async(request);
+        let connect = connect_upstream(request);
         let result = match timeout {
             Some(timeout) => tokio::time::timeout(timeout, connect).await.map_err(|_| {
                 Error::Network("Responses WebSocket connection timed out".to_string())
             })?,
             None => connect.await,
         };
-        let (socket, _) = result.map_err(|error| match error {
+        let (socket, _) = result.map_err(|error| match *error {
             tokio_tungstenite::tungstenite::Error::Http(response) => Error::Http {
                 status: response.status().as_u16(),
                 body: String::new(),
@@ -138,13 +140,13 @@ async fn dial_upstream(
     );
     let result = tokio::time::timeout(
         Duration::from_secs(DEFAULT_RESPONSES_WS_CONNECT_TIMEOUT_SECS),
-        connect_async(request),
+        connect_upstream(request),
     )
     .await
     .map_err(|_| Error::Network("Responses WebSocket connection timed out".to_string()))?;
     result
         .map(|(socket, _)| socket)
-        .map_err(|error| match error {
+        .map_err(|error| match *error {
             tokio_tungstenite::tungstenite::Error::Http(response) => Error::Http {
                 status: response.status().as_u16(),
                 body: String::new(),
