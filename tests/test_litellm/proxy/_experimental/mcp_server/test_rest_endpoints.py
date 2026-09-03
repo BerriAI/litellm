@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 import sys
 from datetime import datetime
@@ -13,6 +14,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
+from litellm.constants import MCP_TOOL_LISTING_TIMEOUT
 from litellm.proxy._experimental.mcp_server import rest_endpoints
 from litellm.proxy._experimental.mcp_server.auth import (
     user_api_key_auth_mcp as auth_mcp,
@@ -108,6 +110,71 @@ class TestExecuteWithMcpClient:
 
         assert result["status"] == "error"
         assert "stack_trace" not in result
+
+    @pytest.mark.asyncio
+    async def test_timeout_caps_hanging_operation_and_names_url(self, monkeypatch):
+        async def fake_create_client(*args, **kwargs):
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+        )
+
+        async def hanging_operation(client):
+            await asyncio.Event().wait()
+
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://mcp.example.com/mcp/",
+            auth_type=MCPAuth.none,
+        )
+
+        result = await asyncio.wait_for(
+            rest_endpoints._execute_with_mcp_client(payload, hanging_operation, timeout_seconds=0.05),
+            timeout=5,
+        )
+
+        assert result["error"] is True
+        assert "https://mcp.example.com/mcp/" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_timeout_covers_client_creation(self, monkeypatch):
+        async def hanging_create_client(*args, **kwargs):
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            hanging_create_client,
+        )
+
+        async def unreached_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://mcp.example.com/mcp/",
+            auth_type=MCPAuth.none,
+        )
+
+        result = await asyncio.wait_for(
+            rest_endpoints._execute_with_mcp_client(payload, unreached_operation, timeout_seconds=0.05),
+            timeout=5,
+        )
+
+        assert result["error"] is True
+        assert "https://mcp.example.com/mcp/" in result["message"]
+
+    def test_timeout_defaults_to_tool_listing_timeout(self):
+        default = inspect.signature(rest_endpoints._execute_with_mcp_client).parameters["timeout_seconds"].default
+        assert default == MCP_TOOL_LISTING_TIMEOUT
+
+    def test_connection_error_message_timeout_names_url_and_budget(self):
+        message = rest_endpoints._connection_error_message(TimeoutError(), "https://api.example.com/mcp/", 30.0)
+        assert "https://api.example.com/mcp/" in message
+        assert "30s" in message
 
     @pytest.mark.asyncio
     async def test_forwards_static_headers(self, monkeypatch):
@@ -3168,17 +3235,21 @@ class TestConnectionErrorMessage:
         secret = "Bearer sk-super-secret-token"
         exc = httpx.LocalProtocolError(f"Illegal header value b' {secret}'")
 
-        message = rest_endpoints._connection_error_message(exc)
+        message = rest_endpoints._connection_error_message(exc, "https://example.com", 30.0)
 
         assert "header" in message.lower()
         assert secret not in message
 
     def test_connect_error_points_at_reachability(self):
-        message = rest_endpoints._connection_error_message(httpx.ConnectError("All connection attempts failed"))
+        message = rest_endpoints._connection_error_message(
+            httpx.ConnectError("All connection attempts failed"), "https://example.com", 30.0
+        )
         assert "unreachable" in message.lower()
 
     def test_timeout_error_message(self):
-        message = rest_endpoints._connection_error_message(httpx.ConnectTimeout("timed out"))
+        message = rest_endpoints._connection_error_message(
+            httpx.ConnectTimeout("timed out"), "https://example.com", 30.0
+        )
         assert "unreachable" in message.lower()
 
     def test_http_status_error_includes_status_code(self):
@@ -3188,11 +3259,11 @@ class TestConnectionErrorMessage:
             request=httpx.Request("POST", "http://x/"),
             response=response,
         )
-        message = rest_endpoints._connection_error_message(exc)
+        message = rest_endpoints._connection_error_message(exc, "https://example.com", 30.0)
         assert "503" in message
 
     def test_unknown_error_falls_back_to_generic(self):
-        message = rest_endpoints._connection_error_message(RuntimeError("weird"))
+        message = rest_endpoints._connection_error_message(RuntimeError("weird"), "https://example.com", 30.0)
         assert "weird" not in message
         assert "proxy logs" in message.lower()
 

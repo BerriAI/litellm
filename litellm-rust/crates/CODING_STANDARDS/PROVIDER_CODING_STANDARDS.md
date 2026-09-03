@@ -54,6 +54,6 @@ Rules for adding or changing an LLM provider/route in `litellm-rust`. `messages`
     cd litellm-rust
     cargo fmt --check
     cargo clippy -p litellm-ai-gateway --all-targets --features server -- -D warnings
-    cargo clippy -p litellm-core -p litellm-python-bridge --all-targets -- -D warnings
+    cargo clippy -p litellm-core -p litellm-python-interop -p litellm-python-bridge --all-targets -- -D warnings
     cargo test --workspace
     ```

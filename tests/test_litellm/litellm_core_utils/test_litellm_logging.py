@@ -6002,7 +6002,9 @@ async def test_prompt_hook_injection_marker_recorded_for_every_surface(logging_o
     """The savings gate reads litellm_gateway_injected_cache from the request's
     metadata bucket. Recording lives in the shared prompt-hook wrappers, so chat,
     /v1/responses, router prompt deployments, and proxy prompt templates all mark
-    injected requests the same way; a hook that injects nothing leaves no marker."""
+    injected requests the same way; a hook that injects nothing leaves no marker.
+    A pass that runs before deployment choice declares it and gets the every-deployment
+    sentinel, which a later per-deployment pass never narrows."""
     from litellm.integrations.custom_prompt_management import CustomPromptManagement
 
     class _InjectingHook(CustomPromptManagement):
@@ -6085,6 +6087,28 @@ async def test_prompt_hook_injection_marker_recorded_for_every_surface(logging_o
         request_kwargs=untouched,
     )
     assert "litellm_gateway_injected_cache" not in untouched["metadata"]
+
+    pre_choice = {"metadata": {}, "model_info": {"id": "dep-of-this-attempt"}}
+    logging_obj.get_chat_completion_prompt(
+        model="claude-sonnet-5",
+        messages=[{"role": "user", "content": "hi"}],
+        non_default_params={},
+        prompt_variables=None,
+        prompt_management_logger=_InjectingHook(),
+        request_kwargs=pre_choice,
+        injected_for_every_deployment=True,
+    )
+    assert pre_choice["metadata"]["litellm_gateway_injected_cache"] == ""
+
+    await logging_obj.async_get_chat_completion_prompt(
+        model="claude-sonnet-5",
+        messages=[{"role": "user", "content": "a fresh turn"}],
+        non_default_params={},
+        prompt_variables=None,
+        prompt_management_logger=_InjectingHook(),
+        request_kwargs=pre_choice,
+    )
+    assert pre_choice["metadata"]["litellm_gateway_injected_cache"] == ""
 
 
 def test_get_standard_logging_object_payload_reads_overhead_from_logging_obj_for_dict_results(logging_obj):

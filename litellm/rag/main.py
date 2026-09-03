@@ -14,6 +14,7 @@ import contextvars
 from collections.abc import Coroutine, Iterator
 from contextlib import contextmanager
 from functools import partial
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -49,6 +50,21 @@ INGESTION_REGISTRY: Final[dict[str, type[BaseRAGIngestion]]] = {
     "s3_vectors": S3VectorsRAGIngestion,
     "vertex_ai": VertexAIRAGIngestion,
 }
+
+# Only these retrieval_config keys are forwarded to vector_stores.asearch as
+# provider-specific params. The explicit allowlist keeps caller-controlled
+# connection overrides (api_base, api_key, ...) away from the search call,
+# where they could redirect store credentials to an attacker-chosen host.
+_FORWARDABLE_RETRIEVAL_CONFIG_KEYS: Final = frozenset(
+    {
+        "aws_region_name",
+        "vector_bucket_name",
+        "embedding_model",
+        "litellm_embedding_model",
+        "litellm_embedding_config",
+        "litellm_credential_name",
+    }
+)
 
 
 def get_ingestion_class(provider: str) -> type[BaseRAGIngestion]:
@@ -224,13 +240,20 @@ async def _execute_query_pipeline(
         raise ValueError("No query found in messages for RAG query")
 
     # 2. Search vector store
+    # Forward allowlisted provider retrieval_config extras (region, embedding
+    # model, bucket, credential refs) to the search call; kwargs win on conflict.
+    provider_search_params: Final = MappingProxyType(
+        {k: v for k, v in retrieval_config.items() if k in _FORWARDABLE_RETRIEVAL_CONFIG_KEYS}
+    )
+    forwarded_search_params: Final = MappingProxyType({**provider_search_params, **kwargs})
     with _suppressed_sub_call_billing():
         search_response: Final = await litellm.vector_stores.asearch(
             vector_store_id=retrieval_config["vector_store_id"],
             query=query_text,
             max_num_results=retrieval_config.get("top_k", 10),
             custom_llm_provider=retrieval_config.get("custom_llm_provider", "openai"),
-            **kwargs,
+            router=router,
+            **forwarded_search_params,
         )
 
     search_provider: Final = retrieval_config.get("custom_llm_provider", "openai")
