@@ -761,6 +761,7 @@ async def rag_query(
             model=model,
             messages=messages,
             retrieval_config=merged_retrieval_config,
+            vector_store_params=store_data,
             rerank=rerank,
             stream=stream,
             router=llm_router,
