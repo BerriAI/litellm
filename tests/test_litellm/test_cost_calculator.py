@@ -4492,3 +4492,13 @@ def test_cost_per_token_string_token_counts_coerced():
     )
     assert prompt_cost == expected_prompt
     assert completion_cost == expected_completion
+
+
+def test_cost_per_token_garbage_string_counts_cost_zero():
+    prompt_cost, completion_cost = cost_per_token(
+        model="gpt-4o-mini", prompt_tokens="abc", completion_tokens=5
+    )
+    expected_prompt, _ = cost_per_token(
+        model="gpt-4o-mini", prompt_tokens=0, completion_tokens=5
+    )
+    assert prompt_cost == expected_prompt
