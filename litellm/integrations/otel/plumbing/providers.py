@@ -242,11 +242,9 @@ def _with_destination_resource(span: ReadableSpan, destination: "OtelDestination
 class TenantFanOutSpanProcessor(SpanProcessor):
     """Export every finished span to each destination this request resolved.
 
-    Destinations ride a request-scoped ``ContextVar`` set during auth, so the
-    processor keeps no per-request state and concurrent requests stay isolated.
-    Every span is forwarded, the gen-AI span included: the tenant's account gets the
-    tree the operator's would have received, still parented, because the forwarded
-    view keeps the original span's trace and parent ids.
+    Destinations ride a request-scoped ``ContextVar`` set during auth, so concurrent
+    requests stay isolated. The forwarded view keeps the original trace and parent
+    ids, so the tenant gets the same tree the operator would have received.
     """
 
     def __init__(
@@ -314,13 +312,11 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 _shutdown_quietly(built)
                 return existing
             self._processors[key] = built
-            evicted: Final = (
-                self._processors.popitem(last=False)[1]
-                if len(self._processors) > _MAX_CACHED_DESTINATION_PROCESSORS
-                else None
-            )
-        if evicted is not None:
-            _shutdown_quietly(evicted)
+            if len(self._processors) > _MAX_CACHED_DESTINATION_PROCESSORS:
+                # Evict without shutting down: another thread may be inside ``on_end``
+                # holding the victim, and a shut-down BatchSpanProcessor drops spans
+                # silently. Same rule as ArizePhoenixLogger's per-project cache.
+                self._processors.popitem(last=False)
         return built
 
 
@@ -350,11 +346,8 @@ class _OverriddenBackendFilter(SpanProcessor):
     """Hold a span back from ``owner``'s operator-level exporter when the request
     pointed ``owner`` at a tenant's own account.
 
-    A team destination is an override rather than an addition, and a ``SpanProcessor``
-    cannot veto its siblings (``SynchronousMultiSpanProcessor.on_end`` ignores return
-    values), so suppression has to wrap the exporter's own processor. Dropping here
-    also keeps the span out of ``BatchSpanProcessor``'s bounded queue instead of
-    filling it with spans that will never ship.
+    Wrapping is the only place this works: ``SynchronousMultiSpanProcessor.on_end``
+    ignores return values, so a sibling processor can never veto the export.
     """
 
     def __init__(self, inner: SpanProcessor, owner: str) -> None:

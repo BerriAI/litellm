@@ -1,10 +1,7 @@
 """The resolved OTLP destination a request's traces export to.
 
-A destination is a backend-agnostic target: an endpoint plus the auth headers the
-exporter sends. The proxy builds one per backend from the key or team logging
-config resolved at auth, and the fan-out span processor exports the request's
-spans through it. Every OTEL backend reduces to this shape; the per-backend field
-mapping lives in ``litellm.integrations.otel.presets.destinations``.
+Backend-agnostic on purpose: every OTEL backend reduces to an endpoint plus auth
+headers. The per-backend field mapping lives in ``presets.destinations``.
 """
 
 from collections.abc import Mapping
@@ -24,10 +21,8 @@ class OtelDestination(BaseModel):
     protocol: str | None = Field(
         default=None,
         description=(
-            "OTLP transport for this endpoint (``otlp_http`` / ``otlp_grpc``). The "
-            "backend's intrinsic default is used when unset. A backend whose own cloud "
-            "endpoint is gRPC can still be pointed at an HTTP collector, which the "
-            "scheme alone cannot express: Arize's own ``https://otlp.arize.com/v1`` is gRPC."
+            "OTLP transport, defaulting to the backend's own. Not derivable from the "
+            "scheme: Arize's ``https://otlp.arize.com/v1`` is gRPC."
         ),
     )
 
@@ -42,8 +37,7 @@ class OtelDestination(BaseModel):
         return ",".join(f"{key}={quote(value, safe='')}" for key, value in self.headers.items())
 
     def cache_key(self) -> tuple[str, tuple[tuple[str, str], ...], tuple[tuple[str, str], ...], str | None]:
-        """Identity for processor reuse: two requests naming the same destination
-        must share one exporter rather than minting a connection pool each."""
+        """Identity for processor reuse, so one destination means one exporter."""
         return (
             self.endpoint,
             tuple(sorted(self.headers.items())),

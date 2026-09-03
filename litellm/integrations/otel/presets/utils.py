@@ -5,9 +5,6 @@ from typing import Final
 
 from litellm.integrations.otel.model.config import ExporterOwner, ExporterSpec
 
-#: What ``OpenTelemetryV2Config._normalize`` folds in when no destination is configured.
-_DEFAULT_SHORTHAND_EXPORTER: Final = ExporterSpec()
-
 
 def ensure_mappers(mapper_names: Iterable[str], *names: str) -> list[str]:
     """Return ``mapper_names`` with each of ``names`` appended if not already present.
@@ -35,6 +32,17 @@ def credential_gated_exporters(
     override filter still recognises which backend this provider speaks for.
     """
     return (
-        *(spec for spec in exporters if spec != _DEFAULT_SHORTHAND_EXPORTER),
+        *(spec for spec in exporters if not _prints_to_stdout(spec)),
         ExporterSpec(owner=owner, requires_headers=True),
     )
+
+
+def _prints_to_stdout(spec: "ExporterSpec") -> bool:
+    """Whether ``spec`` is the placeholder ``_normalize`` folds in for an empty list.
+
+    Identified by what it does rather than by equality with a default instance:
+    ``OpenTelemetryV2Config`` reads the standard ``OTEL_EXPORTER_OTLP_*`` env vars, so
+    the shorthand it synthesizes is a real operator destination whenever any of them
+    is set, and only a console exporter with no endpoint prints every span.
+    """
+    return spec.kind == "console" and spec.endpoint is None

@@ -3,6 +3,7 @@
 import contextvars
 from collections.abc import Mapping
 
+import litellm
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -39,6 +40,20 @@ LANGFUSE_DEST = OtelDestination(
     headers={"Authorization": "Basic dGVuYW50"},
     callback_name="langfuse_otel",
 )
+
+
+@pytest.fixture
+def allow_test_hosts(monkeypatch):
+    """Hosts named by these fixtures do not resolve, and a tenant-supplied host now
+    goes through the SSRF guard. Allowlist them so the resolution tests stay about
+    resolution; ``TestTenantHostSsrfGuard`` covers the guard itself."""
+    from litellm.litellm_core_utils.url_utils import _public_host_rejection
+
+    monkeypatch.setattr(litellm, "user_url_validation", True, raising=False)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["team.local", "key.local", "x"], raising=False)
+    _public_host_rejection.cache_clear()
+    yield
+    _public_host_rejection.cache_clear()
 
 
 def in_fresh_context(fn, *args):
@@ -231,6 +246,7 @@ class TestRouting:
         assert route.provider is None
 
 
+@pytest.mark.usefixtures("allow_test_hosts")
 class TestDestinationResolution:
     def test_a_langfuse_key_pair_and_host_become_a_destination(self, monkeypatch):
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
@@ -312,12 +328,30 @@ class TestDestinationResolution:
         assert parse_headers(destination.header_string())["authorization"] == destination.headers["Authorization"]
 
 
+#: Anything that makes ``OpenTelemetryV2Config`` synthesize a real operator destination.
+_OTEL_SHORTHAND_ENV = (
+    "OTEL_ENDPOINT",
+    "OTEL_HEADERS",
+    "OTEL_EXPORTER",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_HEADERS",
+    "OTEL_EXPORTER_OTLP_PROTOCOL",
+)
+
+
+def credential_less_proxy(monkeypatch) -> None:
+    """An operator with no Langfuse account and no generic OTLP collector."""
+    for name in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", *_OTEL_SHORTHAND_ENV):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(ValueError, match="LANGFUSE_PUBLIC_KEY"):
+        langfuse_preset()
+
+
 class TestPresetDegradation:
     def test_a_credential_less_langfuse_exports_nowhere_instead_of_to_the_console(self, monkeypatch, capsys):
         """``_normalize`` folds a console exporter in for an empty list, which would
         print every span on a proxy whose teams bring their own credentials."""
-        monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
-        monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+        credential_less_proxy(monkeypatch)
 
         config = langfuse_preset(allow_missing_credentials=True)
         provider = build_tracer_provider(config, tenant_overrides=True)
@@ -338,9 +372,8 @@ class TestPresetDegradation:
     def test_a_credential_less_proxy_still_builds_the_v2_logger(self, monkeypatch):
         from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
 
+        credential_less_proxy(monkeypatch)
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
-        monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
-        monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
 
         is_otel_v2_enabled.cache_clear()
         logger = _maybe_construct_otel_v2("langfuse_otel", [])
@@ -358,3 +391,213 @@ class TestContextIsolation:
 
         assert in_fresh_context(first) == frozenset({"langfuse_otel"})
         assert in_fresh_context(request_destinations) == ()
+
+
+class TestOperatorShorthandSurvivesDegradation:
+    def test_a_generic_otlp_collector_keeps_receiving_when_langfuse_has_no_credentials(self, monkeypatch):
+        """Only the stdout placeholder is dropped. An operator who set the standard
+        OTLP env vars configured a real destination and must keep it."""
+        monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+        monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.local:4318")
+
+        config = langfuse_preset(allow_missing_credentials=True)
+
+        assert [spec.endpoint for spec in config.exporters] == ["http://collector.local:4318", None]
+        assert [spec.kind for spec in config.exporters] == ["otlp_http", "console"]
+
+    def test_the_stdout_placeholder_is_still_dropped_when_it_is_the_only_exporter(self, monkeypatch):
+        credential_less_proxy(monkeypatch)
+
+        config = langfuse_preset(allow_missing_credentials=True)
+
+        assert all(spec.requires_headers and not spec.headers for spec in config.exporters)
+
+
+class TestBackendEndpointParity:
+    def test_arize_follows_its_own_http_endpoint_instead_of_the_grpc_default(self, monkeypatch):
+        monkeypatch.delenv("ARIZE_ENDPOINT", raising=False)
+        monkeypatch.setenv("ARIZE_HTTP_ENDPOINT", "https://otlp.arize.com/v1/traces")
+
+        destination = destination_for("arize", {"arize_space_id": "s", "arize_api_key": "k"})
+
+        assert destination.endpoint == "https://otlp.arize.com/v1/traces"
+        assert destination.protocol == "otlp_http"
+
+    def test_arize_uses_grpc_when_nothing_is_configured(self, monkeypatch):
+        monkeypatch.delenv("ARIZE_ENDPOINT", raising=False)
+        monkeypatch.delenv("ARIZE_HTTP_ENDPOINT", raising=False)
+
+        destination = destination_for("arize", {"arize_space_id": "s", "arize_api_key": "k"})
+
+        assert destination.endpoint == "https://otlp.arize.com/v1"
+        assert destination.protocol == "otlp_grpc"
+
+    def test_weave_follows_a_self_hosted_wandb_host(self, monkeypatch):
+        monkeypatch.setenv("WANDB_HOST", "weave.internal.example")
+
+        destination = destination_for("weave_otel", {"wandb_api_key": "k", "weave_project_id": "e/p"})
+
+        assert destination.endpoint == "https://weave.internal.example/otel/v1/traces"
+
+    def test_weave_uses_the_cloud_endpoint_without_a_host(self, monkeypatch):
+        monkeypatch.delenv("WANDB_HOST", raising=False)
+
+        destination = destination_for("weave_otel", {"wandb_api_key": "k", "weave_project_id": "e/p"})
+
+        assert destination.endpoint == "https://trace.wandb.ai/otel/v1/traces"
+
+
+class TestIncompleteCredentials:
+    """Half a credential set builds a non-empty but unusable header dict. Accepting it
+    would suppress the operator's exporter and send the trace where it cannot land."""
+
+    @pytest.mark.parametrize(
+        "callback_name,callback_vars",
+        [
+            ("arize", {"arize_api_key": "k"}),
+            ("arize", {"arize_space_id": "s"}),
+            ("weave_otel", {"wandb_api_key": "k"}),
+            ("weave_otel", {"weave_project_id": "e/p"}),
+            ("langfuse_otel", {"langfuse_public_key": "pk"}),
+        ],
+    )
+    def test_a_partial_credential_set_resolves_to_nothing(self, callback_name, callback_vars):
+        assert destination_for(callback_name, callback_vars) is None
+
+    @pytest.mark.parametrize(
+        "callback_name,callback_vars",
+        [
+            ("arize", {"arize_space_id": "s", "arize_api_key": "k"}),
+            ("weave_otel", {"wandb_api_key": "k", "weave_project_id": "e/p"}),
+            ("newrelic", {"newrelic_api_key": "k"}),
+        ],
+    )
+    def test_a_complete_credential_set_resolves(self, callback_name, callback_vars):
+        assert destination_for(callback_name, callback_vars) is not None
+
+
+@pytest.mark.usefixtures("allow_test_hosts")
+class TestCallbackTypeFilter:
+    @staticmethod
+    def _auth(callback_type: str | None) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            team_metadata={
+                "logging": [
+                    {
+                        "callback_name": "langfuse_otel",
+                        "callback_type": callback_type,
+                        "callback_vars": {
+                            "langfuse_public_key": "pk",
+                            "langfuse_secret_key": "sk",
+                            "langfuse_host": "http://team.local",
+                        },
+                    }
+                ]
+            }
+        )
+
+    @pytest.mark.parametrize("callback_type", ["success", "success_and_failure", None])
+    def test_an_entry_that_wants_success_traces_gets_the_whole_trace(self, monkeypatch, callback_type):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+
+        assert resolve_tenant_otel_destinations(self._auth(callback_type)) != ()
+
+    def test_a_failure_only_entry_does_not_take_over_the_trace(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+
+        assert resolve_tenant_otel_destinations(self._auth("failure")) == ()
+
+
+class TestEvictionSafety:
+    def test_evicting_a_processor_does_not_shut_it_down(self):
+        """``on_end`` hands the caller a processor and then releases the lock, so a
+        concurrent eviction that shut it down would silently drop that span."""
+        from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
+
+        class Recording(SimpleSpanProcessor):
+            def __init__(self):
+                super().__init__(InMemorySpanExporter())
+                self.shutdown_calls = 0
+
+            def shutdown(self):
+                self.shutdown_calls += 1
+
+        built = []
+
+        def factory(_destination):
+            processor = Recording()
+            built.append(processor)
+            return processor
+
+        fan_out = TenantFanOutSpanProcessor(processor_factory=factory)
+        for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + 1):
+            fan_out._processor_for(LANGFUSE_DEST.model_copy(update={"endpoint": f"http://d{index}/otel"}))
+
+        assert len(built) == _MAX_CACHED_DESTINATION_PROCESSORS + 1
+        assert built[0].shutdown_calls == 0
+        assert len(fan_out._processors) == _MAX_CACHED_DESTINATION_PROCESSORS
+
+
+class TestTenantHostSsrfGuard:
+    """Anyone who can mint a key can write ``langfuse_host``, so a tenant-named host
+    is a user-supplied URL and goes through the proxy's SSRF guard."""
+
+    @staticmethod
+    def _reset() -> None:
+        from litellm.litellm_core_utils.url_utils import _public_host_rejection
+
+        _public_host_rejection.cache_clear()
+
+    @pytest.mark.parametrize("host", ["http://127.0.0.1:9111", "http://169.254.169.254", "http://10.0.0.5:3000"])
+    def test_a_tenant_host_on_a_private_address_resolves_to_nothing(self, monkeypatch, host):
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", [], raising=False)
+        monkeypatch.setattr(litellm, "user_url_validation", True, raising=False)
+        self._reset()
+
+        assert (
+            destination_for(
+                "langfuse_otel",
+                {"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_host": host},
+            )
+            is None
+        )
+
+    def test_the_operator_can_allowlist_its_teams_internal_langfuse(self, monkeypatch):
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["127.0.0.1:9111"], raising=False)
+        monkeypatch.setattr(litellm, "user_url_validation", True, raising=False)
+        self._reset()
+
+        destination = destination_for(
+            "langfuse_otel",
+            {"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_host": "http://127.0.0.1:9111"},
+        )
+
+        assert destination.endpoint == "http://127.0.0.1:9111/api/public/otel"
+
+    def test_the_master_switch_still_turns_the_guard_off(self, monkeypatch):
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", [], raising=False)
+        monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
+        self._reset()
+
+        assert (
+            destination_for(
+                "langfuse_otel",
+                {"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_host": "http://127.0.0.1:9111"},
+            )
+            is not None
+        )
+
+    def test_the_operators_own_internal_host_is_never_blocked(self, monkeypatch):
+        """The operator configures ``LANGFUSE_HOST`` themselves, so an internal
+        collector there is a deployment choice rather than caller-supplied input."""
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", [], raising=False)
+        monkeypatch.setattr(litellm, "user_url_validation", True, raising=False)
+        monkeypatch.setenv("LANGFUSE_HOST", "http://127.0.0.1:9111")
+        self._reset()
+
+        destination = destination_for("langfuse_otel", {"langfuse_public_key": "pk", "langfuse_secret_key": "sk"})
+
+        assert destination.endpoint == "http://127.0.0.1:9111/api/public/otel"
