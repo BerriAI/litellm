@@ -278,9 +278,15 @@ describe("RequestLogsPanel", () => {
     });
 
     it("fetches the log by request_id and opens the drawer when it is not in the loaded page", async () => {
-      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ params }) =>
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ params, page_size }) =>
         params?.request_id === "req-old"
-          ? { data: [logEntry({ request_id: "req-old" })], total: 1, page: 1, page_size: 1, total_pages: 1 }
+          ? {
+              data: [logEntry({ request_id: "req-old" })],
+              total: 1,
+              page: 1,
+              page_size: page_size ?? 1,
+              total_pages: 1,
+            }
           : { data: [], total: 0, page: 1, page_size: 50, total_pages: 0 },
       );
       renderPanel("?log_id=req-old");
@@ -295,7 +301,43 @@ describe("RequestLogsPanel", () => {
         .mock.calls.find(([options]) => options.params?.request_id === "req-old")?.[0];
       if (!byIdCall) throw new Error("expected a by-id uiSpendLogsCall");
       expect(byIdCall.page).toBe(1);
-      expect(byIdCall.page_size).toBe(1);
+      expect(byIdCall.page_size).toBeGreaterThan(1);
+    });
+
+    it("prefers the exact request_id row over a colliding litellm_call_id row on the loaded page", async () => {
+      respondWith([
+        logEntry({ request_id: "attacker-req", litellm_call_id: "victim-req" }),
+        logEntry({ request_id: "victim-req", litellm_call_id: "victim-call-id" }),
+      ]);
+      renderPanel("?log_id=victim-req");
+
+      await waitFor(() => {
+        expect(drawer()).toHaveTextContent("open");
+      });
+      expect(drawer()).toHaveAttribute("data-log-id", "victim-req");
+    });
+
+    it("prefers the exact request_id row over a colliding litellm_call_id row from the by-id fetch", async () => {
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ params }) =>
+        params?.request_id === "victim-req"
+          ? {
+              data: [
+                logEntry({ request_id: "attacker-req", litellm_call_id: "victim-req" }),
+                logEntry({ request_id: "victim-req", litellm_call_id: "victim-call-id" }),
+              ],
+              total: 2,
+              page: 1,
+              page_size: 10,
+              total_pages: 1,
+            }
+          : { data: [], total: 0, page: 1, page_size: 50, total_pages: 0 },
+      );
+      renderPanel("?log_id=victim-req");
+
+      await waitFor(() => {
+        expect(drawer()).toHaveTextContent("open");
+      });
+      expect(drawer()).toHaveAttribute("data-log-id", "victim-req");
     });
 
     it("opens the drawer when ?log_id= is the log's litellm_call_id rather than its request_id", async () => {

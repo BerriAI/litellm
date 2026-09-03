@@ -2709,12 +2709,12 @@ async def test_ui_view_request_response_rejects_foreign_row_inserted_after_owner
 
 
 @pytest.mark.asyncio
-async def test_ui_view_request_response_custom_logger_denies_foreign_payload_owner(client, monkeypatch):
-    """The custom-logger payload comes straight from cold storage, written independently
-    of the spend-log table and able to outlive its row. When an id lookup matches no row,
-    the DB owner pre-check has nothing to verify, so the payload is authorized against the
-    owner recorded inside it. A foreign tenant's stored payload is denied even though no
-    spend-log row exists for the pre-check to catch."""
+async def test_ui_view_request_response_custom_logger_skips_foreign_payload_owner(client, monkeypatch):
+    """The custom-logger payload comes straight from cold storage, keyed by provider
+    request_id, so a lookup id that also exists as another tenant's provider id could
+    otherwise hand back that tenant's stored payload. A foreign-owned payload is skipped
+    so the caller's own matching row is still served by the DB fallback; when no such
+    row exists, the endpoint returns null instead of leaking the foreign payload."""
 
     class MockDB:
         async def query_raw(self, sql_query, *params):
@@ -2747,7 +2747,66 @@ async def test_ui_view_request_response_custom_logger_denies_foreign_payload_own
             params={"start_date": "2026-01-01 00:00:00"},
             headers={"Authorization": "Bearer sk-test"},
         )
-        assert response.status_code == 403
+        assert response.status_code == 200
+        assert "victim prompt" not in response.text
+        assert response.json() is None
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_request_response_custom_logger_falls_through_to_owned_db_row(client, monkeypatch):
+    """A colliding foreign cold-storage payload must not lock the caller out of their
+    own matching DB row. Skipping the foreign payload lets the scoped DB query return
+    the caller's own row, which the pre-check already authorized on the shared id."""
+
+    class MockDB:
+        async def query_raw(self, sql_query, *params):
+            if 'SELECT DISTINCT "user", team_id' in sql_query:
+                return [
+                    {"user": "user_1", "team_id": None},
+                    {"user": "victim_user", "team_id": None},
+                ]
+            return [
+                {
+                    "messages": [{"role": "user", "content": "my own prompt"}],
+                    "response": {"id": "r"},
+                    "proxy_server_request": None,
+                    "metadata": None,
+                    "user": "user_1",
+                    "team_id": None,
+                }
+            ]
+
+    class MockPrisma:
+        def __init__(self):
+            self.db = MockDB()
+
+    class ColdStorageLogger:
+        async def get_request_response_payload(self, request_id, start_time_utc, end_time_utc):
+            return {
+                "messages": [{"role": "user", "content": "victim prompt"}],
+                "response": {"id": "r"},
+                "metadata": {"user_api_key_user_id": "victim_user", "user_api_key_team_id": None},
+            }
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrisma())
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_active_additional_logging_utils_from_custom_logger",
+        lambda: [ColdStorageLogger()],
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui/shared-id",
+            params={"start_date": "2026-01-01 00:00:00"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        assert "my own prompt" in response.text
         assert "victim prompt" not in response.text
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)

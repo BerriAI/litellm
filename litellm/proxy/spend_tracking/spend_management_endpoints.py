@@ -2901,15 +2901,16 @@ async def ui_view_request_response_for_request_id(
             start_time_utc=start_date_obj,
             end_time_utc=end_date_obj,
         )
-        if payload is not None:
-            if not caller_is_admin and prisma_client is not None:
-                await _assert_user_owns_cold_storage_payload(
-                    prisma_client=prisma_client,
-                    user_api_key_dict=user_api_key_dict,
-                    payload=cast(Mapping[str, object], payload),  # cast-ok: custom-logger payload is untyped
-                    request_id=request_id,
-                )
-            return payload
+        if payload is None:
+            continue
+        if not caller_is_admin and prisma_client is not None:
+            if not await _user_can_view_cold_storage_payload(
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+                payload=cast(Mapping[str, object], payload),  # cast-ok: custom-logger payload is untyped
+            ):
+                continue
+        return payload
 
     # Fallback: the list endpoint omits the heavy columns for performance, so
     # serve them here. When prompts were offloaded to cold storage the DB holds
@@ -4462,23 +4463,24 @@ def _cold_storage_payload_owner(payload: Mapping[str, object]) -> tuple[str | No
     )
 
 
-async def _assert_user_owns_cold_storage_payload(
+async def _user_can_view_cold_storage_payload(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     payload: Mapping[str, object],
-    request_id: str,
-) -> None:
+) -> bool:
     """
     Authorize a cold-storage payload against the owner recorded inside it.
     The custom logger reads the payload straight from cold storage, written
-    independently of the spend-log table and able to outlive its row, so a
-    request_id lookup could otherwise hand back another tenant's stored payload
-    when no row exists for the pre-check to catch. Verifying the payload's own
-    owner closes that gap, and a payload that records no owner fails closed.
+    independently of the spend-log table and able to outlive its row, and cold
+    storage is keyed by provider ``request_id``, so a lookup id that also exists
+    as another tenant's provider id would otherwise hand back that tenant's
+    stored payload. Verifying the payload's own owner closes that gap; a payload
+    that records no owner fails closed. Callers skip a foreign-owned payload and
+    fall through to the scoped DB query, so the caller's own matching row is
+    still served when a colliding cold-storage hit is not theirs to view.
     """
     owner_user, owner_team_id = _cold_storage_payload_owner(payload)
-    if not await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, owner_user, owner_team_id):
-        raise _spend_log_forbidden(request_id)
+    return await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, owner_user, owner_team_id)
 
 
 async def _get_permitted_team_ids_for_spend_logs(

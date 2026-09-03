@@ -25,8 +25,11 @@ import { LiveTailBanner, LogsTableToolbar } from "./LogsTableToolbar";
 import { RequestLogsTable } from "./RequestLogsTable";
 
 const PAGE_SIZE = 50;
+const BY_ID_PAGE_SIZE = 10;
 const DEFAULT_INTERVAL = { value: 24, unit: "hours" };
 const matchesLogId = (log: LogEntry, logId: string) => log.request_id === logId || log.litellm_call_id === logId;
+const findByLogId = (logs: readonly LogEntry[], logId: string): LogEntry | null =>
+  logs.find((log) => log.request_id === logId) ?? logs.find((log) => matchesLogId(log, logId)) ?? null;
 
 interface RequestLogsPanelProps {
   accessToken: string;
@@ -131,12 +134,12 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         start_date: window.start_date,
         end_date: window.end_date,
         page: 1,
-        page_size: 1,
+        page_size: BY_ID_PAGE_SIZE,
         params: { request_id: urlLogId },
       });
-      return response.data.find((log) => matchesLogId(log, urlLogId)) ?? null;
+      return findByLogId(response.data, urlLogId);
     },
-    enabled: urlLogId !== null && !(selectedLog !== null && matchesLogId(selectedLog, urlLogId)),
+    enabled: urlLogId !== null && selectedLog?.request_id !== urlLogId,
     staleTime: Infinity,
   };
 
@@ -144,8 +147,8 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   const displayLog = useMemo<LogEntry | null>(() => {
     if (urlLogId === null) return null;
-    if (selectedLog !== null && matchesLogId(selectedLog, urlLogId)) return selectedLog;
-    return filteredLogs.data.find((log) => matchesLogId(log, urlLogId)) ?? urlLog ?? null;
+    if (selectedLog?.request_id === urlLogId) return selectedLog;
+    return findByLogId(filteredLogs.data, urlLogId) ?? urlLog ?? null;
   }, [urlLogId, selectedLog, filteredLogs.data, urlLog]);
 
   const displaySessionId = useMemo<string | null>(() => {
