@@ -559,6 +559,28 @@ mod tests {
         })
     }
 
+    fn succeeded_response_with_native_only_fields() -> Value {
+        json!({
+            "status": "succeeded",
+            "analyzeResult": {
+                "content": "Invoice\nTotal: $100.00",
+                "paragraphs": [{"content": "Invoice", "spans": [{"offset": 0, "length": 7}]}],
+                "pages": [{
+                    "pageNumber": 1,
+                    "width": 8.5,
+                    "height": 11,
+                    "unit": "inch",
+                    "angle": 0.13,
+                    "spans": [{"offset": 0, "length": 22}],
+                    "words": [{"content": "Invoice", "confidence": 0.994, "polygon": [1, 2, 3, 4]}],
+                    "lines": [{"content": "Invoice"}, {"content": "Total: $100.00"}]
+                }],
+                "tables": [{"rowCount": 1, "columnCount": 1, "cells": []}],
+                "keyValuePairs": [{"key": {"content": "Total"}, "value": {"content": "$100.00"}}]
+            }
+        })
+    }
+
     fn mapped_params(params: Value) -> Map<String, Value> {
         AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
             .map_ocr_params(params.as_object().expect("params object"))
@@ -566,8 +588,15 @@ mod tests {
     }
 
     fn document_intelligence_response(params: Map<String, Value>) -> OcrResponseData {
+        document_intelligence_response_from(succeeded_response(), params)
+    }
+
+    fn document_intelligence_response_from(
+        response: Value,
+        params: Map<String, Value>,
+    ) -> OcrResponseData {
         AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
-            .transform_ocr_response_with_params("prebuilt-layout", succeeded_response(), &params)
+            .transform_ocr_response_with_params("prebuilt-layout", response, &params)
             .expect("response transforms")
     }
 
@@ -631,9 +660,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn document_intelligence_response_preserves_native_fields() {
-        let response = document_intelligence_response(Map::new());
+    fn assert_native_fields_preserved(response: &OcrResponseData) {
         assert_eq!(response.content, Some(json!("Invoice\nTotal: $100.00")));
         assert_eq!(
             response.tables,
@@ -643,6 +670,13 @@ mod tests {
             response.key_value_pairs,
             Some(json!([{"key": {"content": "Total"}, "value": {"content": "$100.00"}}]))
         );
+        assert_eq!(response.object, "ocr");
+        assert_eq!(
+            response.usage_info,
+            Some(json!({"pages_processed": 1, "doc_size_bytes": null}))
+        );
+        assert_eq!(response.pages[0]["index"], 0);
+        assert_eq!(response.pages[0]["markdown"], "Invoice\nTotal: $100.00");
         assert_eq!(
             response.pages[0]["dimensions"],
             json!({"width": 816, "height": 1056, "dpi": 96})
@@ -650,14 +684,9 @@ mod tests {
     }
 
     #[test]
-    fn document_intelligence_async_response_preserves_native_fields() {
+    fn document_intelligence_response_preserves_native_fields() {
         let response = document_intelligence_response(Map::new());
-        assert_eq!(response.pages[0]["index"], 0);
-        assert_eq!(response.pages[0]["markdown"], "Invoice\nTotal: $100.00");
-        assert_eq!(
-            response.usage_info,
-            Some(json!({"pages_processed": 1, "doc_size_bytes": null}))
-        );
+        assert_native_fields_preserved(&response);
     }
 
     #[test]
@@ -665,9 +694,21 @@ mod tests {
         let response = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
             .transform_ocr_response(
                 "prebuilt-read",
-                json!({"status": "succeeded", "analyzeResult": {"pages": []}}),
+                json!({
+                    "status": "succeeded",
+                    "analyzeResult": {
+                        "pages": [{
+                            "pageNumber": 1,
+                            "width": 8.5,
+                            "height": 11,
+                            "unit": "inch",
+                            "lines": [{"content": "hello"}]
+                        }]
+                    }
+                }),
             )
             .expect("response transforms");
+        assert_eq!(response.pages[0]["markdown"], "hello");
         assert_eq!(response.content, None);
         assert_eq!(response.tables, None);
         assert_eq!(response.key_value_pairs, None);
@@ -693,39 +734,27 @@ mod tests {
 
     #[test]
     fn document_intelligence_native_format_retains_raw_operation() {
-        let response =
-            document_intelligence_response(mapped_params(json!({"req_format": "native"})));
+        let response = document_intelligence_response_from(
+            succeeded_response_with_native_only_fields(),
+            mapped_params(json!({"req_format": "native"})),
+        );
         assert_eq!(
             response.provider_native_response,
-            Some(succeeded_response())
+            Some(succeeded_response_with_native_only_fields())
         );
-        assert_eq!(response.usage_info.unwrap()["pages_processed"], 1);
-    }
-
-    #[test]
-    fn document_intelligence_async_native_format_retains_raw_operation() {
-        let response =
-            document_intelligence_response(mapped_params(json!({"req_format": "native"})));
-        assert_eq!(
-            response
-                .provider_native_response
-                .as_ref()
-                .and_then(|value| value.get("status")),
-            Some(&json!("succeeded"))
-        );
+        assert_native_fields_preserved(&response);
     }
 
     #[test]
     fn document_intelligence_default_format_omits_raw_operation() {
-        assert_eq!(
-            document_intelligence_response(Map::new()).provider_native_response,
-            None
-        );
-        assert_eq!(
-            document_intelligence_response(mapped_params(json!({"req_format": "litellm"})))
-                .provider_native_response,
-            None
-        );
+        for params in [Map::new(), mapped_params(json!({"req_format": "litellm"}))] {
+            let response = document_intelligence_response_from(
+                succeeded_response_with_native_only_fields(),
+                params,
+            );
+            assert_eq!(response.provider_native_response, None);
+            assert_native_fields_preserved(&response);
+        }
     }
 
     #[test]
@@ -773,6 +802,11 @@ mod tests {
                 json!(["keyValuePairs", "languages"]),
                 json!("keyValuePairs,languages"),
             ),
+            (json!("keyValuePairs"), json!("keyValuePairs")),
+            (
+                json!("keyValuePairs,languages"),
+                json!("keyValuePairs,languages"),
+            ),
             (
                 json!("keyValuePairs, languages"),
                 json!("keyValuePairs,languages"),
@@ -794,9 +828,12 @@ mod tests {
     fn document_intelligence_features_reject_invalid_values() {
         for value in [
             json!("keyValuePairs&pages=9"),
+            json!("key value pairs"),
             json!(""),
             json!([1]),
+            json!([["keyValuePairs"]]),
             json!({"feature": "keyValuePairs"}),
+            json!(5),
         ] {
             let error = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
                 .map_ocr_params(&serde_json::Map::from_iter([(
@@ -820,6 +857,37 @@ mod tests {
         )
         .expect("url builds");
         assert!(url.ends_with("&features=keyValuePairs"));
+    }
+
+    #[test]
+    fn document_intelligence_pages_string_preserves_provider_ranges() {
+        let url = complete_document_intelligence_url(
+            Some("https://example.cognitiveservices.azure.com"),
+            "prebuilt-layout",
+            &mapped_params(json!({"pages": "1-3, 5,7-9"})),
+            &|_| None,
+        )
+        .expect("url builds");
+        assert!(url.ends_with("&pages=1-3,5,7-9"));
+    }
+
+    #[test]
+    fn document_intelligence_pages_reject_negative_mistral_index() {
+        let error = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
+            .map_ocr_params(&serde_json::Map::from_iter([(
+                "pages".to_string(),
+                json!([-1]),
+            )]))
+            .expect_err("negative page must fail");
+        assert!(matches!(error, Error::InvalidRequest(message) if message.contains(">= 0")));
+    }
+
+    #[test]
+    fn document_intelligence_empty_features_return_empty_map() {
+        assert_eq!(
+            mapped_params(json!({"features": []})),
+            Map::<String, Value>::new()
+        );
     }
 
     #[test]
