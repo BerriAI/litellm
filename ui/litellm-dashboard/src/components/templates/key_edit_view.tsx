@@ -312,10 +312,8 @@ export function KeyEditView({
     setField(teamId);
     const selectedTeam = teams?.find((t) => t.team_id === teamId) || null;
     if (selectedTeam?.organization_id) {
-      setSelectedOrganizationId(selectedTeam.organization_id);
       form.setValue("organization_id", selectedTeam.organization_id);
     } else if (!teamId) {
-      setSelectedOrganizationId(null);
       form.setValue("organization_id", undefined);
     }
   };
