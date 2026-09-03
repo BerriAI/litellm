@@ -173,8 +173,8 @@ def _python_references(steps: tuple[PipelineStep, ...]) -> dict[tuple[str, int],
     references: dict[tuple[str, int], str] = {}
     occurrences: dict[str, int] = {}
     for index, step in enumerate(steps, start=1):
-        name: Final = _split_raw(step.raw)[0]
-        occurrence: Final = occurrences.get(step.span, 0) + 1
+        name = _split_raw(step.raw)[0]
+        occurrence = occurrences.get(step.span, 0) + 1
         occurrences[step.span] = occurrence
         references[(step.span, occurrence)] = f"{index} {name}"
     return references
@@ -200,7 +200,7 @@ def _rust_lines(steps: tuple[PipelineStep, ...], references: dict[tuple[str, int
     occurrences: dict[str, int] = {}
     lines: list[str] = []
     for step in steps:
-        occurrence: Final = occurrences.get(step.span, 0) + 1
+        occurrence = occurrences.get(step.span, 0) + 1
         occurrences[step.span] = occurrence
         lines.append(_rust_line(step, depths[step.id], occurrence, references))
     return f"{_paint('RUST', 'yellow')} ({len(steps)} steps)\n" + ("\n".join(lines) if lines else "(empty)")

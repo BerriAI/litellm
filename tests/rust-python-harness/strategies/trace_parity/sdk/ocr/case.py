@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Final
+from typing import Final, cast
 
 from .....shared.parity.recorded_http import HttpHeader, RecordedHttpResponse
 from .....shared.tracing.steps import Engine, mapping
@@ -115,10 +115,11 @@ def _vertex_fixture(engine: Engine, _base_url: str) -> RouteFixture:
         {"type": "image_url", "image_url": "data:image/png;base64,aGVsbG8="},
     )
     vertex: Final = {"vertex_project": "trace-project", "vertex_location": "us-central1"}
+    optional_params: Final = cast(dict[str, object], fixture.kwargs.get("optional_params", {}))
     return RouteFixture(
         kwargs={
             **fixture.kwargs,
-            **({"optional_params": {**fixture.kwargs["optional_params"], **vertex}} if engine == "rust" else vertex),
+            **({"optional_params": {**optional_params, **vertex}} if engine == "rust" else vertex),
         },
         provider_responses=fixture.provider_responses,
     )

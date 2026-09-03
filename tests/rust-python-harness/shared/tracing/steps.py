@@ -88,7 +88,7 @@ def pipeline_projection(
         if event.parent_id is not None and event.parent_id not in raw_parents:
             raise ValueError(f"trace event {event.id} references unknown or later parent {event.parent_id}")
         raw_parents[event.id] = event.parent_id
-        span: Final = _span_for(engine, event.function, mappings)
+        span = _span_for(engine, event.function, mappings)
         if span is None:
             unmatched += 1
             continue
@@ -221,16 +221,16 @@ def _first_difference(
                 return f"{path}: unordered child subtree multiset differs"
             return None
         for index in range(max(len(python_nodes), len(rust_nodes))):
-            child_path: Final = f"{path}/child[{index + 1}]"
+            child_path = f"{path}/child[{index + 1}]"
             if index >= len(python_nodes):
                 return f"{child_path}: Rust has extra {rust_nodes[index].span!r}"
             if index >= len(rust_nodes):
                 return f"{child_path}: Python has extra {python_nodes[index].span!r}"
-            python_node: Final = python_nodes[index]
-            rust_node: Final = rust_nodes[index]
+            python_node = python_nodes[index]
+            rust_node = rust_nodes[index]
             if python_node.span != rust_node.span:
                 return f"{child_path}: Python={python_node.span!r}, Rust={rust_node.span!r}"
-            difference: Final = compare_children(
+            difference = compare_children(
                 python_node.children,
                 rust_node.children,
                 f"{child_path}/{python_node.span}",

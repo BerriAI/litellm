@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import Final
+from collections.abc import Sequence
+from typing import Final, Literal
 
 import pytest
 
 from ...shared.reporting.models import CaseResult, Coverage, HarnessCase, ResultArtifact, RunStatus
 from ...shared.reporting.strategy import ModuleCaseSpec, NotImplementedCaseSpec
-from ...shared.tracing.steps import PipelineStep, TraceContract, mapping
+from ...shared.tracing.steps import PipelineStep, TraceContract, TraceMapping, mapping
 from . import reporting
 from .reporting import TRACE_COMPARISON_ARTIFACT, TraceComparisonArtifact, render_trace_results
 
@@ -39,7 +40,7 @@ def _comparison(
     python: tuple[PipelineStep, ...],
     rust: tuple[PipelineStep, ...],
     *,
-    mappings=MAPPINGS,
+    mappings: Sequence[TraceMapping] = MAPPINGS,
     rust_error: str | None = None,
 ) -> TraceComparisonArtifact:
     return TraceComparisonArtifact.from_traces(
@@ -60,7 +61,7 @@ def _events(*items: tuple[str, int, str | None]) -> tuple[PipelineStep, ...]:
     parents: dict[int, int] = {}
     steps: list[PipelineStep] = []
     for event_id, (span, depth, raw) in enumerate(items):
-        parent_id: Final = parents.get(depth - 1) if depth else None
+        parent_id = parents.get(depth - 1) if depth else None
         steps.append(PipelineStep(event_id, parent_id, span, raw if raw is not None else span))
         parents[depth] = event_id
     return tuple(steps)
@@ -176,14 +177,15 @@ def test_renderer_groups_all_modes_under_one_case_header() -> None:
     )
     result: Final = CaseResult(case=case)
     events: Final = _events(("ocr", 0, None))
-    for mode in ("sync", "async"):
-        nodeid: Final = f"trace:sdk:ocr:default:{mode}"
+    modes: Final[tuple[Literal["sync", "async"], ...]] = ("sync", "async")
+    for mode in modes:
+        nodeid = f"trace:sdk:ocr:default:{mode}"
         result.collected.add(nodeid)
-        comparison: Final = TraceComparisonArtifact.from_traces(
+        comparison = TraceComparisonArtifact.from_traces(
             surface="sdk",
             sdk_function="ocr",
             scenario="default",
-            mode=mode,  # type: ignore[arg-type]
+            mode=mode,
             mappings=MAPPINGS,
             contract=TraceContract(),
             python=events,

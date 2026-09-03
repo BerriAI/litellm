@@ -36,7 +36,10 @@ SYNC_MAPPINGS: Final = (
 ASYNC_MAPPINGS: Final = (
     mapping(rust_span="audio_transcription", python_frame=r"main\.py:\d+ atranscription$"),
     mapping(span="python_transcription_wrapper", python_frame=r"main\.py:\d+ transcription$"),
-    *MAPPINGS,
+    *MAPPINGS[:2],
+    mapping(span="python_map_transcription_params", python_frame=r"get_optional_params_transcription$"),
+    mapping(rust_span="map_transcription_params"),
+    *MAPPINGS[3:],
 )
 
 

@@ -5,7 +5,7 @@ from typing import Final
 import pytest
 
 from .profiler import FunctionTraceEvent
-from .steps import TraceContract, mapping, pipeline_projection, trace_depths, trace_diff
+from .steps import Engine, TraceContract, mapping, pipeline_projection, trace_depths, trace_diff
 
 MAPPINGS: Final = (
     mapping(rust_span="route", python_frame=r"entry$"),
@@ -67,9 +67,9 @@ def test_projection_rejects_duplicate_and_unknown_parent_ids() -> None:
 
 
 @pytest.mark.parametrize("engine", ("python", "rust"))
-def test_rust_only_mappings_do_not_swallow_python_frames(engine: str) -> None:
+def test_rust_only_mappings_do_not_swallow_python_frames(engine: Engine) -> None:
     projection: Final = pipeline_projection(
-        engine,  # type: ignore[arg-type]
+        engine,
         (event(0, "anything"),),
         (mapping(rust_span="rust_only_span"),),
     )
@@ -82,11 +82,11 @@ def test_rust_only_mappings_do_not_swallow_python_frames(engine: str) -> None:
 
 
 def test_mapping_builder_rejects_empty_and_ambiguous_declarations() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="mapping needs"):
         mapping()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="python-only mapping needs"):
         mapping(python_frame=r"frame$")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="disagrees with"):
         mapping(rust_span="span_a", python_frame=r"frame$", span="span_b")
 
 
