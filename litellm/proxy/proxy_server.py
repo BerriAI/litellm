@@ -120,6 +120,8 @@ from litellm.router_utils.add_retry_fallback_headers import (
 from litellm.router_utils.auto_router_model_naming import (
     STRATEGY_ROUTER_PARAM_FIELDS,
     carries_complexity_router_settings,
+    count_heuristic_v2_routers,
+    heuristic_v2_limit_violation,
     validate_complexity_router_config_placement,
 )
 from litellm.types.utils import (
@@ -301,7 +303,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
 from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.auth.litellm_license import LicenseCheck
+from litellm.proxy.auth.litellm_license import HEURISTIC_V2_LICENSE_REMEDY, LicenseCheck
 from litellm.proxy.auth.model_checks import (
     expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,
@@ -4316,6 +4318,19 @@ def validate_deployment_complexity_router_placement(model: Mapping[str, object])
         raise ValueError(f"model {model.get('model_name', '')!r}: {violation}")
 
 
+def validate_heuristic_v2_router_limit(model_list: Sequence[Mapping[str, object]], *, limit: int | None) -> None:
+    """
+    Refuse to start when config.yaml defines more heuristic_v2 auto-routers than the license allows.
+
+    Checked here rather than left to router registration for the same reason as the two
+    validators above: the proxy builds its router with `ignore_invalid_deployments=True`, so
+    the router's own refusal would turn the extra router into a silently missing model.
+    """
+    violation: Final = heuristic_v2_limit_violation(held=count_heuristic_v2_routers(model_list), limit=limit)
+    if violation is not None:
+        raise ValueError(f"config.yaml model_list: {violation} {HEURISTIC_V2_LICENSE_REMEDY}")
+
+
 def pin_complexity_router_model_id(model: dict) -> None:  # mutable-ok: out-param, model_info is stamped in place
     """
     Stamps `model_info.id` from the raw litellm_params before plugin resolution swaps
@@ -5721,6 +5736,7 @@ class ProxyConfig:
         model_list: Final = config.get("model_list", None)
         if model_list:
             router_params["model_list"] = model_list
+            validate_heuristic_v2_router_limit(model_list, limit=_license_check.heuristic_v2_router_limit())
             print(  # noqa: T201
                 "\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m"
             )
@@ -5810,6 +5826,7 @@ class ProxyConfig:
             ),
             ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
             fallback_access_check=router_fallback_access_check,
+            heuristic_v2_router_limit=_license_check.heuristic_v2_router_limit,
         )
 
         if redis_usage_cache is not None and router.cache.redis_cache is None:
@@ -6270,6 +6287,7 @@ class ProxyConfig:
                         search_tools=search_tools,
                         ignore_invalid_deployments=True,
                         fallback_access_check=router_fallback_access_check,
+                        heuristic_v2_router_limit=_license_check.heuristic_v2_router_limit,
                     )
                     verbose_proxy_logger.debug("updated llm_router: %s", llm_router)
             else:
@@ -7571,7 +7589,7 @@ class ProxyConfig:
         return create_versioned_prompt_spec(db_prompt=db_prompt)
 
     async def _init_prompts_in_db(self, prisma_client: PrismaClient):
-        from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+        from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY, registry_key_for_prompt
         from litellm.types.prompts.init_prompts import PromptSpec
 
         def parse_row(db_prompt: object) -> PromptSpec | None:
@@ -7586,21 +7604,12 @@ class ProxyConfig:
                 return None
 
         try:
-            prompt_ids_loaded_before_db_read: Final = frozenset(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS)
+            registry_keys_loaded_before_db_read: Final = frozenset(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS)
             prompts_in_db: Final[Sequence[object]] = await PromptRepository(prisma_client).table.find_many()
             parsed_specs: Final[tuple[PromptSpec, ...]] = tuple(
                 spec for row in prompts_in_db if (spec := parse_row(row)) is not None
             )
-            newest_spec_per_id: Final[Mapping[str, PromptSpec]] = MappingProxyType(
-                {
-                    spec.prompt_id: spec
-                    for spec in sorted(
-                        parsed_specs,
-                        key=lambda s: s.updated_at.timestamp() if s.updated_at else float("-inf"),
-                    )
-                }
-            )
-            for prompt_spec in newest_spec_per_id.values():
+            for prompt_spec in parsed_specs:
                 try:
                     IN_MEMORY_PROMPT_REGISTRY.sync_prompt_from_db(prompt=prompt_spec)
                 except Exception as prompt_sync_error:  # noqa: BLE001  # one poisoned row must not block syncing the remaining prompts
@@ -7612,15 +7621,16 @@ class ProxyConfig:
             # An unparsable row still exists in the DB, so skip the sweep rather than unload its in-memory copy
             every_row_parsed: Final = len(parsed_specs) == len(prompts_in_db)
             if every_row_parsed:
-                deleted_db_prompt_ids: Final = tuple(
-                    prompt_id
-                    for prompt_id in prompt_ids_loaded_before_db_read
-                    if (loaded_spec := IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.get(prompt_id)) is not None
+                db_registry_keys: Final = frozenset(registry_key_for_prompt(spec) for spec in parsed_specs)
+                deleted_db_registry_keys: Final = tuple(
+                    registry_key
+                    for registry_key in registry_keys_loaded_before_db_read
+                    if (loaded_spec := IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.get(registry_key)) is not None
                     and loaded_spec.prompt_info.prompt_type == "db"
-                    and prompt_id not in newest_spec_per_id
+                    and registry_key not in db_registry_keys
                 )
-                for deleted_prompt_id in deleted_db_prompt_ids:
-                    IN_MEMORY_PROMPT_REGISTRY.remove_prompt(prompt_id=deleted_prompt_id)
+                for deleted_registry_key in deleted_db_registry_keys:
+                    IN_MEMORY_PROMPT_REGISTRY.remove_prompt(registry_key=deleted_registry_key)
         except Exception as e:
             verbose_proxy_logger.debug("litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - %s", e)
 

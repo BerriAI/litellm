@@ -21,7 +21,7 @@ import time
 import traceback
 import weakref
 from collections import defaultdict
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator, Iterator, Mapping, Sequence
 from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
@@ -50,6 +50,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
@@ -116,6 +117,9 @@ from litellm.router_utils.add_retry_fallback_headers import (
 from litellm.router_utils.auto_router_model_naming import (
     AUTO_ROUTER_MODEL_PREFIX,
     classify_strategy_router_model,
+    count_heuristic_v2_routers,
+    heuristic_v2_limit_violation,
+    uses_heuristic_v2_classifier,
 )
 from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
@@ -210,6 +214,7 @@ from litellm.types.router import (
     DeploymentTypedDict,
     FallbackAccessCheck,
     GuardrailTypedDict,
+    HeuristicV2RouterLimit,
     LiteLLM_Params,
     MockRouterTestingParams,
     ModelGroupInfo,
@@ -231,6 +236,7 @@ from litellm.types.router import (
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
+    AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
@@ -588,16 +594,20 @@ set_live_deployment_replay(_replay_live_router_model_cost)
 
 
 # Kwargs that carry no signal about the failed attempt, so log_retry drops them from a
-# breadcrumb entirely: the request payload and the router-internal walk state. Credentials are
-# handled separately by mask_credentials_in_payload, which scrubs credential-named values from
-# whatever kwargs remain rather than trying to enumerate every credential-bearing key here.
+# breadcrumb entirely: the request payload, the proxy's snapshot of the inbound request (its body
+# aliases the live request metadata, earlier breadcrumbs included, so copying it would nest every
+# breadcrumb inside the next one), and the router-internal walk state. Credentials are handled
+# separately by mask_credentials_in_payload, which scrubs credential-named values from whatever
+# kwargs remain rather than trying to enumerate every credential-bearing key here.
 RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
     (
         "messages",
         "original_function",
         "attempted_targets",
+        "proxy_server_request",
     )
 )
+RETRY_BREADCRUMB_LIMIT: Final = 4
 
 
 class Router:
@@ -681,6 +691,7 @@ class Router:
         background_health_check_model_groups: Sequence[str] | None = None,
         enable_weighted_failover: bool = False,
         fallback_access_check: FallbackAccessCheck | None = None,
+        heuristic_v2_router_limit: HeuristicV2RouterLimit | None = None,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -757,6 +768,7 @@ class Router:
 
         self.set_verbose = set_verbose
         self.ignore_invalid_deployments = ignore_invalid_deployments
+        self.heuristic_v2_router_limit = heuristic_v2_router_limit
         self.fallback_access_check: Final = fallback_access_check
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
@@ -956,7 +968,6 @@ class Router:
         self.total_calls: defaultdict = defaultdict(int)  # dict to store total calls made to each model
         self.fail_calls: defaultdict = defaultdict(int)  # dict to store fail_calls made to each model
         self.success_calls: defaultdict = defaultdict(int)  # dict to store success_calls  made to each model
-        self.previous_models: list = []  # list to store failed calls (passed in as metadata to next call)
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
         default_litellm_params = default_litellm_params or {}
@@ -2168,6 +2179,76 @@ class Router:
             verbose_router_logger.debug("Error occurred while printing deployment - %s", e)
             raise e
 
+    @staticmethod
+    def _deployment_params_with_request_reasoning_override(
+        deployment_params: Mapping[str, object], request_kwargs: Mapping[str, object]
+    ) -> dict[str, object]:  # mutable-ok: litellm's request pipeline consumes a mutable kwargs mapping
+        """Return deployment params whose equivalent effort controls cannot outrank a request override.
+
+        Providers expose the same setting through several native carriers. A request-level
+        ``reasoning_effort`` is the portable override, so a deployment's ``thinking`` or nested
+        ``*.effort`` must not remain beside it and either win or trigger a conflicting-params 400.
+        Every changed mapping is copied so the Router's shared deployment config stays immutable.
+        """
+        sanitized: Final = dict(deployment_params)  # mutable-ok: request-local copy protects shared Router state
+        if request_kwargs.get("reasoning_effort") is None:
+            return sanitized
+
+        sanitized.pop("thinking", None)
+        Router._pop_effort_from_nested_carrier(sanitized, "output_config")
+        Router._pop_effort_from_nested_carrier(sanitized, "reasoning")
+
+        extra_body: Final = sanitized.get("extra_body")
+        if isinstance(extra_body, Mapping):
+            sanitized_extra_body: Final = dict(extra_body)  # mutable-ok: request-local nested copy
+            sanitized_extra_body.pop("reasoning_effort", None)
+            sanitized_extra_body.pop("thinking", None)
+            Router._pop_effort_from_nested_carrier(sanitized_extra_body, "output_config")
+            Router._pop_effort_from_nested_carrier(sanitized_extra_body, "reasoning")
+            if sanitized_extra_body:
+                sanitized["extra_body"] = sanitized_extra_body
+            else:
+                sanitized.pop("extra_body", None)
+        return sanitized
+
+    @staticmethod
+    def _is_classifier_internal_call(kwargs: Mapping[str, object]) -> bool:
+        metadata: Final = kwargs.get("metadata")
+        litellm_metadata: Final = kwargs.get("litellm_metadata")
+        return any(
+            isinstance(candidate, Mapping)
+            and candidate.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+            for candidate in (metadata, litellm_metadata)
+        )
+
+    def _drop_unsupported_classifier_reasoning_effort(
+        self,
+        deployment: DeploymentTypedDict,
+        model: str,
+        kwargs: dict[str, object],  # mutable-ok: fallback must update the active request and its log body together
+    ) -> None:
+        """Let a classifier fallback without reasoning support remain a usable fallback.
+
+        The dashboard only offers explicitly advertised levels, but an existing config can outlive
+        a model change and fallbacks can target a different group. Unknown capability fails open;
+        only a provider that explicitly rejects the parameter has it removed.
+        """
+        if kwargs.get("reasoning_effort") is None or not self._is_classifier_internal_call(kwargs):
+            return
+        if self._deployment_accepts_param(deployment, model, "reasoning_effort"):
+            return
+        verbose_router_logger.warning(
+            "litellm.router.py: dropping classifier reasoning_effort for model=%s because the selected deployment does not support it",
+            model,
+        )
+        kwargs.pop("reasoning_effort", None)
+        proxy_server_request: Final = kwargs.get("proxy_server_request")
+        if not isinstance(proxy_server_request, dict):
+            return
+        body: Final = proxy_server_request.get("body")
+        if isinstance(body, dict):
+            body.pop("reasoning_effort", None)
+
     ### COMPLETION, EMBEDDING, IMG GENERATION FUNCTIONS
 
     def completion(self, model: str, messages: list[dict[str, str]], **kwargs) -> ModelResponse | CustomStreamWrapper:
@@ -2203,9 +2284,16 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
+            self._drop_unsupported_classifier_reasoning_effort(
+                deployment=cast(DeploymentTypedDict, deployment),  # cast-ok: selection returns a router deployment
+                model=model,
+                kwargs=kwargs,
+            )
             # Check for silent model experiment
             # Make a local copy of litellm_params to avoid mutating the Router's state
-            litellm_params: Final = deployment["litellm_params"].copy()
+            litellm_params: Final = self._deployment_params_with_request_reasoning_override(
+                deployment["litellm_params"], kwargs
+            )
             silent_model: Final = litellm_params.pop("silent_model", None)
 
             if silent_model is not None:
@@ -3216,6 +3304,11 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
+            self._drop_unsupported_classifier_reasoning_effort(
+                deployment=cast(DeploymentTypedDict, deployment),  # cast-ok: selection returns a router deployment
+                model=model,
+                kwargs=kwargs,
+            )
 
             _timeout_debug_deployment_dict = deployment
             end_time: Final = time.time()
@@ -3237,7 +3330,9 @@ class Router:
 
             # Check for silent model experiment
             # Make a local copy of litellm_params to avoid mutating the Router's state
-            litellm_params: Final = deployment["litellm_params"].copy()
+            litellm_params: Final = self._deployment_params_with_request_reasoning_override(
+                deployment["litellm_params"], kwargs
+            )
             silent_model: Final = litellm_params.pop("silent_model", None)
 
             if silent_model is not None:
@@ -8051,35 +8146,31 @@ class Router:
         """
         When a retry or fallback happens, log the details of the just failed model call - similar to Sentry breadcrumbing
         """
-        try:
-            _metadata_var: Final = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
-            # Log failed model as the previous model
-            previous_model: Final = {
+        _metadata_var: Final = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+        request_metadata: Final[Mapping[str, object]] = kwargs[_metadata_var]
+        attempt_kwargs: Final = MappingProxyType(
+            {k: v for k, v in kwargs.items() if k != _metadata_var and k not in RETRY_BREADCRUMB_EXCLUDED_KWARGS}
+        )
+        attempt_metadata: Final = MappingProxyType(
+            {k: v for k, v in request_metadata.items() if k != "previous_models"}
+        )
+        previous_model: Final = MappingProxyType(
+            {
                 "exception_type": type(e).__name__,
                 "exception_string": str(e),
+                **attempt_kwargs,
+                _metadata_var: attempt_metadata,
             }
-            for (
-                k,
-                v,
-            ) in kwargs.items():  # log everything in kwargs except the old previous_models value - prevent nesting
-                if k != _metadata_var and k not in RETRY_BREADCRUMB_EXCLUDED_KWARGS:
-                    previous_model[k] = v
-                elif k == _metadata_var and isinstance(v, dict):
-                    previous_model[_metadata_var] = {}
-                    for metadata_k, metadata_v in kwargs[_metadata_var].items():
-                        if metadata_k != "previous_models":
-                            previous_model[k][metadata_k] = metadata_v
-
-            # check current size of self.previous_models, if it's larger than 3, remove the first element
-            if len(self.previous_models) > 3:
-                self.previous_models.pop(0)
-
-            scrubbed_previous_model: Final = mask_credentials_in_payload(previous_model)
-            self.previous_models.append(scrubbed_previous_model)
-            kwargs[_metadata_var]["previous_models"] = self.previous_models
-            return kwargs
-        except Exception as e:
-            raise e
+        )
+        earlier_breadcrumbs: Final = request_metadata.get("previous_models")
+        kept_breadcrumbs: Final[tuple[object, ...]] = (
+            tuple(earlier_breadcrumbs)[-(RETRY_BREADCRUMB_LIMIT - 1) :]
+            if isinstance(earlier_breadcrumbs, (list, tuple))
+            else ()
+        )
+        breadcrumbs: Final = (*kept_breadcrumbs, mask_credentials_in_payload(previous_model))
+        kwargs[_metadata_var]["previous_models"] = breadcrumbs  # rebind-ok: the logging object already holds this dict
+        return kwargs
 
     def _update_usage(self, deployment_id: str, parent_otel_span: Span | None) -> int:
         """
@@ -8710,6 +8801,30 @@ class Router:
         """
         return classify_strategy_router_model(litellm_params.model) == "complexity"
 
+    def config_deployments(self) -> Iterator[Mapping[str, object]]:
+        """The model_list rows that came from config.yaml rather than the DB (``model_info.db_model`` unset)."""
+        for deployment in self.model_list:
+            if not isinstance(deployment, Mapping):
+                continue
+            model_info = deployment.get("model_info")
+            if not (isinstance(model_info, Mapping) and model_info.get("db_model")):
+                yield deployment
+
+    def heuristic_v2_router_limit_violation(self) -> str | None:
+        """
+        Why one more heuristic_v2 router cannot join this router, or None when it can.
+
+        Judged against every deployment currently on the model_list; an upsert pops the row being
+        edited first, so an edit of an existing heuristic_v2 router keeps its own slot. The limit is
+        resolved on every call through ``heuristic_v2_router_limit``; unset means unlimited, which
+        is the SDK default, and the proxy injects a resolver backed by its license.
+        """
+        limit: Final = self.heuristic_v2_router_limit() if self.heuristic_v2_router_limit is not None else None
+        others: Final = count_heuristic_v2_routers(
+            deployment for deployment in self.model_list if isinstance(deployment, Mapping)
+        )
+        return heuristic_v2_limit_violation(held=others + 1, limit=limit)
+
     def init_complexity_router_deployment(self, deployment: Deployment):
         """
         Initialize the complexity-router deployment.
@@ -8727,6 +8842,10 @@ class Router:
         )
 
         complexity_router_config: Final[dict | None] = deployment.litellm_params.complexity_router_config
+        if uses_heuristic_v2_classifier(complexity_router_config):
+            limit_violation: Final = self.heuristic_v2_router_limit_violation()
+            if limit_violation is not None:
+                raise ValueError(limit_violation)
 
         default_model: str | None = deployment.litellm_params.complexity_router_default_model
 
@@ -9550,8 +9669,16 @@ class Router:
                 raise e
 
     def _restore_deployment_after_failed_upsert(self, previous_deployment: Deployment | None, model_id: str) -> None:
+        """Put a deployment back the way it was before a failed upsert popped it.
+
+        A rollback re-admits state that was already serving, so it does not go through the
+        heuristic_v2 ceiling a newcomer gets: with the ceiling tightened since the deployment first
+        registered, judging the rollback would drop a serving router over an unrelated failed edit.
+        """
         if previous_deployment is None or self.has_model_id(model_id):
             return
+        limit_resolver: Final = self.heuristic_v2_router_limit
+        self.heuristic_v2_router_limit = None
         try:
             self.add_deployment(deployment=previous_deployment)
             verbose_router_logger.info(
@@ -9566,6 +9693,8 @@ class Router:
                 model_id,
                 restore_error,
             )
+        finally:
+            self.heuristic_v2_router_limit = limit_resolver
 
     @staticmethod
     def _backend_cost_map_keys(model: str, custom_llm_provider: str | None) -> tuple[str, ...]:
@@ -9894,6 +10023,17 @@ class Router:
             coerce_token_limit(model_info.get("max_input_tokens")),
             coerce_token_limit(model_info.get("max_output_tokens")),
         )
+
+    def get_configured_mode(self, model_name: str) -> "str | None":
+        """Return the mode explicitly configured for a concrete deployment."""
+        deployment: Final = self.get_deployment_by_model_group_name(model_group_name=model_name)
+        if deployment is None:
+            return None
+
+        mode: Final = deployment.model_info.get("mode")
+        if isinstance(mode, str) and mode.strip():
+            return mode
+        return None
 
     def get_configured_display_name(self, model_name: str) -> "str | None":
         """
@@ -10255,6 +10395,8 @@ class Router:
         total_itpm: int | None = None
         total_otpm: int | None = None
         configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+        reasoning_efforts_initialized = False
+        reasoning_efforts_unknown = False
         model_list: Final = self.get_model_list(model_name=model_group)
         if model_list is None:
             return None
@@ -10441,10 +10583,23 @@ class Router:
                 if model_info.get("rpm", None) is not None and _deployment_rpm is None:
                     _deployment_rpm = model_info.get("rpm")
 
-            model_group_info.supported_reasoning_efforts = intersect_supported_reasoning_efforts(
-                model_group_info.supported_reasoning_efforts,
-                resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=deployment_is_mapped),
+            deployment_reasoning_efforts = (
+                resolve_supported_reasoning_efforts(  # rebind-ok: recalculated per deployment
+                    model_info, deployment_is_mapped=deployment_is_mapped
+                )
             )
+            if deployment_reasoning_efforts is None:
+                reasoning_efforts_unknown = True
+                model_group_info.supported_reasoning_efforts = None
+            elif not reasoning_efforts_initialized:
+                reasoning_efforts_initialized = True
+                if not reasoning_efforts_unknown:
+                    model_group_info.supported_reasoning_efforts = deployment_reasoning_efforts
+            elif not reasoning_efforts_unknown:
+                model_group_info.supported_reasoning_efforts = intersect_supported_reasoning_efforts(
+                    model_group_info.supported_reasoning_efforts,
+                    deployment_reasoning_efforts,
+                )
 
             if _deployment_tpm is not None:
                 if total_tpm is None:
@@ -12308,10 +12463,12 @@ class Router:
     @staticmethod
     def _pop_effort_from_nested_carrier(request_kwargs: dict[str, object], carrier: str) -> None:
         nested: Final = request_kwargs.get(carrier)
-        if not isinstance(nested, dict):
+        if not isinstance(nested, Mapping):
             return
-        nested.pop("effort", None)
-        if not nested:
+        sanitized: Final = {key: value for key, value in nested.items() if key != "effort"}
+        if sanitized:
+            request_kwargs[carrier] = sanitized  # rebind-ok: copy-on-write, so a shared nested carrier is never edited
+        else:
             request_kwargs.pop(carrier, None)
 
     @staticmethod

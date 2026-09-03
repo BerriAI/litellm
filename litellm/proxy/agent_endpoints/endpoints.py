@@ -939,35 +939,32 @@ async def make_agent_public(
             if agent is None:
                 raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
-        if litellm.public_agent_groups is None:
-            litellm.public_agent_groups = []
-        # handle duplicates
-        if not AGENT_REGISTRY.ids_for_agent(agent.agent_id).isdisjoint(litellm.public_agent_groups):
+        config: Final = await proxy_config.get_config()
+
+        current_public_agent_groups: Final = list(litellm.public_agent_groups or [])
+        if not AGENT_REGISTRY.ids_for_agent(agent.agent_id).isdisjoint(current_public_agent_groups):
             raise HTTPException(
                 status_code=400,
                 detail=f"Agent with name {agent.agent_name} already in public agent groups",
             )
-        litellm.public_agent_groups.append(agent.agent_id)
+        updated_public_agent_groups: Final = [*current_public_agent_groups, agent.agent_id]
 
-        # Load existing config
-        config: Final = await proxy_config.get_config()
-
-        # Update config with new settings
         if "litellm_settings" not in config or config["litellm_settings"] is None:
             config["litellm_settings"] = {}
 
-        config["litellm_settings"]["public_agent_groups"] = litellm.public_agent_groups
+        config["litellm_settings"]["public_agent_groups"] = updated_public_agent_groups
 
-        # Save the updated config
         await proxy_config.save_config(new_config=config)
 
+        litellm.public_agent_groups = updated_public_agent_groups
+
         verbose_proxy_logger.debug(
-            "Updated public agent groups to: %s by user: %s", litellm.public_agent_groups, user_api_key_dict.user_id
+            "Updated public agent groups to: %s by user: %s", updated_public_agent_groups, user_api_key_dict.user_id
         )
 
         return {
             "message": "Successfully updated public agent groups",
-            "public_agent_groups": litellm.public_agent_groups,
+            "public_agent_groups": updated_public_agent_groups,
             "updated_by": user_api_key_dict.user_id,
         }
     except HTTPException:

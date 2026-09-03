@@ -1033,6 +1033,7 @@ export const userListCall = async (
   sortBy: string | null = null,
   sortOrder: "asc" | "desc" | null = null,
   organizationIds: string[] | null = null,
+  search: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -1051,6 +1052,7 @@ export const userListCall = async (
         sort_by: sortBy || undefined,
         sort_order: sortOrder || undefined,
         organization_ids: organizationIds && organizationIds.length > 0 ? organizationIds.join(",") : undefined,
+        search: search || undefined,
       },
     })) as UserListResponse;
     return data;
@@ -2053,6 +2055,8 @@ interface UiSpendLogsParams {
   max_spend?: number;
   exclude_internal_health_checks?: boolean;
   group_by_session?: boolean;
+  session_cursor?: string;
+  search?: string;
 }
 
 interface UiSpendLogsCallOptions {
@@ -2381,20 +2385,22 @@ export type ModelGroupConnectionResult = { status: "success" } | { status: "erro
 export const buildModelGroupTestRequest = (
   modelGroup: string,
   mode: "chat" | "embedding",
+  requestParams: Record<string, unknown> = {},
 ): { path: string; body: Record<string, unknown> } =>
   mode === "embedding"
     ? { path: "/v1/embeddings", body: { model: modelGroup, input: "test from litellm" } }
     : {
         path: "/v1/chat/completions",
-        body: { model: modelGroup, messages: [{ role: "user", content: "test from litellm" }] },
+        body: { ...requestParams, model: modelGroup, messages: [{ role: "user", content: "test from litellm" }] },
       };
 
 export const testModelGroupConnection = async (
   accessToken: string,
   modelGroup: string,
   mode: "chat" | "embedding",
+  requestParams?: Record<string, unknown>,
 ): Promise<ModelGroupConnectionResult> => {
-  const { path, body } = buildModelGroupTestRequest(modelGroup, mode);
+  const { path, body } = buildModelGroupTestRequest(modelGroup, mode, requestParams);
   try {
     await apiClient.post(path, { accessToken, body });
     return { status: "success" };
@@ -4691,9 +4697,12 @@ export const updatePromptCall = async (accessToken: string, promptId: string, pr
   }
 };
 
-export const deletePromptCall = async (accessToken: string, promptId: string) => {
+export const deletePromptCall = async (accessToken: string, promptId: string, environment?: string) => {
   try {
-    const data = await apiClient.delete(`/prompts/${promptId}`, { accessToken });
+    const data = await apiClient.delete(`/prompts/${promptId}`, {
+      accessToken,
+      query: { environment: environment || undefined },
+    });
     return data;
   } catch (error) {
     console.error("Failed to delete prompt:", error);
@@ -6555,6 +6564,7 @@ interface UiAuditLogsParams {
   changed_by_api_key?: string;
   object_team_id?: string;
   object_key_hash?: string;
+  search?: string | null;
   sort_by?: string;
   sort_order?: "asc" | "desc";
 }
@@ -8053,15 +8063,18 @@ export const fetchMemoryList = async (
   options: {
     key?: string;
     keyPrefix?: string;
+    search?: string;
     page?: number;
     pageSize?: number;
   } = {},
 ): Promise<MemoryListResponse> => {
   const base = proxyBaseUrl ? `${proxyBaseUrl}/v1/memory` : `/v1/memory`;
   const params = new URLSearchParams();
-  // keyPrefix takes precedence — backend also does, but we omit `key`
+  // Backend precedence is search > key_prefix > key; only the winner is sent
   // to keep the URL clean and intent obvious.
-  if (options.keyPrefix) {
+  if (options.search) {
+    params.append("search", options.search);
+  } else if (options.keyPrefix) {
     params.append("key_prefix", options.keyPrefix);
   } else if (options.key) {
     params.append("key", options.key);

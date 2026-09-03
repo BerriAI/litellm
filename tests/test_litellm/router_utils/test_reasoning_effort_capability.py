@@ -371,3 +371,20 @@ class TestKimiK3AdvertisesItsDocumentedLevels:
             "low",
             "high",
         )
+
+
+class TestGpt6AstraAdvertisesItsDocumentedLevels:
+    def test_the_entry_advertises_low_through_max_without_none(self, local_model_cost_map):
+        """OpenAI documents low, medium, high, xhigh and max for gpt-6-astra. Unlike gpt-5.6-sol it
+        does not take none, so a group must not offer none and must offer max."""
+        from litellm.utils import _get_model_info_helper
+
+        model_info = dict(_get_model_info_helper(model="gpt-6-astra", custom_llm_provider="openai"))
+
+        assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == (
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        )

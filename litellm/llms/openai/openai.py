@@ -2,7 +2,6 @@ import time
 import types
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
-from urllib.parse import urlparse
 
 import httpx
 
@@ -55,6 +54,7 @@ from .common_utils import (
     OpenAIError,
     build_output_token_limit_response,
     drop_params_from_unprocessable_entity_error,
+    is_openai_backed_api_base,
     is_output_token_limit_error,
 )
 from .workload_identity import resolve_openai_workload_identity_config
@@ -1190,10 +1190,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         """
         if stream_options is not None:
             return {"stream_options": stream_options}
-        else:
-            # by default litellm will include usage for openai endpoints
-            if api_base is None or urlparse(api_base).hostname == "api.openai.com":
-                return {"stream_options": {"include_usage": True}}
+        if api_base is None or is_openai_backed_api_base(api_base):
+            return {"stream_options": {"include_usage": True}}
         return {}
 
     # Embedding

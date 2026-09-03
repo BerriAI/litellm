@@ -8,6 +8,7 @@ from typing import Any, Final, Literal, cast
 
 import litellm
 from litellm.constants import (
+    AZURE_OPENAI_AUDIO_PROVIDERS,
     REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
     REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
     request_timeout,
@@ -400,7 +401,7 @@ async def _arealtime(
             litellm_metadata=_build_litellm_metadata(kwargs),
             query_params=query_params,
         )
-    elif _custom_llm_provider == "azure":
+    elif _custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS:
         api_base = dynamic_api_base or litellm_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
         # set API KEY
         api_key = dynamic_api_key or litellm.api_key or litellm.openai_key or get_secret_str("AZURE_API_KEY")
