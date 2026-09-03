@@ -2,6 +2,9 @@ import asyncio
 import copy
 import json
 import os
+import subprocess
+import sys
+import textwrap
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -4949,6 +4952,35 @@ def test_apply_overrides_feature_flag_disabled_by_default():
     )
     assert "api_base" not in data
     assert "api_key" not in data
+
+
+@pytest.mark.parametrize(
+    "env_value, expected",
+    [("true", True), ("True", True), ("false", False), (None, False)],
+)
+def test_credential_overrides_flag_reads_env_var_at_import(env_value, expected):
+    """LITELLM_ENABLE_MODEL_CONFIG_CREDENTIAL_OVERRIDES is read at import, so check it in a fresh interpreter."""
+    env = {k: v for k, v in os.environ.items() if k != "LITELLM_ENABLE_MODEL_CONFIG_CREDENTIAL_OVERRIDES"}
+    if env_value is not None:
+        env["LITELLM_ENABLE_MODEL_CONFIG_CREDENTIAL_OVERRIDES"] = env_value
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(
+                """
+                import litellm
+                print(litellm.enable_model_config_credential_overrides)
+                """
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=180,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(expected)
 
 
 def test_extract_credential_provider_hint_prefers_exact_match():

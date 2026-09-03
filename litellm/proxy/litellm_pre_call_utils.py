@@ -2380,7 +2380,6 @@ def _apply_credential_overrides_from_model_config(
     5. Team default override (defaultconfig)
     6. Deployment default (no action needed)
     """
-    # Feature flag gate — disabled by default, opt in with litellm.enable_model_config_credential_overrides = True
     if not litellm.enable_model_config_credential_overrides:
         return
 
