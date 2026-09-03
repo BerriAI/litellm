@@ -68,6 +68,36 @@ still resolve to a deployment in `model_list`; this configuration does not creat
             - abc
 ```
 
+### Heuristic v2
+
+Set `classifier_type: heuristic_v2` to classify with the bundled calibrated
+success-probability model instead of the hand-written weighted scorer
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        classifier_type: heuristic_v2
+        tiers:
+          SIMPLE: luna
+          MEDIUM: terra
+          COMPLEX: sol
+          REASONING: sol-ultra
+```
+
+No classifier model call or per-model training data is required. The classifier
+uses global tier quality, request-type quality, and similar-request cohorts from
+the bundled UltraFeedback artifact. It estimates success at every tier, enforces
+monotonic probabilities, and returns the first tier meeting the trained 0.75
+threshold. The existing complexity-router tier pool then selects and dispatches
+a model from that tier
+
+Spend logs record `routing_decision.cause: heuristic_v2`, the detected request
+type, and all four predicted probabilities. Existing `classifier_type: heuristic`
+configurations keep the original weighted scorer unchanged
+
 ### Renaming the tiers
 
 `tier_labels` puts your own vocabulary on the four tiers:
@@ -157,6 +187,9 @@ model_list:
 
         # Replace a routed model that cannot take image input (default: false)
         modality_routing: true
+
+        # Let that replacement also override a kept session pin, for image turns only (default: false)
+        modality_pin_override: true
 ```
 
 ## Usage
@@ -197,8 +230,15 @@ vision model sits below the decided tier gets the 400 and an actionable message 
 A same-tier re-pick keeps the decision's cause and adds `modality:image` to `signals`; a tier
 change or default takeover records `cause: modality_escalation` with the displaced placement
 (`modality_escalated_from:<TIER>` or `modality_displaced_default_model`). Escalations are never
-pinned by session affinity, and a KEPT session pin bypasses the gate entirely: a session pinned
+pinned by session affinity, and by default a KEPT session pin bypasses the gate: a session pinned
 to a text-only model keeps it even when an image arrives.
+
+Add `modality_pin_override: true` to lift that last exemption. The image turn is then re-placed
+the same way every other decision is, and records `cause: modality_pin_override` whether or not
+the tier moved, since the model left the pin either way. The pin itself is untouched: the session
+affinity write happens upstream of the gate and stores the session's own model, so the next text
+turn replays the original pin and the override is never pinned in its place. It does nothing
+unless `modality_routing` is also on.
 
 ### Heuristic-first chaining
 
@@ -243,6 +283,49 @@ except that the heuristic outcome is the one already computed rather than a seco
 
 Spend logs record `routing_decision.cause` as `heuristic_first_short_circuit` when the classifier
 was skipped, and `llm_classifier` when it ran, so the two are told apart per request.
+
+### Hybrid
+
+`classifier_type: hybrid` also scores locally first, but it asks a different question than
+`heuristic_first`. Where heuristic-first asks how CHEAP the scorer's tier is and pays for the
+classifier on everything above a ceiling, hybrid asks how DECIDED the score is and pays for the
+classifier only where the score lands near a tier boundary. A confident score keeps its tier at
+every tier, the most expensive one included:
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        classifier_type: hybrid
+        hybrid_boundary_margin: 0.03
+        classifier_llm_config:
+          model: gpt-4o-mini
+        tiers:
+          SIMPLE: gpt-4o-mini
+          MEDIUM: gpt-4o
+          COMPLEX: claude-sonnet-4
+          REASONING: o1-preview
+```
+
+A request routes on the scorer's own tier when its score is further than `hybrid_boundary_margin`
+from every active boundary. Everything else goes to the classifier: a score inside the band, where a
+hair's difference would have named the adjacent tier and its model pool, and a prompt where no
+dimension fired at all, which has no opinion to be confident about. `hybrid_boundary_margin` is
+required for this type and rejected on the others, the same way `heuristic_first_max_tier` is
+required for heuristic-first, so the two modes are told apart by the knob each one takes rather than
+by a shared field that means something different per type.
+
+Pick the margin against the score distribution rather than by intuition. The scorer combines a small
+set of discretely weighted dimensions, so achievable scores cluster on a lumpy grid instead of
+spreading smoothly, and widening the margin admits whole clusters at once rather than a few more
+requests. Spend logs record `routing_decision.cause` as `hybrid_short_circuit` when the classifier
+was skipped and `llm_classifier` when it ran.
+
+Operator-defined tier sets (`tier_definitions`) are not supported here, for the same reason they are
+not supported under heuristic-first: the scorer only produces the built-in tiers. Classifier failure
+behaves exactly as it does under `classifier_type: llm`.
 
 ### Reasoning Override
 

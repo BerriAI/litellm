@@ -141,7 +141,6 @@ from litellm.utils import (
     convert_to_model_response_object,
     create_pretrained_tokenizer,
     create_tokenizer,
-    get_api_key,
     get_llm_provider,
     get_model_info,
     get_non_default_completion_params,
@@ -8596,9 +8595,19 @@ def stream_chunk_builder_text_completion(chunks: list, messages: list | None = N
     return TextCompletionResponse(**response)
 
 
+_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value})
+
+
+def _reported_cost_is_priced_by_calculator(logging_obj: Optional["Logging"]) -> bool:
+    if logging_obj is None:
+        return False
+    provider: Final[object] = logging_obj.model_call_details.get("custom_llm_provider")
+    return provider in _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS
+
+
 def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> float | None:
     usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
-    if isinstance(usage_cost, (int, float)):
+    if isinstance(usage_cost, (int, float)) and not _reported_cost_is_priced_by_calculator(logging_obj):
         return float(usage_cost)
     if logging_obj is not None:
         return None
@@ -8635,6 +8644,16 @@ def _set_stream_builder_response_cost(response: ModelResponse, logging_obj: Opti
         return
     hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
     hidden_params["response_cost"] = response_cost
+
+
+def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
+    if logging_obj is None:
+        return
+    if isinstance(getattr(usage, "cost", None), (int, float)):
+        return
+    computed_cost: Final = logging_obj._response_cost_calculator(result=response)
+    if isinstance(computed_cost, (int, float)) and computed_cost > 0:
+        setattr(usage, "cost", computed_cost)
 
 
 def stream_chunk_builder(
@@ -8731,12 +8750,7 @@ def stream_chunk_builder(
                     )
                     break
 
-            if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-                setattr(
-                    usage,
-                    "cost",
-                    logging_obj._response_cost_calculator(result=response),
-                )
+            _stamp_streaming_usage_cost(usage, response, logging_obj)
             _set_stream_builder_response_cost(response, logging_obj)
 
             processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
@@ -8915,10 +8929,7 @@ def stream_chunk_builder(
                 )
                 break
 
-        # Add cost to usage object if include_cost_in_streaming_usage is True
-        if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-            setattr(usage, "cost", logging_obj._response_cost_calculator(result=response))
-
+        _stamp_streaming_usage_cost(usage, response, logging_obj)
         _set_stream_builder_response_cost(response, logging_obj)
 
         processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
