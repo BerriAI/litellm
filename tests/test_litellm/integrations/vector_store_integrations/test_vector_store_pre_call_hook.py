@@ -11,7 +11,7 @@ from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook i
     ProxyServerRuntime,
     VectorStorePreCallHook,
 )
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
     Choices,
@@ -361,6 +361,59 @@ async def test_a_healthy_vector_store_alone_reports_no_failures(registry_with: R
     )
 
     assert "vector_store_search_failures" not in (_first_message(response).provider_specific_fields or {})
+
+
+@pytest.mark.asyncio
+async def test_a_failing_vector_store_is_reported_on_the_responses_api_response(
+    registry_with: RegisterStores,
+) -> None:
+    """Regression (LIT-6809): /v1/responses answered 200 with no sign the knowledge base was missing."""
+    registry_with("vs-broken")
+    logging_obj = FakeLoggingObj({})
+
+    await _run_hook(
+        VectorStorePreCallHook(
+            proxy_runtime=FakeProxyRuntime(router=RecordingRouter(failing_vector_store_ids=frozenset({"vs-broken"})))
+        ),
+        ["vs-broken"],
+        logging_obj,
+    )
+
+    response = ResponsesAPIResponse(id="resp-lit6809", created_at=0, output=[])
+    await VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=None)).async_post_call_success_deployment_hook(
+        request_data={"litellm_logging_obj": logging_obj},
+        response=response,
+        call_type=CallTypes.aresponses,
+    )
+
+    assert response.model_dump()["vector_store_search_failures"] == [
+        {
+            "vector_store_id": "vs-broken",
+            "custom_llm_provider": "bedrock",
+            "error": "litellm.BadRequestError: no healthy deployments for vs-broken",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_healthy_vector_store_leaves_the_responses_api_response_alone(registry_with: RegisterStores) -> None:
+    registry_with("vs-healthy")
+    logging_obj = FakeLoggingObj({})
+
+    await _run_hook(
+        VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=RecordingRouter())),
+        ["vs-healthy"],
+        logging_obj,
+    )
+
+    response = ResponsesAPIResponse(id="resp-lit6809", created_at=0, output=[])
+    await VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=None)).async_post_call_success_deployment_hook(
+        request_data={"litellm_logging_obj": logging_obj},
+        response=response,
+        call_type=CallTypes.aresponses,
+    )
+
+    assert "vector_store_search_failures" not in response.model_dump()
 
 
 @pytest.mark.asyncio

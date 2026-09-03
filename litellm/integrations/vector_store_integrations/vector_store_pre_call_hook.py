@@ -17,7 +17,11 @@ import litellm.vector_stores
 from litellm._logging import verbose_logger
 from litellm.exceptions import VectorStoreSearchError
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionUserMessage,
+    ResponsesAPIResponse,
+)
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import CallTypes, StandardCallbackDynamicParams
 from litellm.types.vector_stores import (
@@ -371,6 +375,11 @@ class VectorStorePreCallHook(CustomLogger):
             if not search_results and not search_failures:
                 verbose_logger.debug("No search results or search failures found")
                 return None
+
+            if isinstance(response, ResponsesAPIResponse):
+                if search_failures:
+                    setattr(response, SEARCH_FAILURES_FIELD, list(search_failures))
+                return response
 
             # Add search results to response object
             if hasattr(response, "choices") and response.choices:
