@@ -1,10 +1,11 @@
 import asyncio
+import itertools
+import json
+from collections.abc import Sequence
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
-
-import json
 
 import litellm
 from litellm.caching.dual_cache import DualCache
@@ -102,11 +103,10 @@ async def test_async_user_key_affinity_routes_to_same_deployment():
 
     # Deterministic routing: first selection uses seq[0], second selection attempts seq[1]
     # unless the list has been filtered to length=1 by deployment affinity.
-    choice_calls = {"count": 0}
+    choice_calls: Final = itertools.count(1)
 
-    def deterministic_choice(seq):
-        choice_calls["count"] += 1
-        if choice_calls["count"] == 1:
+    def deterministic_choice(seq: Sequence[dict[str, object]]) -> dict[str, object]:
+        if next(choice_calls) == 1:
             return seq[0]
         return seq[1] if len(seq) > 1 else seq[0]
 
@@ -1000,7 +1000,7 @@ async def test_model_group_affinity_config_overrides_global():
     assert len(filtered) == 2
 
 
-def _jwt_metadata(user_id: str) -> dict:
+def _jwt_metadata(user_id: str) -> dict[str, str | None]:
     return {"user_api_key_hash": None, "user_api_key_user_id": user_id}
 
 
@@ -1090,7 +1090,7 @@ async def test_proxy_jwt_auth_metadata_pins_per_user():
         enable_responses_api_affinity=False,
     )
 
-    def proxy_request(user_id: str) -> dict:
+    def proxy_request(user_id: str) -> dict[str, object]:
         return LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
             data={"model": model_group, "messages": [{"role": "user", "content": "hi"}], "metadata": {}},
             user_api_key_dict=UserAPIKeyAuth(api_key=None, user_id=user_id),
@@ -1098,12 +1098,14 @@ async def test_proxy_jwt_auth_metadata_pins_per_user():
         )
 
     alice_request = proxy_request("jwt-user-alice")
-    assert alice_request["metadata"]["user_api_key_hash"] is None
+    alice_metadata = alice_request["metadata"]
+    assert isinstance(alice_metadata, dict)
+    assert alice_metadata["user_api_key_hash"] is None
 
     await callback.async_pre_call_deployment_hook(
         kwargs={
             **alice_request,
-            "metadata": {**alice_request["metadata"], "deployment_model_name": model_group},
+            "metadata": {**alice_metadata, "deployment_model_name": model_group},
             "model_info": {"id": "openai-deployment-b"},
         },
         call_type=None,
