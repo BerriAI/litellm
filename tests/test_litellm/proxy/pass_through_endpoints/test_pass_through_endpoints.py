@@ -5730,3 +5730,38 @@ async def test_pass_through_request_leaves_cost_router_logger_working():
         verbose_logger.removeHandler(recorder)
 
     assert not raised, f"cost router logger raised on the passthrough logging params: {raised[0].exc_info}"
+
+
+@pytest.mark.parametrize("client_metadata_key", ["litellm_metadata", "metadata"])
+def test_passthrough_client_cannot_forge_session_id_omission(client_metadata_key: str):
+    """The omit marker is proxy-owned: only the pre-call policy may set it. A pass-through body that carries
+    it in its own metadata must not null out SpendLogs.session_id on a request the proxy never omitted."""
+    from litellm.constants import SESSION_ID_OMITTED_METADATA_KEY
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_session_id_for_spend_log
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent"
+    mock_request.headers = Headers({})
+    mock_request.scope = {}
+
+    kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={client_metadata_key: {SESSION_ID_OMITTED_METADATA_KEY: True}},
+        litellm_call_id="lit-6694-call-id",
+    )
+
+    metadata = kwargs["litellm_params"]["metadata"]
+    assert SESSION_ID_OMITTED_METADATA_KEY not in metadata
+    assert (
+        _get_session_id_for_spend_log(
+            kwargs={},
+            metadata=metadata,
+            standard_logging_payload={"trace_id": "per-call-random-trace-id"},
+            omit_when_missing=bool(metadata.get(SESSION_ID_OMITTED_METADATA_KEY)),
+        )
+        == "per-call-random-trace-id"
+    )
