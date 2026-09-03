@@ -1702,17 +1702,8 @@ async def warn_if_id_jag_assertion_uncaptured(assertion: SSOIdentityAssertion | 
 
 
 async def id_jag_capture_gap_to_surface() -> str | None:
-    """The capture gap worth putting in front of an operator: a real gap AND an ``oauth2_id_jag``
-    server registered for it to break. A storage failure surfaces nothing rather than guessing.
-
-    Returning ``None`` rather than an empty section is what lets the caller keep the debug page
-    byte-identical for every deployment without one, and it is why the caller's payload carries a
-    ``mutable-ok`` marker: an optional member of a JSON document has to be spelled as a mapping.
-    The immutable rewrites all fail against that. A dict comprehension is the same construction
-    rule, ``dict()`` is a flagged constructor, choosing between two whole payload literals doubles
-    the construction it was meant to avoid, and a frozen model dumped with ``exclude_none`` would
-    change how the three pre-existing keys serialize, which is the byte-identity this protects.
-    """
+    """The gap worth showing an operator: a real capture gap and an ``oauth2_id_jag`` server
+    registered for it to break."""
     gap = id_jag_assertion_capture_gap()
     if gap is None:
         return None

@@ -8806,7 +8806,6 @@ async def test_cli_completion_persists_assertion_under_db_user_id():
 
     retain_mock.assert_awaited_once_with(user_id="cli-user-id", assertion=assertion)
     assert response.status_code == 200
-# ── Diagnosing a login that captured nothing an id_jag server can spend ───────
 
 
 def _id_jag_gap_warnings(logger_mock) -> list:
