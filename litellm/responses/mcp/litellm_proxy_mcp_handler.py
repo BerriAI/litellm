@@ -72,6 +72,32 @@ class LiteLLM_Proxy_MCP_Handler:
     """
 
     @staticmethod
+    def prepare_chained_call_params(
+        params: Mapping[str, Any],
+    ) -> dict[str, Any]:  # mutable-ok: returns a sanitized copy for the next provider call
+        """Copy request params without state owned by the previous LLM call.
+
+        MCP auto-execution keeps the trace identifier so chained rounds remain
+        correlated, but each provider call must create its own logging object and
+        call identifier. Reusing either makes success dispatch one-shot and drops
+        spend rows for later rounds.
+        """
+        follow_up_params = dict(params)
+        follow_up_params.pop("litellm_logging_obj", None)
+        follow_up_params.pop("litellm_call_id", None)
+        if follow_up_params.get("web_search_options") is None:
+            follow_up_params.pop("web_search_options", None)
+
+        nested_params = follow_up_params.get("litellm_params")
+        if isinstance(nested_params, dict):
+            nested_params = dict(nested_params)
+            nested_params.pop("litellm_logging_obj", None)
+            nested_params.pop("litellm_call_id", None)
+            follow_up_params["litellm_params"] = nested_params
+
+        return follow_up_params
+
+    @staticmethod
     def _get_parent_request_tags(kwargs: dict[str, Any] | None) -> list[str]:
         """Tags from the parent LLM request, using the same extraction logic as standard logging (incl. User-Agent)."""
         if not kwargs:
@@ -702,13 +728,19 @@ class LiteLLM_Proxy_MCP_Handler:
                         },
                     }
                 ]
-                tool_logging_call_id = litellm_call_id or str(uuid.uuid4())
+                # SpendLogs.request_id is unique. The parent LLM call ID is
+                # therefore metadata, not the tool execution's call ID: reusing
+                # it causes all but the first MCP tool row to be skipped by the
+                # database's duplicate protection.
+                tool_logging_call_id = str(uuid.uuid4())
                 logging_metadata: dict[str, object] = {
                     "tool_call_id": tool_call_id,
                     "tool_name": sanitized_tool_name,
                     "server_name": server_name,
                     "headers": logging_safe_headers,
                 }
+                if litellm_call_id:
+                    logging_metadata["parent_litellm_call_id"] = litellm_call_id
                 logging_request_data = {
                     "model": f"MCP: {tool_name}",
                     "metadata": logging_metadata,
@@ -1229,14 +1261,14 @@ class LiteLLM_Proxy_MCP_Handler:
         return initial_params
 
     @staticmethod
-    def _prepare_follow_up_call_params(call_params: dict[str, Any], original_stream_setting: bool) -> dict[str, Any]:
+    def prepare_follow_up_call_params(call_params: dict[str, Any], original_stream_setting: bool) -> dict[str, Any]:
         """
         Prepare call parameters for the follow-up LLM call after tool execution.
 
         Restores the original streaming setting and removes tool_choice since
         we're now providing tool results, not requesting tool calls.
         """
-        follow_up_params: Final = call_params.copy()
+        follow_up_params: Final = LiteLLM_Proxy_MCP_Handler.prepare_chained_call_params(call_params)
 
         # Restore original streaming setting for follow-up call
         follow_up_params["stream"] = original_stream_setting
@@ -1245,6 +1277,8 @@ class LiteLLM_Proxy_MCP_Handler:
         follow_up_params.pop("tool_choice", None)
 
         return follow_up_params
+
+    _prepare_follow_up_call_params = prepare_follow_up_call_params
 
     @staticmethod
     def _add_mcp_output_elements_to_response(
