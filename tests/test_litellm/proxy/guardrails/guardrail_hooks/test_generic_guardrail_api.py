@@ -1517,7 +1517,9 @@ class TestGenericGuardrailAPIStreamingViaUnified:
 
     @pytest.mark.asyncio
     async def test_streaming_default_uses_sampled_cadence(self):
-        """Default samples every 5th chunk + final pass: 10 chunks → calls at 5, 10, and final = 3."""
+        """Default samples every 5th chunk. For 10 chunks, sampled scans at 5 and 10
+        cover the full text, so the end-of-stream round is skipped and there are 2 calls
+        """
         from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
             UnifiedLLMGuardrails,
         )
@@ -1566,8 +1568,9 @@ class TestGenericGuardrailAPIStreamingViaUnified:
             ):
                 pass
 
-        assert mock_post.await_count == 3, (
-            f"Expected 3 guardrail calls (2 sampled at chunks 5 / 10 + 1 final), "
+        assert mock_post.await_count == 2, (
+            f"Expected 2 guardrail calls (2 sampled at chunks 5 / 10; "
+            f"the end-of-stream round is skipped because chunk 10 already scanned the full text), "
             f"got {mock_post.await_count}"
         )
         for call in mock_post.await_args_list:
@@ -1631,7 +1634,9 @@ class TestGenericGuardrailAPIStreamingViaUnified:
 
     @pytest.mark.asyncio
     async def test_streaming_sampling_rate_override(self):
-        """sampling_rate=2 on 6 chunks → in-stream at 2,4,6 plus final = 4 calls."""
+        """sampling_rate=2 on 6 chunks. Scans at 2, 4, and 6 cover the full text, so
+        the end-of-stream round is skipped and there are 3 calls
+        """
         from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
             UnifiedLLMGuardrails,
         )
@@ -1680,8 +1685,9 @@ class TestGenericGuardrailAPIStreamingViaUnified:
             ):
                 pass
 
-        assert mock_post.await_count == 4, (
-            f"Expected 4 guardrail calls (3 sampled + 1 final aggregate), "
+        assert mock_post.await_count == 3, (
+            f"Expected 3 guardrail calls (3 sampled; the end-of-stream round is skipped "
+            f"because chunk 6 already scanned the full text), "
             f"got {mock_post.await_count}"
         )
 
