@@ -68,12 +68,10 @@ async def test_success_hook_attaches_original_response_on_block():
     user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/chat/completions")
     data = {"guardrail_to_apply": guardrail, "model": "gpt-4o"}
 
-    # Inject our translation for the inferred call type (the module global is
-    # cached across tests, so patch it directly rather than the loader).
     with patch.object(
         ug,
-        "endpoint_guardrail_translation_mappings",
-        {
+        "load_guardrail_translation_mappings",
+        lambda: {
             CallTypes.acompletion: lambda: translation,
             CallTypes.completion: lambda: translation,
         },
