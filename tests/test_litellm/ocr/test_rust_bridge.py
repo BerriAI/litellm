@@ -1,6 +1,10 @@
 """Tests for the optional Rust-backed OCR path."""
 
 import importlib
+import os
+import subprocess
+import types
+from pathlib import Path
 from typing import Any, Final
 from unittest.mock import Mock
 
@@ -24,6 +28,16 @@ DOCUMENT: dict[str, object] = {
     "type": "document_url",
     "document_url": "https://example.com/doc.pdf",
 }
+
+
+def test_installed_wheel_ocr_callback_parity() -> None:
+    wheel_python: Final = os.environ.get("LITELLM_OCR_WHEEL_PYTHON")
+    if wheel_python is None:
+        pytest.skip("set LITELLM_OCR_WHEEL_PYTHON to the reviewed wheel's interpreter; release-wheel CI requires this lane")
+    script: Final = Path(__file__).resolve().parents[1] / "rust_bridge" / "sdk_callback_wheel_test.py"
+    completed: Final = subprocess.run((wheel_python, str(script)), check=False, timeout=240)
+    assert completed.returncode == 0
+
 
 FAKE_OCR_RESPONSE: dict[str, object] = {
     "pages": [{"index": 0, "markdown": "hello world"}],

@@ -59,6 +59,9 @@ class NativeBinding(Generic[BindingT]):
     def reset(self) -> None:
         self._override = _UNSET
 
+    def is_overridden(self) -> bool:
+        return not isinstance(self._override, _Unset)
+
 
 def native_exception_types() -> tuple[type[BaseException], type[BaseException]] | None:
     native: Final = get_native_bridge()

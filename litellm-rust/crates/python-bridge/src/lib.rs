@@ -1,9 +1,11 @@
+mod constants;
 mod diagnostics;
 mod errors;
 mod execution;
 #[cfg(feature = "trace-parity")]
 mod function_trace;
 mod marshal;
+mod ocr_callbacks;
 mod python_hook_bindings;
 mod routes;
 
@@ -76,6 +78,7 @@ mod _native {
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
         litellm_python_interop::callback_runtime::register(module)?;
+        super::ocr_callbacks::register(module)?;
         super::errors::register(module)?;
         module.add("ready_endpoints", pyo3::types::PyDict::new(module.py()))?;
         super::routes::register(module)?;

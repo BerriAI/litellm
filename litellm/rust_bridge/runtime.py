@@ -94,6 +94,9 @@ class EndpointBinding(Generic[BindingT]):
             raise RuntimeError("only native endpoint bindings support resets")
         self._native_binding.reset()
 
+    def is_overridden(self) -> bool:
+        return self._native_binding is not None and self._native_binding.is_overridden()
+
     def _attempt(
         self,
         *,

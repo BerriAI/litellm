@@ -10,6 +10,11 @@ use serde::Serialize;
 use tokio::runtime::{Handle, Runtime};
 use tokio::time::{self, MissedTickBehavior};
 
+pub(crate) struct PythonCallContext<'py> {
+    pub(crate) py: Python<'py>,
+    pub(crate) asynchronous: bool,
+}
+
 pub(crate) fn run_sync<T, E>(
     py: Python<'_>,
     future: impl Future<Output = Result<T, E>> + Send + 'static,

@@ -29,6 +29,7 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
+from litellm.rust_bridge.ocr_callbacks import OcrLoggingAdapter
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
@@ -233,6 +234,8 @@ def _rust_bridge_api_base(
 def _prepare_rust_ocr_call(
     prepared_request: _PreparedOCRRequest,
     resolve_api_key: Callable[[str], str | None],
+    *,
+    asynchronous: bool,
 ) -> rust_ocr_bridge.RustOCRRequest:
     provider_config: Final = prepared_request.provider_config
     api_key_env_var: Final = provider_config.get_api_key_env_var()
@@ -254,19 +257,21 @@ def _prepare_rust_ocr_call(
     )
     rust_api_base: Final = _rust_bridge_api_base(prepared_request, resolve_api_key)
     rust_optional_params: Final = _rust_bridge_optional_params(prepared_request, resolve_api_key)
-    prepared_request.litellm_logging_obj.pre_call(
-        input="OCR document processing",
-        api_key=resolved_api_key,
-        additional_args={
-            "complete_input_dict": {
-                "model": prepared_request.model,
-                "document": prepared_request.document,
-                **rust_optional_params,
+    callbacks_in_rust: Final = rust_ocr_bridge.supports_callback_adapter(asynchronous=asynchronous)
+    if not callbacks_in_rust:
+        prepared_request.litellm_logging_obj.pre_call(
+            input="OCR document processing",
+            api_key=resolved_api_key,
+            additional_args={
+                "complete_input_dict": {
+                    "model": prepared_request.model,
+                    "document": prepared_request.document,
+                    **rust_optional_params,
+                },
+                "api_base": resolved_complete_url,
+                "headers": resolved_headers,
             },
-            "api_base": resolved_complete_url,
-            "headers": resolved_headers,
-        },
-    )
+        )
     return rust_ocr_bridge.RustOCRRequest(
         model=prepared_request.model,
         document=prepared_request.document,
@@ -278,6 +283,9 @@ def _prepare_rust_ocr_call(
         ),
         optional_params=rust_optional_params,
         timeout=prepared_request.effective_timeout,
+        callback_adapter=(
+            OcrLoggingAdapter(prepared_request.litellm_logging_obj, resolved_api_key) if callbacks_in_rust else None
+        ),
     )
 
 
@@ -289,6 +297,7 @@ def _run_rust_ocr(
         prepare=lambda: _prepare_rust_ocr_call(
             prepared_request=prepared_request,
             resolve_api_key=resolve_api_key,
+            asynchronous=False,
         ),
         model=prepared_request.model,
         provider=prepared_request.custom_llm_provider,
@@ -308,6 +317,7 @@ async def _run_rust_aocr(
         prepare=lambda: _prepare_rust_ocr_call(
             prepared_request=prepared_request,
             resolve_api_key=resolve_api_key,
+            asynchronous=True,
         ),
         model=prepared_request.model,
         provider=prepared_request.custom_llm_provider,
