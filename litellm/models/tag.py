@@ -6,7 +6,6 @@ Canonical definition for ``litellm_tagtable``. Re-exported from
 """
 
 from datetime import datetime
-from typing import Any
 
 from pydantic import BaseModel, model_validator
 
@@ -28,7 +27,7 @@ class LiteLLM_TagTable(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="before")
     @classmethod
-    def set_model_info(cls, values: Any) -> Any:
+    def set_model_info(cls, values):
         if isinstance(values, BaseModel):
             normalized = values.model_dump()
         elif hasattr(values, "__dict__") and not isinstance(values, dict):
