@@ -779,7 +779,7 @@ async def test_concurrent_success_is_not_cancelled_by_another_calls_failure():
     "error, opens_breaker",
     [
         pytest.param("ConnectionError", True, id="connection_refused_is_unhealthy"),
-        pytest.param("TimeoutError", True, id="timeout_is_unhealthy"),
+        pytest.param("TimeoutError", False, id="timeout_burst_is_ambiguous"),
         pytest.param("BusyLoadingError", True, id="loading_is_unhealthy"),
         pytest.param("ResponseError", False, id="wrong_type_command_is_not"),
         pytest.param("DataError", False, id="bad_data_is_not"),
@@ -791,6 +791,10 @@ async def test_only_connectivity_failures_open_the_breaker(error, opens_breaker)
     They say nothing about connectivity, and a caller able to provoke them (an INCR against
     a non-numeric value, say) could otherwise trip the shared breaker on demand and drop
     rate limiting to per-process counters, which spreading traffic across replicas outruns.
+
+    A rapid burst of timeouts is ambiguous too: the async timeout includes event-loop
+    scheduling delay, so a loop stall times out every queued call at once against a
+    healthy Redis. It must not open the breaker until the streak spans a minimum duration.
     """
     import redis.exceptions
 
@@ -810,3 +814,147 @@ async def test_only_connectivity_failures_open_the_breaker(error, opens_breaker)
         await _run_under_circuit_breaker(breaker, "op", failing_call)
 
     assert breaker.is_open() is opens_breaker
+
+
+@pytest.mark.asyncio
+async def test_event_loop_stall_timeout_burst_keeps_breaker_closed():
+    """One blocking stall of the worker event loop must not trip the breaker.
+
+    Every operation already waiting on the loop times out together when the loop resumes,
+    so a purely consecutive threshold is satisfied instantly even though the Redis on the
+    other end (here an in-process fake that answers immediately) is healthy.
+    """
+    import time as time_mod
+
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=5.0)
+
+    async def healthy_redis_call_with_client_timeout():
+        return await asyncio.wait_for(asyncio.sleep(0.001, result="ok"), timeout=0.05)
+
+    async def stall_the_loop():
+        await asyncio.sleep(0)
+        time_mod.sleep(0.2)
+
+    results = await asyncio.gather(
+        *(_run_under_circuit_breaker(breaker, "op", healthy_redis_call_with_client_timeout) for _ in range(8)),
+        stall_the_loop(),
+        return_exceptions=True,
+    )
+    timeouts = [r for r in results if isinstance(r, asyncio.TimeoutError)]
+    assert len(timeouts) >= breaker.failure_threshold, "the stall must time out a full burst"
+
+    assert breaker.is_open() is False, "a healthy Redis behind one loop stall must stay in the pool"
+    assert await _run_under_circuit_breaker(breaker, "op", healthy_redis_call_with_client_timeout) == "ok"
+
+
+@pytest.mark.asyncio
+async def test_persistent_timeouts_still_open_the_breaker():
+    """A real outage that surfaces only as timeouts must still open the breaker.
+
+    Once the timeout-only streak spans the minimum duration with no success in between,
+    Redis is genuinely unusable from this worker and protection has to kick in.
+    """
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=0.1)
+
+    async def timing_out_call():
+        raise RedisTimeoutError("read timed out")
+
+    for _ in range(breaker.failure_threshold):
+        with pytest.raises(RedisTimeoutError):
+            await _run_under_circuit_breaker(breaker, "op", timing_out_call)
+    assert breaker.is_open() is False, "the burst has not spanned the minimum duration yet"
+
+    await asyncio.sleep(0.12)
+    with pytest.raises(RedisTimeoutError):
+        await _run_under_circuit_breaker(breaker, "op", timing_out_call)
+
+    assert breaker.is_open() is True
+
+
+@pytest.mark.asyncio
+async def test_stale_timeout_does_not_let_sub_threshold_hard_failures_open_the_breaker():
+    """Hard connectivity failures below the threshold must not open the breaker just
+    because an old timeout already started the streak and the duration has elapsed.
+
+    Each class has to earn the open on its own terms: hard failures by reaching the
+    threshold, timeouts by reaching the threshold and spanning the minimum duration.
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _is_redis_timeout_failure
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=0.05)
+
+    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("read timed out")))
+    await asyncio.sleep(0.06)
+    for _ in range(breaker.failure_threshold - 1):
+        breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
+    assert breaker.is_open() is False, "2 hard failures and 1 stale timeout are below both thresholds"
+
+    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
+    assert breaker.is_open() is True, "the threshold-th hard failure must still open it"
+
+
+@pytest.mark.asyncio
+async def test_hard_failure_resets_timeout_streak_so_a_later_burst_must_earn_its_own_duration():
+    """A stale timeout followed by hard failures must not pre-age the duration gate:
+    a later short timeout burst has to span timeout_min_duration on its own.
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _is_redis_timeout_failure
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=0.05)
+
+    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("read timed out")))
+    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
+    await asyncio.sleep(0.06)
+    for _ in range(breaker.failure_threshold):
+        breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("read timed out")))
+    assert breaker.is_open() is False, "the burst is instantaneous, so the duration gate must hold it closed"
+
+    await asyncio.sleep(0.06)
+    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("read timed out")))
+    assert breaker.is_open() is True, "the same run of timeouts persisting past the duration must open it"
+
+
+@pytest.mark.asyncio
+async def test_breaker_metrics_track_state_and_failure_class():
+    """Breaker accounting must be observable: failure class, transitions, and state."""
+    from prometheus_client import REGISTRY
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _is_redis_timeout_failure
+
+    def sample(name, labels=None):
+        return REGISTRY.get_sample_value(name, labels) or 0.0
+
+    timeout_before = sample("litellm_redis_circuit_breaker_failures_total", {"failure_class": "timeout"})
+    hard_before = sample("litellm_redis_circuit_breaker_failures_total", {"failure_class": "connectivity"})
+    opened_before = sample("litellm_redis_circuit_breaker_transitions_total", {"state": "open"})
+    open_gauge_before = sample("litellm_redis_circuit_breaker_state", {"state": "open"})
+    closed_gauge_before = sample("litellm_redis_circuit_breaker_state", {"state": "closed"})
+
+    breaker = RedisCircuitBreaker(failure_threshold=2, recovery_timeout=60, timeout_min_duration=5.0)
+    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisTimeoutError("t")))
+    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
+    breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
+
+    assert sample("litellm_redis_circuit_breaker_failures_total", {"failure_class": "timeout"}) == timeout_before + 1
+    assert sample("litellm_redis_circuit_breaker_failures_total", {"failure_class": "connectivity"}) == hard_before + 2
+    assert sample("litellm_redis_circuit_breaker_transitions_total", {"state": "open"}) == opened_before + 1
+    assert sample("litellm_redis_circuit_breaker_state", {"state": "open"}) == open_gauge_before + 1
+    assert sample("litellm_redis_circuit_breaker_state", {"state": "closed"}) == closed_gauge_before
+
+    breaker.record_success()
+    assert sample("litellm_redis_circuit_breaker_state", {"state": "open"}) == open_gauge_before
+    assert sample("litellm_redis_circuit_breaker_state", {"state": "closed"}) == closed_gauge_before + 1
