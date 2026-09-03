@@ -16,6 +16,7 @@ from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import get_native_bridge
 from litellm.rust_bridge import ocr as rust_ocr_bridge
 from litellm.rust_bridge.ocr import RustAocr, RustOcr
+
 from .....shared.parity.compare import assert_model_parity, assert_parity, assert_request_parity
 from .....shared.parity.fixtures.store import recorded_fixtures
 from .....shared.parity.inprocess import run_in_process
@@ -36,7 +37,6 @@ from .....shared.parity.runner import (
     SubprocessWorker,
     execution_worker_pair,
     parity_worker_main,
-    run_execution,
 )
 from .fixtures.config import configured_fixture_directory
 from .fixtures.models import OcrParityCase, OcrSdkInput
@@ -419,14 +419,12 @@ def test_ocr_subprocess_startup_smoke(
     case_file: Final = tmp_path / "ocr-startup-smoke.json"
     case_file.write_text(startup_ocr_fixture.model_dump_json(indent=2, exclude_unset=True), encoding="utf-8")
     python_worker, rust_worker = sdk_workers
-    python: Final = run_execution(
-        python_worker,
+    python: Final = python_worker.execute(
         case_file,
         SDKRoute.OCR.value,
         startup_ocr_fixture.provider_responses,
     )
-    rust: Final = run_execution(
-        rust_worker,
+    rust: Final = rust_worker.execute(
         case_file,
         SDKRoute.OCR.value,
         startup_ocr_fixture.provider_responses,

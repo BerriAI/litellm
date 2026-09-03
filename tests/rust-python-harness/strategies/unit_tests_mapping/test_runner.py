@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
@@ -13,19 +14,16 @@ from . import STRATEGY
 
 
 @pytest.mark.skipif(shutil.which("cargo") is None, reason="Cargo is required for the mapping unit strategy")
-def test_validates_mappings_without_running_the_selected_tests(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).resolve().parents[4]))
-    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+def test_validates_mappings_without_running_the_selected_tests(
+    tmp_path: Path,
+    cargo_project: Callable[[str, str], Path],
+) -> None:
     (tmp_path / "pytest.ini").write_text("[pytest]\n")
     (tmp_path / "backend_probe.py").write_text(
         "import os\ndef selected():\n    return 'rust' if os.environ['TEST_USE_RUST'] == '1' else 'python'\n"
     )
     (tmp_path / "test_api.py").write_text("def test_decode():\n    assert int('42') == 42\n")
-    (tmp_path / "Cargo.toml").write_text(
-        '[package]\nname = "mapping-check"\nversion = "0.1.0"\nedition = "2021"\n[workspace]\n'
-    )
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src/lib.rs").write_text('#[test] fn test_decode() { assert_eq!("42".parse::<u8>().unwrap(), 42); }\n')
+    cargo_project("mapping-check", '#[test] fn test_decode() { assert_eq!("42".parse::<u8>().unwrap(), 42); }\n')
     suite: Final = {
         "python_selectors": ("test_api.py",),
         "cargo_manifest": "Cargo.toml",

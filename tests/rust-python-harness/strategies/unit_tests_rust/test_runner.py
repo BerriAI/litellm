@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
@@ -13,12 +14,11 @@ from . import STRATEGY
 
 
 @pytest.mark.skipif(shutil.which("cargo") is None, reason="Cargo is required for the native unit strategy")
-def test_runs_cargo_tests_and_propagates_ignored_or_failing_tests(tmp_path: Path) -> None:
-    (tmp_path / "Cargo.toml").write_text(
-        '[package]\nname = "rust-unit-check"\nversion = "0.1.0"\nedition = "2021"\n[workspace]\n'
-    )
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src/lib.rs").write_text('#[test] fn test_decode() { assert_eq!("42".parse::<u8>().unwrap(), 42); }\n')
+def test_runs_cargo_tests_and_propagates_ignored_or_failing_tests(
+    tmp_path: Path,
+    cargo_project: Callable[[str, str], Path],
+) -> None:
+    cargo_project("rust-unit-check", '#[test] fn test_decode() { assert_eq!("42".parse::<u8>().unwrap(), 42); }\n')
     suite: Final = {"cargo_manifest": "Cargo.toml", "cargo_package": "rust-unit-check", "cargo_filter": "test_decode"}
     (tmp_path / "suite.json").write_text(json.dumps(suite))
     case: Final = HarnessCase(

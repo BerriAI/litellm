@@ -6,8 +6,8 @@ from typing import Final
 import pytest
 
 from .....shared.parity.recorded_http import HttpHeader, RecordedHttpResponse
-from .....shared.tracing.steps import Engine, pipeline_issues, pipeline_steps, step, trace_diff
-from ..execution import RouteFixture, RouteSpec, collect_trace
+from .....shared.tracing.steps import Engine, step
+from ..execution import RouteFixture, RouteSpec, assert_trace_parity
 
 STEPS: Final = (
     step("messages", r"anthropic_interface/messages/__init__\.py:\d+ a?create$", "messages"),
@@ -78,9 +78,4 @@ SPEC: Final = RouteSpec("messages", ("create", "acreate"), ("messages", "amessag
     ),
 )
 def test_trace_parity(asynchronous: bool) -> None:
-    python: Final = pipeline_steps("python", collect_trace(SPEC, "python", asynchronous=asynchronous), STEPS)
-    rust: Final = pipeline_steps("rust", collect_trace(SPEC, "rust", asynchronous=asynchronous), STEPS)
-
-    assert pipeline_issues("python", python, STEPS, EDGES) == ()
-    assert pipeline_issues("rust", rust, STEPS, EDGES) == ()
-    assert trace_diff(python, rust).matches
+    assert_trace_parity(SPEC, STEPS, EDGES, asynchronous=asynchronous)

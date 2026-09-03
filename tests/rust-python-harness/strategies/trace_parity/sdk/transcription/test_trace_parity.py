@@ -9,8 +9,8 @@ from typing import Final
 import pytest
 
 from .....shared.parity.recorded_http import HttpHeader, RecordedHttpResponse
-from .....shared.tracing.steps import Engine, pipeline_issues, pipeline_steps, step
-from ..execution import RouteFixture, RouteSpec, collect_trace
+from .....shared.tracing.steps import Engine, step
+from ..execution import RouteFixture, RouteSpec, assert_trace_parity
 
 STEPS: Final = (
     step("transcription", r"main\.py:\d+ a?transcription$", "audio_transcription"),
@@ -83,8 +83,4 @@ SPEC: Final = RouteSpec(
 
 @pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
 def test_trace_parity(asynchronous: bool) -> None:
-    python: Final = pipeline_steps("python", collect_trace(SPEC, "python", asynchronous=asynchronous), STEPS)
-    rust: Final = pipeline_steps("rust", collect_trace(SPEC, "rust", asynchronous=asynchronous), STEPS)
-
-    assert pipeline_issues("python", python, STEPS, EDGES) == ()
-    assert pipeline_issues("rust", rust, STEPS, EDGES) == ()
+    assert_trace_parity(SPEC, STEPS, EDGES, asynchronous=asynchronous, matching_steps=False)

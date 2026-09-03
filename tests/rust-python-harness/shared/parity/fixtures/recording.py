@@ -1,23 +1,24 @@
 from __future__ import annotations
 
 import queue
-import threading
 from collections.abc import Callable, Generator, Iterable
-from contextlib import contextmanager
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final, TypeVar, cast
-from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from vcr.filters import remove_query_parameters
 from vcr.request import Request
 
 from ..http import (
+    PARITY_PROVIDER_HOST,
     dropped_request_headers,
     dropped_response_headers,
     is_streaming_response,
+    local_response_header,
+    normalized_response_header,
 )
+from ..local_server import LocalHttpHandler, LocalHttpServer, serve_in_thread
 from ..recorded_http import (
     HttpHeader,
     RecordedHttpResponse,
@@ -26,7 +27,6 @@ from ..recorded_http import (
     RecordedStreamChunk,
 )
 
-_PARITY_PROVIDER_HOST: Final = "parity-provider.invalid"
 _SECRET_HEADERS: Final = frozenset(
     {
         "authorization",
@@ -61,41 +61,17 @@ def _end_to_end_headers(headers: httpx.Headers) -> tuple[HttpHeader, ...]:
     decoded: Final = tuple((name.decode("ascii"), value.decode("latin-1")) for name, value in headers.raw)
     excluded: Final = dropped_response_headers(decoded)
     return tuple(
-        HttpHeader(name=name, value=_normalized_response_header(name, value))
+        HttpHeader(name=name, value=normalized_response_header(name, value))
         for name, value in decoded
         if name.lower() not in excluded
     )
 
 
-def _normalized_response_header(name: str, value: str) -> str:
-    if name.lower() not in {"location", "operation-location"}:
-        return value
-    parsed: Final = urlsplit(value)
-    if not parsed.netloc:
-        return value
-    return urlunsplit(("http", _PARITY_PROVIDER_HOST, parsed.path, parsed.query, parsed.fragment))
-
-
-def local_response_header(name: str, value: str, provider_url: str) -> str:
-    if name.lower() not in {"location", "operation-location"}:
-        return value
-    parsed: Final = urlsplit(value)
-    if parsed.hostname != _PARITY_PROVIDER_HOST:
-        return value
-    return f"{provider_url}{parsed.path}{'?' + parsed.query if parsed.query else ''}"
-
-
-class _RecordingProvider(ThreadingHTTPServer):
-    daemon_threads = True
-
+class _RecordingProvider(LocalHttpServer):
     def __init__(self, spec: UpstreamEndpoint) -> None:
         super().__init__(("127.0.0.1", 0), _RecordingHandler)
         self.spec: Final = spec
         self.interactions: queue.Queue[RecordedInteraction] = queue.Queue()
-
-    @property
-    def url(self) -> str:
-        return f"http://127.0.0.1:{self.server_address[1]}"
 
     def take_interactions(self) -> tuple[RecordedInteraction, ...]:
         try:
@@ -106,9 +82,7 @@ class _RecordingProvider(ThreadingHTTPServer):
         return (first, *remaining)
 
 
-class _RecordingHandler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-
+class _RecordingHandler(LocalHttpHandler):
     def do_POST(self) -> None:
         self._forward()
 
@@ -151,7 +125,7 @@ class _RecordingHandler(BaseHTTPRequestHandler):
         recorded_request: Final = remove_query_parameters(
             Request(
                 self.command,
-                f"http://{_PARITY_PROVIDER_HOST}{self.path}",
+                f"http://{PARITY_PROVIDER_HOST}{self.path}",
                 request_body,
                 {name: value for name, value in forwarded_headers if name.lower() not in _SECRET_HEADERS},
             ),
@@ -191,8 +165,7 @@ class _RecordingHandler(BaseHTTPRequestHandler):
         self.send_header("transfer-encoding", "chunked")
         self.end_headers()
         chunks: Final = tuple(self._relay_chunks(upstream.iter_bytes()))
-        self.wfile.write(b"0\r\n\r\n")
-        self.wfile.flush()
+        self.finish_chunked()
         return RecordedHttpStreamResponse(
             kind="http_stream",
             status_code=upstream.status_code,
@@ -202,10 +175,7 @@ class _RecordingHandler(BaseHTTPRequestHandler):
 
     def _relay_chunks(self, chunks: Iterable[bytes]) -> Generator[RecordedStreamChunk, None, None]:
         for chunk in chunks:
-            self.wfile.write(f"{len(chunk):X}\r\n".encode("ascii"))
-            self.wfile.write(chunk)
-            self.wfile.write(b"\r\n")
-            self.wfile.flush()
+            self.write_chunk(chunk)
             yield RecordedStreamChunk.from_bytes(chunk)
 
     def _send_response(self, status_code: int, headers: tuple[HttpHeader, ...], body: bytes) -> None:
@@ -218,21 +188,8 @@ class _RecordingHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def log_message(self, format: str, *args: object) -> None:
-        return
-
-
-@contextmanager
-def _recording_provider(spec: UpstreamEndpoint) -> Generator[_RecordingProvider]:
-    server: Final = _RecordingProvider(spec)
-    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield server
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+def _recording_provider(spec: UpstreamEndpoint) -> AbstractContextManager[_RecordingProvider]:
+    return serve_in_thread(_RecordingProvider(spec))
 
 
 def _invoke_and_take_interactions(

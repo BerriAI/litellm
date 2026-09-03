@@ -8,8 +8,6 @@ from ...shared.reporting.models import Coverage, HarnessCase, RunStatus
 from ...shared.reporting.strategy import SuiteCaseSpec
 from . import STRATEGY
 
-HARNESS_ROOT: Final = Path(__file__).resolve().parents[4]
-
 
 def _write_tests(tmp_path: Path, *, mismatch: bool = False, failing: bool = False) -> None:
     (tmp_path / "pytest.ini").write_text("[pytest]\n")
@@ -31,9 +29,7 @@ def _case() -> HarnessCase:
     )
 
 
-def test_passes_when_both_backends_agree(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("PYTHONPATH", str(HARNESS_ROOT))
-    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+def test_passes_when_both_backends_agree(tmp_path: Path) -> None:
     _write_tests(tmp_path)
     case: Final = _case()
 
@@ -43,9 +39,7 @@ def test_passes_when_both_backends_agree(tmp_path: Path, monkeypatch) -> None:
     assert report.results[case.key].status is RunStatus.PASSED
 
 
-def test_passes_when_both_backends_fail_identically(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("PYTHONPATH", str(HARNESS_ROOT))
-    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+def test_passes_when_both_backends_fail_identically(tmp_path: Path) -> None:
     _write_tests(tmp_path, failing=True)
     case: Final = _case()
 
@@ -55,9 +49,7 @@ def test_passes_when_both_backends_fail_identically(tmp_path: Path, monkeypatch)
     assert report.results[case.key].status is RunStatus.PASSED
 
 
-def test_fails_when_backend_outcomes_differ(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("PYTHONPATH", str(HARNESS_ROOT))
-    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+def test_fails_when_backend_outcomes_differ(tmp_path: Path) -> None:
     _write_tests(tmp_path, mismatch=True)
     case: Final = _case()
 

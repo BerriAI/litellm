@@ -6,8 +6,8 @@ from typing import Final
 import pytest
 
 from .....shared.parity.recorded_http import HttpHeader, RecordedHttpResponse
-from .....shared.tracing.steps import Engine, pipeline_issues, pipeline_steps, step, trace_diff
-from ..execution import RouteFixture, RouteSpec, collect_trace
+from .....shared.tracing.steps import Engine, step
+from ..execution import RouteFixture, RouteSpec, assert_trace_parity
 
 STEPS: Final = (
     step("ocr", r"ocr/main\.py:\d+ a?ocr$", "ocr"),
@@ -61,10 +61,4 @@ SPEC: Final = RouteSpec("ocr", ("ocr", "aocr"), ("ocr", "aocr"), _fixture)
 
 @pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
 def test_trace_parity(asynchronous: bool) -> None:
-    python: Final = pipeline_steps("python", collect_trace(SPEC, "python", asynchronous=asynchronous), STEPS)
-    rust: Final = pipeline_steps("rust", collect_trace(SPEC, "rust", asynchronous=asynchronous), STEPS)
-
-    assert pipeline_issues("python", python, STEPS, EDGES) == ()
-    assert pipeline_issues("rust", rust, STEPS, EDGES) == ()
-    assert trace_diff(python, rust).matches
-    assert python == rust
+    assert_trace_parity(SPEC, STEPS, EDGES, asynchronous=asynchronous, exact=True)

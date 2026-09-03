@@ -91,7 +91,7 @@ class CaseResult:
     def record(self, nodeid: str, status: RunStatus, duration: float = 0.0) -> None:
         """Record a terminal outcome, allowing teardown errors to replace a pass."""
         self.outcomes[nodeid] = status
-        self.durations[nodeid] = self.durations.get(nodeid, 0.0) + duration
+        self.add_duration(nodeid, duration)
         self.completed = set(self.outcomes)
         values = tuple(self.outcomes.values())
         self.passed = values.count(RunStatus.PASSED)
@@ -99,6 +99,9 @@ class CaseResult:
         self.skipped = values.count(RunStatus.SKIPPED)
         self.errors = values.count(RunStatus.ERROR)
         self.finalize()
+
+    def add_duration(self, nodeid: str, duration: float) -> None:
+        self.durations[nodeid] = self.durations.get(nodeid, 0.0) + duration
 
     def set_initial_status(self) -> None:
         if self.case.spec.coverage is Coverage.NOT_APPLICABLE:

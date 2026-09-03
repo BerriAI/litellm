@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import base64
 import queue
-import threading
-from collections.abc import Generator
-from contextlib import contextmanager
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from contextlib import AbstractContextManager
 from typing import Final
 
 from pydantic import JsonValue, TypeAdapter
 
-from .fixtures.recording import local_response_header
+from .http import local_response_header
+from .local_server import LocalHttpHandler, LocalHttpServer, serve_in_thread
 from .models import CapturedRequest
 from .recorded_http import RecordedHttpResponse, RecordedHttpStreamResponse, RecordedResponse
 
@@ -28,17 +26,11 @@ EXCLUDED_REQUEST_HEADERS: Final = frozenset(
 EXCLUDED_RESPONSE_HEADERS: Final = frozenset({"content-length", "transfer-encoding", "connection"})
 
 
-class ReplayServer(ThreadingHTTPServer):
-    daemon_threads = True
-
+class ReplayServer(LocalHttpServer):
     def __init__(self) -> None:
         super().__init__(("127.0.0.1", 0), _ReplayHandler)
         self.responses: queue.Queue[RecordedResponse] = queue.Queue()
         self.requests: queue.Queue[CapturedRequest] = queue.Queue()
-
-    @property
-    def url(self) -> str:
-        return f"http://127.0.0.1:{self.server_address[1]}"
 
     def enqueue_response(self, response: RecordedResponse) -> None:
         self.responses.put(response)
@@ -56,9 +48,7 @@ class ReplayServer(ThreadingHTTPServer):
             self.requests.get_nowait()
 
 
-class _ReplayHandler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-
+class _ReplayHandler(LocalHttpHandler):
     def do_POST(self) -> None:
         self._replay()
 
@@ -121,27 +111,8 @@ class _ReplayHandler(BaseHTTPRequestHandler):
         assert isinstance(response, RecordedHttpStreamResponse)
         self.send_header("transfer-encoding", "chunked")
         self.end_headers()
-        for chunk in response.chunks:
-            data = chunk.data_bytes()
-            self.wfile.write(f"{len(data):X}\r\n".encode("ascii"))
-            self.wfile.write(data)
-            self.wfile.write(b"\r\n")
-            self.wfile.flush()
-        self.wfile.write(b"0\r\n\r\n")
-        self.wfile.flush()
-
-    def log_message(self, format: str, *args: object) -> None:
-        return
+        self.write_chunked(chunk.data_bytes() for chunk in response.chunks)
 
 
-@contextmanager
-def replay_server() -> Generator[ReplayServer]:
-    server: Final = ReplayServer()
-    thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
-    thread.start()
-    try:
-        yield server
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+def replay_server() -> AbstractContextManager[ReplayServer]:
+    return serve_in_thread(ReplayServer(), poll_interval=0.01)

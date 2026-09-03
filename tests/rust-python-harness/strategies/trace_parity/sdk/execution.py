@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Protocol, cast
@@ -12,7 +12,7 @@ from ....shared.parity.recorded_http import RecordedHttpResponse
 from ....shared.parity.replay import replay_server
 from ....shared.tracing.native import native_trace_events
 from ....shared.tracing.profiler import FunctionTraceEvent, profile_python
-from ....shared.tracing.steps import Engine
+from ....shared.tracing.steps import Engine, Step, pipeline_issues, pipeline_steps, trace_diff
 
 
 class SdkCall(Protocol):
@@ -84,3 +84,23 @@ def collect_trace(spec: RouteSpec, engine: Engine, *, asynchronous: bool) -> tup
     if not events:
         pytest.fail("native Rust bridge trace is empty; rebuild it with tracing support")
     return events
+
+
+def assert_trace_parity(
+    spec: RouteSpec,
+    steps: Sequence[Step],
+    edges: Sequence[tuple[str, str]],
+    *,
+    asynchronous: bool,
+    matching_steps: bool = True,
+    exact: bool = False,
+) -> None:
+    python: Final = pipeline_steps("python", collect_trace(spec, "python", asynchronous=asynchronous), steps)
+    rust: Final = pipeline_steps("rust", collect_trace(spec, "rust", asynchronous=asynchronous), steps)
+
+    assert pipeline_issues("python", python, steps, edges) == ()
+    assert pipeline_issues("rust", rust, steps, edges) == ()
+    if matching_steps:
+        assert trace_diff(python, rust).matches
+    if exact:
+        assert python == rust

@@ -35,17 +35,6 @@ class BackendSpec(BaseModel):
     probe: str = ""
 
 
-def ocr_backend() -> Backend:
-    from litellm.rust_bridge import native_bridge_available
-    from litellm.rust_bridge.configuration import rust_ocr_enabled
-
-    if not rust_ocr_enabled():
-        return "python"
-    if not native_bridge_available():
-        raise RuntimeError("Rust OCR was enabled but the native extension is unavailable")
-    return "rust"
-
-
 class ResultPlugin:
     def __init__(self, backend: Backend, probe: Callable[[], object] | None) -> None:
         self.backend: Final = backend

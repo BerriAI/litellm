@@ -6,8 +6,6 @@ from typing import Final
 
 from .python_runner import BackendSpec, compare_python_runs, run_python_tests
 
-HARNESS_ROOT: Final = Path(__file__).resolve().parents[4]
-
 
 def _suite(root: Path, *, mismatch: bool = False) -> BackendSpec:
     (root / "pytest.ini").write_text("[pytest]\n")
@@ -23,9 +21,7 @@ def _suite(root: Path, *, mismatch: bool = False) -> BackendSpec:
     return BackendSpec(environment_variable="TEST_USE_RUST", probe="backend_probe:selected")
 
 
-def test_runs_existing_python_tests_in_separate_verified_backends(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("PYTHONPATH", str(HARNESS_ROOT))
-    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+def test_runs_existing_python_tests_in_separate_verified_backends(tmp_path: Path) -> None:
     spec: Final = _suite(tmp_path)
     python: Final = run_python_tests(("test_backend.py",), tmp_path, "python", spec)
     rust: Final = run_python_tests(("test_backend.py",), tmp_path, "rust", spec)
@@ -35,9 +31,7 @@ def test_runs_existing_python_tests_in_separate_verified_backends(tmp_path: Path
     assert (tmp_path / "python.pid").read_text() != str(os.getpid())
 
 
-def test_rejects_wrong_backend_and_different_test_results(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("PYTHONPATH", str(HARNESS_ROOT))
-    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+def test_rejects_wrong_backend_and_different_test_results(tmp_path: Path) -> None:
     spec: Final = _suite(tmp_path, mismatch=True)
     python: Final = run_python_tests(("test_backend.py",), tmp_path, "python", spec)
     rust: Final = run_python_tests(("test_backend.py",), tmp_path, "rust", spec)
@@ -53,9 +47,7 @@ def test_rejects_wrong_backend_and_different_test_results(tmp_path: Path, monkey
     assert "backend probe did not select rust" in wrong.problems[0]
 
 
-def test_matches_outcomes_without_a_probe_when_both_backends_fail_identically(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("PYTHONPATH", str(HARNESS_ROOT))
-    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+def test_matches_outcomes_without_a_probe_when_both_backends_fail_identically(tmp_path: Path) -> None:
     (tmp_path / "pytest.ini").write_text("[pytest]\n")
     (tmp_path / "test_backend.py").write_text("def test_fails():\n    assert False\n")
     spec: Final = BackendSpec(environment_variable="TEST_USE_RUST")

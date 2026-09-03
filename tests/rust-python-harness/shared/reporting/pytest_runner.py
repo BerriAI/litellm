@@ -14,6 +14,16 @@ from .strategy import SelectorCaseSpec
 UpdateCallback = Callable[[HarnessRun], None]
 
 
+def _report_status(report: pytest.TestReport) -> RunStatus:
+    if report.skipped:
+        return RunStatus.SKIPPED
+    if report.failed and report.when in {"setup", "teardown"}:
+        return RunStatus.ERROR
+    if report.failed:
+        return RunStatus.FAILED
+    return RunStatus.PASSED
+
+
 def selector_matches_node(selector: str, nodeid: str) -> bool:
     normalized_selector = selector.replace("\\", "/")
     normalized_nodeid = nodeid.replace("\\", "/")
@@ -92,25 +102,13 @@ class HarnessPytestPlugin:
         terminal = report.when == "call" or report.failed or report.skipped
         if not terminal:
             for result in results:
-                result.durations[report.nodeid] = (
-                    result.durations.get(report.nodeid, 0.0) + report.duration
-                )
+                result.add_duration(report.nodeid, report.duration)
             return
         for result in results:
             if report.when == "teardown" and not report.failed:
-                result.durations[report.nodeid] = (
-                    result.durations.get(report.nodeid, 0.0) + report.duration
-                )
+                result.add_duration(report.nodeid, report.duration)
                 continue
-            if report.skipped:
-                status = RunStatus.SKIPPED
-            elif report.failed and report.when in {"setup", "teardown"}:
-                status = RunStatus.ERROR
-            elif report.failed:
-                status = RunStatus.FAILED
-            else:
-                status = RunStatus.PASSED
-            result.record(report.nodeid, status, report.duration)
+            result.record(report.nodeid, _report_status(report), report.duration)
         if report.failed:
             failure = (report.nodeid, str(report.longrepr))
             if failure not in self.run.failures:
