@@ -30,7 +30,7 @@ guardrails:
 #
 # 1. Run LLM Shield somewhere the proxy can reach:
 #      pip install llm-shield-proxy
-#      llm-shield-proxy serve
+#      llm-shield-proxy --port 8000
 #
 # 2. Point this config at it and start the proxy:
 #      export LLM_SHIELD_API_KEY="your-virtual-key"
