@@ -3,7 +3,7 @@
     "limit": 14074
   },
   "reportArgumentType": {
-    "limit": 2211
+    "limit": 2207
   },
   "reportAssignmentType": {
     "limit": 319
@@ -57,7 +57,7 @@
     "limit": 5601
   },
   "reportMissingTypeArgument": {
-    "limit": 15289
+    "limit": 15288
   },
   "reportMissingTypeStubs": {
     "limit": 40
@@ -99,19 +99,19 @@
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 44361
+    "limit": 44360
   },
   "reportUnknownLambdaType": {
     "limit": 109
   },
   "reportUnknownMemberType": {
-    "limit": 38326
+    "limit": 38320
   },
   "reportUnknownParameterType": {
     "limit": 19625
   },
   "reportUnknownVariableType": {
-    "limit": 29854
+    "limit": 29847
   },
   "reportUnnecessaryCast": {
     "limit": 111
