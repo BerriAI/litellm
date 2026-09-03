@@ -87,6 +87,7 @@ class TestChatGPTAuthenticator:
 
         assert exc.value.status_code == 401
         assert "event loop" in str(exc.value)
+        assert authenticator.auth_file not in str(exc.value)
         mock_login.assert_not_called()
         mock_wait.assert_not_called()
 
@@ -104,6 +105,7 @@ class TestChatGPTAuthenticator:
 
         assert exc.value.status_code == 401
         assert "event loop" in str(exc.value)
+        assert authenticator.auth_file not in str(exc.value)
         mock_login.assert_not_called()
         mock_wait.assert_not_called()
 

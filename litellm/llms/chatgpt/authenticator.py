@@ -74,8 +74,8 @@ class Authenticator:
                     "ChatGPT device-code login needs a human and cannot run inside a running event loop "
                     "(for example the LiteLLM proxy). Log in once outside the proxy with "
                     '`python -c "from litellm.llms.chatgpt.authenticator import Authenticator; '
-                    'Authenticator().get_access_token()"` and mount the resulting '
-                    f"{self.auth_file} into the proxy, or set CHATGPT_TOKEN_DIR to a directory that already holds it."
+                    'Authenticator().get_access_token()"` and mount the resulting auth.json into the proxy, '
+                    "or set CHATGPT_TOKEN_DIR to a directory that already holds it."
                 ),
                 status_code=401,
             )

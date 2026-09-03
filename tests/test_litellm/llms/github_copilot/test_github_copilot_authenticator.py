@@ -100,6 +100,7 @@ class TestGitHubCopilotAuthenticator:
 
         assert exc.value.status_code == 401
         assert "event loop" in str(exc.value)
+        assert authenticator.access_token_file not in str(exc.value)
         mock_login.assert_not_called()
 
     def test_get_access_token_failure(self, authenticator):

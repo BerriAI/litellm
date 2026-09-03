@@ -64,9 +64,8 @@ class Authenticator:
                     "GitHub Copilot device-code login needs a human and cannot run inside a running event loop "
                     "(for example the LiteLLM proxy). Log in once outside the proxy with "
                     '`python -c "from litellm.llms.github_copilot.authenticator import Authenticator; '
-                    'Authenticator().get_access_token()"` and mount the resulting '
-                    f"{self.access_token_file} into the proxy, or set GITHUB_COPILOT_TOKEN_DIR to a directory "
-                    "that already holds it."
+                    'Authenticator().get_access_token()"` and mount the resulting access-token file into '
+                    "the proxy, or set GITHUB_COPILOT_TOKEN_DIR to a directory that already holds it."
                 ),
                 status_code=401,
             )
