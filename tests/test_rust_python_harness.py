@@ -498,5 +498,5 @@ mod ocr {
     ignored_scope: Final = ledger_module.RustTestScope(
         target=target, features=("ignored",), default_features=False, modules=("ocr",)
     )
-    with pytest.raises(ValueError, match="Ignored Rust tests.*ocr::ignored_case"):
+    with pytest.raises(ValueError, match=r"Ignored Rust tests.*ocr::ignored_case"):
         rust_runner.enumerate_rust_tests(tmp_path, (ignored_scope,))
