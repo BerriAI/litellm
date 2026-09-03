@@ -824,7 +824,8 @@ describe("userListCall search serialization", () => {
   });
 
   const mockOkFetch = () => {
-    const body = JSON.stringify({ users: [], total: 0, page: 1, page_size: 25, total_pages: 0 });
+    const emptyPage = { users: [], total: 0, page: 1, page_size: 25, total_pages: 0 };
+    const body = JSON.stringify(emptyPage);
     const mockFetch = vi.fn().mockResolvedValue({ ok: true, text: vi.fn().mockResolvedValue(body) } as any);
     global.fetch = mockFetch as any;
     return mockFetch;
