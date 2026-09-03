@@ -169,10 +169,9 @@ jobs:
           version: "0.10.9"
 
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync --frozen --extra proxy --python 3.10
 
-      - name: Install proxy dependencies
-        run: uv sync --frozen --extra proxy
+      - run: uv run --no-sync python --version
 
       - name: Import litellm
         run: uv run --no-sync python -c "import litellm"
