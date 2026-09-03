@@ -4967,9 +4967,9 @@ def test_extract_credential_provider_hint_prefers_exact_match():
     result = _extract_credential_from_entry(entry)
     assert result in ("openai-cred", "azure-cred")
 
-    # Unknown provider falls back to first available
-    result = _extract_credential_from_entry(entry, provider="bedrock")
-    assert result in ("openai-cred", "azure-cred")
+    # A resolved provider that the entry does not configure gets no credential,
+    # otherwise a bedrock request would be sent with an openai or azure key
+    assert _extract_credential_from_entry(entry, provider="bedrock") is None
 
 
 def test_resolve_provider_hint_from_model_name():
@@ -5963,6 +5963,55 @@ def test_apply_overrides_provider_prefix_in_model_skips_router_lookup(
     assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
     assert data["api_key"] == "key-hotel-eastus"
     router.get_deployment_by_model_group_name.assert_not_called()
+
+
+def test_apply_overrides_single_provider_default_does_not_leak_to_other_providers(
+    setup_test_credentials,
+):
+    """
+    A team whose defaultconfig only names anthropic must not have that key
+    injected into requests the router resolves to a different provider. Before
+    this fix an unprefixed gpt-4o-mini request on such a team was sent to OpenAI
+    with the team's sk-ant key and got a 401 back.
+    """
+    litellm.credential_list.append(
+        CredentialItem(
+            credential_name="anthropic-team-1",
+            credential_info={},
+            credential_values={"api_key": "sk-ant-key-for-team-1"},
+        )
+    )
+    team_metadata = {
+        "model_config": {"defaultconfig": {"anthropic": {"litellm_credentials": "anthropic-team-1"}}}
+    }
+
+    router = MagicMock()
+    openai_deployment = MagicMock()
+    openai_deployment.litellm_params.model = "openai/gpt-4o-mini"
+    openai_deployment.litellm_params.custom_llm_provider = "openai"
+    anthropic_deployment = MagicMock()
+    anthropic_deployment.litellm_params.model = "anthropic/claude-sonnet-4-6"
+    anthropic_deployment.litellm_params.custom_llm_provider = "anthropic"
+    router.get_deployment_by_model_group_name.side_effect = lambda model_group_name: {
+        "gpt-4o-mini": openai_deployment,
+        "claude-sonnet-4.6": anthropic_deployment,
+    }.get(model_group_name)
+
+    openai_data = {"model": "gpt-4o-mini"}
+    _apply_credential_overrides_from_model_config(
+        data=openai_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", team_metadata=team_metadata),
+        llm_router=router,
+    )
+    assert "api_key" not in openai_data
+
+    anthropic_data = {"model": "claude-sonnet-4.6"}
+    _apply_credential_overrides_from_model_config(
+        data=anthropic_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", team_metadata=team_metadata),
+        llm_router=router,
+    )
+    assert anthropic_data["api_key"] == "sk-ant-key-for-team-1"
 
 
 def _make_request_mock(path: str, headers: dict) -> MagicMock:
