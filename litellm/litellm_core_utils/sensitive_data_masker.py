@@ -3,7 +3,7 @@ from typing import Any, Final
 
 from pydantic import BaseModel
 
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 from litellm.litellm_core_utils.secret_redaction import REDACTED
 
 
@@ -226,9 +226,10 @@ def redact_credentials_in_payload(data: Mapping[str, object]) -> Mapping[str, ob
     and non-string secrets are covered too, which is what a payload rendered
     straight to stdout needs. ``None`` is preserved so an unset credential still
     reads as unset, and lists and tuples are rebuilt element by element so a
-    credential nested inside one is caught as well. A container sitting at the
-    recursion limit is replaced wholesale rather than passed through, so nesting a
-    payload deeper than the limit hides it instead of exposing it.
+    credential nested inside one is caught as well. The walk is bounded only to stop
+    runaway recursion, and a container sitting at that bound is replaced wholesale
+    rather than passed through, so burying a credential deeper than the walk goes
+    hides it instead of exposing it.
     """
     return _redact_mapping(data, 0)
 
@@ -242,7 +243,7 @@ def _redact_entry(key: str, value: object, depth: int) -> object:
         return REDACTED
     if not isinstance(value, (Mapping, list, tuple)):
         return value
-    if depth >= DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER:
+    if depth >= DEFAULT_MAX_RECURSE_DEPTH:
         return REDACTED
     if isinstance(value, Mapping):
         return _redact_mapping(value, depth + 1)

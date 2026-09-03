@@ -380,12 +380,12 @@ def test_redact_credentials_in_payload_hides_containers_at_the_recursion_limit(w
     buries a credential deeper than the limit must get the container hidden rather than handed
     back verbatim. Nesting through lists costs depth twice as fast as nesting through mappings,
     so both shapes are pushed well past the limit here."""
-    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
     from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 
     fake_key = "sk-fake-lit6835-past-the-limit"
     node = {"api_key": fake_key}
-    for _ in range(2 * DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER + 1):
+    for _ in range(2 * DEFAULT_MAX_RECURSE_DEPTH + 1):
         node = {"extra_body": node} if wrap == "mapping" else {"providers": [node]}
 
     result = redact_credentials_in_payload({**node, "max_tokens": 17})
@@ -393,3 +393,40 @@ def test_redact_credentials_in_payload_hides_containers_at_the_recursion_limit(w
     assert fake_key not in str(result)
     assert "REDACTED" in str(result)
     assert result["max_tokens"] == 17
+
+
+def test_redact_credentials_in_payload_leaves_a_realistic_tool_schema_intact():
+    """The bound must not eat ordinary payloads: a tool whose JSON schema nests an array of
+    objects inside a nested object is what agent traffic looks like, and the verbose line is
+    useless if those leaves come back as REDACTED."""
+    from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "search_orders",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filters": {
+                        "type": "object",
+                        "properties": {
+                            "items": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {"sku": {"type": "string"}, "qty": {"type": "integer"}},
+                                },
+                            }
+                        },
+                    }
+                },
+            },
+        },
+    }
+
+    result = redact_credentials_in_payload({"model": "gpt-4o-mini", "tools": [tool], "api_key": "sk-fake-lit6835"})
+
+    assert "REDACTED" not in str(result["tools"])
+    assert result["tools"][0] == tool
+    assert result["api_key"] == "REDACTED"
