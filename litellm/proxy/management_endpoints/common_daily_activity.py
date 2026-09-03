@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import HTTPException, status
@@ -445,7 +445,7 @@ def update_breakdown_metrics(
 async def get_api_key_metadata(
     prisma_client: PrismaClient,
     api_keys: AbstractSet[str],
-) -> dict[str, _KeyMetadataDict]:
+) -> Mapping[str, _KeyMetadataDict]:
     """Get api key metadata, falling back to deleted keys table for keys not found in active table.
 
     This ensures that key_alias and team_id are preserved in historical activity logs
@@ -483,13 +483,11 @@ async def get_api_key_metadata(
                 e,
             )
 
-    still_missing: Final = api_keys - set(result.keys())
+    still_missing: Final = api_keys - frozenset(result)
     if not still_missing:
         return result
-    return {
-        **result,
-        **(await recover_double_hashed_key_metadata(prisma_client, still_missing)),
-    }
+    recovered: Final = await recover_double_hashed_key_metadata(prisma_client, still_missing)
+    return MappingProxyType({**result, **recovered})
 
 
 def _adjust_dates_for_timezone(

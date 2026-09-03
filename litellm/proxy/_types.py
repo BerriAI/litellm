@@ -3645,7 +3645,7 @@ class SpendLogsMetadata(TypedDict):
     user_api_key_project_alias: str | None
     user_api_key_org_id: str | None
     user_api_key_user_id: str | None
-    user_api_key_user_email: str | None
+    user_api_key_user_email: ReadOnly[str | None]
     user_api_key_team_alias: str | None
     spend_logs_metadata: dict | None  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: str | None

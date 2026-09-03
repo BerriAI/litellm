@@ -1,9 +1,9 @@
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from types import MappingProxyType
 from typing import Final, Protocol, TypeVar
 
-from prisma.errors import PrismaError
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
@@ -16,8 +16,6 @@ from litellm.repositories.verification_token_repository import (
 
 _T = TypeVar("_T")
 
-# Cap reverse-hash scans so a Usage page with orphaned double-hashed api_key
-# values cannot pull an unbounded VerificationToken table into memory.
 _MAX_DOUBLE_HASH_TOKEN_SCAN: Final = 10_000
 
 _SPEND_LOGS_KEY_METADATA_SQL: Final = """
@@ -39,10 +37,14 @@ ORDER BY api_key, "startTime" DESC NULLS LAST
 
 
 class KeyMetadataDict(TypedDict, total=False):
-    key_alias: str | None
-    team_id: str | None
-    user_id: str | None
-    user_email: str | None
+    key_alias: ReadOnly[str | None]
+    team_id: ReadOnly[str | None]
+    user_id: ReadOnly[str | None]
+    user_email: ReadOnly[str | None]
+
+
+_EMPTY_KEY_METADATA: Final[Mapping[str, KeyMetadataDict]] = MappingProxyType({})
+_EMPTY_EMAILS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 class _TokenAliasRecord(Protocol):
@@ -64,6 +66,8 @@ async def _db_or_empty(
     warning: str,
     count: int,
 ) -> _T | None:
+    from prisma.errors import PrismaError
+
     try:
         return await load()
     except PrismaError as e:
@@ -71,89 +75,104 @@ async def _db_or_empty(
         return None
 
 
+def _record_metadata(record: _TokenAliasRecord) -> KeyMetadataDict:
+    meta: Final[KeyMetadataDict] = {
+        "key_alias": record.key_alias,
+        "team_id": record.team_id,
+        "user_id": getattr(record, "user_id", None),
+    }
+    return meta
+
+
+def _spend_log_row_metadata(row: Mapping[str, object]) -> KeyMetadataDict:
+    meta: Final[KeyMetadataDict] = {
+        "key_alias": row.get("key_alias") if isinstance(row.get("key_alias"), str) else None,
+        "team_id": row.get("team_id") if isinstance(row.get("team_id"), str) else None,
+        "user_id": row.get("user_id") if isinstance(row.get("user_id"), str) else None,
+        "user_email": row.get("user_email") if isinstance(row.get("user_email"), str) else None,
+    }
+    return meta
+
+
 def _token_digest_metadata(
     records: Sequence[_TokenAliasRecord],
     wanted: AbstractSet[str],
-) -> dict[str, KeyMetadataDict]:
-    return {
-        digested: {
-            "key_alias": record.key_alias,
-            "team_id": record.team_id,
-            "user_id": getattr(record, "user_id", None),
+) -> Mapping[str, KeyMetadataDict]:
+    return MappingProxyType(
+        {
+            digested: _record_metadata(record)
+            for record in records
+            for digested in (hash_token(record.token),)
+            if digested in wanted
         }
-        for record in records
-        for digested in (hash_token(record.token),)
-        if digested in wanted
-    }
+    )
 
 
 async def _reverse_hash_active_key_metadata(
     prisma_client: PrismaClient,
     wanted: AbstractSet[str],
-) -> dict[str, KeyMetadataDict]:
+) -> Mapping[str, KeyMetadataDict]:
     active_records: Final = await _db_or_empty(
         lambda: VerificationTokenRepository(prisma_client).table.find_many(take=_MAX_DOUBLE_HASH_TOKEN_SCAN),
         "Failed reverse-hash recovery against active keys for %d missing keys: %s",
         len(wanted),
     )
     if active_records is None:
-        return {}
+        return _EMPTY_KEY_METADATA
     return _token_digest_metadata(active_records, wanted)
 
 
 async def _reverse_hash_deleted_key_metadata(
     prisma_client: PrismaClient,
     wanted: AbstractSet[str],
-) -> dict[str, KeyMetadataDict]:
+) -> Mapping[str, KeyMetadataDict]:
     deleted_records: Final = await _db_or_empty(
         lambda: DeletedVerificationTokenRepository(prisma_client).table.find_many(
             take=_MAX_DOUBLE_HASH_TOKEN_SCAN,
-            order={"deleted_at": "desc"},
+            order={"deleted_at": "desc"},  # mutable-ok: Prisma find_many order= is a dict
         ),
         "Failed reverse-hash recovery against deleted keys for %d missing keys: %s",
         len(wanted),
     )
     if deleted_records is None:
-        return {}
+        return _EMPTY_KEY_METADATA
     return _token_digest_metadata(deleted_records, wanted)
 
 
 async def _reverse_hash_key_metadata(
     prisma_client: PrismaClient,
     wanted: AbstractSet[str],
-) -> dict[str, KeyMetadataDict]:
+) -> Mapping[str, KeyMetadataDict]:
     from_active: Final = await _reverse_hash_active_key_metadata(prisma_client, wanted)
     still_wanted: Final = wanted - frozenset(from_active)
     if not still_wanted:
         return from_active
-    return {**from_active, **(await _reverse_hash_deleted_key_metadata(prisma_client, still_wanted))}
+    from_deleted: Final = await _reverse_hash_deleted_key_metadata(prisma_client, still_wanted)
+    return MappingProxyType({**from_active, **from_deleted})
 
 
 async def _spend_logs_key_metadata(
     prisma_client: PrismaClient,
     wanted: AbstractSet[str],
-) -> dict[str, KeyMetadataDict]:
+) -> Mapping[str, KeyMetadataDict]:
     spend_log_rows: Final = await _db_or_empty(
         lambda: prisma_client.db.query_raw(
             _SPEND_LOGS_KEY_METADATA_SQL,
-            list(wanted),
+            tuple(wanted),
         ),
         "Failed SpendLogs metadata recovery for %d missing keys: %s",
         len(wanted),
     )
     if not isinstance(spend_log_rows, list):
-        return {}
+        return _EMPTY_KEY_METADATA
 
-    return {
-        row["api_key"]: {
-            "key_alias": row.get("key_alias"),
-            "team_id": row.get("team_id"),
-            "user_id": row.get("user_id"),
-            "user_email": row.get("user_email"),
+    return MappingProxyType(
+        {
+            row["api_key"]: _spend_log_row_metadata(row)
+            for row in spend_log_rows
+            if isinstance(row, dict) and isinstance(row.get("api_key"), str) and row["api_key"] in wanted
         }
-        for row in spend_log_rows
-        if isinstance(row, dict) and isinstance(row.get("api_key"), str) and row["api_key"] in wanted
-    }
+    )
 
 
 async def _emails_for_user_ids(
@@ -161,19 +180,23 @@ async def _emails_for_user_ids(
     user_ids: AbstractSet[str],
 ) -> Mapping[str, str]:
     if not user_ids:
-        return {}
+        return _EMPTY_EMAILS
     users: Final = await _db_or_empty(
-        lambda: UserRepository(prisma_client).table.find_many(where={"user_id": {"in": list(user_ids)}}),
+        lambda: UserRepository(prisma_client).table.find_many(
+            where={"user_id": {"in": tuple(user_ids)}},  # mutable-ok: Prisma find_many where= is a dict
+        ),
         "Failed user_email recovery for %d user ids: %s",
         len(user_ids),
     )
     if users is None:
-        return {}
-    return {
-        user.user_id: user.user_email
-        for user in users
-        if getattr(user, "user_id", None) and getattr(user, "user_email", None)
-    }
+        return _EMPTY_EMAILS
+    return MappingProxyType(
+        {
+            user.user_id: user.user_email
+            for user in users
+            if getattr(user, "user_id", None) and getattr(user, "user_email", None)
+        }
+    )
 
 
 def _meta_with_email(meta: KeyMetadataDict, emails: Mapping[str, str]) -> KeyMetadataDict:
@@ -182,13 +205,14 @@ def _meta_with_email(meta: KeyMetadataDict, emails: Mapping[str, str]) -> KeyMet
     user_id: Final = meta.get("user_id")
     if not isinstance(user_id, str) or user_id not in emails:
         return meta
-    return {**meta, "user_email": emails[user_id]}
+    updated: Final[KeyMetadataDict] = {**meta, "user_email": emails[user_id]}
+    return updated
 
 
 async def _with_user_emails(
     prisma_client: PrismaClient,
     recovered: Mapping[str, KeyMetadataDict],
-) -> dict[str, KeyMetadataDict]:
+) -> Mapping[str, KeyMetadataDict]:
     needing_email: Final = frozenset(
         user_id
         for meta in recovered.values()
@@ -197,14 +221,14 @@ async def _with_user_emails(
     )
     emails: Final = await _emails_for_user_ids(prisma_client, needing_email)
     if not emails:
-        return dict(recovered)
-    return {api_key: _meta_with_email(meta, emails) for api_key, meta in recovered.items()}
+        return recovered
+    return MappingProxyType({api_key: _meta_with_email(meta, emails) for api_key, meta in recovered.items()})
 
 
 async def recover_double_hashed_key_metadata(
     prisma_client: PrismaClient,
     missing_keys: AbstractSet[str],
-) -> dict[str, KeyMetadataDict]:
+) -> Mapping[str, KeyMetadataDict]:
     """
     Recover key_alias/team_id/user_email for DailyUserSpend.api_key values that
     were double-hashed by the v1.99 spend-log provenance gate.
@@ -216,14 +240,14 @@ async def recover_double_hashed_key_metadata(
     """
     sha_missing: Final = frozenset(key for key in missing_keys if is_valid_sha256_hash(key))
     if not sha_missing:
-        return {}
+        return _EMPTY_KEY_METADATA
 
     from_tokens: Final = await _reverse_hash_key_metadata(prisma_client, sha_missing)
     still_missing: Final = sha_missing - frozenset(from_tokens)
     recovered: Final = (
         from_tokens
         if not still_missing
-        else {**from_tokens, **(await _spend_logs_key_metadata(prisma_client, still_missing))}
+        else MappingProxyType({**from_tokens, **(await _spend_logs_key_metadata(prisma_client, still_missing))})
     )
     return await _with_user_emails(prisma_client, recovered)
 
@@ -241,12 +265,14 @@ def _row_with_recovered_fields(
     if not isinstance(api_key, str) or api_key not in recovered:
         return row
     meta: Final = recovered[api_key]
-    return {
-        **row,
-        alias_field: meta.get("key_alias") or row.get(alias_field),
-        team_id_field: meta.get("team_id") or row.get(team_id_field),
-        user_email_field: meta.get("user_email") or row.get(user_email_field),
-    }
+    return MappingProxyType(
+        {
+            **row,
+            alias_field: meta.get("key_alias") or row.get(alias_field),
+            team_id_field: meta.get("team_id") or row.get(team_id_field),
+            user_email_field: meta.get("user_email") or row.get(user_email_field),
+        }
+    )
 
 
 async def fill_missing_api_key_aliases(
