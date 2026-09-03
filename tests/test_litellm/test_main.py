@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import queue
 import threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -3265,11 +3266,11 @@ def test_stream_chunk_builder_leaves_xai_reported_cost_to_the_calculator(monkeyp
 
 @contextlib.contextmanager
 def _recording_tts_server():
-    received: Final[list[Mapping[str, str]]] = []
+    received: Final[queue.Queue[Mapping[str, str]]] = queue.Queue()
 
     class _Handler(BaseHTTPRequestHandler):
         def do_POST(self):
-            received.append({key.lower(): value for key, value in self.headers.items()})
+            received.put({key.lower(): value for key, value in self.headers.items()})
             self.rfile.read(int(self.headers.get("Content-Length") or 0))
             body = b"ID3\x04\x00\x00\x00fake-mp3-payload"
             self.send_response(200)
@@ -3308,8 +3309,8 @@ def test_speech_openai_compatible_sends_the_provider_scoped_key(monkeypatch: pyt
         )
 
     assert response.content == b"ID3\x04\x00\x00\x00fake-mp3-payload"
-    assert len(received) == 1
-    assert received[0]["authorization"] == "Bearer hosted-vllm-scoped-key"
+    assert received.get(timeout=5)["authorization"] == "Bearer hosted-vllm-scoped-key"
+    assert received.empty()
 
 
 def test_speech_azure_sends_the_provider_scoped_key(monkeypatch: pytest.MonkeyPatch):
@@ -3330,8 +3331,8 @@ def test_speech_azure_sends_the_provider_scoped_key(monkeypatch: pytest.MonkeyPa
         )
 
     assert response.content == b"ID3\x04\x00\x00\x00fake-mp3-payload"
-    assert len(received) == 1
-    assert received[0]["api-key"] == "azure-ai-scoped-key"
+    assert received.get(timeout=5)["api-key"] == "azure-ai-scoped-key"
+    assert received.empty()
 
 
 def test_speech_keeps_an_explicitly_passed_api_key_over_the_provider_scoped_one(monkeypatch: pytest.MonkeyPatch):
@@ -3349,5 +3350,5 @@ def test_speech_keeps_an_explicitly_passed_api_key_over_the_provider_scoped_one(
             api_key="caller-supplied-key",
         )
 
-    assert len(received) == 1
-    assert received[0]["authorization"] == "Bearer caller-supplied-key"
+    assert received.get(timeout=5)["authorization"] == "Bearer caller-supplied-key"
+    assert received.empty()
