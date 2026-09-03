@@ -36,6 +36,11 @@ resource "google_service_networking_connection" "psa" {
 # machine_type alone). Defaults: 2 e2-micro instances scale up to 3 — fine
 # for low-to-moderate Cloud Run egress; bump max if your services push
 # heavy private-network traffic.
+#
+# If constraints/compute.managed.requireOsConfig is enforced, existing
+# projects need enable-osconfig=TRUE in project metadata before this
+# connector can be created. The module does not set that metadata
+# (it is often owned by another root). See README.md Quick start.
 resource "google_vpc_access_connector" "this" {
   name          = "${local.name}-conn"
   region        = var.region
