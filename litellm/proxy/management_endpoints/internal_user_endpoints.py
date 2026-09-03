@@ -426,9 +426,9 @@ async def add_new_user_to_default_team(
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
-async def _fetch_user_team_ids(user_id: str, prisma_client: "PrismaClient") -> list[str]:
+async def _fetch_user_team_ids(user_id: str, prisma_client: "PrismaClient") -> tuple[str, ...]:
     user_row: Final = await _user_table(prisma_client).find_unique(where={"user_id": user_id})
-    return list(user_row.teams) if user_row is not None else []
+    return tuple(user_row.teams) if user_row is not None else ()
 
 
 @router.post(
@@ -607,7 +607,7 @@ async def new_user(
 
         response_dict["key"] = response.get("token", "")
         if attached_team_ids is not None:
-            response_dict["teams"] = attached_team_ids
+            response_dict["teams"] = list(attached_team_ids)
 
         new_user_response: Final = NewUserResponse.model_validate(response_dict)
 
