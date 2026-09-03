@@ -3906,6 +3906,7 @@ class LlmProviders(str, Enum):
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
+    AITOKENKING = "aitokenking"
     COGNITION = "cognition"
     SCX_AI = "scx-ai"
     DARKBLOOM = "darkbloom"

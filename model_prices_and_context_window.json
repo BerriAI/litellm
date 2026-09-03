@@ -58456,5 +58456,389 @@
         "supported_endpoints": [
             "/v1/audio/transcriptions"
         ]
+    },
+    "aitokenking/claude-fable-5": {
+        "input_cost_per_token": 1e-05,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-05,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/claude-opus-4.6": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/claude-opus-4.7": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/claude-opus-4.8": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/claude-opus-5": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/claude-sonnet-4.6": {
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/claude-sonnet-5": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/deepseek-v3.2": {
+        "input_cost_per_token": 5.699999999999999e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.71e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/deepseek-v4-flash": {
+        "input_cost_per_token": 1.4e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 2.8e-07,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/deepseek-v4-pro": {
+        "input_cost_per_token": 1.74e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 3.48e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/dola-seed-2-0-mini": {
+        "input_cost_per_token": 2.0000000000000002e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 8.000000000000001e-07,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/dola-seed-2-0-mini-white": {
+        "input_cost_per_token": 2.0000000000000002e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 8.000000000000001e-07,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/dola-seed-2-1-turbo": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/dola-seed-2.0-code": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/dola-seed-2.0-lite": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/dola-seed-2.0-pro": {
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/gemini-3-flash-preview": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/gemini-3.1-pro-preview": {
+        "input_cost_per_token": 4e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.8e-05,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/glm-5": {
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 200000,
+        "mode": "chat",
+        "output_cost_per_token": 3.2000000000000003e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/glm-5-turbo": {
+        "input_cost_per_token": 1.2e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 200000,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/glm-5.1": {
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 200000,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/glm-5.2": {
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/glm-5.3": {
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/glm-5v-turbo": {
+        "input_cost_per_token": 1.2e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 200000,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/gpt-5-nano": {
+        "input_cost_per_token": 5.0000000000000004e-08,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 400000,
+        "mode": "chat",
+        "output_cost_per_token": 4.0000000000000003e-07,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/gpt-5.4": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1050000,
+        "mode": "chat",
+        "output_cost_per_token": 2.25e-05,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/gpt-5.5": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1050000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-05,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/gpt-5.6-luna": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1050000,
+        "mode": "chat",
+        "output_cost_per_token": 9e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/gpt-5.6-sol": {
+        "input_cost_per_token": 1e-05,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1050000,
+        "mode": "chat",
+        "output_cost_per_token": 4.5e-05,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/gpt-5.6-terra": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1050000,
+        "mode": "chat",
+        "output_cost_per_token": 2.25e-05,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/kimi-k2.5": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/kimi-k2.6": {
+        "input_cost_per_token": 8.58e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 3.566e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/kimi-k2.7-code": {
+        "input_cost_per_token": 9.499999999999999e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/kimi-k2.7-code-highspeed": {
+        "input_cost_per_token": 1.8999999999999998e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 8e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/kimi-k3": {
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/minimax-m2.5": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 200000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/minimax-m2.7": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 200000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/minimax-m3": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 2.4e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/qwen3-max": {
+        "input_cost_per_token": 1.2e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/qwen3-max-white": {
+        "input_cost_per_token": 2.4e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-05,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/qwen3-vl-flash": {
+        "input_cost_per_token": 7.5e-08,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/qwen3-vl-plus": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 256000,
+        "mode": "chat",
+        "output_cost_per_token": 4.8e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/qwen3.5-plus": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/qwen3.5-plus-white": {
+        "input_cost_per_token": 4.0000000000000003e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 2.4e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/qwen3.6-plus": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/qwen3.7-max": {
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/qwen3.7-plus": {
+        "input_cost_per_token": 4.0000000000000003e-07,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 1.6000000000000001e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
+    },
+    "aitokenking/qwen3.8-max": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "aitokenking",
+        "max_input_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "source": "https://www.aitokenking.com.tw/assets/docs/zh/index.html"
     }
 }

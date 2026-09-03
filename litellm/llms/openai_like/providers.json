@@ -200,5 +200,16 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "aitokenking": {
+    "base_url": "https://api.aitokenking.com.tw/api/v1",
+    "api_key_env": "AITOKENKING_API_KEY",
+    "api_base_env": "AITOKENKING_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": [
+      "/v1/chat/completions"
+    ]
   }
 }
