@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .ledger import LEDGER_PATH, TestLedger, load_ledger
+from .ledger import TestLedger, ledger_path_for, load_ledger
 
 REPO_ROOT = Path(__file__).parent.parent.parent
 
@@ -29,10 +29,6 @@ class AuditReport:
             or self.missing_rust_tests
             or self.stale_rust_tests
         )
-
-
-class LedgerDriftError(Exception):
-    pass
 
 
 def _enumerate_python_tests(repo_root: Path, relative_path: str) -> frozenset[str]:
@@ -102,19 +98,26 @@ def audit_ledger(ledger: TestLedger, repo_root: Path = REPO_ROOT) -> AuditReport
     )
 
 
-def run_audit(ledger_path: Path = LEDGER_PATH, repo_root: Path = REPO_ROOT) -> AuditReport:
-    ledger = load_ledger(ledger_path)
-    report = audit_ledger(ledger, repo_root)
-    if report.is_clean:
-        return report
+@dataclass(frozen=True, slots=True)
+class FunctionReport:
+    sdk_function: str
+    ledger: TestLedger | None
+    audit: AuditReport | None
 
-    lines: list[str] = []
-    for label, items in (
-        ("ledger references a python test that no longer exists", report.missing_python_tests),
-        ("python test exists but is not tracked in the ledger", report.stale_python_tests),
-        ("ledger references a rust test that no longer exists", report.missing_rust_tests),
-        ("rust test exists but is not tracked in the ledger", report.stale_rust_tests),
-    ):
-        for item in items:
-            lines.append(f"{label}: {item}")
-    raise LedgerDriftError("\n".join(lines))
+    @property
+    def has_ledger(self) -> bool:
+        return self.ledger is not None
+
+    @property
+    def is_clean(self) -> bool:
+        return self.audit is None or self.audit.is_clean
+
+
+def build_function_report(sdk_function: str, repo_root: Path = REPO_ROOT) -> FunctionReport:
+    path = ledger_path_for(sdk_function)
+    if not path.exists():
+        return FunctionReport(sdk_function=sdk_function, ledger=None, audit=None)
+    ledger = load_ledger(path)
+    return FunctionReport(
+        sdk_function=sdk_function, ledger=ledger, audit=audit_ledger(ledger, repo_root)
+    )
