@@ -42,10 +42,12 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
   });
 
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 });
+  const [pagedTags, setPagedTags] = useState(selectedTags);
 
-  useEffect(() => {
+  if (pagedTags !== selectedTags) {
+    setPagedTags(selectedTags);
     setPagination((prev) => (prev.pageIndex === 0 ? prev : { ...prev, pageIndex: 0 }));
-  }, [selectedTags]);
+  }
 
   useEffect(() => {
     if (!accessToken) return;
@@ -55,7 +57,7 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
       accessToken,
       pagination.pageIndex + 1,
       pagination.pageSize,
-      selectedTags.length > 0 ? selectedTags : undefined,
+      pagedTags.length > 0 ? pagedTags : undefined,
     )
       .then((response) => {
         if (!stale) setPerUserData(response);
@@ -65,7 +67,7 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
     return () => {
       stale = true;
     };
-  }, [accessToken, selectedTags, pagination]);
+  }, [accessToken, pagedTags, pagination]);
 
   const handlePaginationChange = useCallback<OnChangeFn<PaginationState>>((updaterOrValue) => {
     setPagination((prev) => {
