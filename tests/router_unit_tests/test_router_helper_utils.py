@@ -1367,6 +1367,48 @@ def test_get_num_retries_from_retry_policy(
     assert calc_num_retries == num_retries
 
 
+def test_get_num_retries_from_retry_policy_notfounderror_zero(model_list):
+    """gh-36896: NotFoundErrorRetries lets operators pin 404s to 0 retries
+    so the router surfaces a 404 to the client immediately instead of retrying
+    it across the deployment pool (which would cool every deployment)."""
+    from litellm.router import RetryPolicy
+    from litellm.router_utils.get_retry_from_policy import (
+        get_num_retries_from_retry_policy,
+    )
+
+    router = Router(
+        model_list=model_list,
+        retry_policy=RetryPolicy(NotFoundErrorRetries=0),
+    )
+    calc_num_retries = router.get_num_retries_from_retry_policy(
+        exception=litellm.exceptions.NotFoundError(
+            message="test", llm_provider="openai", model="gpt-5-mini"
+        )
+    )
+    assert calc_num_retries == 0
+
+
+def test_get_num_retries_from_retry_policy_notfounderror_falls_back_to_num_retries(model_list):
+    """gh-36896: when NotFoundErrorRetries is unset, a 404 still falls back to
+    the router's default num_retries (unchanged behavior)."""
+    from litellm.router import RetryPolicy
+    from litellm.router_utils.get_retry_from_policy import (
+        get_num_retries_from_retry_policy,
+    )
+
+    router = Router(
+        model_list=model_list,
+        retry_policy=RetryPolicy(),
+        num_retries=3,
+    )
+    calc_num_retries = router.get_num_retries_from_retry_policy(
+        exception=litellm.exceptions.NotFoundError(
+            message="test", llm_provider="openai", model="gpt-5-mini"
+        )
+    )
+    assert calc_num_retries is None  # no policy-set count; falls back to num_retries
+
+
 @pytest.mark.parametrize(
     "exception_type, exception_name, allowed_fails",
     [

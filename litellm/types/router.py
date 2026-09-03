@@ -104,6 +104,7 @@ class RetryPolicy(BaseModel):
     RateLimitErrorRetries: int | None = None
     ContentPolicyViolationErrorRetries: int | None = None
     InternalServerErrorRetries: int | None = None
+    NotFoundErrorRetries: int | None = None
 
 
 OptionalPreCallChecks = list[
