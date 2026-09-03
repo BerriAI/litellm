@@ -4,7 +4,12 @@ mod errors;
 mod execution;
 pub mod function_trace;
 mod marshal;
+mod python_hook_bindings;
 mod routes;
+
+#[cfg(test)]
+#[path = "../tests/callbacks/mod.rs"]
+mod callback_tests;
 
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use pyo3::prelude::*;
@@ -68,6 +73,7 @@ mod _native {
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        litellm_python_interop::callback_runtime::register(module)?;
         super::errors::register(module)?;
         super::routes::register(module)?;
         module.add_class::<super::ResponsesWebSocketConnection>()?;

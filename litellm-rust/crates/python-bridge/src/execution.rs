@@ -3,7 +3,6 @@ use std::panic::AssertUnwindSafe;
 use std::time::Duration;
 
 use futures_util::FutureExt;
-use litellm_core::error::Error;
 use litellm_python_interop::{Pythonized, panic_to_pyerr, release_gil};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -11,14 +10,14 @@ use serde::Serialize;
 use tokio::runtime::{Handle, Runtime};
 use tokio::time::{self, MissedTickBehavior};
 
-pub(crate) fn run_sync<T, F>(
+pub(crate) fn run_sync<T, E>(
     py: Python<'_>,
-    future: F,
-    map_error: fn(Error) -> PyErr,
+    future: impl Future<Output = Result<T, E>> + Send + 'static,
+    map_error: fn(E) -> PyErr,
 ) -> PyResult<Py<PyAny>>
 where
     T: Serialize + Send + 'static,
-    F: Future<Output = Result<T, Error>> + Send + 'static,
+    E: Send + 'static,
 {
     run_sync_on(
         py,
@@ -28,15 +27,15 @@ where
     )
 }
 
-fn run_sync_on<T, F>(
+fn run_sync_on<T, E>(
     py: Python<'_>,
     runtime: &Runtime,
-    future: F,
-    map_error: fn(Error) -> PyErr,
+    future: impl Future<Output = Result<T, E>> + Send + 'static,
+    map_error: fn(E) -> PyErr,
 ) -> PyResult<Py<PyAny>>
 where
     T: Serialize + Send + 'static,
-    F: Future<Output = Result<T, Error>> + Send + 'static,
+    E: Send + 'static,
 {
     if Handle::try_current().is_ok() {
         return Err(PyRuntimeError::new_err(
@@ -45,27 +44,27 @@ where
     }
 
     let result = release_gil(py, move || runtime.block_on(wait_for_sync_result(future)))?;
-    let result = map_core_result(result, map_error)?;
+    let result = map_result(result, map_error)?;
     Pythonized(result).into_pyobject(py).map(Bound::unbind)
 }
 
-pub(crate) fn run_async<T, F>(
+pub(crate) fn run_async<T, E>(
     py: Python<'_>,
-    future: F,
-    map_error: fn(Error) -> PyErr,
+    future: impl Future<Output = Result<T, E>> + Send + 'static,
+    map_error: fn(E) -> PyErr,
 ) -> PyResult<Bound<'_, PyAny>>
 where
     T: Serialize + Send + 'static,
-    F: Future<Output = Result<T, Error>> + Send + 'static,
+    E: Send + 'static,
 {
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let result = catch_future_panic(future).await?;
-        let result = map_core_result(result, map_error)?;
+        let result = map_result(result, map_error)?;
         Ok(Pythonized(result))
     })
 }
 
-fn map_core_result<T>(result: Result<T, Error>, map_error: fn(Error) -> PyErr) -> PyResult<T> {
+fn map_result<T, E>(result: Result<T, E>, map_error: fn(E) -> PyErr) -> PyResult<T> {
     match result {
         Ok(value) => Ok(value),
         Err(error) => Err(
@@ -75,9 +74,9 @@ fn map_core_result<T>(result: Result<T, Error>, map_error: fn(Error) -> PyErr) -
     }
 }
 
-async fn catch_future_panic<T, F>(future: F) -> PyResult<Result<T, Error>>
+async fn catch_future_panic<T, E, F>(future: F) -> PyResult<Result<T, E>>
 where
-    F: Future<Output = Result<T, Error>>,
+    F: Future<Output = Result<T, E>>,
 {
     AssertUnwindSafe(future)
         .catch_unwind()
@@ -85,9 +84,9 @@ where
         .map_err(panic_to_pyerr)
 }
 
-async fn wait_for_sync_result<T, F>(future: F) -> PyResult<Result<T, Error>>
+async fn wait_for_sync_result<T, E, F>(future: F) -> PyResult<Result<T, E>>
 where
-    F: Future<Output = Result<T, Error>>,
+    F: Future<Output = Result<T, E>>,
 {
     let future = catch_future_panic(future);
     tokio::pin!(future);
@@ -114,6 +113,7 @@ mod tests {
     use std::thread;
     use std::time::Instant;
 
+    use litellm_core::error::Error;
     use pyo3::panic::PanicException;
     use pyo3::types::{PyDict, PyModule};
     use serde::Serializer;

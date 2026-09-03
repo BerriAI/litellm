@@ -4,6 +4,7 @@ pub mod call_lifecycle;
 pub mod chat_completions;
 pub mod constants;
 pub mod error;
+pub mod hook_contracts;
 pub mod http_utils;
 pub mod messages;
 pub mod ocr;
