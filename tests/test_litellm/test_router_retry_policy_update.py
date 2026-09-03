@@ -582,6 +582,23 @@ def test_update_settings_keeps_the_semaphore_when_the_limit_is_unchanged():
     assert semaphore.locked() is True
 
 
+@pytest.mark.parametrize("stored", [0, -1])
+def test_update_settings_refuses_an_unusable_stored_parallel_request_limit(stored):
+    """The config API refuses these, but a row written before it did, or a
+    config.yaml, replays straight into update_settings. A negative one reaches
+    asyncio.Semaphore and raises the first time any deployment needs a limiter,
+    turning every such request into a 500, and zero silently removes the limit
+    that was in force. Neither may displace the working value."""
+    router = _build_router()
+    router.update_settings(default_max_parallel_requests=3)
+
+    router.update_settings(default_max_parallel_requests=stored)
+
+    assert router.default_max_parallel_requests == 3
+    deployment = router.model_list[0]
+    assert router._get_client(deployment=deployment, kwargs={}, client_type="max_parallel_requests")._value == 3
+
+
 def test_max_parallel_requests_cache_key_addresses_the_cached_semaphore():
     """The read site and the write site have to agree on the key, or clearing
     the cache silently misses and every deployment keeps its old limit. Pinning

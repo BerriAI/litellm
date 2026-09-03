@@ -11509,6 +11509,13 @@ class Router:
 
     def _set_default_max_parallel_requests(self, value: SupportsInt | str | None) -> None:
         limit: Final = None if value is None else int(value)
+        if limit is not None and limit < 1:
+            verbose_router_logger.warning(
+                "Ignoring default_max_parallel_requests=%s: a deployment's concurrency limiter cannot be built "
+                "from it, so the previous limit stays in effect",
+                limit,
+            )
+            return
         if limit == self.default_max_parallel_requests:
             return
         self.default_max_parallel_requests = limit
