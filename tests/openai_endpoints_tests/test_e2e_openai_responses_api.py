@@ -1,5 +1,5 @@
 import httpx
-from openai import OpenAI, BadRequestError, APIStatusError
+from openai import OpenAI, BadRequestError, NotFoundError, APIStatusError
 import pytest
 
 
@@ -105,19 +105,18 @@ def test_streaming_response():
     assert len(collected_chunks) > 0
 
 
-def test_bad_request_error():
+def test_model_not_found_error():
     client = get_test_client()
-    with pytest.raises(BadRequestError):
-        # Trigger error with invalid model name
+    with pytest.raises(NotFoundError):
         client.responses.create(model="non-existent-model", input="This should fail")
 
 
 def test_bad_request_bad_param_error():
     client = get_test_client()
     with pytest.raises(BadRequestError):
-        # Trigger error with invalid model name
+        # Out-of-range temperature on a non-reasoning model, so drop_params forwards it
         client.responses.create(
-            model="gpt-5.5", input="This should fail", temperature=2000
+            model="gpt-4.1", input="This should fail", temperature=2000
         )
 
 

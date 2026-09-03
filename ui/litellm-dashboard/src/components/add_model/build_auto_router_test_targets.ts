@@ -1,5 +1,3 @@
-import { ComplexityTiers } from "./ComplexityRouterConfig";
-
 export type AutoRouterTestMode = "chat" | "embedding";
 
 export interface AutoRouterTestTarget {
@@ -9,7 +7,8 @@ export interface AutoRouterTestTarget {
 }
 
 export interface BuildAutoRouterTestTargetsParams {
-  tiers: ComplexityTiers;
+  /** Ordered [tier name, model groups] entries of the active tier set. */
+  tiers: readonly (readonly [string, string[]])[];
   semanticMatchingEnabled: boolean;
   embeddingModel: string | undefined;
   /** The resolved default model - see resolveComplexityDefaultModel. A live fallback destination,
@@ -17,23 +16,14 @@ export interface BuildAutoRouterTestTargetsParams {
   defaultModel?: string;
 }
 
-// Keys drive iteration order; `satisfies Record<keyof ComplexityTiers, null>` makes it a
-// compile error to add a tier to ComplexityTiers without listing it here (and vice versa).
-const TIER_ORDER = Object.keys({
-  SIMPLE: null,
-  MEDIUM: null,
-  COMPLEX: null,
-  REASONING: null,
-} satisfies Record<keyof ComplexityTiers, null>) as (keyof ComplexityTiers)[];
-
 export const buildAutoRouterTestTargets = ({
   tiers,
   semanticMatchingEnabled,
   embeddingModel,
   defaultModel,
 }: BuildAutoRouterTestTargetsParams): AutoRouterTestTarget[] => {
-  const tieredByModel = TIER_ORDER.reduce<Record<string, string[]>>((acc, tier) => {
-    return (tiers[tier] ?? []).reduce((tierAcc, rawModel) => {
+  const tieredByModel = tiers.reduce<Record<string, string[]>>((acc, [tier, models]) => {
+    return models.reduce((tierAcc, rawModel) => {
       const modelGroup = rawModel?.trim();
       if (!modelGroup) return tierAcc;
       return { ...tierAcc, [modelGroup]: [...(tierAcc[modelGroup] ?? []), tier] };

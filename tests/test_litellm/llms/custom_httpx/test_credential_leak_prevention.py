@@ -7,14 +7,11 @@ Covers:
 - _raise_masked_sync_error and _raise_masked_async_error
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,

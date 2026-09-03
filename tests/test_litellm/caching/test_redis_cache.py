@@ -1,13 +1,8 @@
 import asyncio
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock
 
 from litellm.caching.redis_cache import RedisCache
@@ -20,6 +15,31 @@ def redis_no_ping():
         # Either raise an exception or return a mock that will handle the task creation
         mock_get_loop.side_effect = RuntimeError("No running event loop")
         yield
+
+
+@pytest.mark.parametrize(
+    ("namespace", "key", "expected"),
+    [
+        ("litellm", "litellm_spend_update_buffer", "litellm:litellm_spend_update_buffer"),
+        ("litellm", "litellm_config:param:general_settings", "litellm:litellm_config:param:general_settings"),
+        ("litellm", "litellm:3997c4abcdef", "litellm:3997c4abcdef"),
+        ("litellm", "spend:key:3997c4abcdef", "litellm:spend:key:3997c4abcdef"),
+        (None, "litellm_spend_update_buffer", "litellm_spend_update_buffer"),
+        ("", "litellm_spend_update_buffer", "litellm_spend_update_buffer"),
+    ],
+)
+def test_check_and_fix_namespace_prefixes_keys_sharing_the_namespace_prefix(
+    namespace, key, expected, monkeypatch, redis_no_ping
+):
+    """A key whose name merely begins with the namespace string (e.g.
+    litellm_spend_update_buffer under namespace "litellm") is not namespaced
+    yet and must still get the "namespace:" prefix; only a key already carrying
+    the delimited prefix is left alone. Without this, spend update buffers and
+    litellm_config:param:* keys reach Redis unprefixed and NOPERM under an ACL
+    scoped to the namespace pattern."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+    assert redis_cache.check_and_fix_namespace(key=key) == expected
 
 
 @pytest.mark.parametrize("namespace", [None, "litellm"])

@@ -92,7 +92,7 @@ export function FallbackGroupConfig({
       </div>
 
       {/* Visual Connection */}
-      <div className="flex items-center justify-center -my-4 z-10">
+      <div className="flex items-center justify-center -my-4 z-raised">
         <div className="bg-indigo-50 text-indigo-500 px-4 py-1 rounded-full text-xs font-bold border border-indigo-100 flex items-center gap-2 shadow-xs dark:bg-indigo-950 dark:text-indigo-300 dark:border-indigo-900">
           <ArrowDown className="w-4 h-4" />
           IF FAILS, TRY...

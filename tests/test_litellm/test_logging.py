@@ -1,27 +1,33 @@
 import ast
 import asyncio
 import json
-import os
+import logging
 import re
 import sys
+import time
+from io import StringIO
 from pathlib import Path
 from typing import List
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system-path
-import logging
-import sys
-
 import litellm
 from litellm._logging import (
+    _COLOR_LOG_FORMAT,
+    _MAX_SCRUBBED_ACCESS_ARG,
+    _PLAIN_LOG_FORMAT,
     ALL_LOGGERS,
+    AccessLogRedactionFilter,
     CorrelationContextFilter,
     CorrelationPlainFormatter,
     JsonFormatter,
+    LevelRoutingStreamHandler,
     SecretRedactionFilter,
     StdoutLogTruncationFilter,
+    _get_uvicorn_json_log_config,
     _initialize_loggers_with_handler,
+    _parse_json_logs_env,
+    _plain_log_format,
     _stdout_truncation_marker,
     _turn_on_json,
     session_id_var,
@@ -60,11 +66,10 @@ def test_json_mode_emits_one_record_per_logger(capfd):
     verbose_router_logger.info("second info from router")
     verbose_proxy_logger.info("third info from proxy")
 
-    # Capture stdout
+    # All three records are INFO, so they must route to stdout and none to stderr
     out, err = capfd.readouterr()
-    print("out", out)
-    print("err", err)
-    lines = [l for l in err.splitlines() if l.strip()]
+    assert [raw for raw in err.splitlines() if raw.strip()] == []
+    lines = [raw for raw in out.splitlines() if raw.strip()]
 
     # Expect exactly three JSON lines
     assert len(lines) == 3, f"got {len(lines)} lines, want 3: {lines!r}"
@@ -834,3 +839,342 @@ def test_set_session_id_bounds_length():
         assert len(session_id_var.get()) == 256
     finally:
         session_id_var.reset(token)
+
+
+class _FakeStream:
+    def __init__(self, tty: bool) -> None:
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+
+def test_records_below_warning_go_to_stdout_and_the_rest_to_stderr(capsys):
+    logger = logging.getLogger("test_level_routing")
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+    handler = LevelRoutingStreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    logger.addHandler(handler)
+
+    try:
+        logger.debug("d")
+        logger.info("i")
+        logger.warning("w")
+        logger.error("e")
+        logger.critical("c")
+    finally:
+        logger.handlers.clear()
+
+    out, err = capsys.readouterr()
+    assert out.splitlines() == ["DEBUG d", "INFO i"]
+    assert err.splitlines() == ["WARNING w", "ERROR e", "CRITICAL c"]
+
+
+def test_verbose_loggers_route_records_by_level():
+    for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger):
+        assert any(isinstance(h, LevelRoutingStreamHandler) for h in lg.handlers), lg.name
+
+
+@pytest.mark.parametrize(
+    "stdout_tty, stderr_tty, no_color, want_color",
+    [
+        (True, True, None, True),
+        (False, False, None, False),
+        (False, True, None, False),
+        (True, False, None, False),
+        (True, True, "1", False),
+        (True, True, "", True),
+    ],
+)
+def test_plain_log_format_colorizes_only_for_a_terminal(monkeypatch, stdout_tty, stderr_tty, no_color, want_color):
+    if no_color is None:
+        monkeypatch.delenv("NO_COLOR", raising=False)
+    else:
+        monkeypatch.setenv("NO_COLOR", no_color)
+
+    fmt = _plain_log_format(_FakeStream(stdout_tty), _FakeStream(stderr_tty))
+
+    assert fmt == (_COLOR_LOG_FORMAT if want_color else _PLAIN_LOG_FORMAT)
+    assert ("\033[" in fmt) is want_color
+
+
+def test_plain_format_carries_no_ansi_codes():
+    assert "\033[" not in _PLAIN_LOG_FORMAT
+
+
+class _Brokenstream:
+    """A write-only shim without isatty, like GUI log redirectors install."""
+
+
+class _ClosedStream:
+    closed = True
+
+    def isatty(self) -> bool:
+        raise ValueError("I/O operation on closed file")
+
+
+@pytest.mark.parametrize(
+    "stdout, stderr",
+    [
+        (None, None),
+        (_FakeStream(True), None),
+        (_Brokenstream(), _FakeStream(True)),
+        (_ClosedStream(), _FakeStream(True)),
+    ],
+)
+def test_plain_log_format_survives_hostile_streams(stdout, stderr):
+    """sys.stdout/sys.stderr can be None, shimmed, or closed; import must not crash."""
+    assert _plain_log_format(stdout, stderr) == _PLAIN_LOG_FORMAT
+
+
+def test_level_routing_handler_falls_back_to_stderr_when_stdout_is_unusable(monkeypatch, capsys):
+    logger = logging.getLogger("test_level_routing_fallback")
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+    handler = LevelRoutingStreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    logger.addHandler(handler)
+
+    try:
+        monkeypatch.setattr(sys, "stdout", None)
+        logger.info("stdout is gone")
+    finally:
+        logger.handlers.clear()
+
+    err = capsys.readouterr().err
+    assert "INFO stdout is gone" in err
+    assert "--- Logging error ---" not in err
+
+
+@pytest.mark.parametrize(
+    "value, want",
+    [
+        ("true", True),
+        ("True", True),
+        ("TRUE", True),
+        ("false", False),
+        ("False", False),
+        ("0", False),
+        ("1", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_parse_json_logs_env_enables_only_on_true(value, want):
+    """JSON_LOGS=false / 0 must not enable JSON logs (LIT-5558)."""
+    assert _parse_json_logs_env(value) is want
+
+
+def test_plain_log_format_survives_none_streams():
+    """sys.stdout/sys.stderr can be None in embedded interpreters; import must not crash."""
+    assert _plain_log_format(None, None) == _PLAIN_LOG_FORMAT
+    assert _plain_log_format(_FakeStream(True), None) == _PLAIN_LOG_FORMAT
+
+
+# ---------------------------------------------------------------------------
+# Access-log redaction (LIT-5909)
+# ---------------------------------------------------------------------------
+
+_LEAKED_KEY = "sk-mx5ous1o9Iezz5fj3pkLuA"
+
+
+def _access_record(full_path: str) -> logging.LogRecord:
+    """A record shaped exactly like the one uvicorn.access emits per request."""
+    return logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("127.0.0.1:1", "GET", full_path, "1.1", 200),
+        exc_info=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "full_path",
+    [
+        f"/key/info?key={_LEAKED_KEY}",
+        f"/global/spend/report?api_key={_LEAKED_KEY}&start_date=2026-08-01",
+        f"/key/spend/report?api_key={_LEAKED_KEY}",
+        f"/spend/logs?api_key={_LEAKED_KEY}",
+        f"/user/daily/activity?api_key={_LEAKED_KEY}",
+        f"/gemini/v1beta/models/gemini-2.0-flash:generateContent?key={_LEAKED_KEY}",
+    ],
+)
+def test_access_log_filter_redacts_a_credential_query_parameter(full_path):
+    record = _access_record(full_path)
+    assert AccessLogRedactionFilter().filter(record) is True
+    assert _LEAKED_KEY not in record.getMessage()
+    assert "REDACTED" in record.getMessage()
+
+
+def test_access_log_filter_keeps_the_record_formattable_by_uvicorn():
+    """uvicorn's AccessFormatter unpacks record.args, so the filter must scrub the
+    args in place rather than collapse them the way SecretRedactionFilter does."""
+    from uvicorn.logging import AccessFormatter
+
+    record = _access_record(f"/key/info?key={_LEAKED_KEY}")
+    AccessLogRedactionFilter().filter(record)
+    assert isinstance(record.args, tuple)
+    assert len(record.args) == 5
+
+    formatted = AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False).format(record)
+    assert _LEAKED_KEY not in formatted
+    assert "GET" in formatted
+    assert "200 OK" in formatted
+
+
+@pytest.mark.parametrize(
+    "full_path, want",
+    [
+        # The delimiter must survive so the logged request line stays well formed.
+        (f"/key/info?key={_LEAKED_KEY}&page=2", "/key/info?REDACTED&page=2"),
+        ("/download?sig=AbCd1234%2Fxy&page=2", "/download?REDACTED&page=2"),
+        (
+            f"/global/spend/report?api_key={_LEAKED_KEY}&start_date=2026-01-01",
+            "/global/spend/report?REDACTED&start_date=2026-01-01",
+        ),
+        ("/sso/callback?client_secret=abcdefgh12345&state=xyz", "/sso/callback?REDACTED&state=xyz"),
+        (f"/v1/models?token={_LEAKED_KEY}&page=2", "/v1/models?REDACTED&page=2"),
+    ],
+)
+def test_access_log_filter_keeps_the_query_delimiter(full_path, want):
+    record = _access_record(full_path)
+    AccessLogRedactionFilter().filter(record)
+    assert record.args[2] == want
+
+
+@pytest.mark.parametrize(
+    "full_path, want",
+    [
+        # Both the param name and the value are encoded, so neither is literal text
+        # the patterns can see, yet the request parser decodes it into a working key.
+        (f"/key/info?k%65y=sk%2D{_LEAKED_KEY[3:]}", "/key/info?REDACTED"),
+        (f"/key/info?k%65y=sk%2D{_LEAKED_KEY[3:]}&page=2", "/key/info?REDACTED"),
+        (f"/v1/models/sk%2D{_LEAKED_KEY[3:]}", "REDACTED"),
+        # A decoded credential must never be echoed back: it can carry a newline and
+        # forge a following log line.
+        (f"/v1/models?k%65y=sk%2D{_LEAKED_KEY[3:]}%0AINFO:%20forged", "/v1/models?REDACTED"),
+    ],
+)
+def test_access_log_filter_redacts_a_percent_encoded_credential(full_path, want):
+    record = _access_record(full_path)
+    AccessLogRedactionFilter().filter(record)
+    assert record.args[2] == want
+
+
+@pytest.mark.parametrize(
+    "full_path",
+    [
+        "/v1/models?filter=gpt%2D4o&page=2",
+        "/gemini/v1beta/models/gemini-2.0-flash%3AgenerateContent",
+    ],
+)
+def test_access_log_filter_leaves_harmless_percent_encoding_alone(full_path):
+    """Decoding is a detector, not a rewrite, so a request line with no credential
+    in it survives encoded exactly as the client sent it."""
+    record = _access_record(full_path)
+    AccessLogRedactionFilter().filter(record)
+    assert record.args[2] == full_path
+
+
+def test_access_log_filter_caps_how_much_of_a_request_target_it_scans():
+    """The request target is the only input to the secret regex an unauthenticated
+    caller controls end to end, so it is bounded before it is scanned, and the
+    dropped tail must not reach the log either."""
+    record = _access_record("/v1/models?u=" + "a://" * 8192 + f"&key={_LEAKED_KEY}")
+
+    started = time.perf_counter()
+    AccessLogRedactionFilter().filter(record)
+    elapsed = time.perf_counter() - started
+
+    scrubbed = record.args[2]
+    assert _LEAKED_KEY not in scrubbed
+    assert len(scrubbed) < 1024
+    assert elapsed < 1.0, f"scrubbing one access line took {elapsed:.2f}s"
+
+
+@pytest.mark.parametrize("chars_before_the_cut", range(1, 12))
+def test_access_log_filter_never_logs_a_half_scanned_credential(chars_before_the_cut):
+    """Cutting mid-value would leave a prefix too short for the key= pattern to match,
+    and that prefix would then be logged raw, so the cut lands on a param boundary."""
+    prefix = "/v1/models?u="
+    padding = _MAX_SCRUBBED_ACCESS_ARG - len(prefix) - len("&key=") - chars_before_the_cut
+    record = _access_record(f"{prefix}{'a' * padding}&key={_LEAKED_KEY}")
+
+    AccessLogRedactionFilter().filter(record)
+
+    assert f"key={_LEAKED_KEY[:chars_before_the_cut]}" not in record.args[2]
+
+
+def test_access_log_filter_leaves_a_credential_free_request_line_intact():
+    record = _access_record("/v1/chat/completions")
+    AccessLogRedactionFilter().filter(record)
+    assert record.getMessage() == '127.0.0.1:1 - "GET /v1/chat/completions HTTP/1.1" 200'
+
+
+def test_access_log_filter_redacts_a_record_that_carries_no_positional_args():
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg=f'127.0.0.1:1 - "GET /key/info?key={_LEAKED_KEY} HTTP/1.1" 200',
+        args=None,
+        exc_info=None,
+    )
+    assert AccessLogRedactionFilter().filter(record) is True
+    assert _LEAKED_KEY not in record.getMessage()
+
+
+def _emit_access_line(full_path: str) -> str:
+    """Hand one real record to uvicorn.access and return what a handler wrote out."""
+    from uvicorn.logging import AccessFormatter
+
+    logger = logging.getLogger("uvicorn.access")
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False))
+    saved_level, saved_propagate = logger.level, logger.propagate
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    try:
+        logger.handle(_access_record(full_path))
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(saved_level)
+        logger.propagate = saved_propagate
+    return stream.getvalue()
+
+
+def test_uvicorn_access_logger_redacts_a_credential_it_is_handed():
+    """Registration happens at litellm import; without it the filter never runs."""
+    emitted = _emit_access_line(f"/key/info?key={_LEAKED_KEY}")
+
+    assert _LEAKED_KEY not in emitted
+    assert "REDACTED" in emitted
+
+
+def test_access_redaction_survives_the_uvicorn_json_log_config():
+    """litellm hands uvicorn a dictConfig when json_logs is on. dictConfig clears a
+    logger's handlers but not its filters, so redaction has to still be attached."""
+    import logging.config
+
+    names = ("uvicorn", "uvicorn.error", "uvicorn.access")
+    saved = tuple((logging.getLogger(n), logging.getLogger(n).handlers[:], logging.getLogger(n).level) for n in names)
+    try:
+        logging.config.dictConfig(_get_uvicorn_json_log_config())
+        emitted = _emit_access_line(f"/key/info?key={_LEAKED_KEY}")
+
+        assert _LEAKED_KEY not in emitted
+        assert "REDACTED" in emitted
+    finally:
+        for lg, handlers, level in saved:
+            lg.handlers[:] = handlers
+            lg.setLevel(level)
+            lg.propagate = True

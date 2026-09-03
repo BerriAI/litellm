@@ -3,7 +3,7 @@
 import { Plus, X } from "lucide-react";
 import React from "react";
 import { useController } from "react-hook-form";
-import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,

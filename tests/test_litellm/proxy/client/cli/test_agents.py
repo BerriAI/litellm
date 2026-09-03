@@ -8,9 +8,6 @@ import pytest
 import requests
 from click.testing import CliRunner
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 from litellm.proxy.client.cli.commands.agents import (
@@ -80,8 +77,18 @@ class TestBuildAgentEnv:
         )
         assert env["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-key"
+        assert env["ENABLE_TOOL_SEARCH"] == "true"
         assert "OPENAI_BASE_URL" not in env
         assert "OPENAI_API_KEY" not in env
+
+    def test_anthropic_profile_preserves_existing_tool_search(self):
+        env = build_agent_env(
+            {"ENABLE_TOOL_SEARCH": "false"},
+            "http://localhost:4000",
+            "sk-key",
+            frozenset({"anthropic"}),
+        )
+        assert env["ENABLE_TOOL_SEARCH"] == "false"
 
     def test_anthropic_profile_drops_existing_api_key(self):
         env = build_agent_env(
@@ -99,6 +106,7 @@ class TestBuildAgentEnv:
         assert env["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
         assert env["OPENAI_API_KEY"] == "sk-key"
         assert "ANTHROPIC_BASE_URL" not in env
+        assert "ENABLE_TOOL_SEARCH" not in env
 
     def test_both_profiles_set_everything(self):
         env = build_agent_env(
@@ -108,6 +116,7 @@ class TestBuildAgentEnv:
         assert env["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
         assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-key"
         assert env["OPENAI_API_KEY"] == "sk-key"
+        assert env["ENABLE_TOOL_SEARCH"] == "true"
 
     def test_preserves_unrelated_env_and_does_not_mutate_input(self):
         base = {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "real-key"}
@@ -204,6 +213,7 @@ class TestRunAgent:
         env = calls["env"]
         assert env["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-key"
+        assert env["ENABLE_TOOL_SEARCH"] == "true"
         assert "ANTHROPIC_API_KEY" not in env
         assert "OPENAI_BASE_URL" not in env
 
@@ -221,6 +231,7 @@ class TestRunAgent:
         assert calls["env"]["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
         assert calls["env"]["OPENAI_API_KEY"] == "sk-key"
         assert "ANTHROPIC_BASE_URL" not in calls["env"]
+        assert "ENABLE_TOOL_SEARCH" not in calls["env"]
 
     def test_codex_injects_proxy_provider_args_before_user_args(self):
         calls = {}

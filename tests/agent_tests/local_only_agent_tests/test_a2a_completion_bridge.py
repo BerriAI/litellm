@@ -10,13 +10,10 @@ Prerequisites:
     - LangGraph server running on localhost:2024
 """
 
-import os
-import sys
 from uuid import uuid4
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from a2a.types import MessageSendParams, SendMessageRequest, SendStreamingMessageRequest

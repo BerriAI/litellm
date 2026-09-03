@@ -117,8 +117,10 @@ class AnthropicPassthroughLoggingHandler:
     @staticmethod
     def _cost_relevant_speed(request_body: Mapping[str, object] | None) -> str | None:
         """
-        Anthropic's ``speed=fast`` multiplies non-cache token cost, and only the request
-        carries it, so it has to reach the usage-building paths for spend to be right.
+        Anthropic's ``speed=fast`` multiplies token cost. The response usage carries the
+        served ``speed`` when the request asked for one, and ``calculate_usage`` prefers
+        that served value; this request-side value is the fallback when the response
+        omits it, so it still has to reach the usage-building paths.
         """
         speed: Final = (request_body or {}).get("speed")
         return speed if isinstance(speed, str) else None
@@ -702,6 +704,7 @@ class AnthropicPassthroughLoggingHandler:
         web_search_requests: int | None = None
         tool_search_requests: int | None = None
         inference_geo: str | None = None
+        speed_from_stream: str | None = None
         stop_reason: str | None = None
         found_usage = False
         resolved_model = model
@@ -725,6 +728,8 @@ class AnthropicPassthroughLoggingHandler:
                         cache_creation_1h = _cc.get("ephemeral_1h_input_tokens")
                     if usage.get("inference_geo") is not None:
                         inference_geo = usage.get("inference_geo")
+                    if isinstance(usage.get("speed"), str):
+                        speed_from_stream = usage.get("speed")
                     if usage.get("output_tokens") is not None:
                         output_tokens = usage.get("output_tokens")
                     found_usage = True
@@ -745,6 +750,8 @@ class AnthropicPassthroughLoggingHandler:
                         cache_read = usage.get("cache_read_input_tokens")
                     if usage.get("inference_geo") is not None:
                         inference_geo = usage.get("inference_geo")
+                    if isinstance(usage.get("speed"), str):
+                        speed_from_stream = usage.get("speed")
                     found_usage = True
         if not found_usage:
             return None
@@ -776,6 +783,8 @@ class AnthropicPassthroughLoggingHandler:
             usage_object["server_tool_use"] = _server_tool_use
         if inference_geo is not None:
             usage_object["inference_geo"] = inference_geo
+        if speed_from_stream is not None:
+            usage_object["speed"] = speed_from_stream
         usage_obj: Final = AnthropicConfig().calculate_usage(
             usage_object=usage_object, reasoning_content=None, speed=speed
         )

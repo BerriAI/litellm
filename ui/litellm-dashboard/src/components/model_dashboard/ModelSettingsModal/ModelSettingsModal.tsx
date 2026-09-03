@@ -4,7 +4,7 @@ import { ConfigType, useProxyConfig } from "@/app/(dashboard)/hooks/proxyConfig/
 import { StoreModelInDBParams, useStoreModelInDB } from "@/app/(dashboard)/hooks/storeModelInDB/useStoreModelInDB";
 import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";

@@ -216,27 +216,25 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   const canCreateKey = userRole !== "Admin Viewer" && userRole !== "proxy_admin_viewer";
 
   return (
-    <div className="mx-4 h-[75vh]">
-      <div className="grid grid-cols-1 gap-2 p-8 w-full mt-2">
-        <div className="col-span-1 flex flex-col gap-2">
-          <VirtualKeysTable
-            headerActions={
-              canCreateKey ? (
-                <CreateKey
-                  key={selectedTeam ? selectedTeam.team_id : null}
-                  team={selectedTeam as Team | null}
-                  teams={teams as Team[]}
-                  data={keys}
-                  addKey={addKey}
-                  autoOpenCreate={autoOpenCreate}
-                  prefillData={prefillData}
-                />
-              ) : undefined
-            }
-          />
-        </div>
+    <main className="h-[75vh] p-8">
+      <div className="flex h-full flex-col">
+        <VirtualKeysTable
+          headerActions={
+            canCreateKey ? (
+              <CreateKey
+                key={selectedTeam ? selectedTeam.team_id : null}
+                team={selectedTeam as Team | null}
+                teams={teams as Team[]}
+                data={keys}
+                addKey={addKey}
+                autoOpenCreate={autoOpenCreate}
+                prefillData={prefillData}
+              />
+            ) : undefined
+          }
+        />
       </div>
-    </div>
+    </main>
   );
 };
 

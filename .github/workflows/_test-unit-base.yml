@@ -149,7 +149,7 @@ jobs:
               --reruns "${RERUNS}" \
               --reruns-delay 1 \
               --durations=20 \
-              --cov=./litellm \
+              --cov=./litellm --cov=./enterprise/litellm_enterprise \
               --cov-report=xml:coverage.xml \
               --cov-config=pyproject.toml
           else
@@ -161,7 +161,7 @@ jobs:
               --reruns-delay 1 \
               --dist="${DIST}" \
               --durations=20 \
-              --cov=./litellm \
+              --cov=./litellm --cov=./enterprise/litellm_enterprise \
               --cov-report=xml:coverage.xml \
               --cov-config=pyproject.toml
           fi

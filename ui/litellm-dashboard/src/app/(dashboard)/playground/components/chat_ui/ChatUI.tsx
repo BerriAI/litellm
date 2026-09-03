@@ -1784,19 +1784,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     chatHistory.length > 0 &&
                     chatHistory[chatHistory.length - 1].role === "user" && (
                       <div className="mb-4 text-left">
-                        <div
-                          className="inline-block max-w-[80%] rounded-lg p-3.5 px-4 shadow-xs"
-                          style={{
-                            backgroundColor: "#ffffff",
-                            border: "1px solid #f0f0f0",
-                            textAlign: "left",
-                          }}
-                        >
+                        <div className="inline-block max-w-[80%] rounded-lg border border-border bg-card p-3.5 px-4 text-left text-card-foreground shadow-xs">
                           <div className="mb-1.5 flex items-center gap-2">
-                            <div
-                              className="mr-1 flex h-6 w-6 items-center justify-center rounded-full"
-                              style={{ backgroundColor: "#f5f5f5" }}
-                            >
+                            <div className="mr-1 flex h-6 w-6 items-center justify-center rounded-full bg-muted">
                               <Bot className="size-3 text-muted-foreground" aria-hidden="true" />
                             </div>
                             <strong className="text-sm capitalize">Assistant</strong>

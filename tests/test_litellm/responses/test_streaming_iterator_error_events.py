@@ -15,13 +15,10 @@ Pydantic ValidationError (previously typed as Optional[str]).
 """
 
 import json
-import os
-import sys
 from unittest.mock import Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError

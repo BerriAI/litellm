@@ -1,13 +1,9 @@
 import os
-import sys
 from datetime import datetime
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm import get_llm_provider
@@ -76,7 +72,6 @@ def test_hyperbolic_in_provider_lists():
 def test_hyperbolic_models_configuration():
     """Test that Hyperbolic models are properly configured"""
     import json
-    import os
 
     # Load model configuration directly from the JSON file
     json_path = os.path.join(

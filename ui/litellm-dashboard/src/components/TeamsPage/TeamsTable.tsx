@@ -2,6 +2,7 @@
 
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeamsTable } from "@/app/(dashboard)/hooks/teams/useTeams";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import {
   DataTable,
   DataTableFilterDrawer,
@@ -9,14 +10,17 @@ import {
   DataTableToolbar,
 } from "@/components/shared/DataTable";
 import { SearchSelect } from "@/components/shared/SearchSelect";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
+import { Download } from "lucide-react";
 import React, { useCallback, useMemo, useState } from "react";
 
 import { Team } from "../key_team_helpers/key_list";
 import { getTeamTableColumns, TEAM_TABLE_HIDDEN_COLUMNS } from "./teamTableColumns";
+import { exportTeamsToCsv } from "./teamsCsvExport";
 
 interface TeamsTableProps {
   userRole: string | null;
@@ -49,7 +53,9 @@ export function TeamsTable({ userRole, userID, onSelectTeam, onEditTeam, onDelet
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchInput, setSearchInput] = useState("");
+  const [isExporting, setIsExporting] = useState(false);
   const [searchQuery] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
+  const { accessToken } = useAuthorized();
 
   const getFilterValue = useCallback(
     (columnId: string): string | undefined => {
@@ -61,16 +67,19 @@ export function TeamsTable({ userRole, userID, onSelectTeam, onEditTeam, onDelet
 
   const isAdminView = userRole === "Admin" || userRole === "Admin Viewer";
 
-  const teamListOptions = {
-    organizationID: getFilterValue("org_id"),
-    team_alias: getFilterValue("alias"),
-    teamID: getFilterValue("team_id"),
-    search: searchQuery.trim() || undefined,
-    searchTeamIdMatch: "prefix" as const,
-    userID: isAdminView ? undefined : userID ?? undefined,
-    sortBy: sorting[0]?.id,
-    sortOrder: toSortOrder(sorting),
-  };
+  const teamListOptions = useMemo(
+    () => ({
+      organizationID: getFilterValue("org_id"),
+      team_alias: getFilterValue("alias"),
+      teamID: getFilterValue("team_id"),
+      search: searchQuery.trim() || undefined,
+      searchTeamIdMatch: "prefix" as const,
+      userID: isAdminView ? undefined : userID ?? undefined,
+      sortBy: sorting[0]?.id,
+      sortOrder: toSortOrder(sorting),
+    }),
+    [getFilterValue, searchQuery, isAdminView, userID, sorting],
+  );
 
   const {
     data: teamsResponse,
@@ -96,6 +105,16 @@ export function TeamsTable({ userRole, userID, onSelectTeam, onEditTeam, onDelet
     setColumnFilters(updaterOrValue);
     setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
   }, []);
+
+  const handleExportCsv = useCallback(async () => {
+    if (!accessToken || isExporting) return;
+    setIsExporting(true);
+    try {
+      await exportTeamsToCsv(accessToken, teamListOptions);
+    } finally {
+      setIsExporting(false);
+    }
+  }, [accessToken, isExporting, teamListOptions]);
 
   const columns = useMemo(() => {
     const columnDeps = { organizations, userRole, onSelectTeam, onEditTeam, onDeleteTeam };
@@ -159,7 +178,18 @@ export function TeamsTable({ userRole, userID, onSelectTeam, onEditTeam, onDelet
             onOpenFilters={() => setFiltersOpen(true)}
             filterLabels={FILTER_LABELS}
             formatFilterValue={formatFilterValue}
-          />
+          >
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleExportCsv}
+              disabled={isExporting}
+              data-testid="teams-export-csv"
+            >
+              <Download />
+              {isExporting ? "Exporting..." : "Export CSV"}
+            </Button>
+          </DataTableToolbar>
           <DataTableFilterDrawer
             table={table}
             open={filtersOpen}

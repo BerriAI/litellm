@@ -1,5 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import TeamMultiSelect from "./team_multi_select";
@@ -58,9 +59,9 @@ describe("TeamMultiSelect", () => {
     await user.click(combobox());
 
     expect(screen.getByText("Alpha Team")).toBeInTheDocument();
-    expect(screen.getByText("(team-1)")).toBeInTheDocument();
+    expect(screen.getByText("team-1")).toBeInTheDocument();
     expect(screen.getByText("Beta Team")).toBeInTheDocument();
-    expect(screen.getByText("(team-2)")).toBeInTheDocument();
+    expect(screen.getByText("team-2")).toBeInTheDocument();
   });
 
   it("deduplicates a team that appears on more than one page", async () => {
@@ -114,6 +115,29 @@ describe("TeamMultiSelect", () => {
 
     // Substring match because one library appends an invisible word joiner for its live region.
     expect(screen.getByText(/No teams found/)).toBeInTheDocument();
+  });
+
+  it("keeps a picked team's alias on its chip once a later search drops it from the loaded page", async () => {
+    const user = userEvent.setup();
+
+    function Controlled() {
+      const [value, setValue] = useState<string[]>([]);
+      return <TeamMultiSelect value={value} onChange={setValue} />;
+    }
+    const { rerender } = render(<Controlled />);
+
+    await user.click(combobox());
+    const matches = screen.getAllByText("Beta Team");
+    await user.click(matches[matches.length - 1]);
+
+    mockUseInfiniteTeams.mockReturnValue(
+      mockTeamsResult({ pages: [{ teams: [team("team-3", "Gamma Team")] }] }) as never,
+    );
+    rerender(<Controlled />);
+
+    const chips = document.querySelector('[data-slot="combobox-chips"]') as HTMLElement;
+    expect(within(chips).getByText("Beta Team")).toBeInTheDocument();
+    expect(within(chips).queryByText("team-2")).not.toBeInTheDocument();
   });
 
   it("passes the page size and organization filter through to the teams query", () => {

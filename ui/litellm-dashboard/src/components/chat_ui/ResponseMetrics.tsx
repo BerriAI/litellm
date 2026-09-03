@@ -7,11 +7,15 @@ import {
   DatabaseBackup,
   DollarSign,
   Hash,
+  History,
   Lightbulb,
   Wrench,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PROMPT_CACHE_CREATION_TOOLTIP, PROMPT_CACHE_READ_TOOLTIP } from "@/utils/promptCacheUsage";
+
+const RESPONSE_CACHE_TOOLTIP =
+  "This response was replayed from LiteLLM's response cache. The request never reached the provider, so it did not read from or write to the provider's own prompt cache.";
 
 export interface TokenUsage {
   completionTokens?: number;
@@ -21,6 +25,7 @@ export interface TokenUsage {
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
   cost?: number;
+  servedFromResponseCache?: boolean;
 }
 
 interface ResponseMetricsProps {
@@ -51,7 +56,22 @@ function MetricItem({ label, tooltip, icon, value }: MetricItemProps) {
   );
 }
 
+function ResponseCacheIndicator() {
+  return (
+    <MetricItem
+      label="Response Cache"
+      tooltip={RESPONSE_CACHE_TOOLTIP}
+      icon={<History className="size-3" aria-hidden="true" />}
+      value="Hit"
+    />
+  );
+}
+
 function PromptCacheChips({ usage }: { usage?: TokenUsage }) {
+  if (usage?.servedFromResponseCache) {
+    return <ResponseCacheIndicator />;
+  }
+
   const readTokens = usage?.cacheReadTokens ?? 0;
   const creationTokens = usage?.cacheCreationTokens ?? 0;
 

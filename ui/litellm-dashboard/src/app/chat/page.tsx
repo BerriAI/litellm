@@ -585,7 +585,7 @@ export default function ChatConversationPage() {
                     }
                   }
                 }}
-                className="absolute bottom-[100px] left-1/2 -translate-x-1/2 z-10 rounded-full border bg-background/75 text-muted-foreground shadow-sm backdrop-blur-md hover:bg-background/95"
+                className="absolute bottom-[100px] left-1/2 -translate-x-1/2 z-chrome rounded-full border bg-background/75 text-muted-foreground shadow-sm backdrop-blur-md hover:bg-background/95"
                 aria-label="Scroll to bottom"
               >
                 <ChevronDown className="h-3 w-3" />

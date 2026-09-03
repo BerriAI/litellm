@@ -3,6 +3,8 @@ import hashlib
 import json
 import os
 from collections.abc import Callable, Mapping
+from functools import lru_cache
+from types import MappingProxyType
 from typing import Any, Final, Literal, NamedTuple, cast
 
 import httpx
@@ -75,6 +77,24 @@ def process_azure_headers(headers: httpx.Headers | dict) -> dict:
     return {**llm_response_headers, **openai_headers}
 
 
+@lru_cache(maxsize=128)
+def _cached_entra_id_token_provider(
+    tenant_id: str,
+    client_id: str,
+    client_secret: str,
+    scope: str,
+) -> Callable[[], str]:
+    """Build (once per credential set) a bearer token provider backed by a `ClientSecretCredential`.
+
+    The credential caches the access token internally and only talks to Entra ID when it is close
+    to expiry, so reusing the provider keeps one AAD round trip per token lifetime instead of one
+    per request.
+    """
+    from azure.identity import ClientSecretCredential, get_bearer_token_provider
+
+    return get_bearer_token_provider(ClientSecretCredential(tenant_id, client_id, client_secret), scope)
+
+
 def get_azure_ad_token_from_entra_id(
     tenant_id: str,
     client_id: str,
@@ -93,8 +113,6 @@ def get_azure_ad_token_from_entra_id(
     Returns:
         callable that returns a bearer token.
     """
-    from azure.identity import ClientSecretCredential, get_bearer_token_provider
-
     verbose_logger.debug("Getting Azure AD Token from Entra ID")
 
     if tenant_id.startswith("os.environ/"):
@@ -120,9 +138,13 @@ def get_azure_ad_token_from_entra_id(
     )
     if _tenant_id is None or _client_id is None or _client_secret is None:
         raise ValueError("tenant_id, client_id, and client_secret must be provided")
-    credential: Final = ClientSecretCredential(_tenant_id, _client_id, _client_secret)
 
-    token_provider: Final = get_bearer_token_provider(credential, scope)
+    token_provider: Final = _cached_entra_id_token_provider(
+        tenant_id=_tenant_id,
+        client_id=_client_id,
+        client_secret=_client_secret,
+        scope=scope,
+    )
 
     verbose_logger.debug("token_provider %s", token_provider)
 
@@ -767,6 +789,32 @@ class BaseAzureLLM(BaseOpenAILLM):
         final_url: Final = httpx.URL(new_url).copy_with(params=query_params)
 
         return str(final_url)
+
+    @staticmethod
+    def get_azure_v1_image_url(api_base: str, api_version: str | None, route: str) -> str | None:
+        """
+        Azure's v1 surface serves images at ``/openai/v1/images/{generations,edits}`` and routes by
+        ``model`` in the request body, so any deployment path and stale ``api-version`` in
+        ``api_base`` have to be dropped.
+
+        Returns None when ``api_version`` is a dated one, which still uses the deployment route.
+        """
+        if not BaseAzureLLM._is_azure_v1_api_version(api_version):
+            return None
+
+        base_url: Final = httpx.URL(api_base)
+        openai_path_start: Final = base_url.path.find("/openai")
+        resource_base: Final = str(
+            base_url.copy_with(
+                path=base_url.path if openai_path_start == -1 else base_url.path[:openai_path_start],
+                params=httpx.QueryParams(tuple((k, v) for k, v in base_url.params.multi_items() if k != "api-version")),
+            )
+        )
+        return BaseAzureLLM._get_base_azure_url(
+            api_base=resource_base,
+            litellm_params=MappingProxyType({"api_version": api_version}),
+            route=route,
+        )
 
     @staticmethod
     def _is_azure_v1_api_version(api_version: str | None) -> bool:

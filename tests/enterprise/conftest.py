@@ -3,13 +3,9 @@
 import asyncio
 import importlib
 import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 
 
@@ -31,9 +27,6 @@ def setup_and_teardown():
     This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
     """
     curr_dir = os.getcwd()  # Get the current working directory
-    sys.path.insert(
-        0, os.path.abspath("../..")
-    )  # Adds the project directory to the system path
 
     from litellm import Router
 
@@ -41,8 +34,6 @@ def setup_and_teardown():
 
     try:
         if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
-            import litellm.proxy.proxy_server
-
             importlib.reload(litellm.proxy.proxy_server)
     except Exception as e:
         print(f"Error reloading litellm.proxy.proxy_server: {e}")

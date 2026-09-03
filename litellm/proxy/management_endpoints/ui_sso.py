@@ -29,7 +29,6 @@ from typing import (
     NoReturn,
     Optional,
     Protocol,
-    TypeVar,
     Union,
     cast,
     overload,
@@ -90,9 +89,10 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
 from litellm.proxy.auth.auth_utils import (
     _get_request_ip_address,
-    _has_user_setup_sso,
+    has_user_setup_sso,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
@@ -112,6 +112,7 @@ from litellm.proxy.management_endpoints.sso_helper_utils import (
 )
 from litellm.proxy.management_endpoints.team_endpoints import new_team, team_member_add
 from litellm.proxy.management_endpoints.types import (
+    LITELLM_USER_ROLE_HIERARCHY,
     CustomOpenID,
     get_litellm_user_role,
     is_valid_litellm_user_role,
@@ -122,6 +123,7 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_server_root_path,
 )
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SSOConfigRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
@@ -171,51 +173,16 @@ _CLI_SSO_SECRET_KEY_FRAGMENTS: Final = frozenset(
     }
 )
 
-_DbRecordT: Final = TypeVar("_DbRecordT", covariant=True)
-
-
-class _PrismaTableActions(Protocol[_DbRecordT]):
-    async def find_unique(
-        self,
-        where: Mapping[str, object],
-    ) -> _DbRecordT | None: ...
-
-    async def find_first(
-        self,
-        where: Mapping[str, object] | None = None,
-    ) -> _DbRecordT | None: ...
-
-    async def find_many(
-        self,
-        where: Mapping[str, object] | None = None,
-        include: Mapping[str, bool] | None = None,
-    ) -> Sequence[_DbRecordT]: ...
-
-    async def update(
-        self,
-        where: Mapping[str, object],
-        data: Mapping[str, object],
-    ) -> _DbRecordT: ...
-
-    async def update_many(
-        self,
-        where: Mapping[str, object],
-        data: Mapping[str, object],
-    ) -> int: ...
-
 
 class _UserMetadataRow(Protocol):
     @property
     def metadata(self) -> Mapping[str, object] | None: ...
 
 
-class _HasUserMetadataTable(Protocol):
-    @property
-    def table(self) -> "_PrismaTableActions[_UserMetadataRow]": ...
-
-
-def _user_meta_db(repo: "_HasUserMetadataTable") -> "_PrismaTableActions[_UserMetadataRow]":
-    return repo.table
+def _user_meta_db(repo: UserRepository) -> "TableActions[_UserMetadataRow]":
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
+        "TableActions[_UserMetadataRow]", repo.table
+    )
 
 
 class _SsoConfigRow(Protocol):
@@ -223,25 +190,17 @@ class _SsoConfigRow(Protocol):
     def sso_settings(self) -> Mapping[str, object] | None: ...
 
 
-class _HasSsoConfigTable(Protocol):
-    @property
-    def table(self) -> "_PrismaTableActions[_SsoConfigRow]": ...
-
-
-def _sso_config_db(repo: "_HasSsoConfigTable") -> "_PrismaTableActions[_SsoConfigRow]":
-    return repo.table
+def _sso_config_db(repo: SSOConfigRepository) -> "TableActions[_SsoConfigRow]":
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
+        "TableActions[_SsoConfigRow]", repo.table
+    )
 
 
 class _TeamDetailRow(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
 
 
-class _HasTeamDetailTable(Protocol):
-    @property
-    def table(self) -> "_PrismaTableActions[_TeamDetailRow]": ...
-
-
-def _team_detail_db(repo: "_HasTeamDetailTable") -> "_PrismaTableActions[_TeamDetailRow]":
+def _team_detail_db(repo: TeamRepository) -> "TableActions[_TeamDetailRow]":
     return repo.table
 
 
@@ -545,7 +504,7 @@ def _set_nested_metadata_value(metadata: dict[str, object], key_path: str, value
     placeholder: Final = "\x00"
     parts = key_path.replace("\\.", placeholder).split(".")
     parts = [p.replace(placeholder, ".") for p in parts]
-    current: Any = metadata
+    current: dict[str, object] = metadata
     for part in parts[:-1]:
         existing = current.get(part)
         if not isinstance(existing, dict):
@@ -875,19 +834,11 @@ def determine_role_from_groups(
         # No role mappings configured, return default_role
         return role_mappings.default_role
 
-    # Role hierarchy (highest to lowest)
-    role_hierarchy: Final = [
-        LitellmUserRoles.PROXY_ADMIN,
-        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-        LitellmUserRoles.INTERNAL_USER,
-        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-    ]
-
     # Convert user_groups to a set for efficient lookup
     user_groups_set: Final = set(user_groups) if isinstance(user_groups, list) else set()
 
     # Find the highest privilege role the user belongs to
-    for role in role_hierarchy:
+    for role in LITELLM_USER_ROLE_HIERARCHY:
         if role in role_mappings.roles:
             role_groups = role_mappings.roles[role]
             if isinstance(role_groups, list) and user_groups_set.intersection(set(role_groups)):
@@ -1160,7 +1111,7 @@ async def google_login(
             request=request,
         )
         if sso_redirect is not None:
-            _persist_return_to_cookie(sso_redirect, return_to)
+            _persist_return_to_cookie(sso_redirect, return_to, request)
         return sso_redirect
 
     from fastapi.responses import HTMLResponse
@@ -1180,7 +1131,7 @@ async def google_login(
     # helper the SSO branch uses, so /login can resume the connect flow instead of dead-ending at the
     # dashboard. One implementation → the two sign-in branches cannot diverge (and the login form always
     # renders, since the helper never raises on a bad return_to).
-    _persist_return_to_cookie(form_response, return_to)
+    _persist_return_to_cookie(form_response, return_to, request)
     return form_response
 
 
@@ -2659,7 +2610,7 @@ async def get_ui_settings(request: Request):
     _proxy_base_url: Final = os.getenv("PROXY_BASE_URL", None)
     _logout_url: Final = os.getenv("PROXY_LOGOUT_URL", None)
     _api_doc_base_url: Final = os.getenv("LITELLM_UI_API_DOC_BASE_URL", None)
-    _is_sso_enabled: Final = _has_user_setup_sso()
+    _is_sso_enabled: Final = has_user_setup_sso()
     disable_expensive_db_queries: Final = (
         proxy_state.get_proxy_state_variable("spend_logs_row_count") > MAX_SPENDLOG_ROWS_TO_QUERY
     )
@@ -2783,6 +2734,7 @@ async def _sso_return_to_redirect(
     jwt_token: str,
     redis_usage_cache,
     user_api_key_cache,
+    request: Request,
 ) -> RedirectResponse | None:
     """Resolve the post-SSO redirect for a ``return_to``, or None to fall through to the dashboard.
 
@@ -2801,7 +2753,7 @@ async def _sso_return_to_redirect(
 
     if _is_same_origin_return_path(return_to):
         redirect_response = RedirectResponse(url=return_to, status_code=303)
-        redirect_response.set_cookie(key="token", value=jwt_token)
+        set_session_token_cookie(redirect_response, request, jwt_token)
         redirect_response.delete_cookie("litellm_cp_return_to")
         return redirect_response
 
@@ -2824,7 +2776,25 @@ async def _sso_return_to_redirect(
     return None
 
 
-def _persist_return_to_cookie(response: Response, return_to: str | None) -> None:
+def set_session_token_cookie(response: Response, request: Request, jwt_token: str) -> None:
+    """Set the ``token`` session cookie shared by every sign-in path.
+
+    Not HttpOnly: the dashboard reads this cookie via ``document.cookie`` to
+    populate its own Authorization headers (see
+    ``ui/litellm-dashboard/src/utils/cookieUtils.ts``), so marking it
+    HttpOnly would break login. Secure is still required whenever the public
+    origin is HTTPS, resolved the same trust-aware way as every other
+    litellm cookie."""
+    response.set_cookie(
+        key="token",
+        value=jwt_token,
+        secure=IPAddressUtils.is_request_https(request),
+        httponly=False,
+        samesite="lax",
+    )
+
+
+def _persist_return_to_cookie(response: Response, return_to: str | None, request: Request) -> None:
     """Best-effort: persist a SAFE ``return_to`` on ``response`` as the one-shot ``litellm_cp_return_to``
     cookie so ANY sign-in path — SSO / Okta / generic OR the username/password form — can resume there
     afterwards. THIS is the single source of truth, called by every sign-in branch so they cannot
@@ -2845,6 +2815,7 @@ def _persist_return_to_cookie(response: Response, return_to: str | None) -> None
             max_age=600,
             httponly=True,
             samesite="lax",
+            secure=IPAddressUtils.is_request_https(request),
         )
 
 
@@ -3121,8 +3092,11 @@ class SSOAuthenticationHandler:
                     # incoming request is HTTP (local dev).  Without
                     # ``Secure`` the cookie is sent over plain HTTP,
                     # letting a network observer read and replay the
-                    # state value and bypass this protection.
-                    secure_flag: Final = request is None or request.url.scheme == "https"
+                    # state value and bypass this protection. Trust-aware:
+                    # honors PROXY_BASE_URL / a trusted reverse proxy's
+                    # X-Forwarded-Proto instead of only the literal scheme
+                    # litellm sees on the wire.
+                    secure_flag: Final = request is None or IPAddressUtils.is_request_https(request)
                     redirect_response.set_cookie(
                         key="litellm_oauth_state",
                         value=state_value,
@@ -3670,6 +3644,7 @@ class SSOAuthenticationHandler:
             jwt_token=jwt_token,
             redis_usage_cache=redis_usage_cache,
             user_api_key_cache=user_api_key_cache,
+            request=request,
         )
         if return_to_redirect is not None:
             return return_to_redirect
@@ -3678,7 +3653,7 @@ class SSOAuthenticationHandler:
             litellm_dashboard_ui += "?login=success"
         verbose_proxy_logger.info("Redirecting to %s", litellm_dashboard_ui)
         redirect_response: Final = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-        redirect_response.set_cookie(key="token", value=jwt_token)
+        set_session_token_cookie(redirect_response, request, jwt_token)
         return redirect_response
 
     @staticmethod
@@ -4118,7 +4093,7 @@ class SSOAuthenticationHandler:
                 )
                 if resp.status_code == 200:
                     try:
-                        userinfo_raw: Final = resp.json()
+                        userinfo_raw: Final[dict[str, object] | None] = resp.json()
                         if not userinfo_raw:
                             # JSON null (None) or empty dict ({}) — no identity claims.
                             # Treat as failure so id_token fallback can be attempted.
@@ -4279,15 +4254,7 @@ class MicrosoftSSOHandler:
         verbose_proxy_logger.debug("Extracted app roles from id_token: %s", app_roles)
 
         # Combine groups and app roles
-        user_role: LitellmUserRoles | None = None
-        if app_roles:
-            # Check if any app role is a valid LitellmUserRoles
-            for role_str in app_roles:
-                role = get_litellm_user_role(role_str)
-                if role is not None:
-                    user_role = role
-                    verbose_proxy_logger.debug("Found valid LitellmUserRoles '%s' in app_roles", role.value)
-                    break
+        user_role: Final = MicrosoftSSOHandler.get_user_role_from_app_roles(app_roles)
 
         verbose_proxy_logger.debug("Combined team_ids (groups + app roles): %s", user_team_ids)
 
@@ -4324,6 +4291,20 @@ class MicrosoftSSOHandler:
         )
         verbose_proxy_logger.debug("Microsoft SSO OpenID Response: %s", openid_response)
         return openid_response
+
+    @staticmethod
+    def get_user_role_from_app_roles(
+        app_roles: Sequence[str] | None,
+    ) -> LitellmUserRoles | None:
+        """
+        Resolve the one role LiteLLM stores for a user from their Entra app roles.
+
+        Entra does not guarantee `roles` claim ordering, so a user holding several app
+        roles resolves to the highest privilege one rather than whichever the claim
+        listed first. Roles the hierarchy does not rank (org_admin, team, customer)
+        resolve by name to stay deterministic
+        """
+        return get_litellm_user_role(tuple(app_roles or ()))
 
     @staticmethod
     def get_app_roles_from_id_token(id_token: str | None) -> list[str]:
@@ -4435,7 +4416,7 @@ class MicrosoftSSOHandler:
     ) -> tuple[list[str], str | None]:
         """Helper function to fetch and parse group data from a URL"""
         response: Final = await async_client.get(url, headers=headers)
-        response_json: Final = response.json()
+        response_json: Final[dict[str, object]] = response.json()
         response_typed: Final = await MicrosoftSSOHandler._cast_graph_api_response_dict(response=response_json)
         group_ids: Final = MicrosoftSSOHandler._get_group_ids_from_graph_api_response(response=response_typed)
         return group_ids, response_typed.get("odata_nextLink")

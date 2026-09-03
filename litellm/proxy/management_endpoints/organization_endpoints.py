@@ -14,7 +14,14 @@ Endpoints for /organization operations
 #### ORGANIZATION MANAGEMENT ####
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Annotated, Final, Protocol, overload
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # prisma types Json columns as fields.Json but reads back plain python values
+    overload,
+)
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -72,6 +79,11 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_UserTable as PrismaUserTable
 
 router: Final = APIRouter()
+
+
+class _ObjectPermissionRow(Protocol):
+    @property
+    def object_permission_id(self) -> str | None: ...
 
 
 class _UserTableClient(Protocol):
@@ -475,12 +487,11 @@ async def new_organization(
         for m in data.models:
             await can_user_call_model(m, llm_router=llm_router, user_object=user_object_correct_type)
 
-    organization_row: Final = LiteLLM_OrganizationTable(
-        **data.json(exclude_none=True),
-        object_permission_id=object_permission_id,
-        created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
-        updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
-    )
+    organization_payload: Final = _STR_OBJECT_DICT_ADAPTER.validate_python(data.json(exclude_none=True))
+    organization_payload["object_permission_id"] = object_permission_id
+    organization_payload["created_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
+    organization_payload["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
+    organization_row: Final = LiteLLM_OrganizationTable.model_validate(organization_payload)
 
     for field in LiteLLM_ManagementEndpoint_MetadataFields:
         if getattr(data, field, None) is not None:
@@ -632,7 +643,7 @@ async def update_organization(
         )
 
     # Transform UI payload to expected format
-    raw_data: Final = await request.json()
+    raw_data: Final[dict[str, object]] = await request.json()
     raw_data_with_flat_budget_fields: Final = handle_nested_budget_structure_in_organization_update_request(raw_data)
 
     # Create validated data model
@@ -679,9 +690,12 @@ async def update_organization(
     # Merge metadata from existing organization with updated metadata
     if updated_organization_row_json.get("metadata") is not None:
         existing_metadata: Final = existing_organization_row.metadata or {}
-        updated_metadata: Final = updated_organization_row_json.get("metadata", {})
+        updated_metadata: Final[dict[str, object]] = updated_organization_row_json.get("metadata", {})
         merged_metadata: Final[Mapping[str, object]] = _update_dictionary(
-            existing_dict=existing_metadata.copy(), new_dict=updated_metadata
+            existing_dict=cast(  # cast-ok: prisma de-serializes a Json column to the plain python dict it stores
+                "dict[str, object]", existing_metadata
+            ).copy(),
+            new_dict=updated_metadata,
         )
         updated_organization_row_json["metadata"] = merged_metadata
 
@@ -720,7 +734,7 @@ async def update_organization(
 
 async def handle_update_object_permission(
     data_json: dict[str, object],
-    existing_organization_row: LiteLLM_OrganizationTable,
+    existing_organization_row: _ObjectPermissionRow,
 ) -> dict[str, object]:
     """
     Handle the update of object permission for an organization.
@@ -1276,17 +1290,20 @@ async def find_member_if_email(user_email: str, prisma_client: PrismaClient) -> 
     Find a member if the user_email is in LiteLLM_UserTable
     """
 
+    not_unique_user_email_error: Final = HTTPException(
+        status_code=400,
+        detail={
+            "error": f"Unique user not found for user_email={user_email}. Potential duplicate OR non-existent user_email in LiteLLM_UserTable. Use 'user_id' instead."
+        },
+    )
     try:
-        existing_user_email_row: Final[BaseModel] = await UserRepository(prisma_client).table.find_unique(
+        existing_user_email_row: Final = await UserRepository(prisma_client).table.find_unique(
             where={"user_email": user_email}
         )
     except Exception:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": f"Unique user not found for user_email={user_email}. Potential duplicate OR non-existent user_email in LiteLLM_UserTable. Use 'user_id' instead."
-            },
-        )
+        raise not_unique_user_email_error
+    if existing_user_email_row is None:
+        raise not_unique_user_email_error
     existing_user_email_row_pydantic: Final = LiteLLM_UserTable.model_validate(existing_user_email_row.model_dump())
     return existing_user_email_row_pydantic
 
@@ -1537,7 +1554,10 @@ async def add_member_to_organization(
             _returned_user = await prisma_client.insert_data(data=new_user_defaults, table_name="user")
             if _returned_user is not None:
                 user_object = LiteLLM_UserTable.model_validate(_returned_user.model_dump())
-        elif existing_user_email_row is not None and len(existing_user_email_row) > 1:
+        elif existing_user_email_row is not None and (
+            len(existing_user_email_row)  # pyright: ignore[reportArgumentType]  # find_unique yields a row, not a list
+            > 1
+        ):
             raise HTTPException(
                 status_code=400,
                 detail={"error": "Multiple users with this email found in db. Please use 'user_id' instead."},

@@ -10,12 +10,10 @@ Tests the cost calculation for Dashscope models including:
 
 import math
 import os
-import sys
 
 import pytest
 
 # Add the project root to Python path
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.llms.dashscope.cost_calculator import (

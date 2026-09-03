@@ -4,13 +4,10 @@ These tests focus on the helper itself — not on the proxy endpoint or
 Slack integration — so they can run without the full proxy stack.
 """
 
-import os
-import sys
 from datetime import date, datetime, timezone
 from unittest.mock import MagicMock
 
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.proxy.common_utils.model_deprecation import (

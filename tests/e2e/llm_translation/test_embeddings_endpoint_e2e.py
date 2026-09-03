@@ -40,6 +40,7 @@ def _openai_embeddings_params() -> LiteLLMParamsBody:
 
 
 class TestEmbeddingsEndpoint:
+    @pytest.mark.replayable
     @pytest.mark.covers("llm.embeddings.openai.basic.nonstream.works")
     def test_embeddings_returns_vector(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
@@ -109,6 +110,7 @@ class TestEmbeddingsEndpoint:
             f"embedding vector is all zeros: {result.body[:300]}"
         )
 
+    @pytest.mark.replayable
     @pytest.mark.covers("llm.embeddings.openai.basic.nonstream.works")
     def test_array_input_returns_vectors(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
@@ -129,6 +131,7 @@ class TestEmbeddingsEndpoint:
         parsed = EmbeddingsResult.model_validate_json(result.body)
         assert len(parsed.data) == 3, f"expected 3 vectors: {result.body[:300]}"
 
+    @pytest.mark.replayable
     @pytest.mark.covers("llm.embeddings.openai.input_validation.nonstream.works")
     def test_missing_model_returns_client_error(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
@@ -141,6 +144,7 @@ class TestEmbeddingsEndpoint:
         )
         assert_client_error(result, "embeddings missing model")
 
+    @pytest.mark.replayable
     @pytest.mark.covers("llm.embeddings.openai.input_validation.nonstream.works")
     def test_missing_input_returns_error(
         self, endpoints_client: EndpointsClient, resources: ResourceManager

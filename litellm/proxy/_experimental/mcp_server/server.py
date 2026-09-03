@@ -246,11 +246,12 @@ def _mcp_meta_trace_carrier(req_ctx: object) -> dict[str, str] | None:
     """The W3C trace context (``traceparent``/``tracestate``) the MCP client
     propagated in the request's ``params._meta`` (SEP-414), or ``None``.
 
-    When present, per the OTel MCP semconv the MCP span parents to this propagated
-    context rather than to the HTTP transport (which is recorded as a link instead).
-    When absent, the span nests under the transport span of the request carrying
-    this specific message, so a streamable-HTTP session that multiplexes many
-    messages still does not glue every message under the session's first request;
+    When present, the MCP span records this propagated context as a span *link*,
+    never the parent — a remote parent would root the span in a trace whose root
+    never reaches the gateway's tracing backend. The span itself nests under the
+    transport span of the request carrying this specific message, so a
+    streamable-HTTP session that multiplexes many messages still does not glue
+    every message under the session's first request;
     see ``resolve_mcp_span_context``. The client's W3C Baggage is
     deliberately excluded: it is caller-controlled, and the otel baggage processor
     stamps allowlisted baggage keys (``litellm.team.id``, ``litellm.metadata.*``,
@@ -432,7 +433,6 @@ if MCP_AVAILABLE:
         _client_forwarded_authorization_headers,
         _resolve_openapi_tool_auth,
         _should_strip_caller_authorization,
-        _without_authorization,
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
@@ -451,6 +451,7 @@ if MCP_AVAILABLE:
         split_server_prefix_from_name,
         strip_known_server_prefix,
     )
+    from litellm.types.mcp import DEFAULT_CREDENTIAL_HEADER, without_header
 
     ######################################################
     ############ MCP Tools List REST API Response Object #
@@ -911,14 +912,17 @@ if MCP_AVAILABLE:
         the caller falls through to normal tool routing.
         """
         from litellm.proxy._experimental.mcp_server.tool_search import (
-            MCP_TOOL_CALL_TOOL_NAME,
+            AGENT_SEARCH_TOOL_NAME,
+            DEFAULT_AGENT_SEARCH_TOP_K,
             MCP_TOOL_SEARCH_TOOL_NAME,
+            VIRTUAL_TOOL_NAMES,
             coerce_top_k,
+            handle_agent_search,
             handle_mcp_tool_call,
             handle_mcp_tool_search,
         )
 
-        if name not in (MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME):
+        if name not in VIRTUAL_TOOL_NAMES:
             return None
 
         if not getattr(
@@ -951,6 +955,12 @@ if MCP_AVAILABLE:
             )
 
         assert user_api_key_auth is not None  # guaranteed by the flag check above
+        if name == AGENT_SEARCH_TOOL_NAME:
+            return await handle_agent_search(
+                query=str(args.get("query", "")),
+                top_k=coerce_top_k(args.get("top_k", DEFAULT_AGENT_SEARCH_TOP_K), default=DEFAULT_AGENT_SEARCH_TOP_K),
+                user_api_key_dict=user_api_key_auth,
+            )
         virtual_logging_obj: Final = await _build_virtual_call_logging_obj(
             name=name,
             arguments=args,
@@ -1732,7 +1742,7 @@ if MCP_AVAILABLE:
                     raw_headers=raw_headers,
                     user_api_key_auth=user_api_key_auth,
                 ):
-                    extra_headers = _without_authorization(extra_headers)
+                    extra_headers = without_header(extra_headers, DEFAULT_CREDENTIAL_HEADER)
         elif is_client_forwarded_mode:
             if not withhold_forwarded_authorization:
                 extra_headers = _client_forwarded_authorization_headers(
@@ -2179,6 +2189,7 @@ if MCP_AVAILABLE:
             try:
                 prompts = await global_mcp_server_manager.get_prompts_from_server(
                     server=server,
+                    user_api_key_auth=user_api_key_auth,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=True,  # Always add server prefix
@@ -2232,6 +2243,7 @@ if MCP_AVAILABLE:
             try:
                 resources = await global_mcp_server_manager.get_resources_from_server(
                     server=server,
+                    user_api_key_auth=user_api_key_auth,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=True,  # Always add server prefix
@@ -2283,6 +2295,7 @@ if MCP_AVAILABLE:
             try:
                 resource_templates = await global_mcp_server_manager.get_resource_templates_from_server(
                     server=server,
+                    user_api_key_auth=user_api_key_auth,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=True,  # Always add server prefix
@@ -3201,6 +3214,7 @@ if MCP_AVAILABLE:
 
         return await global_mcp_server_manager.get_prompt_from_server(
             server=server,
+            user_api_key_auth=user_api_key_auth,
             prompt_name=original_prompt_name,
             arguments=arguments,
             mcp_auth_header=server_auth_header,
@@ -3251,6 +3265,7 @@ if MCP_AVAILABLE:
 
         return await global_mcp_server_manager.read_resource_from_server(
             server=server,
+            user_api_key_auth=user_api_key_auth,
             url=url,
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
@@ -3713,6 +3728,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: UserAPIKeyAuth | None,
         client_ip: str | None,
         allowed_server_ids: set[str] | None = None,
+        raw_headers: Mapping[str, str] | None = None,
     ) -> None:
         """Fail fast with HTTP 401 for MCP servers that need user auth but
         didn't receive it on this request. Covers both gateway-managed OAuth2
@@ -3845,11 +3861,19 @@ if MCP_AVAILABLE:
                 and server.auth_type == MCPAuth.oauth2_token_exchange
                 and oauth2_headers
                 and len(mcp_servers or []) == 1
+                and server.server_id
+                in frozenset(
+                    allowed.server_id
+                    for allowed in await _get_allowed_mcp_servers(
+                        user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
+                    )
+                )
             ):
                 await global_mcp_server_manager.preflight_token_exchange(
                     server=server,
                     oauth2_headers=oauth2_headers,
                     user_api_key_auth=user_api_key_auth,
+                    raw_headers=raw_headers,
                 )
 
             # Pass-through OAuth: when the admin has opted a server into
@@ -4178,6 +4202,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_client_ip,
                 allowed_server_ids=toolset_allowed_server_ids,
+                raw_headers=raw_headers,
             )
 
             # Pre-flight auth check for pass-through servers.  Must run after
@@ -4501,6 +4526,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_sse_client_ip,
                 allowed_server_ids=toolset_allowed_server_ids,
+                raw_headers=raw_headers,
             )
 
             # Pre-flight auth check for pass-through servers: surface upstream

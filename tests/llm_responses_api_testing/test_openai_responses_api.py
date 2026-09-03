@@ -1,5 +1,4 @@
 import os
-import sys
 import pytest
 import asyncio
 from typing import Optional, cast
@@ -10,7 +9,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 import time
 import json
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
@@ -1818,7 +1816,7 @@ async def test_extra_body_merges_with_request_data(extra_body_mock_response_data
         await litellm.aresponses(
             model="gpt-5.5",
             input="Test",
-            temperature=0.7,
+            temperature=1,
             max_output_tokens=20,
             extra_body={
                 "custom_field": "custom_value",

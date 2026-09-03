@@ -9,13 +9,9 @@
 
 import importlib
 import os
-import sys
 from pathlib import Path
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 
 import litellm
@@ -379,6 +375,9 @@ def isolate_litellm_state():
         litellm.in_memory_llm_clients_cache.flush_cache()
     image_handling_module.in_memory_cache.flush_cache()
     _reset_module_level_aws_auth_caches()
+    # litellm.get_model_info() memoizes ModelInfo built from litellm.model_cost, so a
+    # test that rebinds the cost map leaves later tests pricing against the old map.
+    litellm_utils_module._invalidate_model_cost_lowercase_map()
 
     # Clear all callback lists to prevent cross-test contamination
     if hasattr(litellm, "callbacks"):
@@ -422,6 +421,7 @@ def isolate_litellm_state():
 
     litellm_utils_module._runtime_registered_model_cost.clear()
     litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
+    litellm_utils_module._invalidate_model_cost_lowercase_map()
 
     for _router in tuple(litellm_router_module._live_routers):
         litellm_router_module._live_routers.discard(_router)
@@ -462,7 +462,6 @@ def setup_and_teardown():
     Use this sparingly - most state should be handled by isolate_litellm_state.
     Only reload modules here if absolutely necessary.
     """
-    sys.path.insert(0, os.path.abspath("../.."))
 
     import litellm
 

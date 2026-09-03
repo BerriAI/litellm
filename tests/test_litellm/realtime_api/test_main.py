@@ -1,13 +1,12 @@
 import asyncio
-import os
-import sys
 import time
-from unittest.mock import MagicMock
+from types import TracebackType
+from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 
+import litellm
 from litellm.realtime_api import main as realtime_main
 from litellm.realtime_api.main import _with_resolved_session_model
 
@@ -193,3 +192,105 @@ def test_client_secret_forwards_nested_transcription_model_untouched(monkeypatch
     session = captured["request_data"]["session"]
     assert session["model"] == "gpt-4o-realtime-preview"
     assert session["input_audio_transcription"]["model"] == "whisper-1"
+
+
+class _CapturingConnect:
+    def __init__(self) -> None:
+        self.url: str | None = None
+
+    def __call__(self, url: str, **kwargs: object) -> "_CapturingConnect":
+        self.url = url
+        return self
+
+    async def __aenter__(self) -> MagicMock:
+        return MagicMock()
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_azure_health_check_probes_ga_transcription_url_for_transcription_model(local_model_cost_map):
+    """Regression for LIT-6240: transcription-only models (mode audio_transcription
+    in the cost map) are GA-only and 400 on the beta path, so the health probe
+    must hit /openai/v1/realtime?intent=transcription like real calls do."""
+    connect = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="gpt-realtime-whisper",
+            custom_llm_provider="azure",
+            api_key="fake-key",
+            api_base="https://my-endpoint.openai.azure.com",
+            api_version="2025-04-01-preview",
+        )
+    assert connect.url == "wss://my-endpoint.openai.azure.com/openai/v1/realtime?intent=transcription"
+
+
+@pytest.mark.asyncio
+async def test_azure_health_check_stays_on_ga_when_deployment_registration_overwrites_mode(
+    local_model_cost_map, monkeypatch
+):
+    """In a live proxy, Router._register_deployment_in_model_cost writes the
+    operator's deployment model_info (mode: realtime) over the catalog entry for
+    azure/gpt-realtime-whisper, so mode alone misreads the model as speech-capable
+    and the probe regresses to the beta path. supported_endpoints survives that
+    registration and must keep the probe on the GA transcription path."""
+    polluted = {**litellm.model_cost["azure/gpt-realtime-whisper"], "mode": "realtime"}
+    monkeypatch.setitem(litellm.model_cost, "azure/gpt-realtime-whisper", polluted)
+    connect = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="gpt-realtime-whisper",
+            custom_llm_provider="azure",
+            api_key="fake-key",
+            api_base="https://my-endpoint.openai.azure.com",
+            api_version="2025-04-01-preview",
+        )
+    assert connect.url == "wss://my-endpoint.openai.azure.com/openai/v1/realtime?intent=transcription"
+
+
+def test_transcription_only_detection_falls_back_to_mode(local_model_cost_map):
+    """azure/whisper-1 declares mode audio_transcription but no supported_endpoints,
+    so only the mode signal can classify it as transcription-only."""
+    assert realtime_main._is_transcription_only_realtime_model("whisper-1", "azure") is True
+
+
+def test_transcription_only_detection_rejects_speech_model(local_model_cost_map):
+    assert realtime_main._is_transcription_only_realtime_model("gpt-realtime-mini", "azure") is False
+
+
+@pytest.mark.asyncio
+async def test_azure_health_check_keeps_beta_path_for_speech_model():
+    connect = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="gpt-4o-realtime-preview",
+            custom_llm_provider="azure",
+            api_key="fake-key",
+            api_base="https://my-endpoint.openai.azure.com",
+            api_version="2024-10-01-preview",
+        )
+    assert connect.url == (
+        "wss://my-endpoint.openai.azure.com/openai/realtime"
+        "?api-version=2024-10-01-preview&deployment=gpt-4o-realtime-preview"
+    )
+
+
+@pytest.mark.asyncio
+async def test_azure_health_check_honors_deployment_realtime_protocol():
+    connect = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="gpt-4o-realtime-preview",
+            custom_llm_provider="azure",
+            api_key="fake-key",
+            api_base="https://my-endpoint.openai.azure.com",
+            api_version="2024-10-01-preview",
+            model_params={"realtime_protocol": "GA"},
+        )
+    assert connect.url == "wss://my-endpoint.openai.azure.com/openai/v1/realtime?model=gpt-4o-realtime-preview"

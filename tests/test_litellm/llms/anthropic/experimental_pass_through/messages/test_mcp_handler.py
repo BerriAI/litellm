@@ -1,10 +1,7 @@
-import os
-import sys
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
     anthropic_messages_handler,

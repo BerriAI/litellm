@@ -73,6 +73,7 @@ except ImportError:
 from litellm.a2a_protocol.card_resolver import (
     LiteLLMA2ACardResolver,
     get_agent_card_url,
+    normalize_agent_card_interfaces,
 )
 from litellm.a2a_protocol.exception_mapping_utils import (
     handle_a2a_localhost_retry,
@@ -85,7 +86,7 @@ A2ACardResolver: Final = LiteLLMA2ACardResolver
 
 
 def _set_usage_on_logging_obj(
-    kwargs: dict[str, Any],
+    kwargs: Mapping[str, object],
     prompt_tokens: int,
     completion_tokens: int,
 ) -> None:
@@ -98,7 +99,7 @@ def _set_usage_on_logging_obj(
         completion_tokens: Number of output tokens
     """
     litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
-    if litellm_logging_obj is not None:
+    if isinstance(litellm_logging_obj, Logging):
         usage: Final = litellm.Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -108,7 +109,7 @@ def _set_usage_on_logging_obj(
 
 
 def _set_agent_id_on_logging_obj(
-    kwargs: dict[str, Any],
+    kwargs: Mapping[str, object],
     agent_id: str | None,
 ) -> None:
     """
@@ -122,7 +123,7 @@ def _set_agent_id_on_logging_obj(
         return
 
     litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
-    if litellm_logging_obj is not None:
+    if isinstance(litellm_logging_obj, Logging):
         # Set agent_id directly on model_call_details (same pattern as custom_llm_provider)
         litellm_logging_obj.model_call_details["agent_id"] = agent_id
 
@@ -131,7 +132,7 @@ _A2A_COST_PARAM_KEYS: Final = ("cost_per_query", "input_cost_per_token", "output
 
 
 def _set_litellm_params_on_logging_obj(
-    kwargs: dict[str, Any],
+    kwargs: Mapping[str, object],
     litellm_params: Mapping[str, object],
 ) -> None:
     """
@@ -143,18 +144,22 @@ def _set_litellm_params_on_logging_obj(
     context, so merge the pricing keys in rather than replacing the dict.
     """
     logging_obj: Final = kwargs.get("litellm_logging_obj")
-    if logging_obj is None:
+    if not isinstance(logging_obj, Logging):
         return
 
-    cost_params = {key: litellm_params[key] for key in _A2A_COST_PARAM_KEYS if litellm_params.get(key) is not None}
+    cost_params: Final = {
+        key: litellm_params[key] for key in _A2A_COST_PARAM_KEYS if litellm_params.get(key) is not None
+    }
     if not cost_params:
         return
 
-    existing: Final = logging_obj.model_call_details.get("litellm_params") or {}
-    logging_obj.model_call_details["litellm_params"] = {**existing, **cost_params}
+    logging_obj.model_call_details["litellm_params"] = {
+        **(logging_obj.model_call_details.get("litellm_params") or {}),
+        **cost_params,
+    }
 
 
-def _get_a2a_model_info(a2a_client: "A2AClientType", kwargs: dict[str, Any]) -> str:
+def _get_a2a_model_info(a2a_client: "A2AClientType", kwargs: Mapping[str, object]) -> str:
     """
     Extract agent info and set model/custom_llm_provider for cost tracking.
 
@@ -174,7 +179,7 @@ def _get_a2a_model_info(a2a_client: "A2AClientType", kwargs: dict[str, Any]) -> 
 
     # Set on litellm_logging_obj if available (for standard logging payload)
     litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
-    if litellm_logging_obj is not None:
+    if isinstance(litellm_logging_obj, Logging):
         litellm_logging_obj.model = model
         litellm_logging_obj.custom_llm_provider = custom_llm_provider
         litellm_logging_obj.model_call_details["model"] = model
@@ -497,7 +502,7 @@ async def asend_message(
     response: Final = LiteLLMSendMessageResponse.from_a2a_response(a2a_response, request_id=str(request.id))
 
     # Calculate token usage from request and response
-    response_dict: Final[dict[str, object]] = a2a_response.model_dump(mode="json", exclude_none=True)
+    response_dict: Final[dict[str, object]] = a2a_response.root.model_dump(mode="json", exclude_none=True)
     (
         prompt_tokens,
         completion_tokens,
@@ -782,13 +787,17 @@ async def create_a2a_client(
     if extra_headers:
         verbose_proxy_logger.debug("A2A client created with extra_headers=%s", list(extra_headers.keys()))
 
+    resolver: Final = A2ACardResolver(httpx_client=httpx_client, base_url=base_url)
+    agent_card: Final = normalize_agent_card_interfaces(
+        await resolver.get_agent_card(http_kwargs={"headers": extra_headers} if extra_headers else None)
+    )
+
     a2a_client: Final = await create_client(  # pyright: ignore[reportOptionalCall]
-        base_url,
+        agent_card,
         client_config=ClientConfig(  # pyright: ignore[reportOptionalCall]
             httpx_client=httpx_client,
             streaming=streaming,
         ),
-        resolver_http_kwargs={"headers": extra_headers} if extra_headers else None,
     )
     # Stash LiteLLM-owned handles on the client so the localhost-retry path can reuse
     # the configured httpx client and this agent's headers without excavating
@@ -799,9 +808,7 @@ async def create_a2a_client(
         if extra_headers
         else None
     )
-    agent_card: Final = getattr(a2a_client, "_card", None)
-    if agent_card is not None:
-        a2a_client._litellm_agent_card = agent_card
+    a2a_client._litellm_agent_card = agent_card
 
     verbose_logger.info("A2A client created for %s", base_url)
 

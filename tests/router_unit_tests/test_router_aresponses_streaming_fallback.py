@@ -10,14 +10,11 @@ Targets the four helpers introduced on Router:
   - _aresponses_streaming_iterator
 """
 
-import os
-import sys
 from typing import Any, AsyncIterator, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm import Router
 from litellm.types.llms.openai import (

@@ -2636,6 +2636,93 @@ async def test_list_batches_unparseable_row_does_not_truncate_pagination():
 
 
 @pytest.mark.asyncio
+async def test_list_batches_fills_a_page_past_a_full_page_of_unparseable_rows():
+    """A page whose rows all fail to parse must still let the caller advance.
+
+    ``has_more`` came from the raw fetch while ``last_id`` came from the parsed
+    survivors, so a full page of corrupt rows answered ``data: []``,
+    ``last_id: None``, ``has_more: True``, and a client following ``last_id``
+    could not move past them.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    rows = [_managed_batch_row(i) for i in range(5)]
+    for corrupt_row in rows[2:4]:
+        corrupt_row.file_object = "{ not valid json"
+    prisma_client = _fake_managed_object_table(rows)
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+
+    pages = await _walk_batch_pages(
+        proxy_managed_files, UserAPIKeyAuth(user_id="test-user"), limit=1
+    )
+
+    assert [[batch.id for batch in page["data"]] for page in pages] == [
+        [rows[4].unified_object_id],
+        [rows[1].unified_object_id],
+        [rows[0].unified_object_id],
+    ]
+    assert [page["has_more"] for page in pages] == [True, True, False]
+
+
+_DEEP_BATCH_SCAN_ROW_COUNT = 2000
+_DEEP_BATCH_SCAN_QUERY_BUDGET = 10
+
+
+@pytest.mark.asyncio
+async def test_list_batches_bounds_the_queries_a_deep_unparseable_run_costs():
+    """A tiny limit behind thousands of corrupt rows must not turn one request into thousands of queries."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    rows = [_managed_batch_row(0)] + [
+        _managed_batch_row(index, file_object="{ not valid json")
+        for index in range(1, _DEEP_BATCH_SCAN_ROW_COUNT + 1)
+    ]
+    prisma_client = _fake_managed_object_table(rows)
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+
+    page = await proxy_managed_files.list_user_batches(
+        user_api_key_dict=UserAPIKeyAuth(user_id="test-user"), limit=1
+    )
+
+    assert [batch.id for batch in page["data"]] == [rows[0].unified_object_id]
+    assert page["has_more"] is False
+    assert (
+        prisma_client.db.litellm_managedobjecttable.find_many.call_count
+        <= _DEEP_BATCH_SCAN_QUERY_BUDGET
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_batches_reads_one_chunk_when_the_first_one_fills_the_page():
+    """The widened chunk must stay off the common path, where the newest rows already fill the page."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    rows = [_managed_batch_row(index) for index in range(_DEEP_BATCH_SCAN_ROW_COUNT)]
+    prisma_client = _fake_managed_object_table(rows)
+
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+
+    page = await proxy_managed_files.list_user_batches(
+        user_api_key_dict=UserAPIKeyAuth(user_id="test-user"), limit=2
+    )
+
+    assert [batch.id for batch in page["data"]] == [
+        rows[-1].unified_object_id,
+        rows[-2].unified_object_id,
+    ]
+    assert page["has_more"] is True
+    assert prisma_client.db.litellm_managedobjecttable.find_many.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_return_unified_file_id_includes_expires_at():
     from litellm.types.llms.openai import OpenAIFileObject
 

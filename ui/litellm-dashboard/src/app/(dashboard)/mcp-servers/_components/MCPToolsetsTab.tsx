@@ -14,7 +14,7 @@ import {
   getProxyBaseUrl,
 } from "@/components/networking";
 import { MCPToolset, MCPToolsetTool } from "@/components/mcp_tools/types";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

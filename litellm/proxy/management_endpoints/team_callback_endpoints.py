@@ -28,6 +28,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.callback_config_validation import callback_config_error
 from litellm.proxy.common_utils.callback_utils import (
     _CALLBACK_VAR_ENCRYPTED_PREFIX,
     decrypt_callback_vars,
@@ -49,6 +50,16 @@ router: Final = APIRouter()
 
 
 _CALLBACK_VARS_REDACTED: Final = "***REDACTED***"
+
+
+def _callback_config_error(message: str) -> HTTPException:
+    return HTTPException(status_code=400, detail={"error": message})  # mutable-ok: FastAPI detail contract
+
+
+def _validate_team_callback(data: "AddTeamCallback") -> None:
+    error: Final = callback_config_error(data.callback_name, data.callback_vars)
+    if error is not None:
+        raise _callback_config_error(error)
 
 
 def _redact_callback_secrets(metadata: Any) -> Any:
@@ -241,7 +252,7 @@ async def add_team_callbacks(
     Use this if if you want different teams to have different success/failure callbacks
 
     Parameters:
-    - callback_name (Literal["langfuse", "langsmith", "gcs"], required): The name of the callback to add
+    - callback_name (str, required): The name of the callback to add, e.g. "langfuse", "langsmith", "gcs", "newrelic". The value is validated against the callbacks that support team-scoped credentials
     - callback_type (Literal["success", "failure", "success_and_failure"], required): The type of callback to add. One of:
         - "success": Callback for successful LLM calls
         - "failure": Callback for failed LLM calls
@@ -251,11 +262,14 @@ async def add_team_callbacks(
         - langfuse_secret_key: The secret key for the Langfuse callback
         - langfuse_secret: The secret for the Langfuse callback
         - langfuse_host: The host for the Langfuse callback
+        - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
         - gcs_bucket_name: The name of the GCS bucket
         - gcs_path_service_account: The path to the GCS service account
         - langsmith_api_key: The API key for the Langsmith callback
         - langsmith_project: The project for the Langsmith callback
         - langsmith_base_url: The base URL for the Langsmith callback
+        - newrelic_api_key: The ingest license key for the team's New Relic account; routes both LLM/agent traces and cost metrics to that account. Requires the proxy to run with LITELLM_OTEL_V2=true, otherwise this callback is rejected with a 400
+        - newrelic_region: The New Relic region for the team's account ("us" or "eu"), riding the team's own key
 
     Example curl:
     ```
@@ -304,6 +318,8 @@ async def add_team_callbacks(
             user_api_key_dict=user_api_key_dict,
         )
 
+        _validate_team_callback(data)
+
         # store team callback settings in metadata
         team_metadata = _existing_team.metadata
         team_callback_settings: list[dict] = team_metadata.get("logging")  # will be dict of type AddTeamCallback
@@ -338,6 +354,9 @@ async def add_team_callbacks(
             # team_model_add for the full rationale.
             include={"object_permission": True},  # mutable-ok: prisma include takes a dict literal
         )
+
+        if new_team_row is None:
+            raise _callback_error(400, f"Team id = {team_id} does not exist. Please use a different team id.")
 
         # Without this a newly registered callback stays dormant for existing keys.
         await _refresh_cached_team(

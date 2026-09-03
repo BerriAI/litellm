@@ -1,8 +1,6 @@
 import asyncio
 import contextlib
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, patch, call
 
 import pytest
@@ -17,9 +15,6 @@ from litellm.proxy.guardrails.guardrail_hooks.aim.aim import (
 from litellm.proxy.proxy_server import StreamingCallbackError, UserAPIKeyAuth
 from litellm.types.utils import ModelResponseStream, ModelResponse
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 

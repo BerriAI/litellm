@@ -138,33 +138,39 @@ describe("RequestLogsPanel", () => {
     respondWith([]);
   });
 
-  describe("multi-call session collapsing", () => {
-    const sessionRows = [
-      logEntry({ request_id: "req-mcp", call_type: "call_mcp_tool", session_id: "sess-1", session_total_count: 3 }),
-      logEntry({ request_id: "req-llm", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
-      logEntry({ request_id: "req-llm-2", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
-    ];
-
-    it("collapses a multi-call session to a single representative row", async () => {
-      respondWith(sessionRows);
+  describe("server-grouped session pagination (#38060)", () => {
+    it("requests session-grouped pages of 10 rows by default", async () => {
       renderPanel();
 
-      await waitFor(() => expect(row("req-mcp") ?? row("req-llm") ?? row("req-llm-2")).not.toBeNull());
-
-      const rendered = ["req-mcp", "req-llm", "req-llm-2"].filter((id) => row(id) !== null);
-      expect(rendered).toHaveLength(1);
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.params?.group_by_session).toBe(true);
+      expect(lastCall()?.page_size).toBe(10);
     });
 
-    it("prefers an LLM call over an MCP call as the session's representative", async () => {
-      respondWith(sessionRows);
+    it("renders every row the server returns without client-side collapsing", async () => {
+      respondWith([
+        logEntry({ request_id: "req-a", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-b", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-c", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+      ]);
       renderPanel();
 
-      await waitFor(() => expect(row("req-llm")).not.toBeNull());
-      expect(row("req-mcp")).toBeNull();
+      await waitFor(() => expect(row("req-a")).not.toBeNull());
+      expect(row("req-b")).not.toBeNull();
+      expect(row("req-c")).not.toBeNull();
     });
 
-    it("shows the session's call count and composition on the representative row", async () => {
-      respondWith(sessionRows);
+    it("shows the session's call count on the server-picked representative row", async () => {
+      respondWith([
+        logEntry({
+          request_id: "req-llm",
+          call_type: "acompletion",
+          session_id: "sess-1",
+          session_total_count: 3,
+          session_llm_count: 2,
+          mcp_tool_call_count: 1,
+        }),
+      ]);
       renderPanel();
 
       await waitFor(() => expect(row("req-llm")).not.toBeNull());
@@ -296,6 +302,7 @@ describe("RequestLogsPanel", () => {
       if (!byIdCall) throw new Error("expected a by-id uiSpendLogsCall");
       expect(byIdCall.page).toBe(1);
       expect(byIdCall.page_size).toBe(1);
+      expect(byIdCall.params?.group_by_session).toBeUndefined();
     });
 
     it("closing the drawer removes ?log_id= from the URL and closes the drawer", async () => {
@@ -431,6 +438,44 @@ describe("RequestLogsPanel", () => {
       await waitFor(() => expect(drawer()).toHaveAttribute("data-log-id", "req-unenriched"));
       expect(urlParams().get("session_id")).toBe("sess-1");
       expect(drawer()).toHaveAttribute("data-session-id", "sess-1");
+    });
+  });
+
+  describe("hide health checks", () => {
+    const toggle = () => screen.getByRole("switch", { name: "Hide Health Checks" });
+
+    it("defaults to showing health checks and refetches without them from page 1 when toggled on", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.params?.exclude_internal_health_checks).toBe(false);
+      expect(toggle()).not.toBeChecked();
+
+      await user.click(toggle());
+
+      await waitFor(() => expect(lastCall()?.params?.exclude_internal_health_checks).toBe(true));
+      expect(lastCall()?.page).toBe(1);
+      expect(toggle()).toBeChecked();
+      expect(sessionStorage.getItem("excludeInternalHealthChecks")).toBe("true");
+    });
+
+    it("restores the persisted toggle from sessionStorage", async () => {
+      sessionStorage.setItem("excludeInternalHealthChecks", "true");
+      renderPanel();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.params?.exclude_internal_health_checks).toBe(true);
+      expect(toggle()).toBeChecked();
+    });
+
+    it("falls back to showing health checks when the persisted value is malformed", async () => {
+      sessionStorage.setItem("excludeInternalHealthChecks", "{not json");
+      renderPanel();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.params?.exclude_internal_health_checks).toBe(false);
+      expect(toggle()).not.toBeChecked();
     });
   });
 

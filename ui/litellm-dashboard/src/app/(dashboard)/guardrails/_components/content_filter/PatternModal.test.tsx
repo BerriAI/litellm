@@ -142,4 +142,13 @@ describe("PatternModal", () => {
 
     expect(screen.queryByText("Add prebuilt pattern")).not.toBeInTheDocument();
   });
+
+  it("should not raise the dialog above the portalled popup layer its pattern combobox renders into", async () => {
+    renderModal();
+    await screen.findByText("Add prebuilt pattern");
+
+    const content = document.querySelector('[data-slot="dialog-content"]');
+    expect(content).not.toBeNull();
+    expect(Array.from(content!.classList).filter((cls) => cls.startsWith("z-"))).toEqual(["z-popup"]);
+  });
 });

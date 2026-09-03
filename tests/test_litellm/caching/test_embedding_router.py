@@ -1,8 +1,5 @@
-import os
-import sys
 from unittest.mock import MagicMock
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm.caching._embedding_router import (

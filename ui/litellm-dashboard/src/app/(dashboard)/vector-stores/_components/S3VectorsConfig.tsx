@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { CircleHelp, Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
-import { Field, FieldError, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import {
   Combobox,
   ComboboxContent,

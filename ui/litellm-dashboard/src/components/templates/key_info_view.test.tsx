@@ -561,6 +561,32 @@ describe("KeyInfoView", () => {
       );
     });
 
+    it("links each model chip to the models page filtered to that model group", async () => {
+      const keyData = { ...MOCK_KEY_DATA, models: ["gpt-4.1", "anthropic/*"] };
+      renderWithProviders(
+        <KeyInfoView keyData={keyData} onClose={() => {}} keyId="test-key-id" onKeyDataUpdate={() => {}} teams={[]} />,
+      );
+
+      expect(await screen.findByRole("link", { name: "gpt-4.1" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/models-and-endpoints?model_group=gpt-4.1"),
+      );
+      expect(screen.getByRole("link", { name: "anthropic/*" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/models-and-endpoints?model_group=anthropic%2F*"),
+      );
+    });
+
+    it("keeps the all-proxy-models grant chip non-clickable", async () => {
+      const keyData = { ...MOCK_KEY_DATA, models: ["all-proxy-models"] };
+      renderWithProviders(
+        <KeyInfoView keyData={keyData} onClose={() => {}} keyId="test-key-id" onKeyDataUpdate={() => {}} teams={[]} />,
+      );
+
+      expect((await screen.findAllByText("all-proxy-models")).length).toBeGreaterThan(0);
+      expect(screen.queryByRole("link", { name: "all-proxy-models" })).not.toBeInTheDocument();
+    });
+
     it("renders no team link when the key has no team", async () => {
       renderWithProviders(
         <KeyInfoView

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { modelAvailableCall } from "@/components/networking";
-import { fetchAvailableModelsForTeam } from "./fetch_models";
+import { modelAvailableCall, modelHubCall } from "@/components/networking";
+import { fetchAvailableModels, fetchAvailableModelsForTeam } from "./fetch_models";
 
 vi.mock("@/components/networking", () => ({
   modelAvailableCall: vi.fn(),
@@ -8,6 +8,7 @@ vi.mock("@/components/networking", () => ({
 }));
 
 const modelAvailableCallMock = vi.mocked(modelAvailableCall);
+const modelHubCallMock = vi.mocked(modelHubCall);
 
 describe("fetchAvailableModelsForTeam", () => {
   beforeEach(() => {
@@ -29,5 +30,35 @@ describe("fetchAvailableModelsForTeam", () => {
     modelAvailableCallMock.mockResolvedValue({ data: [] });
 
     expect(await fetchAvailableModelsForTeam("token", "team-123")).toEqual([]);
+  });
+});
+
+describe("fetchAvailableModels", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("carries the reasoning capabilities the model hub reports for each group", async () => {
+    modelHubCallMock.mockResolvedValue({
+      data: [
+        { model_group: "smart", mode: "chat", supports_reasoning: true, supported_reasoning_efforts: ["low", "high"] },
+        { model_group: "plain", mode: "chat", supports_reasoning: false },
+      ],
+    });
+
+    expect(await fetchAvailableModels("token")).toEqual([
+      { model_group: "plain", mode: "chat" },
+      { model_group: "smart", mode: "chat", supports_reasoning: true, supported_reasoning_efforts: ["low", "high"] },
+    ]);
+  });
+
+  it.each([
+    ["an error payload in place of the list", { data: { error: "no access" } }],
+    ["a missing data key", {}],
+    ["no body at all", undefined],
+  ])("returns an empty list on %s rather than throwing", async (_label, response) => {
+    modelHubCallMock.mockResolvedValue(response);
+
+    expect(await fetchAvailableModels("token")).toEqual([]);
   });
 });

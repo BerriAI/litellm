@@ -1,13 +1,9 @@
-import sys
 import os
 import traceback
 from dotenv import load_dotenv
 from fastapi import Request
 from datetime import datetime
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from litellm import Router
 import pytest
 import litellm
@@ -2298,6 +2294,7 @@ def search_tools():
                 "search_provider": "perplexity",
                 "api_key": "test-api-key",
                 "api_base": "https://api.perplexity.ai",
+                "mode": "turbo",
             },
         },
         {
@@ -2306,6 +2303,7 @@ def search_tools():
                 "search_provider": "perplexity",
                 "api_key": "test-api-key-2",
                 "api_base": "https://api.perplexity.ai",
+                "mode": "turbo",
             },
         },
     ]
@@ -2397,6 +2395,7 @@ async def test_asearch_with_fallbacks_helper(search_tools):
         assert "search_provider" in kwargs
         assert kwargs["search_provider"] == "perplexity"
         assert "api_key" in kwargs
+        assert kwargs["mode"] == "turbo"
         assert kwargs["query"] == "helper test query"
         return mock_response
 

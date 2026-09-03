@@ -312,8 +312,23 @@ def _matchable_names(relative_path: str) -> frozenset[str]:
     )
 
 
+def _workflow_named_tokens() -> frozenset[str]:
+    """Test tokens a GitHub Actions job names directly.
+
+    A CircleCI `-k` that deselects a file no longer means the file runs nowhere once a
+    workflow names it, so the slice check has to credit those the same way the census does.
+    """
+    return _invoked_test_tokens(
+        scalar
+        for path in _config_files()
+        if path != CIRCLECI_CONFIG
+        for scalar in _scalars(yaml.safe_load(path.read_text(encoding="utf-8")), path.name)
+    )
+
+
 def _deselected_everywhere(allowlist: Allowlist) -> tuple[Finding, ...]:
     slices: Final = _slices()
+    named_by_workflow: Final = _workflow_named_tokens()
     globbed: Final = tuple(
         path
         for path in _test_files()
@@ -326,6 +341,7 @@ def _deselected_everywhere(allowlist: Allowlist) -> tuple[Finding, ...]:
         )
         for path in globbed
         if not allowlist.covers_test(path)
+        and not any(_token_covers(token, path) for token in named_by_workflow)
         and not any(slice_.claims(path, _matchable_names(path)) for slice_ in slices)
     )
 

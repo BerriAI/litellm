@@ -1,7 +1,7 @@
 import copy
 import enum
 import re
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -25,12 +25,20 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ProviderField
 from litellm.utils import _add_path_to_api_base, supports_tool_choice
 
+if TYPE_CHECKING:
+    import tiktoken
+
 
 class AzureFoundryErrorStrings(str, enum.Enum):
     SET_EXTRA_PARAMETERS_TO_PASS_THROUGH = "Set extra-parameters to 'pass-through'"
 
 
-NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = ("thinking_blocks", "provider_specific_fields", "cache_control")
+NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
+    "thinking_blocks",
+    "reasoning_content",
+    "provider_specific_fields",
+    "cache_control",
+)
 
 
 class AzureAIStudioConfig(OpenAIConfig):
@@ -173,7 +181,8 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         - Azure AI Studio doesn't support content as a list. This handles:
             1. Strips message fields that are not part of the OpenAI chat-completions
-               schema (thinking_blocks, provider_specific_fields, cache_control).
+               schema (thinking_blocks, reasoning_content, provider_specific_fields,
+               cache_control).
                Azure AI Foundry backends set additionalProperties=false and reject
                these with "Extra inputs are not permitted", which breaks multi-turn
                Anthropic-format clients that echo thinking blocks back as history.
@@ -252,7 +261,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

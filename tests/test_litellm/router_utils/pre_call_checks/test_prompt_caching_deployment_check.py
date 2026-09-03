@@ -1,12 +1,9 @@
 import asyncio
 import copy
-import os
-import sys
 from typing import List, cast
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.caching.dual_cache import DualCache
@@ -151,6 +148,25 @@ async def test_async_filter_deployments_narrows_prompt_above_model_minimum():
     )
 
     assert filtered == [deployments[1]]
+
+
+@pytest.mark.asyncio
+async def test_async_filter_deployments_does_not_pin_when_target_order_is_set():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
+    messages = _messages(word_count=5000)
+
+    await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-2", messages=messages, tools=None)
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs={"_target_order": 2},
+    )
+
+    assert filtered == deployments
 
 
 @pytest.mark.asyncio

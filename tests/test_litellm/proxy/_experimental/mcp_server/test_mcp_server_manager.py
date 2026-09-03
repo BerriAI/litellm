@@ -18,7 +18,6 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListFault
 
 # Add the parent directory to the path so we can import litellm
-sys.path.insert(0, "../../../../../")
 
 
 import httpx
@@ -31,6 +30,7 @@ from mcp.types import (
     TextResourceContents,
 )
 from mcp.types import Tool as MCPTool
+from pydantic import AnyUrl
 
 from litellm.constants import MCP_METADATA_TIMEOUT
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -44,7 +44,6 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     _obo_retry_applies,
     _resolve_openapi_tool_auth,
     _should_strip_caller_authorization,
-    _without_authorization,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -2272,7 +2271,9 @@ class TestMCPServerManager:
         """prompts/list on an OBO server must exchange the caller's bearer, not connect with none."""
         server = self._token_exchange_server("te-prompts")
         st = await self._capture_subject_token(
-            lambda m: m.get_prompts_from_server(server=server, raw_headers={"authorization": "Bearer subj-jwt"})
+            lambda m: m.get_prompts_from_server(
+                server=server, user_api_key_auth=None, raw_headers={"authorization": "Bearer subj-jwt"}
+            )
         )
         assert st == "subj-jwt"
 
@@ -2281,7 +2282,9 @@ class TestMCPServerManager:
         """resources/list on an OBO server must exchange the caller's bearer."""
         server = self._token_exchange_server("te-resources")
         st = await self._capture_subject_token(
-            lambda m: m.get_resources_from_server(server=server, raw_headers={"authorization": "Bearer subj-jwt"})
+            lambda m: m.get_resources_from_server(
+                server=server, user_api_key_auth=None, raw_headers={"authorization": "Bearer subj-jwt"}
+            )
         )
         assert st == "subj-jwt"
 
@@ -2292,6 +2295,7 @@ class TestMCPServerManager:
         st = await self._capture_subject_token(
             lambda m: m.read_resource_from_server(
                 server=server,
+                user_api_key_auth=None,
                 url="https://up.example.com/r",
                 raw_headers={"authorization": "Bearer subj-jwt"},
             )
@@ -2309,7 +2313,9 @@ class TestMCPServerManager:
             auth_type=MCPAuth.none,
         )
         st = await self._capture_subject_token(
-            lambda m: m.get_prompts_from_server(server=server, raw_headers={"authorization": "Bearer subj-jwt"})
+            lambda m: m.get_prompts_from_server(
+                server=server, user_api_key_auth=None, raw_headers={"authorization": "Bearer subj-jwt"}
+            )
         )
         assert st is None
 
@@ -2405,6 +2411,104 @@ class TestMCPServerManager:
 
         assert client._resolved_auth is not None
         assert "authorization" not in {k.lower() for k in (client.extra_headers or {})}
+
+    @staticmethod
+    def _esb_server(header: "str | None") -> MCPServer:
+        return MCPServer(
+            server_id="esb",
+            name="esb-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            client_id="cid",
+            client_secret="csec",
+            token_url="https://idp.example.com/token",
+            upstream_token_header=header,
+            static_headers={"Authorization": "Bearer static-upstream-mcp-token"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_static_authorization_survives_a_minted_token_aimed_elsewhere(self):
+        """The dual-credential case: an ESB wants the gateway-minted token on its own header while a
+        separate static Authorization passes through to the origin. Dropping Authorization here (the
+        old name-blind behavior) deletes the second credential and the upstream 401s."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Ok(StaticHeaderAuth("Bearer MINTED-M2M", header_name="esb-oauth"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        client = await manager._create_mcp_client(
+            self._esb_server("esb-oauth"),
+            extra_headers={"Authorization": "Bearer static-upstream-mcp-token"},
+        )
+
+        assert client._resolved_auth is not None
+        assert (client.extra_headers or {})["Authorization"] == "Bearer static-upstream-mcp-token"
+
+    @pytest.mark.asyncio
+    async def test_a_minted_token_aimed_at_the_static_header_still_wins_that_slot(self):
+        """The negative class of the test above: when the two DO collide the resolver-owned
+        credential is still authoritative, so the knob cannot be used to smuggle a second
+        credential into the same slot."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Ok(StaticHeaderAuth("Bearer MINTED-M2M", header_name="esb-oauth"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        client = await manager._create_mcp_client(
+            self._esb_server("esb-oauth"),
+            extra_headers={"esb-oauth": "Bearer signer-jwt", "X-Trace": "keep-me"},
+        )
+
+        assert client._resolved_auth is not None
+        assert "esb-oauth" not in {k.lower() for k in (client.extra_headers or {})}
+        assert (client.extra_headers or {})["X-Trace"] == "keep-me"
+
+    @pytest.mark.asyncio
+    async def test_a_differently_cased_injected_header_is_still_recognised_as_the_collision(self):
+        """HTTP header names are case-insensitive, so the conflict check must be too.
+
+        A case-sensitive check reports no conflict and hands the injected header back untouched, so
+        the returned extra_headers still carries a second copy of the credential slot for every
+        downstream consumer of that dict. httpx happens to collapse the two on the wire, which is
+        exactly why this needs pinning rather than being left to luck.
+        """
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="esb-oauth"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        client = await manager._create_mcp_client(
+            self._esb_server("esb-oauth"),
+            extra_headers={"ESB-OAuth": "Bearer injected", "X-Trace": "keep"},
+        )
+
+        assert client._resolved_auth is not None
+        assert not any(k.lower() == "esb-oauth" for k in (client.extra_headers or {}))
+        assert (client.extra_headers or {})["X-Trace"] == "keep"
+
+    def test_without_header_drops_only_the_named_header(self):
+        from litellm.types.mcp import DEFAULT_CREDENTIAL_HEADER, without_header
+
+        headers = {"Authorization": "Bearer a", "esb-oauth": "Bearer b", "X-Trace": "t"}
+        assert without_header(headers, "ESB-OAuth") == {"Authorization": "Bearer a", "X-Trace": "t"}
+        assert without_header(headers, DEFAULT_CREDENTIAL_HEADER) == {"esb-oauth": "Bearer b", "X-Trace": "t"}
 
     @pytest.mark.asyncio
     async def test_preflight_token_exchange_challenges_on_rejected_subject(self):
@@ -2625,14 +2729,16 @@ class TestMCPServerManager:
         if captured_extra_headers:
             assert "authorization" not in {k.lower() for k in captured_extra_headers}
 
-    def test_without_authorization_drops_only_the_credential(self):
+    def test_without_header_drops_only_the_credential(self):
+        from litellm.types.mcp import without_header
+
         # None / empty -> None
-        assert _without_authorization(None) is None
-        assert _without_authorization({}) is None
+        assert without_header(None, "Authorization") is None
+        assert without_header({}, "Authorization") is None
         # Only Authorization present -> nothing left -> None (case-insensitive)
-        assert _without_authorization({"authorization": "Bearer x"}) is None
+        assert without_header({"authorization": "Bearer x"}, "Authorization") is None
         # Authorization dropped, other headers kept
-        assert _without_authorization({"Authorization": "Bearer x", "X-Trace-Id": "t"}) == {"X-Trace-Id": "t"}
+        assert without_header({"Authorization": "Bearer x", "X-Trace-Id": "t"}, "Authorization") == {"X-Trace-Id": "t"}
 
     @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_passthrough_forwards_authorization_with_admission_header(
@@ -3156,7 +3262,7 @@ class TestMCPServerManager:
             new_callable=AsyncMock,
             return_value=mock_client,
         ):
-            prompts = await manager.get_prompts_from_server(server, add_prefix=True)
+            prompts = await manager.get_prompts_from_server(server, user_api_key_auth=None, add_prefix=True)
 
         mock_client.list_prompts.assert_awaited_once()
         assert len(prompts) == 1
@@ -3191,6 +3297,7 @@ class TestMCPServerManager:
         ):
             result = await manager.get_prompt_from_server(
                 server=server,
+                user_api_key_auth=None,
                 prompt_name="hello",
                 arguments={"tone": "casual"},
             )
@@ -3236,6 +3343,7 @@ class TestMCPServerManager:
         ):
             result = await manager.get_resources_from_server(
                 server=server,
+                user_api_key_auth=None,
                 mcp_auth_header="auth",
                 extra_headers={"X-Test": "1"},
                 add_prefix=True,
@@ -3293,6 +3401,7 @@ class TestMCPServerManager:
         ):
             result = await manager.get_resource_templates_from_server(
                 server=server,
+                user_api_key_auth=None,
                 mcp_auth_header="auth",
                 extra_headers=None,
                 add_prefix=False,
@@ -3343,6 +3452,7 @@ class TestMCPServerManager:
         ) as mock_create_client:
             result = await manager.read_resource_from_server(
                 server=server,
+                user_api_key_auth=None,
                 url="https://example.com/resource",
                 mcp_auth_header="auth",
                 extra_headers={"X-Test": "1"},
@@ -9642,12 +9752,37 @@ class TestMaterializeAuthHeaders:
         from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
             ClientCredentialsBearerAuth,
         )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+            ClientCredentialsConfig,
+        )
 
         async def _refetch(_stale: str):
             return None
 
-        headers = await _materialize_auth_headers(ClientCredentialsBearerAuth("m2m-token", _refetch))
+        default_carrier = ClientCredentialsConfig()
+        headers = await _materialize_auth_headers(ClientCredentialsBearerAuth("m2m-token", _refetch, default_carrier))
         assert headers == {"Authorization": "Bearer m2m-token"}
+
+    @pytest.mark.asyncio
+    async def test_materialize_follows_the_minted_token_to_a_custom_header(self):
+        # The OpenAPI arm reads header_name off the auth object rather than assuming Authorization,
+        # so it carries the knob with no per-arm change. This pins that it stays that way.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _materialize_auth_headers,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
+            ClientCredentialsBearerAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+            ClientCredentialsConfig,
+        )
+
+        async def _refetch(_stale: str):
+            return None
+
+        esb_carrier = ClientCredentialsConfig(header_name="esb-oauth")
+        headers = await _materialize_auth_headers(ClientCredentialsBearerAuth("m2m-token", _refetch, esb_carrier))
+        assert headers == {"esb-oauth": "Bearer m2m-token"}
 
     @pytest.mark.asyncio
     async def test_noop_and_none_materialize_to_none(self):
@@ -10883,3 +11018,294 @@ class TestOpenApiHandlerRelaysUpstreamAuth:
 
         assert result.isError is True
         assert "upstream returned HTTP 503" in result.content[0].text
+
+
+class TestLitellmAdmissionKeyIsNeverTheSubjectToken:
+    """The bearer that admitted the request as a LiteLLM key must not be sent to the IdP as the
+    RFC 8693 subject_token (or ID-JAG assertion). Only ``x-litellm-api-key`` disambiguates: with it
+    present, ``Authorization`` is the caller's own identity token and is exchanged as before."""
+
+    _ADMISSION_KEY: Final = "sk-litellm-virtual-key"
+    _USER_TOKEN: Final = "user-idp-jwt"
+
+    @staticmethod
+    def _token_exchange_server(server_id: str) -> MCPServer:
+        return MCPServer(
+            server_id=server_id,
+            name=f"{server_id}-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+
+    @staticmethod
+    def _id_jag_server(server_id: str) -> MCPServer:
+        return MCPServer(
+            server_id=server_id,
+            name=f"{server_id}-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_id_jag,
+            client_id="cid",
+            client_secret="csec",
+            token_exchange_endpoint="https://idp.example.com/token",
+            id_jag_resource_token_endpoint="https://resource-as.example.com/token",
+        )
+
+    @staticmethod
+    def _recording_provider() -> MagicMock:
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        provider: Final = MagicMock()
+        provider.resolve_credentials = AsyncMock(
+            return_value=Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+        )
+        return provider
+
+    @staticmethod
+    def _subjects_seen_by(provider: MagicMock) -> list[str | None]:
+        return [
+            call.args[0].inbound_token.get_secret_value() if call.args[0].inbound_token else None
+            for call in provider.resolve_credentials.call_args_list
+        ]
+
+    @staticmethod
+    def _manager_with_recording_client() -> MCPServerManager:
+        manager: Final = MCPServerManager()
+        client: Final = AsyncMock()
+        client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        client.list_prompts = AsyncMock(return_value=[])
+        client.read_resource = AsyncMock(return_value=ReadResourceResult(contents=[]))
+        manager._create_mcp_client = AsyncMock(return_value=client)
+        return manager
+
+    @staticmethod
+    def _subject_token_given_to_client(manager: MCPServerManager) -> str | None:
+        return manager._create_mcp_client.call_args.kwargs["subject_token"]
+
+    async def _call_tool_subject(self, server: MCPServer, oauth2_headers, raw_headers, user_api_key_auth):
+        manager: Final = self._manager_with_recording_client()
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            proxy_logging_obj=None,
+            user_api_key_auth=user_api_key_auth,
+        )
+        return self._subject_token_given_to_client(manager)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag])
+    async def test_tools_call_with_only_the_litellm_key_has_no_subject(self, auth_type):
+        server = (
+            self._token_exchange_server("te-call")
+            if auth_type == MCPAuth.oauth2_token_exchange
+            else self._id_jag_server("jag-call")
+        )
+        subject_token = await self._call_tool_subject(
+            server,
+            oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_rest_tools_call_with_only_the_litellm_key_has_no_subject(self):
+        """The REST facade passes no oauth2_headers; the bearer is reached through raw_headers only."""
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-rest"),
+            oauth2_headers=None,
+            raw_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_tools_call_exchanges_the_user_token_when_x_litellm_api_key_admits(self):
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-split"),
+            oauth2_headers={"Authorization": f"Bearer {self._USER_TOKEN}"},
+            raw_headers={
+                "X-LiteLLM-API-Key": f"Bearer {self._ADMISSION_KEY}",
+                "authorization": f"Bearer {self._USER_TOKEN}",
+            },
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token == self._USER_TOKEN
+
+    @pytest.mark.asyncio
+    async def test_tools_call_with_an_empty_x_litellm_api_key_has_no_subject(self):
+        """Admission ignores an empty ``x-litellm-api-key`` and validates ``Authorization`` instead."""
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-empty-header"),
+            oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            raw_headers={"x-litellm-api-key": "", "authorization": f"Bearer {self._ADMISSION_KEY}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_tools_call_with_the_same_litellm_key_in_both_headers_has_no_subject(self):
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-same-key"),
+            oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            raw_headers={
+                "x-litellm-api-key": self._ADMISSION_KEY,
+                "authorization": f"Bearer {self._ADMISSION_KEY}",
+            },
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_tools_call_with_a_different_litellm_key_in_authorization_has_no_subject(self):
+        """A second ``sk-`` virtual key next to ``x-litellm-api-key`` is still a gateway credential."""
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-second-key"),
+            oauth2_headers={"Authorization": "Bearer sk-another-virtual-key"},
+            raw_headers={
+                "x-litellm-api-key": f"Bearer {self._ADMISSION_KEY}",
+                "authorization": "Bearer sk-another-virtual-key",
+            },
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_tools_call_exchanges_the_bearer_when_jwt_admission_left_api_key_unset(self):
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-jwt"),
+            oauth2_headers={"Authorization": f"Bearer {self._USER_TOKEN}"},
+            raw_headers={"authorization": f"Bearer {self._USER_TOKEN}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key=None, user_id="alice"),
+        )
+        assert subject_token == self._USER_TOKEN
+
+    @pytest.mark.asyncio
+    async def test_tools_list_with_only_the_litellm_key_has_no_subject(self):
+        manager: Final = self._manager_with_recording_client()
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=[])
+        await manager._get_tools_from_server(
+            server=self._token_exchange_server("te-list-key"),
+            oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert self._subject_token_given_to_client(manager) is None
+
+    @pytest.mark.asyncio
+    async def test_prompts_list_with_only_the_litellm_key_has_no_subject(self):
+        manager: Final = self._manager_with_recording_client()
+        await manager.get_prompts_from_server(
+            server=self._token_exchange_server("te-prompts-key"),
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+            raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+        )
+        assert self._subject_token_given_to_client(manager) is None
+
+    @pytest.mark.asyncio
+    async def test_resource_read_with_only_the_litellm_key_has_no_subject(self):
+        manager: Final = self._manager_with_recording_client()
+        await manager.read_resource_from_server(
+            server=self._token_exchange_server("te-read-key"),
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+            url=AnyUrl("file:///notes.txt"),
+            raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+        )
+        assert self._subject_token_given_to_client(manager) is None
+
+    @pytest.mark.asyncio
+    async def test_resource_read_exchanges_the_user_token_when_x_litellm_api_key_admits(self):
+        manager: Final = self._manager_with_recording_client()
+        await manager.read_resource_from_server(
+            server=self._token_exchange_server("te-read-split"),
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+            url=AnyUrl("file:///notes.txt"),
+            raw_headers={
+                "x-litellm-api-key": f"Bearer {self._ADMISSION_KEY}",
+                "authorization": f"Bearer {self._USER_TOKEN}",
+            },
+        )
+        assert self._subject_token_given_to_client(manager) == self._USER_TOKEN
+
+    @pytest.mark.asyncio
+    async def test_openapi_call_never_hands_the_litellm_key_to_the_exchanger(self):
+        provider: Final = self._recording_provider()
+        manager = MCPServerManager(cred_provider=provider)
+        server = MCPServer(
+            server_id="te-openapi",
+            name="te_openapi",
+            server_name="te_openapi",
+            url=None,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+            spec_path="https://api.example.com/openapi.json",
+        )
+        user_auth = UserAPIKeyAuth(api_key="hashed-key", user_id="alice")
+
+        await manager.resolve_openapi_upstream_auth(
+            mcp_server=server,
+            oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+            mcp_auth_header=None,
+            user_api_key_auth=user_auth,
+            forwarded_headers=None,
+        )
+        await manager.resolve_openapi_upstream_auth(
+            mcp_server=server,
+            oauth2_headers={"Authorization": f"Bearer {self._USER_TOKEN}"},
+            raw_headers={
+                "x-litellm-api-key": f"Bearer {self._ADMISSION_KEY}",
+                "authorization": f"Bearer {self._USER_TOKEN}",
+            },
+            mcp_auth_header=None,
+            user_api_key_auth=user_auth,
+            forwarded_headers=None,
+        )
+        assert self._subjects_seen_by(provider) == [None, self._USER_TOKEN]
+
+    @pytest.mark.asyncio
+    async def test_preflight_challenges_instead_of_exchanging_the_litellm_key(self):
+        provider: Final = self._recording_provider()
+        manager = MCPServerManager(cred_provider=provider)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_token_exchange(
+                server=self._token_exchange_server("te-preflight-key"),
+                oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+                user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+                raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+            )
+        assert exc_info.value.status_code == 401
+        headers = exc_info.value.headers or {}
+        assert "resource_metadata" in (headers.get("WWW-Authenticate") or headers.get("www-authenticate") or "")
+        assert self._subjects_seen_by(provider) == []
+
+    @pytest.mark.asyncio
+    async def test_preflight_exchanges_the_user_token_when_x_litellm_api_key_admits(self):
+        provider: Final = self._recording_provider()
+        manager = MCPServerManager(cred_provider=provider)
+
+        await manager.preflight_token_exchange(
+            server=self._token_exchange_server("te-preflight-split"),
+            oauth2_headers={"Authorization": f"Bearer {self._USER_TOKEN}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+            raw_headers={
+                "x-litellm-api-key": f"Bearer {self._ADMISSION_KEY}",
+                "authorization": f"Bearer {self._USER_TOKEN}",
+            },
+        )
+        assert self._subjects_seen_by(provider) == [self._USER_TOKEN]

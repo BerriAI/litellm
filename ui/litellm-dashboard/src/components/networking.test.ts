@@ -104,6 +104,45 @@ describe("loginCall - storeLoginToken integration", () => {
   });
 });
 
+describe("modelInfoCall", () => {
+  let currentFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    currentFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = currentFetch;
+  });
+
+  it("sends the exact model name as the model query param and leaves search alone", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({ data: [] }) } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.modelInfoCall(
+      "token",
+      "user",
+      "Admin",
+      2,
+      25,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+      "gpt-4",
+    );
+
+    const parsed = new URL(mockFetch.mock.calls[0][0] as string, "http://example.com");
+    expect(parsed.pathname).toBe("/v2/model/info");
+    expect(parsed.searchParams.get("model")).toBe("gpt-4");
+    expect(parsed.searchParams.has("search")).toBe(false);
+    expect(parsed.searchParams.get("page")).toBe("2");
+    expect(parsed.searchParams.get("exclude_auto_routers")).toBe("true");
+  });
+});
+
 describe("daily activity helpers", () => {
   const startTime = new Date("2025-02-12T00:00:00.000Z");
   const endTime = new Date("2025-02-19T00:00:00.000Z");
@@ -456,6 +495,64 @@ describe("teamInfoCall", () => {
     const [url] = mockFetch.mock.calls[0];
     const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
     expect(parsed.searchParams.has("team_id")).toBe(false);
+  });
+});
+
+describe("uiSpendLogsCall exclude_internal_health_checks serialization", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const mockOkFetch = () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ data: [], total: 0, page: 1, page_size: 50, total_pages: 0 }),
+    } as any);
+    global.fetch = mockFetch as any;
+    return mockFetch;
+  };
+
+  const callWith = (params: Parameters<typeof Networking.uiSpendLogsCall>[0]["params"]) =>
+    Networking.uiSpendLogsCall({
+      accessToken: "token",
+      start_date: "2026-01-01 00:00:00",
+      end_date: "2026-01-02 00:00:00",
+      params,
+    });
+
+  const lastUrl = (mockFetch: ReturnType<typeof vi.fn>) => {
+    const [url] = mockFetch.mock.calls.at(-1) ?? [];
+    return new URL(url as string, "http://example.com");
+  };
+
+  it("appends exclude_internal_health_checks=true when the toggle is on", async () => {
+    const mockFetch = mockOkFetch();
+
+    await callWith({ exclude_internal_health_checks: true });
+
+    expect(lastUrl(mockFetch).searchParams.get("exclude_internal_health_checks")).toBe("true");
+  });
+
+  it("omits exclude_internal_health_checks when the toggle is off", async () => {
+    const mockFetch = mockOkFetch();
+
+    await callWith({ exclude_internal_health_checks: false });
+
+    expect(lastUrl(mockFetch).searchParams.has("exclude_internal_health_checks")).toBe(false);
+  });
+
+  it("omits exclude_internal_health_checks when the param is absent", async () => {
+    const mockFetch = mockOkFetch();
+
+    await callWith({});
+
+    expect(lastUrl(mockFetch).searchParams.has("exclude_internal_health_checks")).toBe(false);
   });
 });
 

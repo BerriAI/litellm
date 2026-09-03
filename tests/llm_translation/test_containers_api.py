@@ -5,12 +5,10 @@ Tests the container files endpoints using LiteLLM SDK methods.
 """
 
 import os
-import sys
 import time
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.containers import (
     create_container,

@@ -1,5 +1,4 @@
 import os
-import sys
 
 import pytest
 
@@ -10,9 +9,6 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
 from litellm.types.llms.openai import FileSearchTool, WebSearchOptions
 from litellm.types.utils import ModelResponse, StandardBuiltInToolsParams
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 
@@ -514,6 +510,95 @@ def test_gemini_3x_web_search_billed_per_query(model, local_model_cost_map):
         f"Expected {web_search_requests} x ${per_query_cost} = ${expected_cost} "
         f"per_query search fee, got ${cost}"
     )
+
+
+@pytest.mark.parametrize(
+    "model,custom_llm_provider",
+    [
+        ("gemini/gemini-2.5-flash", "gemini"),
+        ("vertex_ai/gemini-2.5-flash", "vertex_ai"),
+    ],
+)
+def test_gemini_2x_maps_grounding_billed_at_maps_rate(model, custom_llm_provider, local_model_cost_map):
+    """
+    Grounding with Google Maps is its own SKU: a Maps-only grounded prompt on Gemini 2.x bills the
+    $0.025 Maps per-prompt fee, not the $0.035 Google Search fee it was previously conflated with,
+    and not $0 as on Vertex AI where webSearchQueries is never populated for Maps.
+    Regression for https://github.com/BerriAI/litellm/issues/35906
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    model_info = litellm.get_model_info(model)
+    expected_cost = model_info["google_maps_grounding_cost_per_query"]
+    assert expected_cost == pytest.approx(0.025)
+
+    usage = Usage(
+        prompt_tokens=15,
+        completion_tokens=100,
+        total_tokens=115,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=15, google_maps_grounding_requests=1),
+    )
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=None,
+        custom_llm_provider=custom_llm_provider,
+        standard_built_in_tools_params=None,
+    )
+    assert cost == pytest.approx(expected_cost)
+
+
+def test_gemini_3x_maps_grounding_billed_per_query(local_model_cost_map):
+    """Gemini 3.x bills Maps grounding per executed query: N queries cost N * $0.014."""
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    model = "vertex_ai/gemini-3.5-flash"
+    model_info = litellm.get_model_info(model)
+    assert model_info["web_search_billing_unit"] == "per_query"
+    expected_cost = model_info["google_maps_grounding_cost_per_query"] * 2
+
+    usage = Usage(
+        prompt_tokens=15,
+        completion_tokens=100,
+        total_tokens=115,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=15, google_maps_grounding_requests=2),
+    )
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=None,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+    assert cost == pytest.approx(expected_cost)
+    assert cost == pytest.approx(0.028)
+
+
+def test_gemini_combined_search_and_maps_costs_are_additive(local_model_cost_map):
+    """A prompt grounded with both Google Search and Google Maps pays both fees."""
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    model = "gemini/gemini-3.5-flash"
+    model_info = litellm.get_model_info(model)
+    search_rate = model_info["search_context_cost_per_query"]["search_context_size_medium"]
+    maps_rate = model_info["google_maps_grounding_cost_per_query"]
+
+    usage = Usage(
+        prompt_tokens=15,
+        completion_tokens=100,
+        total_tokens=115,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=15, web_search_requests=2, google_maps_grounding_requests=1
+        ),
+    )
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=None,
+        custom_llm_provider="gemini",
+        standard_built_in_tools_params=None,
+    )
+    assert cost == pytest.approx(search_rate * 2 + maps_rate)
 
 
 def test_gemini_2x_web_search_still_billed_per_prompt(local_model_cost_map):

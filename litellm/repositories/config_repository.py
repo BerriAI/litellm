@@ -77,7 +77,7 @@ class ConfigRepository:
         return self.prisma_client.db.litellm_config
 
     @property
-    def table(self) -> Any:
+    def table(self) -> _ConfigTable:
         return self._config_table
 
     async def get_param(self, param_name: str) -> ConfigParam | None:

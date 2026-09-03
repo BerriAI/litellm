@@ -245,11 +245,19 @@ def _fake_get_async_httpx_client_factory(captured_calls: list):
     return _fake_get_async_httpx_client
 
 
-async def _fake_create_client(base_url, client_config=None, **kwargs):
+async def _fake_create_client(agent_card, client_config=None, **kwargs):
     client = MagicMock()
     if client_config is not None:
         client._litellm_httpx_client = client_config.httpx_client
     return client
+
+
+def _fake_card_resolver(httpx_client, base_url, **kwargs):
+    resolver = MagicMock()
+    card = MagicMock()
+    card.supported_interfaces = ()
+    resolver.get_agent_card = AsyncMock(return_value=card)
+    return resolver
 
 
 @pytest.mark.asyncio
@@ -275,6 +283,10 @@ async def test_create_a2a_client_leaves_the_shared_client_untouched():
         patch(
             "litellm.a2a_protocol.main.create_client",
             new=AsyncMock(side_effect=_fake_create_client),
+        ),
+        patch(
+            "litellm.a2a_protocol.main.A2ACardResolver",
+            side_effect=_fake_card_resolver,
         ),
     ):
         await create_a2a_client(
@@ -321,6 +333,10 @@ async def test_create_a2a_client_default_timeout_matches_constant():
             "litellm.a2a_protocol.main.create_client",
             new=AsyncMock(side_effect=_fake_create_client),
         ),
+        patch(
+            "litellm.a2a_protocol.main.A2ACardResolver",
+            side_effect=_fake_card_resolver,
+        ),
     ):
         await create_a2a_client(base_url="http://127.0.0.1:9")
 
@@ -351,6 +367,10 @@ async def test_create_a2a_client_explicit_timeout_overrides_default():
         patch(
             "litellm.a2a_protocol.main.create_client",
             new=AsyncMock(side_effect=_fake_create_client),
+        ),
+        patch(
+            "litellm.a2a_protocol.main.A2ACardResolver",
+            side_effect=_fake_card_resolver,
         ),
     ):
         await create_a2a_client(base_url="http://127.0.0.1:9", timeout=42.5)

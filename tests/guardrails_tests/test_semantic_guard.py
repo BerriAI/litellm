@@ -3,9 +3,7 @@ Tests for the Semantic Guard guardrail — embedding-based prompt injection dete
 """
 
 import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from unittest.mock import MagicMock
 

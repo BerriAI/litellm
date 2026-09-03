@@ -110,7 +110,7 @@ describe("EditMembership submit payload", () => {
     expect(submitted()).toStrictEqual(expected);
   });
 
-  it("collapses falsy budget and limit values to null and a missing model list to an empty array", async () => {
+  it("keeps stored 0 budget and limits as 0 on an untouched save, collapsing only empty strings and a missing model list", async () => {
     renderEdit(teamMemberConfig, {
       user_id: "u1",
       user_email: "a@b.com",
@@ -128,10 +128,10 @@ describe("EditMembership submit payload", () => {
       user_email: "a@b.com",
       user_id: "u1",
       role: "user",
-      max_budget_in_team: null,
+      max_budget_in_team: 0,
       budget_duration: null,
-      tpm_limit: null,
-      rpm_limit: null,
+      tpm_limit: 0,
+      rpm_limit: 0,
       allowed_models: [],
     });
   });

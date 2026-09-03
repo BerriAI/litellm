@@ -2,13 +2,11 @@
 import asyncio
 import inspect
 import os
-import sys
 import time
 import traceback
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import completion, embedding

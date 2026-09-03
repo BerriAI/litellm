@@ -73,6 +73,11 @@ ARRAY_KEYS: dict[str, JsonSchema] = {
         "description": "Output modalities the model can produce.",
         "items": {"type": "string", "enum": ["text", "image", "audio", "video", "code"]},
     },
+    "reasoning_effort_levels": {
+        "type": "array",
+        "description": "Exact reasoning_effort levels this deployment accepts; wins over supports_* flags.",
+        "items": {"type": "string", "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]},
+    },
     "supported_regions": {
         "type": "array",
         "description": "Cloud regions the model is available in ('global' or region ids).",
@@ -157,6 +162,9 @@ COST_DESCRIPTIONS: dict[str, str] = {
     "input_cost_per_token": "USD per prompt token.",
     "output_cost_per_token": "USD per generated token.",
     "output_cost_per_reasoning_token": "USD per reasoning/thinking token, when billed separately.",
+    "google_maps_grounding_cost_per_query": (
+        "USD per Grounding with Google Maps request; billed per query or per prompt per web_search_billing_unit."
+    ),
     "cache_creation_input_token_cost": "USD per token written to the provider's prompt cache.",
     "cache_read_input_token_cost": "USD per prompt token served from the provider's prompt cache.",
     "input_cost_per_token_batches": "USD per prompt token via the provider's batch API.",
@@ -211,6 +219,15 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
             "type": "string",
             "description": "Highest reasoning effort the Bedrock output_config accepts for this model.",
             "enum": ["low", "medium", "high", "max", "xhigh"],
+        },
+        "default_reasoning_effort": {
+            "type": "string",
+            "description": (
+                "Reasoning effort the provider applies when the request omits reasoning_effort. "
+                "Gates whether a non-default temperature or the top_p/logprobs sampling params are "
+                "accepted, which hold only when the effort resolves to 'none'."
+            ),
+            "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
         },
         "comment": STRING,
         "audio_transcription_config": STRING,

@@ -1,14 +1,9 @@
-import os
-import sys
 from unittest.mock import patch
 
 import pytest
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.vertex_ai.common_utils import (
     _get_vertex_url,
@@ -198,6 +193,22 @@ def test_set_schema_property_ordering_with_excessive_nesting():
         match=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting.",
     ):
         set_schema_property_ordering(schema)
+
+
+def test_set_schema_property_ordering_skips_non_dict_property_values():
+    """Non-dict property values must be skipped, not recursed into (they used to raise)."""
+    schema = {
+        "properties": {
+            "a": "hello",
+            "b": {"type": "string"},
+            "c": ["x"],
+            "d": "a string mentioning items",
+        }
+    }
+
+    result = set_schema_property_ordering(schema)
+
+    assert result["propertyOrdering"] == ["a", "b", "c", "d"]
 
 
 def test_build_vertex_schema():

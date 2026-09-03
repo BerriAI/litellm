@@ -1,11 +1,8 @@
-import os
-import sys
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.integrations.galileo import GalileoObserve
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse

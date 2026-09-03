@@ -9,14 +9,11 @@ Covers actual execution of redaction in:
 """
 
 import logging
-import os
-import sys
 import traceback
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm._logging import _ENABLE_SECRET_REDACTION, _redact_string
 
@@ -175,8 +172,6 @@ class TestLLMHTTPHandlerRealtimeRedaction:
 
 
 class TestProxyStreamingDataGeneratorRedaction:
-    """Test _redact_string on traceback.format_exc() — the pattern at common_request_processing.py:1733."""
-
     def test_redact_traceback_format_exc(self):
         try:
             raise RuntimeError(

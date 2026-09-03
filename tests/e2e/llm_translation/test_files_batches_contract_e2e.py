@@ -46,9 +46,6 @@ class TestFilesBatchesContract:
             case other:
                 pytest.fail(f"upload without purpose expected 4xx, got {other!r}")
 
-    @pytest.mark.skip(
-        reason="stage red: product gap, /v1/batches 500s (acreate_batch TypeError) on missing input_file_id instead of 400"
-    )
     @pytest.mark.covers("llm.batches.openai.input_validation.nonstream.works")
     def test_create_batch_missing_input_file_id_returns_error(
         self, proxy: ProxyClient, resources: ResourceManager

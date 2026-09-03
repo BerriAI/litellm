@@ -104,6 +104,11 @@
           "minimum": 0,
           "description": "Flex service-tier rate for the same-named base field."
         },
+        "cache_creation_input_token_cost_above_272k_tokens_priority": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Priority service-tier rate for the same-named base field."
+        },
         "cache_creation_input_token_cost_flex": {
           "type": "number",
           "minimum": 0,
@@ -174,6 +179,18 @@
         "comment": {
           "type": "string"
         },
+        "default_reasoning_effort": {
+          "type": "string",
+          "description": "Reasoning effort the provider applies when the request omits reasoning_effort. Gates whether a non-default temperature or the top_p/logprobs sampling params are accepted, which hold only when the effort resolves to 'none'.",
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ]
+        },
         "deprecation_date": {
           "type": "string",
           "description": "Date the provider deprecates the model, YYYY-MM-DD.",
@@ -185,6 +202,11 @@
         },
         "gemini_native_audio": {
           "type": "boolean"
+        },
+        "google_maps_grounding_cost_per_query": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD per Grounding with Google Maps request; billed per query or per prompt per web_search_billing_unit."
         },
         "guardrail_cost_per_unit": {
           "type": "object",
@@ -428,6 +450,14 @@
           "type": "number",
           "minimum": 0
         },
+        "output_cost_per_second_480p": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_second_4k": {
+          "type": "number",
+          "minimum": 0
+        },
         "output_cost_per_token": {
           "type": "number",
           "minimum": 0,
@@ -513,6 +543,22 @@
         "provider_specific_entry": {
           "type": "object",
           "description": "Provider-internal routing hints (e.g. bedrock_invocation_schema)."
+        },
+        "reasoning_effort_levels": {
+          "type": "array",
+          "description": "Exact reasoning_effort levels this deployment accepts; wins over supports_* flags.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
         },
         "regional_endpoint_uplift_multiplier": {
           "type": "number",
@@ -616,6 +662,9 @@
         "supports_embedding_image_input": {
           "type": "boolean"
         },
+        "supports_forced_tool_use": {
+          "type": "boolean"
+        },
         "supports_function_calling": {
           "type": "boolean"
         },
@@ -623,6 +672,9 @@
           "type": "boolean"
         },
         "supports_image_size": {
+          "type": "boolean"
+        },
+        "supports_legacy_thinking": {
           "type": "boolean"
         },
         "supports_low_reasoning_effort": {
