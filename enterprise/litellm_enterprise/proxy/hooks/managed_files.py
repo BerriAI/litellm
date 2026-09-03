@@ -349,6 +349,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "file_purpose": file_purpose,
                     "created_by": resolve_resource_owner_id(user_api_key_dict),
                     "team_id": user_api_key_dict.team_id,
+                    "org_id": user_api_key_dict.org_id,
                     "updated_by": user_api_key_dict.user_id,
                     "status": file_object.status,
                     **attribution_columns,
