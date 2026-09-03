@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -133,10 +134,16 @@ class TestRedaction:
         assert data["messages"][0]["content"][1]["image_url"]["url"] == "http://x/y.png"
 
     @pytest.mark.asyncio
-    async def test_request_without_messages_is_untouched(self):
+    async def test_request_without_text_is_untouched(self):
+        """No text to redact means no call to LLM Shield.
+
+        This deliberately uses a request with no caller text at all. An earlier
+        version used a Responses-API `input`, which asserted the very bypass that
+        let `input` reach the provider unredacted.
+        """
         guardrail = _guardrail()
         mock = _mock_post(guardrail)
-        data = {"input": "no messages here"}
+        data = {"model": "gpt-4o", "temperature": 0.2}
 
         await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
 
@@ -156,6 +163,91 @@ class TestRedaction:
         assert len(sessions) == 1
 
 
+class TestRequestCoverage:
+    """Every request shape that carries caller text must be redacted.
+
+    A shape missed here is not a cosmetic gap: the guardrail reports as enabled
+    while the raw value goes to the provider.
+    """
+
+    @pytest.mark.asyncio
+    async def test_responses_api_string_input_is_redacted(self):
+        """Measured against a live provider: `input` reached the model unredacted."""
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail, {"texts": ["Email [EMAIL_1] the invoice"]})
+
+        data = {"input": "Email jane.doe@example.com the invoice"}
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="aresponses")
+
+        assert mock.call_args_list[0].kwargs["json"]["texts"] == ["Email jane.doe@example.com the invoice"]
+        assert data["input"] == "Email [EMAIL_1] the invoice"
+
+    @pytest.mark.asyncio
+    async def test_responses_api_list_input_is_redacted(self):
+        guardrail = _guardrail()
+        _mock_post(guardrail, {"texts": ["[EMAIL_1]", "[PHONE_1]"]})
+
+        data = {
+            "input": [
+                {"role": "user", "content": "jane.doe@example.com"},
+                {"role": "user", "content": [{"type": "input_text", "text": "555-0100"}]},
+            ]
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="aresponses")
+
+        assert data["input"][0]["content"] == "[EMAIL_1]"
+        assert data["input"][1]["content"][0]["text"] == "[PHONE_1]"
+
+    @pytest.mark.asyncio
+    async def test_tool_call_arguments_are_redacted(self):
+        """Tool arguments carry the values the user asked the model to act on."""
+        guardrail = _guardrail()
+        _mock_post(guardrail, {"texts": ['{"email": "[EMAIL_1]"}']})
+
+        data = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "send", "arguments": '{"email": "jane.doe@example.com"}'},
+                        }
+                    ],
+                }
+            ]
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
+
+        assert data["messages"][0]["tool_calls"][0]["function"]["arguments"] == '{"email": "[EMAIL_1]"}'
+
+    @pytest.mark.asyncio
+    async def test_every_shape_in_one_request_is_redacted(self):
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail, {"texts": ["a", "b", "c", "d"]})
+
+        data = {
+            "messages": [
+                {"role": "user", "content": "one"},
+                {"role": "user", "content": [{"type": "text", "text": "two"}]},
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "f", "arguments": "three"}}],
+                },
+            ],
+            "input": "four",
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
+
+        assert mock.call_args_list[0].kwargs["json"]["texts"] == ["one", "two", "three", "four"]
+        assert data["messages"][0]["content"] == "a"
+        assert data["messages"][1]["content"][0]["text"] == "b"
+        assert data["messages"][2]["tool_calls"][0]["function"]["arguments"] == "c"
+        assert data["input"] == "d"
+
+
 class TestRestoration:
     @pytest.mark.asyncio
     async def test_openai_shape_is_restored(self):
@@ -168,6 +260,36 @@ class TestRestoration:
         )
 
         assert result.choices[0].message.content == "a@b.com"
+
+    @pytest.mark.asyncio
+    async def test_responses_api_shape_is_restored(self):
+        """The Responses API reply carries output items, not choices.
+
+        Measured against a live provider: once the request side was fixed the reply
+        came back still holding the placeholder, because this shape has no choices
+        to walk.
+        """
+        guardrail = _guardrail(event_hook="post_call")
+        _mock_post(guardrail, {"texts": ["a@b.com"]})
+
+        response = SimpleNamespace(output=[SimpleNamespace(content=[{"type": "output_text", "text": "[EMAIL_1]"}])])
+        result = await guardrail.async_post_call_success_hook(
+            data={"messages": []}, user_api_key_dict=None, response=response
+        )
+
+        assert result.output[0].content[0]["text"] == "a@b.com"
+
+    @pytest.mark.asyncio
+    async def test_responses_api_object_blocks_are_restored(self):
+        """Blocks arrive as objects too, depending on how far the reply is parsed."""
+        guardrail = _guardrail(event_hook="post_call")
+        _mock_post(guardrail, {"texts": ["a@b.com"]})
+
+        block = SimpleNamespace(text="[EMAIL_1]")
+        response = SimpleNamespace(output=[SimpleNamespace(content=[block])])
+        await guardrail.async_post_call_success_hook(data={"messages": []}, user_api_key_dict=None, response=response)
+
+        assert block.text == "a@b.com"
 
     @pytest.mark.asyncio
     async def test_anthropic_message_shape_is_restored(self):
