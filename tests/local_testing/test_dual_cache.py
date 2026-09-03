@@ -245,8 +245,6 @@ async def test_dual_cache_delete(is_async):
 @pytest.mark.asyncio
 async def test_dual_cache_concurrent_sync_and_async_redis_reads():
     """Sync and async batch reads share one Redis backend in one process, and sync reads never open an async connection"""
-    from redis.asyncio.connection import Connection as AsyncRedisConnection
-
     redis_cache = RedisCache(host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"))
     dual_cache = DualCache(redis_cache=redis_cache)
 
@@ -265,16 +263,12 @@ async def test_dual_cache_concurrent_sync_and_async_redis_reads():
     )
     assert list(concurrent_results) == [[expected[key]] for key in [*sync_keys, *async_keys]]
 
-    async_connects = []
-    original_connect = AsyncRedisConnection.connect
-
-    async def counting_connect(self, *args, **kwargs):
-        async_connects.append(self)
-        return await original_connect(self, *args, **kwargs)
-
-    with patch.object(AsyncRedisConnection, "connect", counting_connect):
+    with patch.object(
+        redis_cache,
+        "async_batch_get_cache",
+        side_effect=AssertionError("sync batch reads must not call async Redis"),
+    ):
         in_loop_results = [dual_cache.batch_get_cache(keys=[key]) for key in in_loop_keys]
 
     assert in_loop_results == [[expected[key]] for key in in_loop_keys]
-    assert async_connects == []
     assert await dual_cache.async_batch_get_cache(keys=[survivor_key]) == [expected[survivor_key]]
