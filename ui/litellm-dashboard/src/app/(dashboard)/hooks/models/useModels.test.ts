@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isAutoRouterDeployment,
   selectAutoRouterModelGroups,
+  selectDatabaseModelGroups,
   selectPlainModelGroups,
   useAllProxyModels,
   useAutoRouterModelGroups,
@@ -1134,5 +1135,20 @@ describe("useAutoRouterModelGroups", () => {
 
       expect(keys.some((key) => JSON.stringify(key).includes("autoRouters"))).toBe(true);
     });
+  });
+});
+
+describe("selectDatabaseModelGroups", () => {
+  it("keeps only names with a database deployment, deduplicated and sorted", () => {
+    expect(
+      selectDatabaseModelGroups([
+        { model_name: "zeta", model_info: { db_model: true } },
+        { model_name: "alpha", model_info: { db_model: true } },
+        { model_name: "alpha", model_info: { db_model: true } },
+        { model_name: "config-only", model_info: { db_model: false } },
+        { model_name: "untagged", model_info: {} },
+        { model_name: null, model_info: { db_model: true } },
+      ]),
+    ).toEqual(["alpha", "zeta"]);
   });
 });

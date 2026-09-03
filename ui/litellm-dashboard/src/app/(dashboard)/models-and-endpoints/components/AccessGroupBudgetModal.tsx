@@ -1,12 +1,11 @@
 "use client";
 
-import { CircleHelp } from "lucide-react";
 import React from "react";
 import { z } from "zod/v4";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import NumericalInput from "@/components/shared/numerical_input";
 import { Button } from "@/components/ui/button";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -14,16 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { ModelAccessGroup } from "@/app/(dashboard)/hooks/modelAccessGroups/useModelAccessGroups";
 import { SetModelAccessGroupBudgetParams } from "@/app/(dashboard)/hooks/modelAccessGroups/useSetModelAccessGroupBudget";
 import { accessGroupBudgetFormValues, buildAccessGroupBudgetBody, hasAnyBudgetValue } from "./accessGroupBudgetPayload";
-
-const labelWithHint = (label: React.ReactNode, hint: string): React.ReactNode => (
-  <>
-    {label}
-    <Tooltip>
-      <TooltipTrigger render={<CircleHelp className="size-3.5 shrink-0 cursor-help text-muted-foreground" />} />
-      <TooltipContent>{hint}</TooltipContent>
-    </Tooltip>
-  </>
-);
+import { labelWithHint } from "./LabelWithHint";
 
 const budgetSchema = z
   .object({

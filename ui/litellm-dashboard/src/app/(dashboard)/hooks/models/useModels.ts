@@ -22,7 +22,7 @@ export interface PaginatedModelInfoResponse {
   size: number;
 }
 
-const modelKeys = createQueryKeys("models");
+export const modelKeys = createQueryKeys("models");
 const modelHubKeys = createQueryKeys("modelHub");
 const allProxyModelsKeys = createQueryKeys("allProxyModels");
 const selectedTeamModelsKeys = createQueryKeys("selectedTeamModels");
@@ -194,6 +194,30 @@ export const usePlainModelGroups = (): ReadonlySet<string> => {
     select: selectPlainModelGroups,
   });
   return data ?? NO_AUTO_ROUTERS;
+};
+
+const NO_MODEL_GROUPS: readonly string[] = [];
+
+/** Public model names with at least one database deployment, which is what /access_group/new can tag. */
+export const selectDatabaseModelGroups = (deployments: AutoRouterDeployment[]): string[] =>
+  Array.from(
+    new Set(
+      deployments
+        .filter((deployment) => deployment.model_info?.db_model === true)
+        .map((deployment) => deployment.model_name)
+        .filter((modelName): modelName is string => Boolean(modelName)),
+    ),
+  ).sort();
+
+export const useDatabaseModelGroups = (): { data: readonly string[]; isLoading: boolean } => {
+  const { accessToken, userId, userRole } = useAuthorized();
+  const { data, isLoading } = useQuery<AutoRouterDeployment[], Error, string[]>({
+    queryKey: autoRouterListKey(userId, userRole),
+    queryFn: async () => await fetchAllModelDeployments(accessToken!, userId!, userRole!),
+    enabled: Boolean(accessToken && userId && userRole),
+    select: selectDatabaseModelGroups,
+  });
+  return { data: data ?? NO_MODEL_GROUPS, isLoading };
 };
 
 export const useAutoRouters = (): UseQueryResult<AutoRouterDeployment[], Error> => {
