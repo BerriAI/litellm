@@ -162,7 +162,7 @@ def test_cancel_streaming_response():
     started = time.monotonic()
     stream = client.responses.create(
         model="gpt-5.5",
-        input="just respond with the word 'ping'",
+        input="count from 1 to 500, one number per line",
         stream=True,
         background=True,
         timeout=BACKGROUND_STREAM_ADMISSION_DEADLINE_SECONDS,
@@ -189,13 +189,7 @@ def test_cancel_streaming_response():
         )
     assert response_id is not None, f"no response event within {elapsed:.0f}s of streaming a background response"
 
-    try:
-        cancel_response = client.responses.cancel(response_id)
-    except BadRequestError as e:
-        if "Cannot cancel a completed response" not in str(e):
-            raise
-        print("response completed before cancel=", e)
-        return
+    cancel_response = client.responses.cancel(response_id)
     print("CANCEL streaming response=", cancel_response)
     assert cancel_response.status == "cancelled"
 
