@@ -174,7 +174,7 @@ class TestBedrockMantleConfig:
 
     @pytest.mark.parametrize(
         "model_id",
-        ["google.gemma-4-31b", "google.gemma-4-26b-a4b", "google.gemma-4-e2b"],
+        ["google.gemma-4-31b", "google.gemma-4-26b-a4b", "google.gemma-4-e2b", "google.gemma-4-e4b"],
     )
     def test_chat_base_for_gemma_4_uses_openai_v1(
         self, monkeypatch, local_cost_map, model_id
@@ -706,6 +706,7 @@ class TestBedrockMantlePricing:
         ("google.gemma-4-31b", 1.4e-07, 4e-07, 256000),
         ("google.gemma-4-26b-a4b", 1.3e-07, 4e-07, 256000),
         ("google.gemma-4-e2b", 4e-08, 8e-08, 128000),
+        ("google.gemma-4-e4b", 0.0, 0.0, 128000),
     ],
 )
 def test_gemma_4_bedrock_mantle_model_metadata(
@@ -737,6 +738,7 @@ def test_gemma_4_bedrock_mantle_model_metadata(
         "google.gemma-4-31b",
         "google.gemma-4-26b-a4b",
         "google.gemma-4-e2b",
+        "google.gemma-4-e4b",
     ],
 )
 def test_gemma_4_models_register_under_bedrock_mantle(local_cost_map, model_id):
