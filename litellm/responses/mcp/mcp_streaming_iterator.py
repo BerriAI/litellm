@@ -800,8 +800,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                         "stream": True,
                     }
                 )
-                if persistence_disabled:
-                    follow_up_params.pop("previous_response_id", None)
             else:
                 return
             # Remove tool_choice to avoid forcing more tool calls

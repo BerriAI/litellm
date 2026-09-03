@@ -352,7 +352,7 @@ async def aresponses_api_with_mcp(
                     follow_up_input=follow_up_input,
                     model=model,
                     all_tools=all_tools,
-                    response_id=None if persistence_disabled else response.id,
+                    response_id=previous_response_id if persistence_disabled else response.id,
                     **follow_up_call_params,
                 )
 

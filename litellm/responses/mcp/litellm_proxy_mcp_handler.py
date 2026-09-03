@@ -965,21 +965,8 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     def _is_persistence_disabled(call_params: Mapping[str, object]) -> bool:
-        """Whether the caller opted out of server-side response persistence (store=false).
-
-        Zero data retention callers send store=false, so the provider never persisted the
-        first response and previous_response_id cannot be used to link the follow-up call.
-        """
+        """store=false means the provider kept nothing, so the follow-up call cannot chain on a response id."""
         return call_params.get("store") is False
-
-    @staticmethod
-    def _extract_reasoning_items(response: ResponsesAPIResponse) -> tuple[Mapping[str, object], ...]:
-        """Reasoning output items, kept whole so reasoning.encrypted_content survives replay."""
-        normalized: Final = tuple(
-            output_item if isinstance(output_item, dict) else output_item.model_dump(exclude_none=True)
-            for output_item in response.output
-        )
-        return tuple(item for item in normalized if item.get("type") == "reasoning")
 
     @staticmethod
     def _create_follow_up_input(
@@ -1002,11 +989,11 @@ class LiteLLM_Proxy_MCP_Handler:
 
         # Add the assistant message with function calls
         assistant_message_content: Final[list[object]] = []
-        function_calls: Final[list[dict[str, object]]] = []
+        turn_items: Final[list[Mapping[str, object]]] = []
 
         for output_item in response.output:
             if not isinstance(output_item, dict) and hasattr(output_item, "model_dump"):
-                output_item = output_item.model_dump()
+                output_item = output_item.model_dump(exclude_none=True)
 
             if isinstance(output_item, dict):
                 if output_item.get("type") == "function_call":
@@ -1016,7 +1003,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
                     # Only add if we have required fields
                     if call_id and name:
-                        function_calls.append(
+                        turn_items.append(
                             {
                                 "type": "function_call",
                                 "call_id": call_id,
@@ -1024,6 +1011,8 @@ class LiteLLM_Proxy_MCP_Handler:
                                 "arguments": arguments,
                             }
                         )
+                elif output_item.get("type") == "reasoning" and preserve_reasoning:
+                    turn_items.append(output_item)
                 elif output_item.get("type") == "message":
                     # Extract content from message
                     content = output_item.get("content", [])
@@ -1044,12 +1033,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 }
             )
 
-        if preserve_reasoning:
-            follow_up_input.extend(LiteLLM_Proxy_MCP_Handler._extract_reasoning_items(response))
-
-        # Add function calls (these can come directly after user message for LLM)
-        for function_call in function_calls:
-            follow_up_input.append(function_call)
+        follow_up_input.extend(turn_items)
 
         # Add tool results (function call outputs)
         for tool_result in tool_results:
@@ -1071,11 +1055,7 @@ class LiteLLM_Proxy_MCP_Handler:
         response_id: str | None,
         **call_params: Any,
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
-        """Make follow-up response API call with tool results.
-
-        response_id is None for stateless (store=false) requests, where the whole prior
-        turn is replayed in follow_up_input instead of linked by previous_response_id.
-        """
+        """Make follow-up response API call with tool results."""
         return await aresponses(
             input=follow_up_input,
             model=model,
