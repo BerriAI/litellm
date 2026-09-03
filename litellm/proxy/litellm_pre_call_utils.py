@@ -727,7 +727,7 @@ def _is_llm_inference_route(request: Request) -> bool:
 
 
 def apply_missing_session_id_policy(
-    data: dict[str, object],  # mutable-ok: stamps session ids in place on the request body the pre-call pipeline threads through
+    data: dict[str, object],  # mutable-ok: stamps session ids in place on the request body the pipeline threads through
     _metadata_variable_name: str,
     general_settings: Mapping[str, object] | None,
     request: Request,
