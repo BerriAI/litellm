@@ -1,4 +1,7 @@
 
+import math
+from datetime import datetime, timezone
+
 import pytest
 
 
@@ -64,3 +67,75 @@ def test_no_cached_tokens_matches_full_input_rate():
 
     assert prompt_cost == pytest.approx(prompt_tokens * INPUT_COST)
     assert completion_cost == pytest.approx(completion_tokens * OUTPUT_COST)
+
+
+OFF_PEAK_MODEL = "accounts/fireworks/models/off-peak-test"
+OFF_PEAK_WINDOW = "14:00-00:00"
+INSIDE_WINDOW = datetime(2026, 9, 3, 17, 25, tzinfo=timezone.utc)
+OUTSIDE_WINDOW = datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc)
+STANDARD_INPUT_COST = 1.5e-07
+STANDARD_OUTPUT_COST = 6e-07
+STANDARD_CACHE_READ_COST = 1.5e-08
+
+
+def _register_off_peak_model(off_peak_pricing: dict) -> None:
+    litellm.model_cost[f"fireworks_ai/{OFF_PEAK_MODEL}"] = {
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "input_cost_per_token": STANDARD_INPUT_COST,
+        "output_cost_per_token": STANDARD_OUTPUT_COST,
+        "cache_read_input_token_cost": STANDARD_CACHE_READ_COST,
+        "off_peak_pricing": off_peak_pricing,
+    }
+
+
+def test_off_peak_window_swaps_in_the_off_peak_rates():
+    """
+    Regression (LIT-6874): a deployment configured with off_peak_pricing kept billing the
+    standard fireworks_ai rates inside its window, while the same block on a deepseek
+    deployment billed the off-peak rates.
+    """
+    _register_off_peak_model(
+        {
+            "hours_utc": OFF_PEAK_WINDOW,
+            "input_cost_per_token": 1e-08,
+            "output_cost_per_token": 2e-08,
+            "cache_read_input_token_cost": 1e-09,
+        }
+    )
+    usage = _usage(prompt_tokens=1000, cached_tokens=300, completion_tokens=200)
+
+    prompt_cost, completion_cost = cost_per_token(model=OFF_PEAK_MODEL, usage=usage, current_time=INSIDE_WINDOW)
+
+    assert math.isclose(prompt_cost, (700 * 1e-08) + (300 * 1e-09), rel_tol=1e-10)
+    assert math.isclose(completion_cost, 200 * 2e-08, rel_tol=1e-10)
+
+    peak_prompt_cost, peak_completion_cost = cost_per_token(
+        model=OFF_PEAK_MODEL, usage=usage, current_time=OUTSIDE_WINDOW
+    )
+
+    assert math.isclose(peak_prompt_cost, (700 * STANDARD_INPUT_COST) + (300 * STANDARD_CACHE_READ_COST), rel_tol=1e-10)
+    assert math.isclose(peak_completion_cost, 200 * STANDARD_OUTPUT_COST, rel_tol=1e-10)
+
+
+def test_off_peak_rates_left_unset_keep_the_standard_rates():
+    """A block that only overrides the input rate leaves output and cache reads on the standard rates."""
+    _register_off_peak_model({"hours_utc": OFF_PEAK_WINDOW, "input_cost_per_token": 1e-08})
+    usage = _usage(prompt_tokens=1000, cached_tokens=300, completion_tokens=200)
+
+    prompt_cost, completion_cost = cost_per_token(model=OFF_PEAK_MODEL, usage=usage, current_time=INSIDE_WINDOW)
+
+    assert math.isclose(prompt_cost, (700 * 1e-08) + (300 * STANDARD_CACHE_READ_COST), rel_tol=1e-10)
+    assert math.isclose(completion_cost, 200 * STANDARD_OUTPUT_COST, rel_tol=1e-10)
+
+
+def test_off_peak_defaults_to_the_current_time():
+    """The proxy's cost dispatch passes no clock, so an all-day window has to apply on the
+    default current time."""
+    _register_off_peak_model({"hours_utc": "00:00-00:00", "input_cost_per_token": 1e-08, "output_cost_per_token": 2e-08})
+    usage = _usage(prompt_tokens=1000, cached_tokens=0, completion_tokens=200)
+
+    prompt_cost, completion_cost = cost_per_token(model=OFF_PEAK_MODEL, usage=usage)
+
+    assert math.isclose(prompt_cost, 1000 * 1e-08, rel_tol=1e-10)
+    assert math.isclose(completion_cost, 200 * 2e-08, rel_tol=1e-10)
