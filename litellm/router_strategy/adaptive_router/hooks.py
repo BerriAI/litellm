@@ -55,9 +55,13 @@ def _resolve_session_key(kwargs: dict[str, Any]) -> str | None:
     sid = litellm_params.get("litellm_session_id")
     if sid:
         return str(sid)
-    metadata: Final = litellm_params.get("metadata") or {}
+    metadata: Final = (
+        litellm_params.get("metadata")
+        if isinstance(litellm_params.get("metadata"), dict)
+        else (kwargs.get("metadata") if isinstance(kwargs.get("metadata"), dict) else kwargs.get("litellm_metadata"))
+    ) or {}
     if isinstance(metadata, dict):
-        sid = metadata.get("session_id") or metadata.get("litellm_session_id")
+        sid = metadata.get("session_id") or metadata.get("litellm_session_id") or metadata.get("prompt_cache_key")
         if sid:
             return str(sid)
 

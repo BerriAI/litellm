@@ -934,6 +934,14 @@ class ComplexityRouterConfig(BaseModel):
             "idle time for the session's routing decisions rather than total session length"
         ),
     )
+    session_key_fallback: Literal["none", "prompt_cache_key", "prefix_hash"] = Field(
+        default="none",
+        description=(
+            "Fallback method to derive a session key when session_id is absent from request metadata. "
+            "Supported values: 'none' (default, no fallback), 'prompt_cache_key' (use prompt_cache_key from request), "
+            "or 'prefix_hash' (SHA256 hash of user_api_key/user_id + model/model_group + normalized first system message + normalized first user message)."
+        ),
+    )
 
     plugins: list[RoutingPlugin] | None = Field(
         default=None,
