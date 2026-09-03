@@ -1,7 +1,6 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import traceback
-from datetime import datetime
 from typing import Final
 
 from litellm import token_counter
@@ -9,7 +8,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import LiteLLMPydanticObjectBase
-from litellm.utils import print_verbose
+from litellm.utils import print_verbose, utc_epoch_minute
 
 
 class RoutingArgs(LiteLLMPydanticObjectBase):
@@ -49,9 +48,9 @@ class LowestTPMLoggingHandler(CustomLogger):
                 # ------------
                 # Setup values
                 # ------------
-                current_minute: Final = datetime.now().strftime("%H-%M")
-                tpm_key: Final = f"{model_group}:tpm:{current_minute}"
-                rpm_key: Final = f"{model_group}:rpm:{current_minute}"
+                window_id: Final = utc_epoch_minute()
+                tpm_key: Final = f"{model_group}:tpm:v2:{window_id}"
+                rpm_key: Final = f"{model_group}:rpm:v2:{window_id}"
 
                 # ------------
                 # Update usage
@@ -106,9 +105,9 @@ class LowestTPMLoggingHandler(CustomLogger):
                 # ------------
                 # Setup values
                 # ------------
-                current_minute: Final = datetime.now().strftime("%H-%M")
-                tpm_key: Final = f"{model_group}:tpm:{current_minute}"
-                rpm_key: Final = f"{model_group}:rpm:{current_minute}"
+                window_id: Final = utc_epoch_minute()
+                tpm_key: Final = f"{model_group}:tpm:v2:{window_id}"
+                rpm_key: Final = f"{model_group}:rpm:v2:{window_id}"
 
                 # ------------
                 # Update usage
@@ -156,9 +155,9 @@ class LowestTPMLoggingHandler(CustomLogger):
             model_group,
             healthy_deployments,
         )
-        current_minute: Final = datetime.now().strftime("%H-%M")
-        tpm_key: Final = f"{model_group}:tpm:{current_minute}"
-        rpm_key: Final = f"{model_group}:rpm:{current_minute}"
+        window_id: Final = utc_epoch_minute()
+        tpm_key: Final = f"{model_group}:tpm:v2:{window_id}"
+        rpm_key: Final = f"{model_group}:rpm:v2:{window_id}"
 
         tpm_dict = self.router_cache.get_cache(key=tpm_key)
         rpm_dict: Final = self.router_cache.get_cache(key=rpm_key)

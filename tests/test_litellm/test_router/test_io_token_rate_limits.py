@@ -71,7 +71,7 @@ class TestIOTokenRateLimitHelpers:
 class TestModelRateLimitingCheckIOTokens:
     @pytest.mark.asyncio
     async def test_itpm_reservation_and_reconcile(self):
-        from litellm.utils import get_utc_datetime
+        from litellm.utils import get_utc_datetime, utc_epoch_minute
 
         dual_cache = DualCache()
         check = ModelRateLimitingCheck(dual_cache=dual_cache)
@@ -93,9 +93,9 @@ class TestModelRateLimitingCheckIOTokens:
         set_io_token_rate_limit_request_kwargs(request_kwargs)
         await check.async_pre_call_check(deployment)
 
-        minute = get_utc_datetime().strftime("%H-%M")
-        itpm_key = f"global_router:io-test-id:bedrock_mantle/anthropic.claude-opus-4-7:itpm:{minute}"
-        otpm_key = f"global_router:io-test-id:bedrock_mantle/anthropic.claude-opus-4-7:otpm:{minute}"
+        window_id = utc_epoch_minute(get_utc_datetime())
+        itpm_key = f"global_router:io-test-id:bedrock_mantle/anthropic.claude-opus-4-7:itpm:v2:{window_id}"
+        otpm_key = f"global_router:io-test-id:bedrock_mantle/anthropic.claude-opus-4-7:otpm:v2:{window_id}"
 
         kwargs = {
             "standard_logging_object": {
@@ -158,7 +158,7 @@ class TestModelRateLimitingCheckIOTokens:
 
     @pytest.mark.asyncio
     async def test_otpm_atomic_reservation_no_overshoot_under_concurrency(self):
-        from litellm.utils import get_utc_datetime
+        from litellm.utils import get_utc_datetime, utc_epoch_minute
 
         dual_cache = DualCache()
         check = ModelRateLimitingCheck(dual_cache=dual_cache)
@@ -191,8 +191,8 @@ class TestModelRateLimitingCheckIOTokens:
         results = await asyncio.gather(*[_attempt() for _ in range(8)])
         successes = sum(1 for r in results if r)
 
-        minute = get_utc_datetime().strftime("%H-%M")
-        otpm_key = f"global_router:io-otpm-race-id:bedrock_mantle/anthropic.claude-opus-4-7:otpm:{minute}"
+        window_id = utc_epoch_minute(get_utc_datetime())
+        otpm_key = f"global_router:io-otpm-race-id:bedrock_mantle/anthropic.claude-opus-4-7:otpm:v2:{window_id}"
         current_otpm = await dual_cache.async_get_cache(key=otpm_key)
 
         # Atomic reservation must never let concurrent requests overshoot the limit.
@@ -211,7 +211,7 @@ class TestModelRateLimitingCheckIOTokens:
         concurrent request is rejected until it completes - effectively
         serializing traffic to the deployment.
         """
-        from litellm.utils import get_utc_datetime
+        from litellm.utils import get_utc_datetime, utc_epoch_minute
 
         dual_cache = DualCache()
         check = ModelRateLimitingCheck(dual_cache=dual_cache)
@@ -243,8 +243,11 @@ class TestModelRateLimitingCheckIOTokens:
         results = await asyncio.gather(*[_attempt() for _ in range(8)])
         successes = sum(1 for r in results if r)
 
-        minute = get_utc_datetime().strftime("%H-%M")
-        itpm_key = f"global_router:io-itpm-estimate-fail-id:bedrock_mantle/anthropic.claude-opus-4-7:itpm:{minute}"
+        window_id = utc_epoch_minute(get_utc_datetime())
+        itpm_key = (
+            "global_router:io-itpm-estimate-fail-id:bedrock_mantle/anthropic.claude-opus-4-7:"
+            f"itpm:v2:{window_id}"
+        )
         current_itpm = await dual_cache.async_get_cache(key=itpm_key)
 
         # A minimal 1-token reservation per request lets itpm_limit concurrent
@@ -255,12 +258,12 @@ class TestModelRateLimitingCheckIOTokens:
 
     @pytest.mark.asyncio
     async def test_reservation_read_prefers_top_level_metadata_over_litellm_params(self):
-        from litellm.utils import get_utc_datetime
+        from litellm.utils import get_utc_datetime, utc_epoch_minute
 
         dual_cache = DualCache()
         check = ModelRateLimitingCheck(dual_cache=dual_cache)
-        minute = get_utc_datetime().strftime("%H-%M")
-        itpm_key = f"global_router:io-lp-id:bedrock_mantle/test:itpm:{minute}"
+        window_id = utc_epoch_minute(get_utc_datetime())
+        itpm_key = f"global_router:io-lp-id:bedrock_mantle/test:itpm:v2:{window_id}"
         await dual_cache.async_increment_cache(key=itpm_key, value=20, ttl=60)
 
         # Production kwargs commonly carry litellm_params.metadata; the stashed
@@ -281,7 +284,7 @@ class TestModelRateLimitingCheckIOTokens:
 
     @pytest.mark.asyncio
     async def test_reconcile_tracks_actual_usage_when_estimate_zero(self):
-        from litellm.utils import get_utc_datetime
+        from litellm.utils import get_utc_datetime, utc_epoch_minute
 
         dual_cache = DualCache()
         check = ModelRateLimitingCheck(dual_cache=dual_cache)
@@ -298,8 +301,8 @@ class TestModelRateLimitingCheckIOTokens:
         set_io_token_rate_limit_request_kwargs(request_kwargs)
         await check.async_pre_call_check(deployment)
 
-        minute = get_utc_datetime().strftime("%H-%M")
-        itpm_key = f"global_router:io-zero-est-id:bedrock_mantle/anthropic.claude-opus-4-7:itpm:{minute}"
+        window_id = utc_epoch_minute(get_utc_datetime())
+        itpm_key = f"global_router:io-zero-est-id:bedrock_mantle/anthropic.claude-opus-4-7:itpm:v2:{window_id}"
         # A failed/zero estimate reserves a minimal 1 token, not the full
         # itpm limit, so it doesn't starve concurrent requests.
         assert await dual_cache.async_get_cache(key=itpm_key) == 1
@@ -386,7 +389,7 @@ class TestModelRateLimitingCheckIOTokens:
         assert await dual_cache.async_get_cache(key=normal_output_otpm_key) == 5
 
     def test_sync_io_pre_call_reserves_and_reconciles(self):
-        from litellm.utils import get_utc_datetime
+        from litellm.utils import get_utc_datetime, utc_epoch_minute
 
         dual_cache = DualCache()
         check = ModelRateLimitingCheck(dual_cache=dual_cache)
@@ -407,9 +410,9 @@ class TestModelRateLimitingCheckIOTokens:
         set_io_token_rate_limit_request_kwargs(request_kwargs)
         check.pre_call_check(deployment)
 
-        minute = get_utc_datetime().strftime("%H-%M")
-        itpm_key = f"global_router:io-sync-id:bedrock_mantle/anthropic.claude-opus-4-7:itpm:{minute}"
-        otpm_key = f"global_router:io-sync-id:bedrock_mantle/anthropic.claude-opus-4-7:otpm:{minute}"
+        window_id = utc_epoch_minute(get_utc_datetime())
+        itpm_key = f"global_router:io-sync-id:bedrock_mantle/anthropic.claude-opus-4-7:itpm:v2:{window_id}"
+        otpm_key = f"global_router:io-sync-id:bedrock_mantle/anthropic.claude-opus-4-7:otpm:v2:{window_id}"
         kwargs = {
             "standard_logging_object": {
                 "model_id": "io-sync-id",
@@ -453,12 +456,12 @@ class TestModelRateLimitingCheckIOTokens:
 
     @pytest.mark.asyncio
     async def test_failure_clears_reservation_so_retry_is_not_poisoned(self):
-        from litellm.utils import get_utc_datetime
+        from litellm.utils import get_utc_datetime, utc_epoch_minute
 
         dual_cache = DualCache()
         check = ModelRateLimitingCheck(dual_cache=dual_cache)
-        minute = get_utc_datetime().strftime("%H-%M")
-        itpm_key = f"global_router:io-first:bedrock_mantle/test:itpm:{minute}"
+        window_id = utc_epoch_minute(get_utc_datetime())
+        itpm_key = f"global_router:io-first:bedrock_mantle/test:itpm:v2:{window_id}"
         await dual_cache.async_increment_cache(key=itpm_key, value=8, ttl=60)
 
         # Shared request metadata carrying the first (IO) deployment's reservation.
@@ -496,7 +499,7 @@ class TestModelRateLimitingCheckIOTokens:
         # The first deployment's ITPM counter is not driven negative...
         assert await dual_cache.async_get_cache(key=itpm_key) == 0
         # ...and the non-IO deployment's TPM usage is tracked normally.
-        tpm_key = f"non-io-second:openai/gpt-4o-mini:tpm:{minute}"
+        tpm_key = f"non-io-second:openai/gpt-4o-mini:tpm:v2:{window_id}"
         assert await dual_cache.async_get_cache(key=tpm_key) == 12
 
     @pytest.mark.asyncio
@@ -511,11 +514,11 @@ class TestModelRateLimitingCheckIOTokens:
         elevated by the reservation until its TTL expires, and the
         now-orphaned sentinels must not leak into B's accounting either.
         """
-        from litellm.utils import get_utc_datetime
+        from litellm.utils import get_utc_datetime, utc_epoch_minute
 
         dual_cache = DualCache()
-        minute = get_utc_datetime().strftime("%H-%M")
-        itpm_key_a = f"global_router:io-retry-a:bedrock_mantle/test-a:itpm:{minute}"
+        window_id = utc_epoch_minute(get_utc_datetime())
+        itpm_key_a = f"global_router:io-retry-a:bedrock_mantle/test-a:itpm:v2:{window_id}"
         await dual_cache.async_increment_cache(key=itpm_key_a, value=9, ttl=60)
 
         # Deployment A's still-unreconciled reservation, stashed on the shared
@@ -541,7 +544,7 @@ class TestModelRateLimitingCheckIOTokens:
         # The retry proceeds to stash deployment B's own reservation on the
         # same dict; it starts clean, unaffected by A's cleared sentinels.
         set_io_token_rate_limit_request_kwargs(shared_kwargs)
-        itpm_key_b = f"global_router:io-retry-b:bedrock_mantle/test-b:itpm:{minute}"
+        itpm_key_b = f"global_router:io-retry-b:bedrock_mantle/test-b:itpm:v2:{window_id}"
         shared_kwargs["metadata"][ITPM_RESERVED_KEY] = 4
         shared_kwargs["metadata"][ITPM_CACHE_KEY] = itpm_key_b
         await dual_cache.async_increment_cache(key=itpm_key_b, value=4, ttl=60)
@@ -594,7 +597,7 @@ class TestModelRateLimitingCheckIOTokens:
 
     @pytest.mark.asyncio
     async def test_otpm_reservation_error_rolls_back_itpm(self):
-        from litellm.utils import get_utc_datetime
+        from litellm.utils import get_utc_datetime, utc_epoch_minute
 
         class _OtpmFailCache(DualCache):
             async def async_increment_cache(self, key, **kwargs):
@@ -623,8 +626,8 @@ class TestModelRateLimitingCheckIOTokens:
         with pytest.raises(RuntimeError):
             await async_io_token_pre_call_check(dual_cache, deployment)
 
-        minute = get_utc_datetime().strftime("%H-%M")
-        itpm_key = f"global_router:io-rollback-id:bedrock_mantle/anthropic.claude-opus-4-7:itpm:{minute}"
+        window_id = utc_epoch_minute(get_utc_datetime())
+        itpm_key = f"global_router:io-rollback-id:bedrock_mantle/anthropic.claude-opus-4-7:itpm:v2:{window_id}"
         # A transient OTPM error must release the ITPM reservation, not leak it.
         assert (await dual_cache.async_get_cache(key=itpm_key) or 0) == 0
 
@@ -827,7 +830,7 @@ class TestModelRateLimitingCheckIOTokens:
     async def test_io_and_tpm_rpm_limits_both_enforced_with_warning(self, caplog):
         import logging
 
-        from litellm.utils import get_utc_datetime
+        from litellm.utils import get_utc_datetime, utc_epoch_minute
 
         dual_cache = DualCache()
         check = ModelRateLimitingCheck(dual_cache=dual_cache)
@@ -843,9 +846,9 @@ class TestModelRateLimitingCheckIOTokens:
             "model_name": "opus",
         }
 
-        minute = get_utc_datetime().strftime("%H-%M")
-        rpm_key = f"{model_id}:{deployment_name}:rpm:{minute}"
-        itpm_key = f"global_router:{model_id}:{deployment_name}:itpm:{minute}"
+        window_id = utc_epoch_minute(get_utc_datetime())
+        rpm_key = f"{model_id}:{deployment_name}:rpm:v2:{window_id}"
+        itpm_key = f"global_router:{model_id}:{deployment_name}:itpm:v2:{window_id}"
         await dual_cache.async_increment_cache(key=rpm_key, value=5, ttl=60)
 
         request_kwargs = {
@@ -871,15 +874,15 @@ class TestModelRateLimitingCheckIOTokens:
         success, otherwise the tpm_key the pre-call check reads is never written
         and the tpm_limit can never be enforced.
         """
-        from litellm.utils import get_utc_datetime
+        from litellm.utils import get_utc_datetime, utc_epoch_minute
 
         dual_cache = DualCache()
         check = ModelRateLimitingCheck(dual_cache=dual_cache)
         model_id = "io-tpm-mixed-id"
         deployment_name = "bedrock_mantle/anthropic.claude-opus-4-7"
-        minute = get_utc_datetime().strftime("%H-%M")
-        itpm_key = f"global_router:{model_id}:{deployment_name}:itpm:{minute}"
-        tpm_key = f"{model_id}:{deployment_name}:tpm:{minute}"
+        window_id = utc_epoch_minute(get_utc_datetime())
+        itpm_key = f"global_router:{model_id}:{deployment_name}:itpm:v2:{window_id}"
+        tpm_key = f"{model_id}:{deployment_name}:tpm:v2:{window_id}"
         await dual_cache.async_increment_cache(key=itpm_key, value=5, ttl=60)
 
         kwargs = {
@@ -903,15 +906,15 @@ class TestModelRateLimitingCheckIOTokens:
         assert await dual_cache.async_get_cache(key=tpm_key) == 7
 
     def test_io_success_still_tracks_tpm_for_mixed_deployment_sync(self):
-        from litellm.utils import get_utc_datetime
+        from litellm.utils import get_utc_datetime, utc_epoch_minute
 
         dual_cache = DualCache()
         check = ModelRateLimitingCheck(dual_cache=dual_cache)
         model_id = "io-tpm-mixed-sync-id"
         deployment_name = "bedrock_mantle/anthropic.claude-opus-4-7"
-        minute = get_utc_datetime().strftime("%H-%M")
-        itpm_key = f"global_router:{model_id}:{deployment_name}:itpm:{minute}"
-        tpm_key = f"{model_id}:{deployment_name}:tpm:{minute}"
+        window_id = utc_epoch_minute(get_utc_datetime())
+        itpm_key = f"global_router:{model_id}:{deployment_name}:itpm:v2:{window_id}"
+        tpm_key = f"{model_id}:{deployment_name}:tpm:v2:{window_id}"
         dual_cache.set_cache(key=itpm_key, value=5, ttl=60)
 
         kwargs = {
@@ -934,12 +937,12 @@ class TestModelRateLimitingCheckIOTokens:
 
     @pytest.mark.asyncio
     async def test_failure_refunds_itpm_reservation(self):
-        from litellm.utils import get_utc_datetime
+        from litellm.utils import get_utc_datetime, utc_epoch_minute
 
         dual_cache = DualCache()
         check = ModelRateLimitingCheck(dual_cache=dual_cache)
-        minute = get_utc_datetime().strftime("%H-%M")
-        itpm_key = f"global_router:io-refund-id:bedrock_mantle/test:itpm:{minute}"
+        window_id = utc_epoch_minute(get_utc_datetime())
+        itpm_key = f"global_router:io-refund-id:bedrock_mantle/test:itpm:v2:{window_id}"
         await dual_cache.async_increment_cache(key=itpm_key, value=20, ttl=60)
 
         reservation = {ITPM_RESERVED_KEY: 20, ITPM_CACHE_KEY: itpm_key}

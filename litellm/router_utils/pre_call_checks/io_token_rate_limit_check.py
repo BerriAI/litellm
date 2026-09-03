@@ -22,7 +22,7 @@ from litellm import token_counter
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.types.router import RouterCacheEnum, RouterErrors
-from litellm.utils import get_utc_datetime
+from litellm.utils import get_utc_datetime, utc_epoch_minute
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -93,15 +93,15 @@ def deployment_has_io_token_limits(deployment: dict) -> bool:
     return itpm is not None or otpm is not None
 
 
-def _get_cache_keys(deployment: dict, current_minute: str) -> tuple[str, str] | None:
+def _get_cache_keys(deployment: dict, window_id: int) -> tuple[str, str] | None:
     model_id: Final = deployment.get("model_info", {}).get("id")
     deployment_name: Final = deployment.get("litellm_params", {}).get("model")
     # Without both a deployment id and model name the key would collapse to a
     # shared "None:None" bucket across misconfigured deployments, so bail out.
     if model_id is None or deployment_name is None:
         return None
-    itpm_key = RouterCacheEnum.ITPM.value.format(id=model_id, model=deployment_name, current_minute=current_minute)
-    otpm_key = RouterCacheEnum.OTPM.value.format(id=model_id, model=deployment_name, current_minute=current_minute)
+    itpm_key = RouterCacheEnum.ITPM.value.format(id=model_id, model=deployment_name, window_id=window_id)
+    otpm_key = RouterCacheEnum.OTPM.value.format(id=model_id, model=deployment_name, window_id=window_id)
     return itpm_key, otpm_key
 
 
@@ -407,8 +407,8 @@ def io_token_pre_call_check(
     max_tokens: Final = _resolve_max_tokens(request_kwargs, deployment)
 
     dt: Final = get_utc_datetime()
-    current_minute: Final = dt.strftime("%H-%M")
-    cache_keys: Final = _get_cache_keys(deployment, current_minute)
+    window_id: Final = utc_epoch_minute(dt)
+    cache_keys: Final = _get_cache_keys(deployment, window_id)
     if cache_keys is None:
         return deployment
     itpm_key, otpm_key = cache_keys
@@ -470,8 +470,8 @@ async def async_io_token_pre_call_check(
     max_tokens: Final = _resolve_max_tokens(request_kwargs, deployment)
 
     dt: Final = get_utc_datetime()
-    current_minute: Final = dt.strftime("%H-%M")
-    cache_keys: Final = _get_cache_keys(deployment, current_minute)
+    window_id: Final = utc_epoch_minute(dt)
+    cache_keys: Final = _get_cache_keys(deployment, window_id)
     if cache_keys is None:
         return deployment
     itpm_key, otpm_key = cache_keys

@@ -22,7 +22,7 @@ from litellm.proxy.hooks.rate_limiter_utils import (
 )
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral
-from litellm.utils import get_utc_datetime
+from litellm.utils import get_utc_datetime, utc_epoch_minute
 
 
 class DynamicRateLimiterCache:
@@ -39,8 +39,8 @@ class DynamicRateLimiterCache:
 
     async def async_get_cache(self, model: str) -> int | None:
         dt: Final = self.time_fn()
-        current_minute: Final = dt.strftime("%H-%M")
-        key_name: Final = f"{current_minute}:{model}"
+        window_id: Final = utc_epoch_minute(dt)
+        key_name: Final = f"v2:{window_id}:{model}"
         _response: Final = await self.cache.async_get_cache(key=key_name)
         response: int | None = None
         if _response is not None:
@@ -63,9 +63,8 @@ class DynamicRateLimiterCache:
         """
         try:
             dt: Final = self.time_fn()
-            current_minute: Final = dt.strftime("%H-%M")
-
-            key_name: Final = f"{current_minute}:{model}"
+            window_id: Final = utc_epoch_minute(dt)
+            key_name: Final = f"v2:{window_id}:{model}"
             await self.cache.async_set_cache_sadd(key=key_name, value=value, ttl=self.ttl)
         except Exception as e:
             verbose_proxy_logger.exception(
