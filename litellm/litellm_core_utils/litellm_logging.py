@@ -2906,7 +2906,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 result.usage = batch_usage
                 batch_prompt_cost: Final = kwargs.get("batch_prompt_cost", None)
                 batch_completion_cost: Final = kwargs.get("batch_completion_cost", None)
-                if batch_prompt_cost is not None and batch_completion_cost is not None:
+                if (
+                    isinstance(batch_prompt_cost, float)
+                    and isinstance(batch_completion_cost, float)
+                    and isinstance(batch_cost, float)
+                ):
                     self.set_cost_breakdown(
                         input_cost=batch_prompt_cost,
                         output_cost=batch_completion_cost,
