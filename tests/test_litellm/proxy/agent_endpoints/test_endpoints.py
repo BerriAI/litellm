@@ -1062,3 +1062,72 @@ def test_merged_agent_card_url_has_no_double_slash_without_proxy_base_url(
     interface_url = merged["supportedInterfaces"][0]["url"]
     assert interface_url == f"{base_url.rstrip('/')}/a2a/agent-xyz"
     assert "//a2a" not in interface_url
+
+
+class _DbBackedProxyConfig:
+    """Round-trips `litellm_settings` through the DB overlay the proxy applies on every
+    `get_config()`, which is what re-assigns the `litellm.public_*` globals in production."""
+
+    def __init__(self) -> None:
+        self.stored_litellm_settings: dict = {}
+
+    async def get_config(self) -> dict:
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        config: dict = {"litellm_settings": {}}
+        if not self.stored_litellm_settings:
+            return config
+        return ProxyConfig()._update_config_fields(
+            current_config=config,
+            param_name="litellm_settings",
+            db_param_value=dict(self.stored_litellm_settings),
+        )
+
+    async def save_config(self, new_config: dict) -> None:
+        self.stored_litellm_settings = dict(new_config.get("litellm_settings") or {})
+
+
+def test_make_agent_public_twice_keeps_both_agents_public(monkeypatch):
+    """A second /make_public call must not drop the agent published by the first one."""
+    import litellm
+    from litellm.proxy.agent_endpoints import agent_registry as agent_registry_module
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+
+    registry = AgentRegistry()
+    registry.register_agent(_sample_agent_response(agent_id="agent-1", agent_name="Agent One"))
+    registry.register_agent(_sample_agent_response(agent_id="agent-2", agent_name="Agent Two"))
+
+    monkeypatch.setattr(agent_registry_module, "global_agent_registry", registry)
+    monkeypatch.setattr(litellm, "public_agent_groups", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", _DbBackedProxyConfig())
+
+    first = client.post("/v1/agents/agent-1/make_public", headers={"Authorization": "Bearer test-key"})
+    second = client.post("/v1/agents/agent-2/make_public", headers={"Authorization": "Bearer test-key"})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["public_agent_groups"] == ["agent-1", "agent-2"]
+    assert [agent.agent_id for agent in registry.get_public_agent_list()] == ["agent-1", "agent-2"]
+
+
+def test_make_agent_public_rejects_an_already_public_agent(monkeypatch):
+    """The duplicate guard must still fire when the published list comes back from the DB."""
+    import litellm
+    from litellm.proxy.agent_endpoints import agent_registry as agent_registry_module
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+
+    registry = AgentRegistry()
+    registry.register_agent(_sample_agent_response(agent_id="agent-1", agent_name="Agent One"))
+
+    monkeypatch.setattr(agent_registry_module, "global_agent_registry", registry)
+    monkeypatch.setattr(litellm, "public_agent_groups", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", _DbBackedProxyConfig())
+
+    first = client.post("/v1/agents/agent-1/make_public", headers={"Authorization": "Bearer test-key"})
+    duplicate = client.post("/v1/agents/agent-1/make_public", headers={"Authorization": "Bearer test-key"})
+
+    assert first.status_code == 200
+    assert duplicate.status_code == 400
+    assert "already in public agent groups" in duplicate.json()["detail"]

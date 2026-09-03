@@ -22,11 +22,14 @@ test.describe("AI Hub (internal admin view)", () => {
     // on the disabled-Next button or the success toast.
     await expect(modal.getByText(/Select All \(\d+\)/)).toBeVisible({ timeout: 5_000 });
 
-    // Step 1: pick the seeded models via "Select All"
-    await modal.getByText(/Select All/i).click();
+    // Step 1: pick the seeded models via "Select All". check() rather than click() because
+    // the modal preselects groups that are already public, and a click would clear them.
+    await modal.getByRole("checkbox", { name: /Select All/ }).check();
 
     // Move to confirm step
-    await modal.getByRole("button", { name: "Next" }).click();
+    const next = modal.getByRole("button", { name: "Next" });
+    await expect(next).toBeEnabled();
+    await next.click();
     await expect(modal.getByText("Confirm Making Models Public")).toBeVisible({ timeout: 5_000 });
 
     // Submit
