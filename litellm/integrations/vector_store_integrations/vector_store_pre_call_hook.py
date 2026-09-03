@@ -7,8 +7,9 @@ It searches the vector store for relevant context and appends it to the messages
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_args
 
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
@@ -22,6 +23,7 @@ from litellm.types.utils import CallTypes, StandardCallbackDynamicParams
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
     VectorStoreSearchFailure,
+    VectorStoreSearchFailureMode,
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
 )
@@ -34,6 +36,8 @@ else:
     LiteLLMLoggingObj = Any
 
 SEARCH_FAILURES_FIELD: Final = "vector_store_search_failures"
+_DEFAULT_FAILURE_MODE: Final[VectorStoreSearchFailureMode] = "annotate"
+_FAILURE_MODE_ADAPTER: Final = TypeAdapter(VectorStoreSearchFailureMode)
 
 
 class ProxyRuntime(Protocol):
@@ -153,7 +157,7 @@ class VectorStorePreCallHook(CustomLogger):
                 litellm_logging_obj.model_call_details[detail] = value
 
         if augmentation.failures:
-            match litellm.vector_store_search_failure_mode:
+            match _configured_failure_mode():
                 case "error":
                     raise VectorStoreSearchError(failures=augmentation.failures, model=model)
                 case "annotate":
@@ -435,3 +439,16 @@ def _requested_vector_store_ids(non_default_params: Mapping[str, object]) -> tup
     if not isinstance(requested, (list, tuple)):
         return ()
     return tuple(str(vector_store_id) for vector_store_id in requested)
+
+
+def _configured_failure_mode() -> VectorStoreSearchFailureMode:
+    try:
+        return _FAILURE_MODE_ADAPTER.validate_python(litellm.vector_store_search_failure_mode)
+    except ValidationError:
+        verbose_logger.warning(
+            "Unsupported vector_store_search_failure_mode=%r, falling back to %r. Supported modes: %s",
+            litellm.vector_store_search_failure_mode,
+            _DEFAULT_FAILURE_MODE,
+            ", ".join(get_args(VectorStoreSearchFailureMode)),
+        )
+        return _DEFAULT_FAILURE_MODE
