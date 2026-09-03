@@ -583,6 +583,10 @@ mod tests {
             .data;
         assert_eq!(body["model"], "pixtral-12b-2409");
         assert_eq!(body["include_image_base64"], true);
+        assert_eq!(
+            body["document"]["document_url"],
+            "data:application/pdf;base64,abc"
+        );
     }
 
     #[test]
@@ -821,8 +825,8 @@ mod tests {
     #[test]
     fn document_intelligence_url_combines_pages_and_features() {
         let url = complete_document_intelligence_url(
-            Some("https://example.cognitiveservices.azure.com"),
-            "prebuilt-layout",
+            Some("https://example.cognitiveservices.azure.com/"),
+            "azure_ai/doc-intelligence/prebuilt-layout",
             &mapped_params(json!({"pages": [0, 1, 2], "features": ["keyValuePairs", "languages"]})),
             &|_| None,
         )
