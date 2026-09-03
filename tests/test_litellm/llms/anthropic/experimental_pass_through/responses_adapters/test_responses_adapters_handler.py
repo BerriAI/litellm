@@ -100,7 +100,7 @@ async def test_streaming_message_start_reports_the_provider_local_model(requeste
 
 @pytest.mark.asyncio
 async def test_streaming_hands_the_logging_object_the_message_id_the_caller_is_streamed(
-    respx_mock: respx.MockRouter, monkeypatch
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
     """
     The bridge mints the ``msg_`` id itself, and it is the only request id a streaming
@@ -110,7 +110,6 @@ async def test_streaming_hands_the_logging_object_the_message_id_the_caller_is_s
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-lit6825-test")
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     respx_mock.post("https://api.openai.com/v1/responses").respond(
         status_code=200,
