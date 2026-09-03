@@ -17,7 +17,9 @@
     "litellm-rust/crates/core/src/providers/azure_ai/ocr/transformation.rs",
     "litellm-rust/crates/core/src/providers/vertex_ai/ocr/transformation.rs",
     "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-    "litellm-rust/crates/ai-gateway/src/integrations/custom_logger/mod.rs"
+    "litellm-rust/crates/ai-gateway/src/integrations/custom_logger/mod.rs",
+    "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+    "litellm-rust/crates/ai-gateway/src/ocr/request_body.rs"
   ],
   "entries": [
     {
@@ -389,236 +391,314 @@
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_pdf_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection is Python-only preprocessing before the bridge call"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "mime_type_detects_pdf",
+      "justification": "both assert .pdf resolves to application/pdf"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_png_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "mime_type_detects_png",
+      "justification": "both assert .png resolves to image/png"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_jpg_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "mime_type_detects_jpg",
+      "justification": "both assert .jpg resolves to image/jpeg"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_jpeg_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "mime_type_detects_jpeg",
+      "justification": "both assert .jpeg resolves to image/jpeg"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_gif_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "mime_type_detects_gif",
+      "justification": "both assert .gif resolves to image/gif"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_webp_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "mime_type_detects_webp",
+      "justification": "both assert .webp resolves to image/webp"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_tiff_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "mime_type_detects_tiff",
+      "justification": "both assert .tiff resolves to image/tiff"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_tif_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "mime_type_detects_tif",
+      "justification": "both assert .tif resolves to image/tiff"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_bmp_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "mime_type_detects_bmp",
+      "justification": "both assert .bmp resolves to image/bmp"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_be_case_insensitive",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection case handling"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "mime_type_is_case_insensitive",
+      "justification": "both assert .PDF/.PNG resolve to the same MIME as lowercase"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_fallback_for_unknown_extension",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection fallback"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "mime_type_falls_back_for_unknown_extension",
+      "justification": "both assert an unknown extension resolves to a non-empty fallback (Rust always application/octet-stream, Python may consult mimetypes first)"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_convert_pdf_pathlib_path_to_document_url",
-      "status": "unmapped",
-      "reason": "file-normalization: local-path-to-data-URI conversion happens in Python"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "convert_pdf_path_to_document_url",
+      "justification": "both write a .pdf temp file, assert type document_url, data:application/pdf;base64 prefix and round-tripped bytes"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_convert_image_pathlib_path_to_image_url",
-      "status": "unmapped",
-      "reason": "file-normalization: local-path-to-data-URI conversion"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "convert_image_path_to_image_url",
+      "justification": "both write a .png temp file, assert type image_url, data:image/png;base64 prefix and round-tripped bytes"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_reject_bare_str_path",
-      "status": "unmapped",
-      "reason": "file-normalization: arbitrary-file-read guard on bare str paths"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "convert_rejects_bare_str_path",
+      "justification": "both assert a bare string path is rejected with the \"does not accept bare str values\" error"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_convert_pathlib_path",
-      "status": "unmapped",
-      "reason": "file-normalization: local-path-to-data-URI conversion"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "convert_pathbuf_matches_path_behavior",
+      "justification": "both assert a filesystem path value produces document_url with application/pdf data URI"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_convert_raw_bytes",
-      "status": "unmapped",
-      "reason": "file-normalization: raw-bytes-to-data-URI conversion"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "convert_raw_bytes_uses_fallback_mime",
+      "justification": "both assert raw bytes fall back to application/octet-stream document_url and round-trip"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_convert_raw_bytes_with_explicit_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: explicit MIME override on raw bytes"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "convert_raw_bytes_with_explicit_mime_type",
+      "justification": "both assert an explicit application/pdf mime_type on raw bytes yields document_url"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_convert_raw_bytes_with_image_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: explicit MIME override on raw bytes"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "convert_raw_bytes_with_image_mime_type",
+      "justification": "both assert an explicit image/jpeg mime_type on raw bytes yields image_url"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_convert_file_like_object",
-      "status": "unmapped",
-      "reason": "file-normalization: file-like-object conversion"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "convert_reader_without_name",
+      "justification": "both assert a nameless file-like reader is base64 encoded into document_url with the original bytes"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_convert_file_like_object_with_name",
-      "status": "unmapped",
-      "reason": "file-normalization: file-like-object name-based MIME detection"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "convert_reader_with_name_detects_mime",
+      "justification": "both assert a file-like reader named *.png yields image_url with image/png"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_raise_error_for_missing_file_field",
-      "status": "unmapped",
-      "reason": "file-normalization: missing-field validation"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "convert_errors_for_missing_file_field",
+      "justification": "both assert an absent file value fails with \"must include a 'file' field\""
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_raise_error_for_nonexistent_pathlib_path",
-      "status": "unmapped",
-      "reason": "file-normalization: missing-file validation"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "convert_errors_for_nonexistent_path",
+      "justification": "both assert a nonexistent path fails with \"File not found\""
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_raise_error_for_empty_file",
-      "status": "unmapped",
-      "reason": "file-normalization: empty-file validation"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "convert_errors_for_empty_file",
+      "justification": "both assert an empty file fails with \"File is empty\""
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_raise_error_for_unsupported_type",
-      "status": "unmapped",
-      "reason": "file-normalization: unsupported input type validation"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "convert_errors_for_unsupported_type",
+      "justification": "both assert an unsupported input type fails with \"Unsupported file input type\""
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_raise_error_for_invalid_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME-type injection validation"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "convert_errors_for_invalid_mime_type",
+      "justification": "both assert a mime_type containing header-injection characters fails with \"Invalid MIME type\""
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_override_mime_type_for_pathlib_path",
-      "status": "unmapped",
-      "reason": "file-normalization: explicit MIME override precedence"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "convert_explicit_mime_overrides_path_detection",
+      "justification": "both assert explicit image/png overrides the .pdf extension and yields image_url"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_build_document_url_for_pdf",
-      "status": "unmapped",
-      "reason": "file-normalization: multipart upload conversion"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "upload_builds_document_url_for_pdf",
+      "justification": "both assert a PDF upload yields document_url with application/pdf data URI and round-tripped bytes"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_build_image_url_for_png",
-      "status": "unmapped",
-      "reason": "file-normalization: multipart upload conversion"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "upload_builds_image_url_for_png",
+      "justification": "both assert a PNG upload yields image_url with image/png data URI"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_build_image_url_for_jpeg",
-      "status": "unmapped",
-      "reason": "file-normalization: multipart upload conversion"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "upload_builds_image_url_for_jpeg",
+      "justification": "both assert a JPEG upload yields image_url with image/jpeg data URI"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_detect_mime_from_filename_when_content_type_is_octet_stream",
-      "status": "unmapped",
-      "reason": "file-normalization: filename-based MIME fallback"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "upload_detects_mime_from_filename_when_content_type_is_octet_stream",
+      "justification": "both assert application/octet-stream content type defers to the .pdf filename"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_detect_mime_from_filename_when_content_type_is_none",
-      "status": "unmapped",
-      "reason": "file-normalization: filename-based MIME fallback"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "upload_detects_mime_from_filename_when_content_type_is_none",
+      "justification": "both assert a missing content type defers to the .png filename"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_fallback_to_octet_stream_for_unknown",
-      "status": "unmapped",
-      "reason": "file-normalization: default MIME fallback"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "upload_falls_back_to_octet_stream_for_unknown",
+      "justification": "both assert no filename and no content type yields application/octet-stream document_url"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_preserve_base64_content_correctly",
-      "status": "unmapped",
-      "reason": "file-normalization: binary round-trip through base64"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "upload_preserves_binary_content_through_base64",
+      "justification": "both decode the data URI and assert the arbitrary binary bytes round-trip"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_strip_mime_parameters_from_content_type",
-      "status": "unmapped",
-      "reason": "file-normalization: content-type parameter stripping"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "upload_strips_mime_parameters_from_content_type",
+      "justification": "both assert \"application/pdf; charset=utf-8\" yields a data:application/pdf;base64 URI"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_strip_mime_parameters_with_multiple_params",
-      "status": "unmapped",
-      "reason": "file-normalization: content-type parameter stripping"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/file_input.rs",
+      "rust_test": "upload_strips_multiple_mime_parameters",
+      "justification": "both assert multiple content-type parameters are stripped to image/png"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestProxySecurityGuard::test_should_reject_file_type_document_in_json_body",
-      "status": "unmapped",
-      "reason": "proxy-layer JSON-body file-type guard, a different mechanism than Rust's URL-fetch SSRF guard"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/request_body.rs",
+      "rust_test": "json_body_rejects_file_type_document",
+      "justification": "both assert a JSON body with document.type=file fails with \"not supported through the JSON API\""
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestProxySecurityGuard::test_should_accept_document_url_type_in_json_body",
-      "status": "unmapped",
-      "reason": "proxy-layer JSON-body parsing"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/request_body.rs",
+      "rust_test": "json_body_accepts_document_url_type",
+      "justification": "both assert a document_url JSON body parses and keeps document.type"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestProxySecurityGuard::test_should_raise_on_invalid_json_body",
-      "status": "unmapped",
-      "reason": "proxy-layer JSON-body parsing error path"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/request_body.rs",
+      "rust_test": "json_body_rejects_invalid_json",
+      "justification": "both assert malformed JSON fails with \"Invalid JSON in request body\""
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestProxySecurityGuard::test_should_ignore_document_form_field_injection",
-      "status": "unmapped",
-      "reason": "proxy-layer multipart form-field injection guard, a different mechanism than Rust's URL-fetch SSRF guard"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/request_body.rs",
+      "rust_test": "multipart_ignores_document_form_field_injection",
+      "justification": "both assert an injected document form field is ignored and the uploaded PDF becomes the document_url data URI"
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_transformation.py",
@@ -1079,6 +1159,11 @@
       "rust_file": "litellm-rust/crates/ai-gateway/src/integrations/custom_logger/mod.rs",
       "rust_test": "rust_custom_logger_reads_success_payload_for_ocr",
       "reason": "Rust-internal custom-logger dispatch for OCR payloads has no Python unit test at this layer"
+    },
+    {
+      "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/request_body.rs",
+      "rust_test": "multipart_rejects_empty_upload",
+      "reason": "empty-upload rejection is asserted inline in the Python multipart parser but has no dedicated Python test"
     }
   ]
 }

@@ -3,11 +3,17 @@ use litellm_core::call_lifecycle::CallLifecycle;
 use serde_json::Value;
 
 mod common_utils;
+mod file_input;
 mod handler;
 mod hooks;
 mod prepare;
+mod request_body;
 mod types;
 
+pub use file_input::{
+    FileInput, build_document_from_upload, convert_file_document_to_url_document, get_mime_type,
+};
+pub use request_body::{parse_ocr_json_body, parse_ocr_multipart_form};
 pub use types::OcrRequest;
 
 use handler::execute_ocr_provider_call;

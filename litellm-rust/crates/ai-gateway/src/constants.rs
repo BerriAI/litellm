@@ -40,3 +40,19 @@ pub(crate) const MESSAGES_ROUTE_PATH: &str = "/v1/messages";
 #[cfg(feature = "server")]
 pub(crate) const MESSAGES_HEADERS_NOT_FORWARDED: &[&str] =
     &["authorization", "connection", "content-length", "host"];
+
+/// Fallback MIME type for OCR file input whose type cannot be detected.
+pub(crate) const OCR_DEFAULT_MIME_TYPE: &str = "application/octet-stream";
+
+/// File extension (lowercase, no dot) to MIME type for OCR file input.
+pub(crate) const OCR_MIME_TYPES_BY_EXTENSION: &[(&str, &str)] = &[
+    ("pdf", "application/pdf"),
+    ("png", "image/png"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("gif", "image/gif"),
+    ("webp", "image/webp"),
+    ("tiff", "image/tiff"),
+    ("tif", "image/tiff"),
+    ("bmp", "image/bmp"),
+];
