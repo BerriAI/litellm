@@ -26,10 +26,8 @@ from litellm.proxy.hooks.model_based_tag_rate_limits_hook import (
     _build_limits_index,
     _ConfiguredLimit,
     _current_admission_token,
-    _discard_pending_concurrency_keys,
     _extract_team_id,
     _inflight_key,
-    _pending_concurrency_keys,
     _pending_reservations_cache_key,
     _PROXY_ModelBasedTagRateLimitsHook,
     _record_admission_time,
@@ -3168,22 +3166,22 @@ async def test_next_hops_admission_releases_a_prior_hops_leaked_reservation(time
 
 
 @pytest.mark.asyncio
-async def test_concurrent_batch_siblings_dedupe_to_exactly_one_concurrency_reservation(time_controller):
+async def test_concurrent_batch_siblings_each_reserve_their_own_unit_and_a_tight_cap_still_rejects(time_controller):
     """
-    Router.abatch_completion's comma-separated multi-model dispatch runs
-    each model concurrently as its own asyncio.Task, but every branch is
-    handed the identical litellm_logging_obj (the proxy attaches one to the
-    request before the comma-split), so two genuinely concurrent branches
-    share one model_call_details -- and, confirmed live, that shared
-    Logging instance means only ONE terminal success/failure event will
-    ever fire for the whole dispatch (litellm's own has_logged_{event_type}
-    dedup), never one per branch. Reserving one unit per branch and relying
-    on that many independent releases was the wrong model: with only one
-    release ever happening, every other branch's own reservation would leak
-    until its safety TTL on every ordinary multi-model batch call. Admission
-    instead reserves at most one unit per key for the whole dispatch: both
-    branches here admit successfully under a limit of 1, and only one real
-    reservation exists regardless.
+    Veria AI finding, independently verified by wall-clock timing: three
+    abatch_completion branches with a 1s mock delay each complete in ~1s
+    total, not serially, even when two dial the identical deployment --
+    concurrency and terminal-event-count are two separate things. Only ONE
+    terminal event ever fires for the whole dispatch (litellm's own
+    has_logged_{event_type} dedup on the shared Logging instance every
+    branch reuses), but that does not mean the dispatch only ever needs
+    one concurrency unit: a concurrency limit exists to cap real
+    simultaneous load, so admission must reserve one unit per branch that
+    actually admits, never deduped by key just because a sibling of the
+    same dispatch already holds one. Two branches racing the identical
+    deployment under a limit of 1 are two real concurrent calls, so the
+    second is correctly rejected, exactly like two genuinely separate
+    concurrent requests would be.
     """
     limiter = _make_limiter(time_controller)
     router = _concurrency_router(limit=1)
@@ -3200,19 +3198,22 @@ async def test_concurrent_batch_siblings_dedupe_to_exactly_one_concurrency_reser
         asyncio.create_task(_admit()), asyncio.create_task(_admit()), return_exceptions=True
     )
     rejections = [result for result in results if isinstance(result, ProxyRateLimitError)]
-    assert rejections == []
-    assert len(_pending_concurrency_keys(request_kwargs)) == 1
+    assert len(rejections) == 1
 
 
 @pytest.mark.asyncio
-async def test_three_batch_siblings_still_dedupe_to_exactly_one_concurrency_reservation(time_controller):
-    """A dispatch's own reservation count does not scale with how many
-    models are in its comma-separated list."""
+async def test_three_concurrent_batch_siblings_each_reserve_their_own_unit(time_controller):
+    """
+    A dispatch's own reservation count scales with how many branches
+    genuinely admit, not with dispatch width collapsed to one, and not
+    with key uniqueness: three branches targeting the identical deployment
+    under a limit of 3 each reserve their own real unit.
+    """
     limiter = _make_limiter(time_controller)
-    router = _concurrency_router(limit=1)
+    router = _concurrency_router(limit=3)
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
-    request_kwargs, _kwargs = _call_context(["end_user_id:u1"])
+    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
 
     async def _admit() -> None:
         await limiter.async_filter_deployments(
@@ -3224,68 +3225,22 @@ async def test_three_batch_siblings_still_dedupe_to_exactly_one_concurrency_rese
     )
     rejections = [result for result in results if isinstance(result, ProxyRateLimitError)]
     assert rejections == []
-    assert len(_pending_concurrency_keys(request_kwargs)) == 1
+    pending = kwargs.get(_PENDING_CONCURRENCY_KEYS_FIELD)
+    assert pending is not None and len(pending) == 3
 
 
 @pytest.mark.asyncio
-async def test_rejected_atomic_batch_rolls_back_its_own_newly_staked_concurrency_claim(time_controller):
-    """
-    A concurrency claim is staked synchronously before the atomic
-    check-and-increment it's part of even runs, to close the race two
-    concurrent siblings could otherwise hit (see
-    _PENDING_CONCURRENCY_KEYS_FIELD's docstring). If that batch then
-    rejects because of a *different* check in it, nothing was actually
-    incremented for the concurrency claim either -- the whole batch is
-    all-or-nothing -- so the staked claim must be rolled back. Left in
-    place, it would falsely tell a later admission this key is already
-    covered by a real reservation that never actually happened.
-    """
-    limiter = _make_limiter(time_controller)
-    router = litellm.Router(
-        model_list=[
-            _deployment(
-                "grp",
-                "dep-1",
-                {
-                    "concurrency_limits": {
-                        "limits": [{"name": "inflight", "tag_id": "shared_pool", "limit": 2, "period_seconds": 300}]
-                    },
-                    "request_limits": {
-                        "limits": [{"name": "per_period", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300}]
-                    },
-                },
-            )
-        ]
-    )
-    limiter.update_variables(llm_router=router)
-    healthy = router.model_list
-
-    first_request_kwargs, _first_kwargs = _call_context(["end_user_id:u1", "shared_pool:pool-a"])
-    await limiter.async_filter_deployments(
-        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=first_request_kwargs
-    )
-
-    second_request_kwargs, _second_kwargs = _call_context(["end_user_id:u1", "shared_pool:pool-a"])
-    with pytest.raises(ProxyRateLimitError):
-        await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=second_request_kwargs
-        )
-
-    assert _pending_concurrency_keys(second_request_kwargs) == frozenset()
-
-
-@pytest.mark.asyncio
-async def test_the_dispatchs_one_surviving_success_event_fully_releases_its_single_reservation(time_controller):
+async def test_the_dispatchs_one_surviving_success_event_releases_every_branchs_own_reservation(time_controller):
     """
     Only one terminal event -- success or failure -- ever fires for the
-    whole abatch_completion dispatch. Since admission reserves exactly one
-    unit for the dispatch regardless of how many branches matched it, that
-    one event's own unconditional release always exactly balances it:
-    whichever branch's data happens to be reflected when it fires, the
-    concurrency slot is fully freed for the request as a whole.
+    whole abatch_completion dispatch. Since admission reserves one real
+    unit per branch that actually admitted (not deduped to one for the
+    whole dispatch), that one event's own unconditional release must free
+    every one of them together, not just one: there is no second, later
+    event that could ever release the rest.
     """
     limiter = _make_limiter(time_controller)
-    router = _concurrency_router(limit=1)
+    router = _concurrency_router(limit=2)
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
     request_kwargs, kwargs = _call_context(["end_user_id:u1"])
@@ -3297,7 +3252,7 @@ async def test_the_dispatchs_one_surviving_success_event_fully_releases_its_sing
 
     await asyncio.create_task(_admit())
     await asyncio.create_task(_admit())
-    assert len(_pending_concurrency_keys(request_kwargs)) == 1
+    assert len(kwargs.get(_PENDING_CONCURRENCY_KEYS_FIELD)) == 2
 
     kwargs["standard_logging_object"] = {
         "model_group": "grp",
@@ -3308,7 +3263,15 @@ async def test_the_dispatchs_one_surviving_success_event_fully_releases_its_sing
     await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
     await asyncio.sleep(0)
 
-    assert _pending_concurrency_keys(request_kwargs) == frozenset()
+    assert not kwargs.get(_PENDING_CONCURRENCY_KEYS_FIELD)
+    # Both units are free again: two fresh requests both fit under the
+    # limit=2 cap, proving neither branch's own unit leaked.
+    await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+    )
     await limiter.async_filter_deployments(
         model="grp",
         healthy_deployments=healthy,
@@ -3318,10 +3281,10 @@ async def test_the_dispatchs_one_surviving_success_event_fully_releases_its_sing
 
 
 @pytest.mark.asyncio
-async def test_the_dispatchs_one_surviving_failure_event_fully_releases_its_single_reservation(time_controller):
+async def test_the_dispatchs_one_surviving_failure_event_releases_every_branchs_own_reservation(time_controller):
     """Same as the success-event version above, but for the failure path."""
     limiter = _make_limiter(time_controller)
-    router = _concurrency_router(limit=1)
+    router = _concurrency_router(limit=2)
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
     request_kwargs, kwargs = _call_context(["end_user_id:u1"])
@@ -3333,7 +3296,7 @@ async def test_the_dispatchs_one_surviving_failure_event_fully_releases_its_sing
 
     await asyncio.create_task(_admit())
     await asyncio.create_task(_admit())
-    assert len(_pending_concurrency_keys(request_kwargs)) == 1
+    assert len(kwargs.get(_PENDING_CONCURRENCY_KEYS_FIELD)) == 2
 
     kwargs["standard_logging_object"] = {
         "model_group": "grp",
@@ -3343,7 +3306,13 @@ async def test_the_dispatchs_one_surviving_failure_event_fully_releases_its_sing
     }
     await limiter.async_log_failure_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
 
-    assert _pending_concurrency_keys(request_kwargs) == frozenset()
+    assert not kwargs.get(_PENDING_CONCURRENCY_KEYS_FIELD)
+    await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+    )
     await limiter.async_filter_deployments(
         model="grp",
         healthy_deployments=healthy,
@@ -3415,7 +3384,7 @@ async def test_a_hop_matching_two_concurrency_scoped_entries_releases_both_reser
 
 
 @pytest.mark.asyncio
-async def test_real_pipeline_abatch_completion_reserves_and_releases_exactly_one_concurrency_unit(
+async def test_real_pipeline_abatch_completion_reserves_one_unit_per_branch_and_releases_them_all(
     time_controller, monkeypatch
 ):
     """
@@ -3428,17 +3397,21 @@ async def test_real_pipeline_abatch_completion_reserves_and_releases_exactly_one
     ONE terminal success/failure event ever fires for the whole dispatch,
     never one per branch, since every branch checks the identical
     instance's has_logged_{event_type} flag before dispatching to any
-    CustomLogger. This drives the real hook (registered in litellm.callbacks,
+    CustomLogger -- but also confirmed live (wall-clock timing) that the
+    branches themselves genuinely run concurrently at the provider level
+    regardless. This drives the real hook (registered in litellm.callbacks,
     invoked by Router.async_callback_filter_deployments and litellm's own
     logging worker, not called directly) through a real 3-branch dispatch
-    of the same model against a concurrency limit of 1: without dedup, the
-    second and third branches would each be rejected outright (confirmed
-    empirically without the admission-side fix); with it, all three succeed,
-    and the single reservation is fully released once the one surviving
-    terminal event fires -- checked after an explicit flush of litellm's
-    own async logging worker, not a fixed sleep, since that worker (unlike
-    this hook's own success/failure hooks in the other tests here) runs the
-    completion callback on its own background task, not inline.
+    of the same model against a concurrency limit of 2: if admission
+    deduped by key instead of reserving one real unit per branch, all
+    three would wrongly admit (one reservation is well within a limit of
+    2); reserving genuinely means exactly one of the three is rejected,
+    and the two real reservations that did admit are released together by
+    the single surviving terminal event -- checked after an explicit flush
+    of litellm's own async logging worker, not a fixed sleep, since that
+    worker (unlike this hook's own success/failure hooks in the other
+    tests here) runs the completion callback on its own background task,
+    not inline.
     """
     from unittest.mock import AsyncMock, MagicMock
 
@@ -3450,7 +3423,32 @@ async def test_real_pipeline_abatch_completion_reserves_and_releases_exactly_one
     from litellm.proxy.utils import ProxyLogging
 
     limiter = _make_limiter(time_controller)
-    router = _concurrency_router(limit=1)
+    # mock_delay keeps every branch genuinely in flight at once, the same
+    # way the wall-clock verification did: without it, a branch's own
+    # near-instant mock completion can release its reservation before a
+    # later branch even reaches its own admission, masking the bug this
+    # test exists to catch. num_retries=0 keeps the rejected branch's own
+    # 429 as the final result instead of Router transparently retrying it
+    # (confirmed live: a retried rejection can still eventually succeed
+    # once an earlier branch's own release frees a slot, which would mask
+    # the same bug from a different angle).
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "grp",
+                "litellm_params": {"model": "gpt-4o", "mock_response": "ok", "mock_delay": 0.2},
+                "model_info": {
+                    "id": "dep-1",
+                    "tag_rate_limits": {
+                        "concurrency_limits": {
+                            "limits": [{"name": "inflight", "tag_id": "end_user_id", "limit": 2, "period_seconds": 300}]
+                        }
+                    },
+                },
+            }
+        ],
+        num_retries=0,
+    )
     limiter.update_variables(llm_router=router)
     monkeypatch.setattr(litellm, "callbacks", [limiter])
 
@@ -3495,12 +3493,15 @@ async def test_real_pipeline_abatch_completion_reserves_and_releases_exactly_one
     if asyncio.iscoroutine(resolved):
         resolved = await resolved
     assert len(resolved) == 3
-    assert not any(isinstance(branch_result, Exception) for branch_result in resolved)
+    rejections = [branch_result for branch_result in resolved if isinstance(branch_result, Exception)]
+    assert len(rejections) == 1
 
     await GLOBAL_LOGGING_WORKER.flush()
     await asyncio.sleep(0.2)
 
-    assert _pending_concurrency_keys(data) == frozenset()
+    logging_obj = data.get("litellm_logging_obj")
+    model_call_details = getattr(logging_obj, "model_call_details", None)
+    assert not model_call_details.get(_PENDING_CONCURRENCY_KEYS_FIELD)
 
 
 @pytest.mark.asyncio

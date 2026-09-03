@@ -577,21 +577,25 @@ _INDEX_TTL_SECONDS: Final = 5.0
 # branch's own completion checks the identical instance's
 # `has_logged_{event_type}` flag (`Logging.should_run_logging`) before
 # dispatching to any registered `CustomLogger`, and whichever branch gets
-# there first flips it for all the others. Reserving one unit per matching
-# branch and relying on that many independent releases was the wrong model:
-# with only one release ever happening, every other branch's own
-# reservation would leak until `_CONCURRENCY_MIN_SAFETY_TTL_SECONDS` on
-# every ordinary multi-model batch call, not just a race. Admission
-# (`async_filter_deployments`, via `_pending_concurrency_keys`) instead
-# reserves at most one unit per key for the whole dispatch regardless of
-# how many branches match it -- every branch after the first rides along on
-# that one reservation for free -- so the single release that does happen
-# always exactly balances what was reserved. Each entry also carries an
-# admission-scoped token (see `_current_admission_token`), used only by
+# there first flips it for all the others.
+#
+# That single-terminal-event fact is independent of how many branches are
+# genuinely, concurrently in flight at the provider level -- also confirmed
+# live (wall-clock: three branches with a 1s mock delay each, including two
+# dialing the identical deployment, complete in ~1s total, not serially).
+# A concurrency limit exists to cap that real simultaneous load, so
+# admission must still reserve one unit per branch that actually admits,
+# never deduped by key just because a sibling already holds one -- two
+# branches racing the same deployment are two real concurrent calls, and
+# collapsing them to one reservation would undercount exactly the load the
+# limit exists to cap. What changes for the single terminal event is only
+# the release side: since nothing else will ever come along afterward to
+# release anything else, that one event releases everything still pending
+# for the call in one shot, not "this branch's own key" -- there is no
+# second, later event to race against by doing so. Each entry also carries
+# an admission-scoped token (see `_current_admission_token`), used only by
 # `_release_stale_hop_reservations`'s *own* admission-time cleanup of a
-# prior hop of the identical serial fallback chain, never by the terminal
-# release hooks, which release everything still pending unconditionally --
-# safe now that at most one reservation per key ever exists at a time.
+# prior hop of the identical serial fallback chain.
 _PENDING_CONCURRENCY_KEYS_FIELD: Final[str] = "_model_based_tag_rate_limits_pending_concurrency_keys"
 
 # Identifies which admission call queued a given reservation, scoped by
@@ -1011,42 +1015,6 @@ def _queue_pending_reservations(
     )  # mutable-ok: see comment above
 
 
-def _pending_concurrency_keys(request_kwargs: Mapping[str, object]) -> frozenset[str]:
-    """Every concurrency key already queued for this call, by any branch of
-    an `abatch_completion` dispatch -- see `_PENDING_CONCURRENCY_KEYS_FIELD`'s
-    docstring for why a dispatch reserves at most one unit per key regardless
-    of how many branches match it."""
-    logging_obj: Final = request_kwargs.get("litellm_logging_obj")
-    model_call_details: Final = getattr(logging_obj, "model_call_details", None)
-    if not isinstance(model_call_details, dict):
-        return frozenset()
-    pending: Final = model_call_details.get(_PENDING_CONCURRENCY_KEYS_FIELD)
-    if not isinstance(pending, list):
-        return frozenset()
-    return frozenset(entry[0] for entry in pending)
-
-
-def _discard_pending_concurrency_keys(request_kwargs: Mapping[str, object], keys: Iterable[str]) -> None:
-    """Rolls back this hop's own just-staked claim(s) for `keys` -- used
-    when the atomic batch they were staked ahead of ends up rejected, since
-    `_atomic_check_and_increment`'s all-or-nothing contract means nothing
-    was actually incremented for them; leaving the claim in place would
-    both corrupt release-time bookkeeping (nothing to release against) and
-    make a genuinely later sibling wrongly skip its own real reservation,
-    believing this one already covers it."""
-    logging_obj: Final = request_kwargs.get("litellm_logging_obj")
-    model_call_details: Final = getattr(logging_obj, "model_call_details", None)
-    if not isinstance(model_call_details, dict):
-        return
-    pending: Final = model_call_details.get(_PENDING_CONCURRENCY_KEYS_FIELD)
-    if not isinstance(pending, list):
-        return
-    for key in keys:
-        entry = next((candidate for candidate in pending if candidate[0] == key), None)
-        if entry is not None:
-            pending.remove(entry)  # mutable-ok: shared, request-scoped accumulator; see field's own docstring
-
-
 def _record_admission_time(request_kwargs: Mapping[str, object], model_group: str, now: float) -> None:
     """Stash this hop's admission timestamp under its own model_group -- see
     `_ADMISSION_TIME_FIELD`'s docstring for why keyed, not scalar. Silently a
@@ -1366,7 +1334,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         key_alias: Final = _extract_key_alias(resolved_request_kwargs, metadata_variable_name)
         now: Final = self._time_provider().timestamp()
         _record_admission_time(resolved_request_kwargs, model, now)
-        raw_classified: Final = tuple(
+        classified: Final = tuple(
             check
             for configured_limit in configured
             if (
@@ -1383,34 +1351,6 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             )
             is not None
         )
-        # A dispatch reserves at most one concurrency unit per key regardless
-        # of how many abatch_completion branches match it -- see
-        # _PENDING_CONCURRENCY_KEYS_FIELD's own docstring for why. Staked
-        # synchronously below, before this function's next `await`: asyncio
-        # only switches tasks at an `await`, so a sibling branch admitting
-        # concurrently can never observe this hop mid-decision, only either
-        # fully before or fully after it -- closing the race that would
-        # otherwise let two branches both see "not yet reserved" and each
-        # stake their own.
-        already_pending_keys: Final = _pending_concurrency_keys(resolved_request_kwargs)
-        own_new_concurrency_claims: Final = []  # mutable-ok: staked synchronously below before any further await; see comment above
-        deduped_classified: Final = []  # mutable-ok: see comment above
-        for check in raw_classified:
-            # not Final: rebound each loop iteration
-            already_claimed = check.configured_limit.unit == "concurrency" and (
-                check.key in already_pending_keys or any(key == check.key for key, _ in own_new_concurrency_claims)
-            )
-            if already_claimed:
-                continue
-            if check.configured_limit.unit == "concurrency":
-                own_new_concurrency_claims.append((check.key, _partition_key(check.configured_limit.entry)))
-            deduped_classified.append(check)
-        classified: Final = tuple(deduped_classified)
-        if own_new_concurrency_claims:
-            _queue_pending_reservations(
-                resolved_request_kwargs, _PENDING_CONCURRENCY_KEYS_FIELD, own_new_concurrency_claims
-            )
-
         read_only_checks: Final = tuple((c.configured_limit, c.tag_value, c.key) for c in classified if not c.is_atomic)
         atomic_checks: Final = tuple((c.configured_limit, c.tag_value, c.key) for c in classified if c.is_atomic)
 
@@ -1446,23 +1386,22 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
                 )
             )
             if failing_index is not None:
-                if own_new_concurrency_claims:
-                    # Nothing was actually incremented for these (the whole
-                    # batch is all-or-nothing), so the claim staked above
-                    # must be rolled back -- otherwise it would both corrupt
-                    # release-time bookkeeping and make a genuinely later
-                    # sibling wrongly skip its own real reservation.
-                    _discard_pending_concurrency_keys(
-                        resolved_request_kwargs, (key for key, _partition_key in own_new_concurrency_claims)
-                    )
                 failing_limit, failing_tag_value, _ = atomic_checks[failing_index]
                 self._raise_over_limit(failing_limit, failing_tag_value, model, current=values[0])
 
-            if own_new_concurrency_claims:
+            concurrency_reservations: Final = tuple(
+                (key, _partition_key(configured_limit.entry))
+                for configured_limit, _tag_value, key in atomic_checks
+                if configured_limit.unit == "concurrency"
+            )
+            if concurrency_reservations:
+                _queue_pending_reservations(
+                    resolved_request_kwargs, _PENDING_CONCURRENCY_KEYS_FIELD, concurrency_reservations
+                )
                 await self._mirror_pending_reservations(
                     resolved_request_kwargs.get("litellm_call_id"),
                     _extract_key_hash(resolved_request_kwargs, metadata_variable_name),
-                    tuple(own_new_concurrency_claims),
+                    concurrency_reservations,
                 )
 
             # Only genuinely new keys, never one already in stale_request_keys:
@@ -1747,10 +1686,11 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         # docstring for why that distinction, not just presence, decides
         # what's actually stale. The terminal release hooks
         # (`async_log_success_event`/`async_log_failure_event`) never pass
-        # it: with admission now reserving at most one unit per key for the
-        # whole dispatch (see `_PENDING_CONCURRENCY_KEYS_FIELD`'s docstring),
-        # everything still pending when the one terminal event for this
-        # dispatch fires is safe to release unconditionally.
+        # it: only one terminal event ever fires per call (see
+        # `_PENDING_CONCURRENCY_KEYS_FIELD`'s docstring), so nothing else
+        # will ever come along afterward to release anything else --
+        # everything still pending when it fires is safe to release
+        # unconditionally, however many branches actually admitted.
         pending: Final = kwargs.get(_PENDING_CONCURRENCY_KEYS_FIELD)
         if not isinstance(pending, list) or not pending:
             return ()
@@ -2022,9 +1962,9 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         #
         # Unconditional, not filtered to this hop's own lineage: only one
         # terminal event ever fires per abatch_completion dispatch (see
-        # _PENDING_CONCURRENCY_KEYS_FIELD's docstring), and admission now
-        # reserves at most one unit per key for the whole dispatch, so
-        # whatever's still pending here is exactly that one reservation.
+        # _PENDING_CONCURRENCY_KEYS_FIELD's docstring), so nothing else will
+        # ever come along afterward to release whatever every admitted
+        # branch of this dispatch actually reserved.
         release_keys: Final = await self._pop_pending_concurrency_keys(kwargs)
         if release_keys:
             await self._release_keys(release_keys)
