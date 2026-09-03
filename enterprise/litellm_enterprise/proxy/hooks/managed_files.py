@@ -277,6 +277,24 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
         verbose_logger.debug(f"LiteLLM Managed File object with id={file_id} stored in db: {result}")
 
+    async def _resolve_creator_org_id(self, user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
+        """Organization to snapshot on the managed object row, like team_id. A key that
+        belongs to an org only through its team carries no org_id on the auth object, so
+        resolve the team's organization at creation time; costing then bills the org the
+        batch was submitted under even if the key or team moves before it completes."""
+        if user_api_key_dict.org_id:
+            return user_api_key_dict.org_id
+        if not user_api_key_dict.team_id:
+            return None
+        try:
+            team_row = await self.prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": user_api_key_dict.team_id}
+            )
+            return getattr(team_row, "organization_id", None) if team_row is not None else None
+        except Exception as e:
+            verbose_logger.warning(f"could not resolve org for managed object attribution: {e}")
+            return None
+
     async def store_unified_object_id(
         self,
         unified_object_id: str,
@@ -349,7 +367,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "file_purpose": file_purpose,
                     "created_by": resolve_resource_owner_id(user_api_key_dict),
                     "team_id": user_api_key_dict.team_id,
-                    "org_id": user_api_key_dict.org_id,
+                    "org_id": await self._resolve_creator_org_id(user_api_key_dict),
                     "updated_by": user_api_key_dict.user_id,
                     "status": file_object.status,
                     **attribution_columns,

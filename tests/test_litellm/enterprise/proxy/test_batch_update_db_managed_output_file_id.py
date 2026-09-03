@@ -375,6 +375,7 @@ def _in_memory_managed_files():
     table.upsert = AsyncMock(side_effect=_upsert)
     prisma = MagicMock()
     prisma.db.litellm_managedobjecttable = table
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
 
     cache = MagicMock()
     cache.async_set_cache = AsyncMock()
@@ -409,6 +410,32 @@ async def test_store_unified_object_id_persists_key_and_tags_on_create():
     assert row["team_id"] == "team-alpha"
     assert row["org_id"] == "org-acme"
     assert row["request_tags"].data == ["env:prod"]
+
+
+@pytest.mark.asyncio
+async def test_store_unified_object_id_resolves_org_through_the_team():
+    """Most keys belong to an org only through their team, so the auth object carries no
+    org_id. The create resolves the team's organization so org spend is snapshotted at
+    submission time instead of never being billed."""
+    from types import SimpleNamespace
+
+    instance, store = _in_memory_managed_files()
+    instance.prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(organization_id="org-via-team")
+    )
+    creator = UserAPIKeyAuth(user_id="alice", team_id="team-alpha", api_key="hash-alice")
+
+    await instance.store_unified_object_id(
+        unified_object_id="unified-b",
+        file_object=_build_batch_response(batch_id="b", status="validating"),
+        litellm_parent_otel_span=None,
+        model_object_id="b",
+        file_purpose="batch",
+        user_api_key_dict=creator,
+        persist_attribution=True,
+    )
+
+    assert store["unified-b"]["org_id"] == "org-via-team"
 
 
 @pytest.mark.asyncio
