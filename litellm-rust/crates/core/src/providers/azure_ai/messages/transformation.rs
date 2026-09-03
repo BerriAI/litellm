@@ -164,6 +164,10 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
         self.anthropic.auth_strategy()
     }
 
+    fn supports_streaming(&self) -> bool {
+        self.anthropic.supports_streaming()
+    }
+
     fn accepts_bearer_auth(&self) -> bool {
         true
     }

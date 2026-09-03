@@ -68,6 +68,10 @@ impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {
     fn auth_strategy(&self) -> MessagesAuthStrategy {
         MessagesAuthStrategy::Header("x-api-key")
     }
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

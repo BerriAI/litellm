@@ -33,7 +33,7 @@ pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
 /// Everything raised before the request goes out is safe for the host to retry
 /// on its own path; anything after it is not, because the provider has already
 /// done the work and billed for it.
-pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
+pub(crate) fn fallback_error_to_pyerr(err: Error) -> PyErr {
     match err {
         Error::Unsupported(_)
         | Error::Auth(_)

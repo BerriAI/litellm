@@ -1,10 +1,10 @@
-use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
 use crate::error::Error;
 use crate::http_utils::http_request;
 
 use super::client::http_client;
 use super::common_utils::truncate_error_body;
 use super::prepare::prepare_provider_request;
+use super::transformation::AnthropicMessagesProviderConfig;
 use super::types::{AnthropicMessagesResponse, MessagesRequest};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
@@ -42,15 +42,25 @@ pub(super) async fn execute_messages_provider_call(
     request.config.transform_response(&request.model, response)
 }
 
+/// The streaming-capability gate. A provider whose config does not opt into
+/// streaming declines ([`Error::Unsupported`]) before any request goes out, so
+/// hosts treat it as "fall back", not "fail".
+pub(super) fn ensure_streaming_supported(
+    config: &dyn AnthropicMessagesProviderConfig,
+) -> Result<(), Error> {
+    if config.supports_streaming() {
+        return Ok(());
+    }
+    Err(Error::Unsupported(
+        "streaming messages is not supported for this provider",
+    ))
+}
+
 pub(super) async fn execute_messages_provider_stream(
     request: MessagesRequest<'_>,
 ) -> Result<reqwest::Response, Error> {
     let mut request = prepare_provider_request(request)?;
-    if request.provider != ANTHROPIC_MESSAGES_PROVIDER {
-        return Err(Error::InvalidRequest(
-            "streaming messages is not supported for this provider".to_string(),
-        ));
-    }
+    ensure_streaming_supported(request.config)?;
     // The streaming entrypoints only make sense for `stream: true`; force it so
     // a host cannot accidentally ask for SSE and receive a buffered JSON body.
     if let Some(body) = request.body.as_object_mut() {

@@ -45,6 +45,13 @@ pub trait AnthropicMessagesProviderConfig: Sync {
         ]
     }
 
+    /// Whether this provider serves the SSE streaming variant of the route.
+    /// Opt-in: a config that does not override this declines streaming so the
+    /// host falls back to its own implementation instead of failing.
+    fn supports_streaming(&self) -> bool {
+        false
+    }
+
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_request(
         &self,
