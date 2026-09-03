@@ -44,11 +44,12 @@ pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> Re
         .await?;
         return Ok(request
             .config
-            .transform_ocr_response_with_params(
+            .async_transform_ocr_response_with_params(
                 &request.model,
                 response_json,
                 &request.optional_params,
-            )?
+            )
+            .await?
             .into_json());
     }
 
@@ -69,10 +70,11 @@ pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> Re
 
     Ok(request
         .config
-        .transform_ocr_response_with_params(
+        .async_transform_ocr_response_with_params(
             &request.model,
             response_json,
             &request.optional_params,
-        )?
+        )
+        .await?
         .into_json())
 }
