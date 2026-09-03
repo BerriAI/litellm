@@ -4473,3 +4473,22 @@ def test_explicit_pricing_precedes_private_provider_response_model(
     )
 
     assert selected == expected
+
+
+def test_cost_per_token_none_token_counts_cost_zero():
+    prompt_cost, completion_cost = cost_per_token(
+        model="gpt-4o-mini", prompt_tokens=None, completion_tokens=None
+    )
+    assert prompt_cost == 0.0
+    assert completion_cost == 0.0
+
+
+def test_cost_per_token_string_token_counts_coerced():
+    prompt_cost, completion_cost = cost_per_token(
+        model="gpt-4o-mini", prompt_tokens="10", completion_tokens=5
+    )
+    expected_prompt, expected_completion = cost_per_token(
+        model="gpt-4o-mini", prompt_tokens=10, completion_tokens=5
+    )
+    assert prompt_cost == expected_prompt
+    assert completion_cost == expected_completion

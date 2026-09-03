@@ -305,6 +305,17 @@ def _transcription_usage_has_token_details(
     return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
 
 
+def _coerce_token_count(value: float | str | None) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return int(value)
+
+
 def cost_per_token(
     model: str = "",
     prompt_tokens: int = 0,
@@ -361,6 +372,9 @@ def cost_per_token(
 
     if model is None:
         raise Exception("Invalid arg. Model cannot be none.")
+
+    prompt_tokens = _coerce_token_count(prompt_tokens)
+    completion_tokens = _coerce_token_count(completion_tokens)
 
     ## RECONSTRUCT USAGE BLOCK ##
     if usage_object is not None:
