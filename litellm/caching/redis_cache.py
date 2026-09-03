@@ -111,7 +111,7 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
         function_names: Final = []
 
         while frame is not None and len(function_names) < num_frames:
-            if frame.f_code.co_name in _BREAKER_GUARD_FRAME_NAMES and frame.f_code.co_filename == __file__:
+            if frame.f_code.co_name in _BREAKER_GUARD_FRAME_NAMES and frame.f_globals.get("__name__") == __name__:
                 frame = frame.f_back
                 continue
             function_names.append(frame.f_code.co_name)

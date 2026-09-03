@@ -553,6 +553,39 @@ def test_call_stack_info_skips_breaker_guard_frames():
     assert caller_two() == "caller_one <- caller_two"
 
 
+def test_call_stack_info_skips_guard_frames_when_deployed_without_sources(monkeypatch):
+    """Guard-frame skipping must survive a bytecode-only deployment.
+
+    Shipping `.pyc` files without their `.py` sources leaves the module's `__file__` pointing
+    at the compiled file while every frame still carries the compile-time source path, so a
+    check comparing those two paths stops skipping and the service log then names the guard
+    machinery instead of the real caller.
+    """
+    from litellm.caching import redis_cache as redis_cache_module
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        _get_call_stack_info,
+        _redis_circuit_breaker_guard_sync,
+    )
+
+    monkeypatch.setattr(redis_cache_module, "__file__", redis_cache_module.__file__ + "c")
+
+    class Guarded:
+        _circuit_breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+
+        @_redis_circuit_breaker_guard_sync
+        def probe(self):
+            return _get_call_stack_info()
+
+    def caller_one():
+        return Guarded().probe()
+
+    def caller_two():
+        return caller_one()
+
+    assert caller_two() == "caller_one <- caller_two"
+
+
 @pytest.mark.asyncio
 async def test_circuit_breaker_success_still_resets_the_failure_streak(redis_no_ping):
     """A reachable Redis must keep the breaker closed, however many earlier calls failed.
