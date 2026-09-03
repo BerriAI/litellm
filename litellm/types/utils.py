@@ -3905,6 +3905,7 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
+    TRUSTEDROUTER = "trustedrouter"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
     SCX_AI = "scx-ai"
