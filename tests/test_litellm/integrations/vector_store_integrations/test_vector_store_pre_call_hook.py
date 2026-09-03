@@ -8,6 +8,7 @@ import pytest
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+    ProxyServerRuntime,
     VectorStorePreCallHook,
 )
 from litellm.types.llms.openai import AllMessageValues
@@ -242,3 +243,45 @@ async def test_the_only_vector_store_failing_leaves_the_messages_untouched(
             "litellm.BadRequestError: no healthy deployments for vs-broken",
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_the_default_hook_reaches_the_proxy_router_through_its_runtime(
+    registry_with: RegisterStores,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (LIT-6752): a hook built with no arguments must still search through the proxy's own Router."""
+    from litellm.proxy import proxy_server
+
+    registry_with("vs-default")
+    router = RecordingRouter()
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    _, messages, _ = await _run_hook(
+        VectorStorePreCallHook(),
+        ["vs-default"],
+        FakeLoggingObj({"user_api_key_team_id": "team-a"}),
+    )
+
+    assert [call["vector_store_id"] for call in router.calls] == ["vs-default"]
+    assert messages[0]["content"] == "Context:\n\ncontext from vs-default\n\n"
+
+
+def test_the_default_runtime_follows_the_proxy_globals(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    runtime = ProxyServerRuntime()
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    assert runtime.llm_router() is None
+    assert runtime.prisma_client() is None
+
+    router = RecordingRouter()
+    prisma = object()
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    assert runtime.llm_router() is router
+    assert runtime.prisma_client() is prisma
