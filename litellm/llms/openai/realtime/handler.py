@@ -89,8 +89,13 @@ class OpenAIRealtime(OpenAIChatCompletion):
         api_base = api_base.replace("https://", "wss://")
         api_base = api_base.replace("http://", "ws://")
         url = URL(api_base)
-        # Set the correct path
-        url = url.copy_with(path="/v1/realtime")
+        # Set the correct path, preserving any mount prefix the api_base carries
+        # (e.g. DashScope serves the realtime socket under /api-ws). A trailing
+        # /v1 is dropped first so the canonical ".../v1" bases stay unchanged.
+        prefix = url.path.rstrip("/")
+        if prefix.endswith("/v1"):
+            prefix = prefix[: -len("/v1")]
+        url = url.copy_with(path=f"{prefix}/v1/realtime")
         # Include all query parameters including 'model'
         if query_params:
             url = url.copy_with(params=query_params)

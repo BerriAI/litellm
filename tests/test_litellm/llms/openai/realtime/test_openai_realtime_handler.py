@@ -416,3 +416,38 @@ async def test_async_realtime_ws_url_has_no_ssl():
 
         # Verify ssl is None for ws:// URLs (the fix for issue #19222)
         assert called_kwargs["ssl"] is None
+
+
+@pytest.mark.parametrize(
+    "api_base, expected_path",
+    [
+        # Hosts that mount the realtime socket under a prefix keep it.
+        ("https://dashscope.aliyuncs.com/api-ws", "/api-ws/v1/realtime"),
+        ("https://dashscope.aliyuncs.com/api-ws/", "/api-ws/v1/realtime"),
+        ("https://example.com/gateway/api-ws", "/gateway/api-ws/v1/realtime"),
+        # The canonical shapes are unchanged, including a trailing /v1.
+        ("https://api.openai.com/v1", "/v1/realtime"),
+        ("https://api.openai.com/v1/", "/v1/realtime"),
+        ("https://api.openai.com", "/v1/realtime"),
+        ("https://api.openai.com/", "/v1/realtime"),
+        ("http://vllm-asr:8000/v1", "/v1/realtime"),
+        ("http://vllm-asr:8000", "/v1/realtime"),
+    ],
+)
+def test_openai_realtime_handler_preserves_api_base_path_prefix(api_base, expected_path):
+    """A mount prefix in api_base must survive URL construction.
+
+    Some OpenAI-compatible providers do not serve /v1/realtime at the host root
+    (DashScope serves /api-ws/v1/realtime), and overwriting the whole path made
+    them unreachable. A trailing /v1 is still absorbed so the canonical bases
+    keep producing exactly one /v1 segment.
+    """
+    from httpx import URL
+
+    from litellm.llms.openai.realtime.handler import OpenAIRealtime
+
+    handler = OpenAIRealtime()
+    url = handler._construct_url(api_base=api_base, query_params={"model": "M"})
+
+    assert URL(url).path == expected_path
+    assert "model=M" in url
