@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import sys
 from collections.abc import Sequence
+from typing import Final
+
+import pytest
 
 from ..shared.reporting.models import SDK_FUNCTIONS
 from .catalog import load_catalog
@@ -90,9 +94,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 _PARSER = _build_parser()
+_INTERRUPTED_EXIT_CODE: Final = 130
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _main(argv: Sequence[str] | None = None) -> int:
     args = _PARSER.parse_args(argv)
     if args.verb == "run" and args.coverage and importlib.util.find_spec("pytest_cov") is None:
         _PARSER.error(
@@ -120,3 +125,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         case _:
             _PARSER.error(f"Unknown verb: {args.verb}")
     raise AssertionError("unreachable")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    try:
+        exit_code: Final = _main(argv)
+    except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted\n")
+        return _INTERRUPTED_EXIT_CODE
+    if exit_code == int(pytest.ExitCode.INTERRUPTED):
+        sys.stderr.write("Interrupted\n")
+        return _INTERRUPTED_EXIT_CODE
+    return exit_code

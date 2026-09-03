@@ -6,6 +6,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Final
 
+import pytest
+
 from ..shared.reporting.models import HarnessCase, Strategy
 from ..shared.reporting.orchestration import run_strategies
 from ..shared.reporting.strategy import SelectorCaseSpec, SuiteCaseSpec
@@ -60,7 +62,8 @@ def run_command(
             dashboard.update,
             pytest_args,
         )
-        dashboard.finish(run, exit_code)
+        if exit_code != int(pytest.ExitCode.INTERRUPTED):
+            dashboard.finish(run, exit_code)
     if args.coverage and (COVERAGE_ROOT / "python.json").exists():
         print(f"Python LOC heatmap: {COVERAGE_ROOT / 'python-html' / 'index.html'}")
         print(f"Machine-readable coverage: {COVERAGE_ROOT / 'python.json'}")

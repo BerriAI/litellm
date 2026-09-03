@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import importlib
 import json
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Final
 
 import pytest
 
+from ..shared.reporting.models import SDK_FUNCTIONS, HarnessRun, Strategy
+from ..shared.reporting.strategy import StrategyDefinition
 from . import main
 from .catalog import STRATEGIES_ROOT, load_catalog
 from .commands import _coverage_pytest_args
 from .selection import pick_values, select
-from ..shared.reporting.models import SDK_FUNCTIONS
-from ..shared.reporting.strategy import StrategyDefinition
 
 _SELECTOR_STRATEGY_INIT: Final = (
     "import importlib\n"
@@ -215,6 +217,55 @@ def test_run_rejects_an_unknown_strategy() -> None:
         main(["run", "--strategy", "not-real"])
 
     assert excinfo.value.code == 2
+
+
+def test_keyboard_interrupt_exits_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cli: Final = importlib.import_module("tests.rust-python-harness.cli")
+
+    def interrupt() -> tuple[object, ...]:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "load_catalog", interrupt)
+
+    exit_code: Final = cli.main(["list"])
+
+    captured: Final = capsys.readouterr()
+    assert exit_code == 130
+    assert captured.out == ""
+    assert captured.err == "\nInterrupted\n"
+
+
+def test_pytest_interrupt_skips_the_completion_report(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    commands: Final = importlib.import_module("tests.rust-python-harness.cli.commands")
+
+    def interrupt_run(
+        strategies: Sequence[Strategy],
+        repo_root: Path,
+        on_update: Callable[[HarnessRun], None],
+        pytest_args: Sequence[str] = (),
+    ) -> tuple[int, HarnessRun]:
+        del repo_root, on_update, pytest_args
+        run: Final = HarnessRun.from_cases(
+            case for strategy in strategies for case in strategy.cases
+        )
+        return int(pytest.ExitCode.INTERRUPTED), run
+
+    monkeypatch.setattr(commands, "run_strategies", interrupt_run)
+
+    exit_code: Final = main(
+        ["run", "--strategy", "trace_parity", "--surface", "gateway", "--plain"]
+    )
+
+    captured: Final = capsys.readouterr()
+    assert exit_code == 130
+    assert "Harness finished" not in captured.out
+    assert captured.err == "Interrupted\n"
 
 
 def test_should_validate_the_chat_completions_ledger_through_check(
