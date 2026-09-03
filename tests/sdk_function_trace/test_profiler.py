@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from collections.abc import Callable
+from functools import wraps
 from pathlib import Path
 from types import FunctionType
-from typing import Final, cast
+from typing import Final, ParamSpec, TypeVar, cast
 
 import pytest
 
@@ -14,7 +16,18 @@ from tests.sdk_function_trace import (
     TraceStep,
     assert_function_trace_parity,
 )
-from tests.sdk_function_trace.profiler import profile_python
+from tests.sdk_function_trace.profiler import _module_qualnames, profile_python
+
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
+
+
+def _passthrough(function: Callable[_P, _T]) -> Callable[_P, _T]:
+    @wraps(function)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _T:
+        return function(*args, **kwargs)
+
+    return wrapper
 
 
 class First:
@@ -27,6 +40,20 @@ class Second:
     @staticmethod
     def run() -> None:
         return None
+
+
+class Decorated:
+    @_passthrough
+    def call(self) -> None:
+        return None
+
+
+def test_source_profiler_qualifies_decorated_methods_by_class() -> None:
+    with profile_python(source_root=Path(__file__).parent) as profiler:
+        Decorated().call()
+
+    assert any(event.function.endswith(" Decorated.call") for event in profiler.events)
+    assert _module_qualnames(__name__)[cast(FunctionType, Decorated.call.__wrapped__).__code__] == "Decorated.call"
 
 
 def test_profiler_matches_code_objects_and_keeps_repeated_calls() -> None:
