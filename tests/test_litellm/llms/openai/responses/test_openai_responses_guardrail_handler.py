@@ -1731,3 +1731,93 @@ class TestBuildBlockSseChunks:
         dones = [payload for payload in payloads if payload["type"] == "response.output_item.done"]
         assert len(dones) == 1
         assert dones[0]["item"]["content"][0]["text"] == "Blocked by policy."
+
+
+class TestOpenAIResponsesHandlerStreamingScanKey:
+    """get_streaming_scan_key mirrors what process_output_streaming_response would scan"""
+
+    @staticmethod
+    def _delta(sequence_number, text):
+        return {
+            "type": "response.output_text.delta",
+            "sequence_number": sequence_number,
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": text,
+        }
+
+    def test_no_events_yields_no_key(self):
+        assert OpenAIResponsesHandler().get_streaming_scan_key([]) is None
+
+    def test_key_accumulates_deltas_while_the_stream_is_open(self):
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
+
+        key = OpenAIResponsesHandler().get_streaming_scan_key([self._delta(0, "hel"), self._delta(1, "lo")])
+        assert key == StreamingScanKey(texts=("hello",))
+
+    def test_typed_delta_events_accumulate_like_dicts(self):
+        from litellm.types.llms.openai import OutputTextDeltaEvent
+
+        events = [
+            OutputTextDeltaEvent(
+                type="response.output_text.delta",
+                item_id="msg_1",
+                output_index=0,
+                content_index=0,
+                delta=text,
+                sequence_number=i,
+            )
+            for i, text in enumerate(("hel", "lo"))
+        ]
+        key = OpenAIResponsesHandler().get_streaming_scan_key(events)
+        assert key.texts == ("hello",)
+        assert key.stream_ended is False
+
+    def test_events_without_text_leave_the_key_unchanged(self):
+        handler = OpenAIResponsesHandler()
+        events = [self._delta(0, "hi")]
+        quiet = events + [{"type": "response.in_progress", "sequence_number": 1}]
+        assert handler.get_streaming_scan_key(quiet) == handler.get_streaming_scan_key(events)
+
+    @staticmethod
+    def _completed(sequence_number, output):
+        return {"type": "response.completed", "sequence_number": sequence_number, "response": {"output": output}}
+
+    def test_completed_event_keys_on_the_final_output_text(self):
+        handler = OpenAIResponsesHandler()
+        message = {"type": "message", "content": [{"type": "output_text", "text": "hi"}]}
+        open_key = handler.get_streaming_scan_key([self._delta(0, "hi")])
+        ended_key = handler.get_streaming_scan_key([self._delta(0, "hi"), self._completed(1, [message])])
+        assert ended_key.stream_ended is True
+        assert ended_key == open_key
+
+    def test_completed_event_with_a_function_call_changes_the_key(self):
+        handler = OpenAIResponsesHandler()
+        message = {"type": "message", "content": [{"type": "output_text", "text": "hi"}]}
+        function_call = {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"}
+        open_key = handler.get_streaming_scan_key([self._delta(0, "hi")])
+        ended_key = handler.get_streaming_scan_key([self._delta(0, "hi"), self._completed(1, [message, function_call])])
+        assert ended_key.texts == ("hi",)
+        assert len(ended_key.tool_calls) == 1 and "get_weather" in ended_key.tool_calls[0]
+        assert ended_key != open_key
+
+    def test_completed_event_reads_every_output_text_part(self):
+        from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+        item = GenericResponseOutputItem(
+            type="message",
+            id="msg_1",
+            status="completed",
+            role="assistant",
+            content=[
+                OutputText(type="output_text", text="one", annotations=[]),
+                OutputText(type="output_text", text="two", annotations=[]),
+            ],
+        )
+        key = OpenAIResponsesHandler().get_streaming_scan_key([self._completed(0, [item])])
+        assert key.texts == ("one", "two")
+
+    def test_output_item_done_round_is_never_deduped(self):
+        done = {"type": "response.output_item.done", "sequence_number": 1, "item": {"type": "function_call"}}
+        assert OpenAIResponsesHandler().get_streaming_scan_key([self._delta(0, "hi"), done]) is None

@@ -44,10 +44,15 @@ from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     OpenAiResponsesToChatCompletionStreamIterator,
 )
-from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.base_llm.guardrail_translation.base_translation import (
+    BaseTranslation,
+    StreamingScanKey,
+)
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_responses_stream_usage,
     stream_item_field,
+    stream_item_fingerprint,
+    stream_item_items,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -593,18 +598,55 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
         return responses_so_far
 
-    def _check_streaming_has_ended(self, responses_so_far: Sequence[ResponsesStreamChunk]) -> bool:
+    def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
         """
         Check if the streaming has ended.
         """
         if not responses_so_far:
             return False
-        terminal_types: Final = {
-            ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value,
-            ResponsesAPIStreamEvents.RESPONSE_FAILED.value,
-            ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE.value,
-        }
-        return responses_so_far[-1].get("type") in terminal_types
+        terminal_types: Final = frozenset(
+            (
+                ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value,
+                ResponsesAPIStreamEvents.RESPONSE_FAILED.value,
+                ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE.value,
+            )
+        )
+        return stream_item_field(responses_so_far[-1], "type") in terminal_types
+
+    def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        if not responses_so_far or not hasattr(responses_so_far[-1], "get"):
+            return None
+        last_event: Final = responses_so_far[-1]
+        last_event_type: Final = stream_item_field(last_event, "type")
+        if last_event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE.value:
+            return None
+        if last_event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value:
+            return self._completed_response_scan_key(stream_item_field(last_event, "response"))
+        return StreamingScanKey(
+            texts=(self.get_streaming_string_so_far(responses_so_far),),
+            stream_ended=self._check_streaming_has_ended(responses_so_far),
+        )
+
+    @staticmethod
+    def _completed_response_scan_key(response: object) -> StreamingScanKey:
+        output_items: Final = stream_item_items(response, "output")
+        message_items: Final = tuple(
+            item for item in output_items if stream_item_field(item, "type") != "function_call"
+        )
+        return StreamingScanKey(
+            texts=tuple(
+                text
+                for item in message_items
+                for part in stream_item_items(item, "content")
+                if isinstance(text := stream_item_field(part, "text"), str) and text
+            ),
+            tool_calls=tuple(
+                stream_item_fingerprint(item)
+                for item in output_items
+                if stream_item_field(item, "type") == "function_call"
+            ),
+            stream_ended=True,
+        )
 
     def build_stream_error_items(
         self,
@@ -629,7 +671,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             ),
         )
 
-    def get_streaming_string_so_far(self, responses_so_far: Sequence[ResponsesStreamChunk]) -> str:
+    def get_streaming_string_so_far(self, responses_so_far: Sequence[object]) -> str:
         """
         Get the string so far from the responses so far.
 
@@ -641,12 +683,16 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
         keyed_events: Final = tuple(
             (
-                (event.get("item_id"), event.get("output_index"), event.get("content_index")),
-                event.get("text"),
-                event.get("delta"),
+                (
+                    stream_item_field(event, "item_id"),
+                    stream_item_field(event, "output_index"),
+                    stream_item_field(event, "content_index"),
+                ),
+                stream_item_field(event, "text"),
+                stream_item_field(event, "delta"),
             )
             for event in responses_so_far
-            if isinstance(event.get("text"), str) or isinstance(event.get("delta"), str)
+            if isinstance(stream_item_field(event, "text"), str) or isinstance(stream_item_field(event, "delta"), str)
         )
 
         def part_text(part_key: tuple[object, object, object]) -> str:
