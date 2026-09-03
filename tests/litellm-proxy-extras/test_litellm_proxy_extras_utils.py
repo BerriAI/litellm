@@ -1103,9 +1103,7 @@ class TestResolveAllMigrationsHonorsSkippedIndexes:
     def test_the_log_names_a_skipped_index_that_is_only_dropped(self, monkeypatch, tmp_path, caplog):
         with caplog.at_level("INFO", logger="litellm_proxy_extras"):
             self._run(monkeypatch, tmp_path, _DRIFT_DROPPING_SKIPPED_INDEX_SQL)
-        assert any(
-            f"removed the index statements for {_SKIPPED_INDEX_NAME} from" in r.message for r in caplog.records
-        )
+        assert any(f"removed the index statements for {_SKIPPED_INDEX_NAME} from" in r.message for r in caplog.records)
 
 
 class _V2SkipHarness:
@@ -1205,7 +1203,6 @@ class TestV2RecordsSkippedIndexMigrationsBeforeDeploy:
             ("resolve", _OTHER_INDEX_ONLY_MIGRATION),
             ("deploy",),
         ]
-
 
     def test_any_other_resolve_failure_stops_boot_before_deploy(self, monkeypatch, tmp_path):
         import subprocess as subprocess_module
