@@ -78,16 +78,17 @@ describe("Cost column", () => {
 describe("Type column", () => {
   it("shows the conversation badge and composition even when an MCP call represents the conversation", async () => {
     const user = userEvent.setup();
+    const mcpRepresentative = {
+      request_id: "req-mcp-rep",
+      call_type: "call_mcp_tool",
+      session_id: "sess-edge",
+      session_total_count: 3,
+      session_llm_count: 2,
+      mcp_tool_call_count: 1,
+      session_agent_count: 0,
+    };
     renderRows([
-      logEntry({
-        request_id: "req-mcp-rep",
-        call_type: "call_mcp_tool",
-        session_id: "sess-edge",
-        session_total_count: 3,
-        session_llm_count: 2,
-        mcp_tool_call_count: 1,
-        session_agent_count: 0,
-      }),
+      logEntry(mcpRepresentative),
     ]);
 
     expect(screen.queryByText("MCP")).not.toBeInTheDocument();
