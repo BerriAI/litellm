@@ -1,0 +1,95 @@
+{
+  "neuronpool/llama-3.2-1b-instruct": {
+    "input_cost_per_token": 5e-9,
+    "output_cost_per_token": 1e-8,
+    "litellm_provider": "neuronpool",
+    "max_input_tokens": 131072,
+    "max_output_tokens": 4096,
+    "max_tokens": 4096,
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_response_schema": true,
+    "supports_system_messages": true
+  },
+  "neuronpool/llama-3.1-8b-instruct": {
+    "input_cost_per_token": 2e-8,
+    "output_cost_per_token": 3e-8,
+    "litellm_provider": "neuronpool",
+    "max_input_tokens": 131072,
+    "max_output_tokens": 4096,
+    "max_tokens": 4096,
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_response_schema": true,
+    "supports_system_messages": true
+  },
+  "neuronpool/qwen2.5-7b-instruct": {
+    "input_cost_per_token": 2e-8,
+    "output_cost_per_token": 3e-8,
+    "litellm_provider": "neuronpool",
+    "max_input_tokens": 32768,
+    "max_output_tokens": 4096,
+    "max_tokens": 4096,
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_response_schema": true,
+    "supports_system_messages": true
+  },
+  "neuronpool/gemma-3-12b-it": {
+    "input_cost_per_token": 4e-8,
+    "output_cost_per_token": 6e-8,
+    "litellm_provider": "neuronpool",
+    "max_input_tokens": 131072,
+    "max_output_tokens": 4096,
+    "max_tokens": 4096,
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_response_schema": true,
+    "supports_system_messages": true
+  },
+  "neuronpool/qwen3-30b-a3b": {
+    "input_cost_per_token": 6e-8,
+    "output_cost_per_token": 9e-8,
+    "litellm_provider": "neuronpool",
+    "max_input_tokens": 32768,
+    "max_output_tokens": 4096,
+    "max_tokens": 4096,
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_response_schema": true,
+    "supports_system_messages": true
+  },
+  "neuronpool/gpt-oss-20b": {
+    "input_cost_per_token": 1.5e-8,
+    "output_cost_per_token": 7e-8,
+    "litellm_provider": "neuronpool",
+    "max_input_tokens": 131072,
+    "max_output_tokens": 4096,
+    "max_tokens": 4096,
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_response_schema": true,
+    "supports_system_messages": true
+  },
+  "neuronpool/neuronpool-tiny-chat": {
+    "input_cost_per_token": 1e-9,
+    "output_cost_per_token": 2e-9,
+    "litellm_provider": "neuronpool",
+    "max_input_tokens": 4096,
+    "max_output_tokens": 4096,
+    "max_tokens": 4096,
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_response_schema": true,
+    "supports_system_messages": true
+  },
+  "neuronpool/nomic-embed-text": {
+    "input_cost_per_token": 5e-9,
+    "output_cost_per_token": 0,
+    "litellm_provider": "neuronpool",
+    "max_input_tokens": 8192,
+    "max_output_tokens": 8192,
+    "max_tokens": 8192,
+    "mode": "embedding"
+  }
+}
