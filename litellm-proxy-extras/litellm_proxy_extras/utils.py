@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
 from litellm_proxy_extras.replica_identity import (
     REPLICA_IDENTITY_FULL_ENV_VAR,
@@ -198,7 +199,7 @@ class ProxyExtrasDBManager:
             # 1. Generate migration SQL file by comparing empty state to current db state
             logger.info("Generating baseline migration...")
             migration_file = init_dir / "migration.sql"
-            subprocess.run(
+            prisma_toolchain.run_prisma(
                 [
                     _get_prisma_command(),
                     "migrate",
@@ -209,14 +210,13 @@ class ProxyExtrasDBManager:
                     "--script",
                 ],
                 stdout=open(migration_file, "w"),
-                check=True,
                 timeout=prisma_command_timeout(),
                 env=prisma_env,
             )
 
             # 3. Mark the migration as applied since it represents current state
             logger.info("Marking baseline migration as applied...")
-            subprocess.run(
+            prisma_toolchain.run_prisma(
                 [
                     _get_prisma_command(),
                     "migrate",
@@ -224,7 +224,6 @@ class ProxyExtrasDBManager:
                     "--applied",
                     "0_init",
                 ],
-                check=True,
                 timeout=prisma_command_timeout(),
                 env=prisma_env,
             )
@@ -253,7 +252,7 @@ class ProxyExtrasDBManager:
         """Mark a specific migration as rolled back"""
         # Set up environment for offline mode if configured
         prisma_env = _get_prisma_env()
-        subprocess.run(
+        prisma_toolchain.run_prisma(
             [
                 _get_prisma_command(),
                 "migrate",
@@ -262,8 +261,6 @@ class ProxyExtrasDBManager:
                 migration_name,
             ],
             timeout=prisma_command_timeout(),
-            check=True,
-            capture_output=True,
             env=prisma_env,
         )
 
@@ -315,11 +312,9 @@ class ProxyExtrasDBManager:
     def _resolve_specific_migration(migration_name: str):
         """Mark a specific migration as applied"""
         prisma_env = _get_prisma_env()
-        subprocess.run(
+        prisma_toolchain.run_prisma(
             [_get_prisma_command(), "migrate", "resolve", "--applied", migration_name],
             timeout=prisma_command_timeout(),
-            check=True,
-            capture_output=True,
             env=prisma_env,
         )
 
@@ -403,7 +398,7 @@ class ProxyExtrasDBManager:
         try:
             logger.info("Generating migration diff between DB and schema.prisma...")
             with open(diff_sql_path, "w") as f:
-                subprocess.run(
+                prisma_toolchain.run_prisma(
                     [
                         _get_prisma_command(),
                         "migrate",
@@ -414,7 +409,6 @@ class ProxyExtrasDBManager:
                         schema_path,
                         "--script",
                     ],
-                    check=True,
                     timeout=prisma_command_timeout(),
                     stdout=f,
                     env=_get_prisma_env(),
@@ -437,7 +431,7 @@ class ProxyExtrasDBManager:
             migration_files = sorted(Path(migrations_dir).glob("*/migration.sql"))
             for mig_file in migration_files:
                 try:
-                    subprocess.run(
+                    prisma_toolchain.run_prisma(
                         [
                             _get_prisma_command(),
                             "db",
@@ -448,9 +442,6 @@ class ProxyExtrasDBManager:
                             schema_path,
                         ],
                         timeout=prisma_command_timeout(),
-                        check=True,
-                        capture_output=True,
-                        text=True,
                         env=_get_prisma_env(),
                     )
                     logger.info(f"Applied migration: {mig_file.parent.name}")
@@ -483,7 +474,7 @@ class ProxyExtrasDBManager:
         applied_ok = False
         try:
             logger.info("Running prisma db execute to apply the migration diff...")
-            result = subprocess.run(
+            result = prisma_toolchain.run_prisma(
                 [
                     _get_prisma_command(),
                     "db",
@@ -494,9 +485,6 @@ class ProxyExtrasDBManager:
                     schema_path,
                 ],
                 timeout=prisma_command_timeout(),
-                check=True,
-                capture_output=True,
-                text=True,
                 env=_get_prisma_env(),
             )
             logger.info(f"prisma db execute stdout: {result.stdout}")
@@ -525,7 +513,7 @@ class ProxyExtrasDBManager:
         for migration_name in migration_names:
             try:
                 logger.info(f"Resolving migration: {migration_name}")
-                subprocess.run(
+                prisma_toolchain.run_prisma(
                     [
                         _get_prisma_command(),
                         "migrate",
@@ -534,9 +522,6 @@ class ProxyExtrasDBManager:
                         migration_name,
                     ],
                     timeout=prisma_command_timeout(),
-                    check=True,
-                    capture_output=True,
-                    text=True,
                     env=_get_prisma_env(),
                 )
                 logger.debug(f"Resolved migration: {migration_name}")
@@ -726,11 +711,12 @@ class ProxyExtrasDBManager:
             original_dir = os.getcwd()
             os.chdir(migrations_dir)
             try:
-                subprocess.run(
+                prisma_toolchain.run_prisma(
                     [_get_prisma_command(), "db", "push", "--accept-data-loss"],
                     timeout=prisma_command_timeout(),
-                    check=True,
                     env=_get_prisma_env(),
+                    stdout=None,
+                    stderr=None,
                 )
                 return True
             except (
@@ -752,12 +738,9 @@ class ProxyExtrasDBManager:
         try:
             for attempt in range(4):
                 try:
-                    result = subprocess.run(
+                    result = prisma_toolchain.run_prisma(
                         [_get_prisma_command(), "migrate", "deploy"],
                         timeout=deploy_timeout,
-                        check=True,
-                        capture_output=True,
-                        text=True,
                         env=_get_prisma_env(),
                     )
                     logger.info(f"prisma migrate deploy stdout: {result.stdout}")
@@ -1007,12 +990,9 @@ class ProxyExtrasDBManager:
                     logger.info("Running prisma migrate deploy")
                     try:
                         # Set migrations directory for Prisma
-                        result = subprocess.run(
+                        result = prisma_toolchain.run_prisma(
                             [_get_prisma_command(), "migrate", "deploy"],
                             timeout=prisma_migrate_deploy_timeout(),
-                            check=True,
-                            capture_output=True,
-                            text=True,
                             env=_get_prisma_env(),
                         )
                         logger.info(f"prisma migrate deploy stdout: {result.stdout}")
@@ -1084,7 +1064,7 @@ class ProxyExtrasDBManager:
                                         f"Found failed migration: {failed_migration}, marking as rolled back"
                                     )
                                     # Mark the failed migration as rolled back
-                                    subprocess.run(
+                                    prisma_toolchain.run_prisma(
                                         [
                                             _get_prisma_command(),
                                             "migrate",
@@ -1093,9 +1073,6 @@ class ProxyExtrasDBManager:
                                             failed_migration,
                                         ],
                                         timeout=prisma_command_timeout(),
-                                        check=True,
-                                        capture_output=True,
-                                        text=True,
                                         env=_get_prisma_env(),
                                     )
                                     logger.info(
@@ -1220,10 +1197,12 @@ class ProxyExtrasDBManager:
                     if ProxyExtrasDBManager.spend_logs_is_partitioned():
                         raise RuntimeError(PARTITIONED_SPEND_LOGS_PUSH_ERROR)
                     # Use prisma db push with increased timeout
-                    subprocess.run(
+                    prisma_toolchain.run_prisma(
                         [_get_prisma_command(), "db", "push", "--accept-data-loss"],
                         timeout=prisma_command_timeout(),
-                        check=True,
+                        stdout=None,
+                        stderr=None,
+                        env=_get_prisma_env(),
                     )
                     return True
             except subprocess.TimeoutExpired:

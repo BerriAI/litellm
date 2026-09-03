@@ -18,10 +18,15 @@ recoverable one.
 constant: it grows with the number of pending migrations, so a fresh database
 that has to replay every migration this package ships overruns a per-command
 budget sized for the short bookkeeping commands, on a laptop as much as on a
-slow CI runner. The Python ``prisma`` wrapper spawns Node and the schema engine
-as separate children, so killing the wrapper on timeout leaves them running:
-the retry then contends with that orphan for Prisma's advisory lock and cannot
-finish any sooner. Migrate deploy therefore runs under its own budget.
+slow CI runner. Migrate deploy therefore runs under its own budget.
+
+The Python ``prisma`` wrapper spawns Node, which spawns the Rust schema
+engine, so killing only the wrapper on timeout leaves the engine running with
+no parent: it keeps mutating the database after the proxy has given up, holds
+Prisma's advisory lock so every retry and every later boot queues behind it,
+and dies mid-migration once its pipes close, leaving a half-applied ledger row.
+Every Prisma command therefore runs in a process group of its own, and a
+timeout kills the whole group.
 
 All three budgets are overridable so an operator can widen them without a
 release: ``LITELLM_PRISMA_BOOTSTRAP_TIMEOUT`` for the toolchain install,
@@ -35,10 +40,12 @@ the deploy override says otherwise.
 import math
 import os
 import shutil
+import signal
 import subprocess
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import IO, Optional, Union
 
 from litellm_proxy_extras._logging import logger
 
@@ -167,6 +174,49 @@ def heal_incomplete_nodeenv_cache() -> bool:
     return True
 
 
+def _kill_process_group(process: "subprocess.Popen[str]") -> None:
+    if os.name == "nt":
+        process.kill()
+        return
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+
+
+def run_prisma(
+    argv: Sequence[str],
+    *,
+    timeout: float,
+    env: Mapping[str, str],
+    stdout: Union[IO[str], int, None] = subprocess.PIPE,
+    stderr: Optional[int] = subprocess.PIPE,
+) -> "subprocess.CompletedProcess[str]":
+    """Run one Prisma CLI command in its own process group, bounded by ``timeout``.
+
+    Raises ``subprocess.TimeoutExpired`` once the budget is spent, after killing
+    the command together with every process it spawned, and
+    ``subprocess.CalledProcessError`` on a non-zero exit. Output is captured as
+    text unless ``stdout``/``stderr`` say otherwise.
+    """
+    with subprocess.Popen(
+        argv,
+        env=env,
+        stdout=stdout,
+        stderr=stderr,
+        text=True,
+        start_new_session=True,
+    ) as process:
+        try:
+            out, err = process.communicate(timeout=timeout)
+        except BaseException:
+            _kill_process_group(process)
+            raise
+    if process.returncode:
+        raise subprocess.CalledProcessError(process.returncode, process.args, out, err)
+    return subprocess.CompletedProcess(process.args, process.returncode, out, err)
+
+
 def ensure_prisma_toolchain(
     prisma_command: str, prisma_env: dict[str, str]
 ) -> ToolchainBootstrap:
@@ -179,14 +229,7 @@ def ensure_prisma_toolchain(
     timeout = prisma_bootstrap_timeout()
     logger.info("Preparing the Prisma CLI toolchain (timeout %ss)", timeout)
     try:
-        subprocess.run(
-            [prisma_command, BOOTSTRAP_ARG],
-            timeout=timeout,
-            check=True,
-            capture_output=True,
-            text=True,
-            env=prisma_env,
-        )
+        run_prisma([prisma_command, BOOTSTRAP_ARG], timeout=timeout, env=prisma_env)
     except subprocess.TimeoutExpired:
         logger.warning(
             "Preparing the Prisma CLI toolchain timed out after %ss. Raise %s "

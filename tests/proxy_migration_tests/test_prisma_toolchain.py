@@ -18,6 +18,7 @@ import ast
 import json
 import logging
 import os
+import signal
 import sys
 import time
 from collections.abc import Callable
@@ -47,6 +48,7 @@ FAKE_PRISMA = """#!{python}
 import json
 import os
 import pathlib
+import subprocess
 import sys
 import time
 
@@ -66,6 +68,9 @@ with log_path.open("a") as log:
 time.sleep(float(os.environ.get("FAKE_PRISMA_SLEEP", "0")))
 if args[:2] == ["migrate", "deploy"]:
     if earlier_same_command == 0:
+        if os.environ.get("FAKE_PRISMA_GRANDCHILD_PIDFILE"):
+            grandchild = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+            pathlib.Path(os.environ["FAKE_PRISMA_GRANDCHILD_PIDFILE"]).write_text(str(grandchild.pid))
         time.sleep(float(os.environ.get("FAKE_PRISMA_FIRST_DEPLOY_SLEEP", "0")))
     elif os.environ.get("FAKE_PRISMA_LATER_DEPLOY_STDERR"):
         print(os.environ["FAKE_PRISMA_LATER_DEPLOY_STDERR"], file=sys.stderr)
@@ -270,6 +275,43 @@ def test_migrate_deploy_stops_at_its_own_timeout(
 
     assert len(_deploy_calls(log_path)) == 2
     assert elapsed < 30
+
+
+def _process_is_gone(pid: int, within_seconds: float) -> bool:
+    deadline = time.monotonic() + within_seconds
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_a_timed_out_migrate_deploy_takes_its_process_tree_with_it(
+    toolchain_env: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The real CLI forks Node and a schema engine; a timeout must not leave them running."""
+    _, log_path = toolchain_env
+    pidfile = tmp_path / "grandchild.pid"
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+    monkeypatch.setenv(PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR, "1")
+    monkeypatch.setenv("FAKE_PRISMA_FIRST_DEPLOY_SLEEP", "60")
+    monkeypatch.setenv("FAKE_PRISMA_LATER_DEPLOY_STDERR", "Error: P3018 permission denied for schema public")
+    monkeypatch.setenv("FAKE_PRISMA_GRANDCHILD_PIDFILE", str(pidfile))
+
+    with pytest.raises(RuntimeError, match="insufficient permissions"):
+        ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+
+    grandchild_pid = int(pidfile.read_text())
+    try:
+        assert len(_deploy_calls(log_path)) == 2
+        assert _process_is_gone(grandchild_pid, within_seconds=5)
+    finally:
+        try:
+            os.kill(grandchild_pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def test_db_push_timeout_hint_names_the_per_command_budget(
