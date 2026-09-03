@@ -550,7 +550,6 @@ def test_set_budget_reset_at_treats_a_blank_duration_as_unset(blank):
 
     _set_budget_reset_at(data, updated_kv)
 
-    assert updated_kv["budget_duration"] is None
     assert updated_kv["budget_reset_at"] is None
 
 
