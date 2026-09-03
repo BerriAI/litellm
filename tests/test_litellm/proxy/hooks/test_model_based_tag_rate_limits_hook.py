@@ -4909,6 +4909,97 @@ async def test_fast_failing_batch_sibling_does_not_release_a_still_executing_sib
 
 
 @pytest.mark.asyncio
+async def test_real_abatch_completion_with_a_shared_logging_obj_never_over_releases(time_controller, monkeypatch):
+    """
+    End-to-end against the real Router.abatch_completion with a real, shared
+    litellm_logging_obj attached the way common_request_processing.py does
+    it before Router ever sees the request -- not the two tests above, which
+    manually fire one callback and assert on that in isolation. Every branch
+    here reserves its own deployment-scoped slot at its own admission hop
+    (unaffected by logging-object sharing, since routing happens per branch
+    regardless), but Logging.should_run_logging's per-event-type dedup means
+    at most one success callback fires for the whole dispatch, no matter how
+    many branches actually completed. This hook's own admission token/hop
+    recomputation must never release more than that one branch's own slot --
+    the other branches' slots are expected to sit until the safety TTL, the
+    same accepted tradeoff already made for abatch_completion_fastest_response's
+    cancelled losers, not an unbounded or over-eager release.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "model-fast",
+                "dep-fast",
+                {
+                    "concurrency_limits": {
+                        "limits": [{"name": "c", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300}]
+                    }
+                },
+            ),
+            _deployment(
+                "model-slow-1",
+                "dep-slow-1",
+                {
+                    "concurrency_limits": {
+                        "limits": [{"name": "c", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300}]
+                    }
+                },
+            ),
+            _deployment(
+                "model-slow-2",
+                "dep-slow-2",
+                {
+                    "concurrency_limits": {
+                        "limits": [{"name": "c", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300}]
+                    }
+                },
+            ),
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    monkeypatch.setattr(litellm, "callbacks", [limiter])
+
+    data = {
+        "model": "model-fast,model-slow-1,model-slow-2",
+        "messages": [{"role": "user", "content": "hello"}],
+        "litellm_call_id": "call-1",
+        "metadata": {"tags": ["end_user_id:u1"]},
+    }
+    logging_obj, data = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        **data,
+    )
+    data["litellm_logging_obj"] = logging_obj
+
+    models = [m.strip() for m in data.pop("model").split(",")]
+    responses = await router.abatch_completion(models=models, **data)
+    await asyncio.sleep(0.1)
+
+    assert [r.choices[0].message.content for r in responses] == ["ok", "ok", "ok"]
+
+    # At most one of the 3 branches' own slot was released via its own
+    # callback; the rest must still be held, not silently freed by a
+    # sibling's event -- a fresh request for each of those models must
+    # still be rejected against the cap of 1.
+    released_count = 0
+    for model_name in ("model-fast", "model-slow-1", "model-slow-2"):
+        try:
+            await limiter.async_filter_deployments(
+                model=model_name,
+                healthy_deployments=router.model_list,
+                messages=None,
+                request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+            )
+            released_count += 1
+        except ProxyRateLimitError:
+            pass
+    assert released_count <= 1
+
+
+@pytest.mark.asyncio
 async def test_fast_succeeding_batch_sibling_does_not_release_a_still_executing_siblings_slot(time_controller):
     """
     Same live repro as the failure-path version above, but for the more
