@@ -1,21 +1,23 @@
-"""Trace /chat/completions gateway endpoint - maps to litellm-rust/crates/core/src/chat_completions/client.rs"""
+"""Validate 1:1 mapping between Python core and Rust core.
+
+Maps litellm-rust/crates/core/ functions to Python implementations.
+"""
 from fastapi.testclient import TestClient
 import sys
 from pathlib import Path
 
-# Add gateway_trace root to path for tracer import
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from tracer import ExecutionTracer, print_trace_table
 
 
-RUST_FUNCTIONS = {
+RUST_IMPLEMENTATIONS = {
     "litellm.rust_bridge.chat_completions.chat_completions",
     "litellm.rust_bridge.chat_completions.achat_completions",
 }
 
 
-def test_chat_completions_client():
-    """Trace /chat/completions endpoint execution."""
+def validate_chat_completions():
+    """Validate /chat/completions endpoint maps to Rust core."""
     from litellm.proxy.proxy_server import app
 
     client = TestClient(app)
@@ -32,9 +34,9 @@ def test_chat_completions_client():
     finally:
         trace = tracer.stop()
 
-    print_trace_table(trace, RUST_FUNCTIONS)
+    print_trace_table(trace, RUST_IMPLEMENTATIONS)
     assert len(trace.calls) > 0
 
 
 if __name__ == "__main__":
-    test_chat_completions_client()
+    validate_chat_completions()

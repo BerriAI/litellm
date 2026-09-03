@@ -1,8 +1,4 @@
-"""Execution tracer for gateway endpoints.
-
-Traces actual endpoint execution using sys.settrace() and shows
-formatted tables of missing Rust implementations.
-"""
+"""Execution tracer for validating Python-to-Rust mapping."""
 import sys
 from dataclasses import dataclass, field
 from typing import Set, List, Dict
@@ -11,7 +7,6 @@ from tabulate import tabulate
 
 @dataclass
 class CallRecord:
-    """Record of a single function call."""
     module: str
     function: str
     depth: int
@@ -19,14 +14,13 @@ class CallRecord:
 
 @dataclass
 class ExecutionTrace:
-    """Complete execution trace."""
     endpoint: str
     calls: List[CallRecord] = field(default_factory=list)
     call_counts: Dict[str, int] = field(default_factory=dict)
 
 
 class ExecutionTracer:
-    """Traces function calls during execution."""
+    """Traces Python function calls to validate Rust mapping."""
 
     def __init__(self, target_modules: List[str]):
         self.target_modules = target_modules
@@ -61,15 +55,14 @@ class ExecutionTracer:
 
 
 def print_trace_table(trace: ExecutionTrace, rust_functions: Set[str]):
-    """Print formatted trace tables."""
+    """Print mapping validation results."""
     python_calls = {f"{c.module}.{c.function}" for c in trace.calls}
     missing = python_calls - rust_functions
     implemented = python_calls & rust_functions
 
-    print(f"\n🔍 Gateway Trace: {trace.endpoint}")
+    print(f"\n🔍 Mapping Validation: {trace.endpoint}")
     print(f"   Total: {len(python_calls)} | Rust: {len(implemented)} | Missing: {len(missing)} | Coverage: {len(implemented)/len(python_calls)*100:.1f}%\n")
 
-    # Execution trace table
     table_data = []
     for call in trace.calls[:20]:
         func_key = f"{call.module}.{call.function}"
@@ -78,9 +71,8 @@ def print_trace_table(trace: ExecutionTrace, rust_functions: Set[str]):
 
     print(tabulate(table_data, headers=["Status", "Function", "Module", "Calls", "Depth"], tablefmt="grid"))
 
-    # Missing functions
     if missing:
-        print(f"\n❌ Missing (Top 10):\n")
+        print(f"\n❌ Missing Rust implementations (Top 10):\n")
         missing_sorted = sorted(missing, key=lambda f: trace.call_counts.get(f, 0), reverse=True)
         for func in missing_sorted[:10]:
             print(f"   {func} ({trace.call_counts[func]} calls)")
