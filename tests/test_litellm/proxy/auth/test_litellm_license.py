@@ -30,11 +30,21 @@ def test_is_over_limit():
 def test_allows_feature_requires_signed_license_claim():
     license_check = LicenseCheck()
 
-    license_check.airgapped_license_data = {"allowed_features": [AUTO_ROUTER_LICENSE_FEATURE]}
+    license_check.airgapped_license_data = {
+        "allowed_features": [AUTO_ROUTER_LICENSE_FEATURE],
+        "expiration_date": "2999-01-01",
+    }
     assert license_check.allows_feature(AUTO_ROUTER_LICENSE_FEATURE) is True
 
-    license_check.airgapped_license_data = {"allowed_features": ["other_feature"]}
+    license_check.airgapped_license_data = {"allowed_features": ["other_feature"], "expiration_date": "2999-01-01"}
     assert license_check.allows_feature(AUTO_ROUTER_LICENSE_FEATURE) is False
+
+    license_check.airgapped_license_data = {
+        "allowed_features": [AUTO_ROUTER_LICENSE_FEATURE],
+        "expiration_date": "2000-01-01",
+    }
+    assert license_check.allows_feature(AUTO_ROUTER_LICENSE_FEATURE) is False
+    assert license_check.airgapped_license_data is None
 
     license_check.airgapped_license_data = None
     assert license_check.allows_feature(AUTO_ROUTER_LICENSE_FEATURE) is False

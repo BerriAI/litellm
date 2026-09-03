@@ -757,7 +757,7 @@ class Router:
         self.set_verbose = set_verbose
         self.ignore_invalid_deployments = ignore_invalid_deployments
         self.fallback_access_check: Final = fallback_access_check
-        self.allow_multiple_heuristic_v2: Final = allow_multiple_heuristic_v2
+        self.allow_multiple_heuristic_v2 = allow_multiple_heuristic_v2
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
         self.enable_tag_filtering = enable_tag_filtering

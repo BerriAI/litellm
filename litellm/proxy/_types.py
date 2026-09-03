@@ -4887,6 +4887,7 @@ class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
     model_info: str
     blocked: bool
     heuristic_v2_unlimited: bool  # writable-ok: the model write path stamps this internal license marker
+    heuristic_v2_license_blocked: bool  # writable-ok: proxy reconciliation stamps this internal routing marker
     updated_at: str
     updated_by: str
 

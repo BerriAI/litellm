@@ -142,10 +142,7 @@ export type ClassifierFallback = "heuristic" | "default_model";
 
 export const DEFAULT_CLASSIFIER_FALLBACK: ClassifierFallback = "heuristic";
 
-export interface AdaptiveRouterWeights {
-  quality: number;
-  cost: number;
-}
+export type AdaptiveRouterWeights = { quality: number; cost: number };
 
 export const DEFAULT_ADAPTIVE_WEIGHTS: AdaptiveRouterWeights = { quality: 0.3, cost: 0.7 };
 

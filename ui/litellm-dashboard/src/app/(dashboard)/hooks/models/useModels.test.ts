@@ -50,10 +50,21 @@ describe("heuristicV2Selection", () => {
       isProxyAdmin: true,
       stateLoading: false,
       hasUnlimitedLicense: false,
-      slotTaken: true,
+      slotTaken: false,
       currentOwnsSlot: true,
     };
     expect(heuristicV2Selection(params).allowed).toBe(true);
+  });
+
+  it("blocks a former licensed owner when another router now owns the singleton", () => {
+    const params = {
+      isProxyAdmin: true,
+      stateLoading: false,
+      hasUnlimitedLicense: false,
+      slotTaken: true,
+      currentOwnsSlot: true,
+    };
+    expect(heuristicV2Selection(params).allowed).toBe(false);
   });
 });
 

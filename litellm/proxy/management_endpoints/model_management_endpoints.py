@@ -308,6 +308,29 @@ def _heuristic_v2_unlimited_marker(complexity_router_config: Mapping[str, object
     return uses_heuristic_v2(complexity_router_config) and _license_allows_unlimited_heuristic_v2()
 
 
+_FIND_HEURISTIC_V2_OWNER_SQL: Final = """
+SELECT model_id, litellm_params
+FROM "LiteLLM_ProxyModelTable"
+WHERE "heuristic_v2_license_blocked" IS NOT TRUE
+  AND ($1::text IS NULL OR model_id <> $1::text)
+  AND CASE
+      WHEN jsonb_typeof(litellm_params) = 'object'
+          THEN (litellm_params #>> '{complexity_router_config,classifier_type}') = 'heuristic_v2'
+      WHEN jsonb_typeof(litellm_params) = 'string'
+          THEN (((litellm_params #>> '{}')::jsonb) #>> '{complexity_router_config,classifier_type}') = 'heuristic_v2'
+      ELSE FALSE
+  END
+LIMIT 1
+"""
+
+
+async def _find_persisted_heuristic_v2_owner(
+    prisma_client: PrismaClient, current_model_id: str | None
+) -> Sequence[Mapping[str, object]]:
+    rows: Final = await prisma_client.db.query_raw(_FIND_HEURISTIC_V2_OWNER_SQL, current_model_id)
+    return cast("Sequence[Mapping[str, object]]", rows)  # cast-ok: query selects two known proxy-model columns
+
+
 async def _raise_if_heuristic_v2_slot_taken(
     *,
     prisma_client: PrismaClient,
@@ -335,8 +358,9 @@ async def _raise_if_heuristic_v2_slot_taken(
         return
     from litellm.proxy.proxy_server import llm_router
 
-    rows: Final = await _proxy_model_table(prisma_client).find_many(
-        where={}  # mutable-ok: Prisma requires a mutable filter mapping
+    rows: Final = await _find_persisted_heuristic_v2_owner(
+        prisma_client=prisma_client,
+        current_model_id=current_model_id,
     )
     violation: Final = _heuristic_v2_slot_violation(
         persisted_rows=rows,
@@ -367,7 +391,7 @@ def _heuristic_v2_admin_violation(*, effective_config: Mapping[str, object] | No
 
 def _heuristic_v2_slot_violation(
     *,
-    persisted_rows: Sequence[_ProxyModelRow],
+    persisted_rows: Sequence[_ProxyModelRow | Mapping[str, object]],
     live_model_list: Sequence[Mapping[str, object]] = (),
     incoming_params: GenericLiteLLMParams | None,
     existing_params: GenericLiteLLMParams | None,
@@ -390,12 +414,14 @@ def _heuristic_v2_slot_violation(
                 "creating a database-backed heuristic_v2 router."
             )
     for row in persisted_rows:
-        if current_model_id is not None and row.model_id == current_model_id:
+        row_model_id: object = row.get("model_id") if isinstance(row, Mapping) else row.model_id
+        if current_model_id is not None and row_model_id == current_model_id:
             continue
+        row_litellm_params: object = row.get("litellm_params") if isinstance(row, Mapping) else row.litellm_params
         if uses_heuristic_v2(
             config
             if isinstance(
-                config := _litellm_params_mapping(row.litellm_params).get("complexity_router_config"), Mapping
+                config := _litellm_params_mapping(row_litellm_params).get("complexity_router_config"), Mapping
             )
             else None
         ):
@@ -903,6 +929,7 @@ async def patch_model(
         update_data["heuristic_v2_unlimited"] = _heuristic_v2_unlimited_marker(
             _effective_complexity_router_config(patch_data.litellm_params, db_model.litellm_params)
         )
+        update_data["heuristic_v2_license_blocked"] = False
 
         # Perform partial update
         updated_model: Final = await _proxy_model_table(prisma_client).update(
@@ -1154,6 +1181,7 @@ async def _add_model_to_db(
         "created_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
         "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
         "heuristic_v2_unlimited": _heuristic_v2_unlimited_marker(model_params.litellm_params.complexity_router_config),
+        "heuristic_v2_license_blocked": False,
     }
     if model_params.model_info.id is not None:
         _data["model_id"] = model_params.model_info.id
@@ -2240,6 +2268,7 @@ async def update_model(
                     if isinstance(merged_dictionary.get("complexity_router_config"), Mapping)
                     else None
                 ),
+                "heuristic_v2_license_blocked": False,
             }
             model_response: Final = await _proxy_model_table(prisma_client).update(
                 where={"model_id": _model_id},

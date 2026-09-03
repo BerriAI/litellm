@@ -154,7 +154,7 @@ export const heuristicV2Selection = ({
   currentOwnsSlot = false,
 }: HeuristicV2SelectionParams): HeuristicV2Selection => {
   if (!isProxyAdmin) return { allowed: false, lockedReason: "Only proxy admins can configure Heuristic v2." };
-  if (currentOwnsSlot) return { allowed: true };
+  if (currentOwnsSlot && !slotTaken) return { allowed: true };
   if (stateLoading) return { allowed: false, lockedReason: "Checking Heuristic v2 availability..." };
   if (slotTaken && !hasUnlimitedLicense) {
     return {

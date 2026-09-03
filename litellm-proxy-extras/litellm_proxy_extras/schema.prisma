@@ -53,7 +53,8 @@ model LiteLLM_ProxyModelTable {
   litellm_params Json
   model_info Json?
   blocked Boolean @default(false)
-  heuristic_v2_unlimited Boolean @default(false)
+  heuristic_v2_unlimited Boolean? @default(false)
+  heuristic_v2_license_blocked Boolean? @default(false)
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")

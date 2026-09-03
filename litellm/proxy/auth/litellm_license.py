@@ -3,7 +3,7 @@
 import base64
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -155,6 +155,16 @@ class LicenseCheck:
         license_data: Final = self.airgapped_license_data
         if license_data is None:
             return False
+        expiration_value: Final = license_data.get("expiration_date")
+        if not isinstance(expiration_value, str):
+            return False
+        try:
+            expiration_date: Final = datetime.strptime(expiration_value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return False
+        if expiration_date < datetime.now(timezone.utc):
+            self.airgapped_license_data = None
+            return False
         allowed_features: Final = license_data.get("allowed_features")
         return isinstance(allowed_features, list) and feature in allowed_features
 
@@ -188,19 +198,22 @@ class LicenseCheck:
             # Decode and parse the data
             license_data: Final = json.loads(message.decode())
 
-            self.airgapped_license_data = EnterpriseLicenseData(**license_data)
-
             # debug information provided in license data
             verbose_proxy_logger.debug("License data: %s", license_data)
 
             # Check expiration date
-            expiration_date: Final = datetime.strptime(license_data["expiration_date"], "%Y-%m-%d")
-            if expiration_date < datetime.now():
+            expiration_date: Final = datetime.strptime(license_data["expiration_date"], "%Y-%m-%d").replace(
+                tzinfo=timezone.utc
+            )
+            if expiration_date < datetime.now(timezone.utc):
+                self.airgapped_license_data = None
                 return False, "License has expired"
 
+            self.airgapped_license_data = EnterpriseLicenseData(**license_data)
             return True
 
         except Exception as e:
+            self.airgapped_license_data = None
             verbose_proxy_logger.debug(
                 "litellm.proxy.auth.litellm_license.py::verify_license_without_api_request - Unable to verify License locally. - %s",
                 e,

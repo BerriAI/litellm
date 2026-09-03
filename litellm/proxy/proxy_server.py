@@ -1685,6 +1685,35 @@ class _UserTeamsRow(Protocol):
 
 _ProxyModelRow: TypeAlias = "prisma_models.LiteLLM_ProxyModelTable"
 
+_RECONCILE_HEURISTIC_V2_LICENSE_SQL: Final = """
+WITH ranked_heuristic_v2 AS (
+    SELECT model_id,
+           ROW_NUMBER() OVER (ORDER BY created_at, model_id) AS owner_rank
+    FROM "LiteLLM_ProxyModelTable"
+    WHERE CASE
+        WHEN jsonb_typeof(litellm_params) = 'object'
+            THEN (litellm_params #>> '{complexity_router_config,classifier_type}') = 'heuristic_v2'
+        WHEN jsonb_typeof(litellm_params) = 'string'
+            THEN (((litellm_params #>> '{}')::jsonb) #>> '{complexity_router_config,classifier_type}') = 'heuristic_v2'
+        ELSE FALSE
+    END
+), expected_state AS (
+    SELECT model_id,
+           $1::boolean AS unlimited,
+           CASE WHEN $1::boolean THEN FALSE ELSE owner_rank > 1 END AS license_blocked
+    FROM ranked_heuristic_v2
+)
+UPDATE "LiteLLM_ProxyModelTable" AS model
+SET "heuristic_v2_unlimited" = expected.unlimited,
+    "heuristic_v2_license_blocked" = expected.license_blocked
+FROM expected_state AS expected
+WHERE model.model_id = expected.model_id
+  AND (
+      model."heuristic_v2_unlimited" IS DISTINCT FROM expected.unlimited
+      OR model."heuristic_v2_license_blocked" IS DISTINCT FROM expected.license_blocked
+  )
+"""
+
 
 def _config_param_table(client: PrismaClient | None) -> TableActions[_ConfigParamRow]:
     return cast(  # cast-ok: this is prisma's LiteLLM_Config actions object, which parses its Json column to a mapping
@@ -6055,7 +6084,9 @@ class ProxyConfig:
         if _id is not None:
             model.model_info["id"] = _id
             model.model_info["db_model"] = True
-            model.model_info["blocked"] = bool(getattr(model, "blocked", False))
+            model.model_info["blocked"] = bool(
+                getattr(model, "blocked", False) or getattr(model, "heuristic_v2_license_blocked", False)
+            )
 
         if premium_user is True:
             # seeing "created_at", "updated_at", "created_by", "updated_by" is a LiteLLM Enterprise Feature
@@ -6255,6 +6286,8 @@ class ProxyConfig:
                 return
 
             models_list: Final[list] = new_models if isinstance(new_models, list) else []
+            if llm_router is not None:
+                llm_router.allow_multiple_heuristic_v2 = _license_check.allows_feature(AUTO_ROUTER_LICENSE_FEATURE)
             if llm_router is None and master_key is not None:
                 verbose_proxy_logger.debug("len new_models: %s", len(models_list))
 
@@ -6957,6 +6990,11 @@ class ProxyConfig:
     def _should_load_db_object(self, object_type: str | SupportedDBObjectType) -> bool:
         return should_load_db_object(object_type=object_type)
 
+    async def _reconcile_heuristic_v2_license_state(self, prisma_client: PrismaClient) -> None:
+        """Apply the current signed-license entitlement before loading DB routers."""
+        unlimited: Final = _license_check.allows_feature(AUTO_ROUTER_LICENSE_FEATURE)
+        await prisma_client.db.execute_raw(_RECONCILE_HEURISTIC_V2_LICENSE_SQL, unlimited)
+
     async def _get_models_from_db(self, prisma_client: PrismaClient) -> Sequence[_ProxyModelRow] | None:
         """
         Fetch all model deployments from the DB.
@@ -7038,6 +7076,7 @@ class ProxyConfig:
 
             # Only load models from DB if "models" is in supported_db_objects (or if supported_db_objects is not set)
             if self._should_load_db_object(object_type="models"):
+                await self._reconcile_heuristic_v2_license_state(prisma_client=prisma_client)
                 new_models: Final = await self._get_models_from_db(prisma_client=prisma_client)
 
                 # update llm router

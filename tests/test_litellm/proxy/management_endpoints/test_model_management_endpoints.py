@@ -3339,6 +3339,36 @@ class TestGetModelInfoWithIdBlocked:
         info = ProxyConfig().get_model_info_with_id(model=model, db_model=True)
         assert getattr(info, "blocked") is False
 
+    def test_get_model_info_with_id_propagates_license_blocked_true(self):
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        model = MagicMock(spec=["model_id", "model_info", "blocked", "heuristic_v2_license_blocked"])
+        model.model_id = "dep-license-blocked"
+        model.model_info = {}
+        model.blocked = False
+        model.heuristic_v2_license_blocked = True
+        info = ProxyConfig().get_model_info_with_id(model=model, db_model=True)
+        assert getattr(info, "blocked") is True
+
+
+class TestHeuristicV2LicenseReconciliation:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("unlimited", [False, True])
+    async def test_reconcile_uses_current_license_state(self, unlimited):
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        prisma = MagicMock()
+        prisma.db.execute_raw = AsyncMock(return_value=2)
+        with patch(  # test-quality-ok: isolates the proxy license singleton used by reconciliation
+            "litellm.proxy.proxy_server._license_check.allows_feature",
+            return_value=unlimited,
+        ):
+            await ProxyConfig()._reconcile_heuristic_v2_license_state(prisma_client=prisma)
+
+        query, entitlement = prisma.db.execute_raw.await_args.args
+        assert "ROW_NUMBER()" in query
+        assert entitlement is unlimited
+
 
 class TestPatchModelBlockedAuthGate:
     """Only proxy admins may flip `blocked` — team admins authorized for
@@ -4150,7 +4180,29 @@ class TestStrategyRouterWriteValidation:
                 existing_params=None,
             )
 
-        prisma_client.db.litellm_proxymodeltable.find_many.assert_not_called()
+        prisma_client.db.query_raw.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_singleton_lookup_uses_bounded_database_query(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _find_persisted_heuristic_v2_owner,
+        )
+
+        prisma_client = MagicMock()
+        prisma_client.db.query_raw = AsyncMock(
+            return_value=[
+                {
+                    "model_id": "owner",
+                    "litellm_params": {"complexity_router_config": {"classifier_type": "heuristic_v2"}},
+                }
+            ]
+        )
+        rows = await _find_persisted_heuristic_v2_owner(prisma_client, "current")
+
+        query, excluded_model_id = prisma_client.db.query_raw.await_args.args
+        assert len(rows) == 1
+        assert "LIMIT 1" in query
+        assert excluded_model_id == "current"
 
     def test_double_prefix_rejected_against_stored_params(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
