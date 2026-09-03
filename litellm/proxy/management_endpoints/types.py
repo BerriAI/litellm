@@ -76,7 +76,7 @@ def get_litellm_user_role(role_str: object) -> LitellmUserRoles | None:
         LitellmUserRoles enum if valid, None otherwise
     """
     if isinstance(role_str, (list, tuple)):
-        entries: Final = cast(Sequence[object], role_str)
+        entries: Final = cast(Sequence[object], role_str)  # cast-ok: isinstance narrows the claim, not its elements
         return highest_privilege_role(
             role for role in (get_litellm_user_role(entry) for entry in entries) if role is not None
         )
