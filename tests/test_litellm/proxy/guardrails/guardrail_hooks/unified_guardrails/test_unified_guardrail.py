@@ -2037,12 +2037,10 @@ class TestStreamingScanDedup:
     guardrail already cleared. Regression for LIT-6692."""
 
     @pytest.fixture(autouse=True)
-    def _use_real_mappings(self, monkeypatch):
-        monkeypatch.setattr(
-            unified_module,
-            "endpoint_guardrail_translation_mappings",
-            load_guardrail_translation_mappings(),
-        )
+    def _use_real_mappings(self):
+        unified_module.endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
+        yield
+        unified_module.endpoint_guardrail_translation_mappings = None
 
     @pytest.mark.asyncio
     async def test_chat_terminal_chunk_on_sampled_index_is_scanned_once(self):

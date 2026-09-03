@@ -5,10 +5,22 @@
 import pytest
 
 import logging
+from typing import Final
 
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
+
+
+async def _eligible_deployment_ids(router: litellm.Router, model: str, tags: list[str]) -> set[str]:
+    eligible: Final = await get_deployments_for_tag(
+        llm_router_instance=router,
+        model=model,
+        healthy_deployments=router.get_model_list(model_name=model) or [],
+        request_kwargs={"metadata": {"tags": tags}},
+    )
+    return {deployment["model_info"]["id"] for deployment in eligible}
 
 
 @pytest.mark.asyncio()
@@ -850,17 +862,9 @@ async def test_negation_regex_pattern_treated_as_literal():
 
     # The regex-like string matches no deployment tag literally, so all
     # candidates survive and both model IDs are reachable.
-    seen_ids = set()
-    for _ in range(10):
-        response = await router.acompletion(
-            model="gpt-4",
-            messages=[{"role": "user", "content": "hi"}],
-            metadata={"tags": ["!provider:(anthropic|openai)"]},
-            mock_response="hi",
-        )
-        seen_ids.add(response._hidden_params["model_id"])
+    eligible_ids: Final = await _eligible_deployment_ids(router, "gpt-4", ["!provider:(anthropic|openai)"])
 
-    assert seen_ids == {"anthropic-model", "openai-model"}
+    assert eligible_ids == {"anthropic-model", "openai-model"}
 
 
 @pytest.mark.asyncio()
@@ -1281,17 +1285,9 @@ async def test_chain_enable_tag_filtering_false_overrides_router_level_true():
         enable_tag_filtering=True,
     )
 
-    seen_ids = set()
-    for _ in range(10):
-        response = await router.acompletion(
-            model="gpt-4",
-            messages=[{"role": "user", "content": "hi"}],
-            metadata={"tags": ["teamA"]},
-            mock_response="hi",
-        )
-        seen_ids.add(response._hidden_params["model_id"])
+    eligible_ids: Final = await _eligible_deployment_ids(router, "gpt-4", ["teamA"])
 
-    assert seen_ids == {"team-a-deployment", "team-b-deployment"}
+    assert eligible_ids == {"team-a-deployment", "team-b-deployment"}
 
 
 @pytest.mark.asyncio()
