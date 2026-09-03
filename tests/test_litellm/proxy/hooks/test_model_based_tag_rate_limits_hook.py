@@ -26,10 +26,10 @@ from litellm.proxy.hooks.model_based_tag_rate_limits_hook import (
     _build_limits_index,
     _ConfiguredLimit,
     _current_admission_token,
+    _discard_pending_concurrency_keys,
     _extract_team_id,
     _inflight_key,
-    _own_concurrency_key_for_limit,
-    _own_concurrency_keys_for_hop,
+    _pending_concurrency_keys,
     _pending_reservations_cache_key,
     _PROXY_ModelBasedTagRateLimitsHook,
     _record_admission_time,
@@ -3168,60 +3168,124 @@ async def test_next_hops_admission_releases_a_prior_hops_leaked_reservation(time
 
 
 @pytest.mark.asyncio
-async def test_concurrent_batch_siblings_do_not_bypass_a_concurrency_limit(time_controller):
+async def test_concurrent_batch_siblings_dedupe_to_exactly_one_concurrency_reservation(time_controller):
     """
-    Veria AI finding: Router.abatch_completion's comma-separated multi-model
-    dispatch runs each model concurrently as its own asyncio.Task, but every
-    branch is handed the identical litellm_logging_obj (the proxy attaches
-    one to the request before the comma-split), so two genuinely concurrent
-    branches share one model_call_details. Before the fix, a second branch's
-    admission-time stale-reservation cleanup couldn't tell that apart from
-    an earlier, already-failed hop of its own retry chain, so it released
-    the first branch's still-live reservation and let both branches through
-    a concurrency limit of 1.
+    Router.abatch_completion's comma-separated multi-model dispatch runs
+    each model concurrently as its own asyncio.Task, but every branch is
+    handed the identical litellm_logging_obj (the proxy attaches one to the
+    request before the comma-split), so two genuinely concurrent branches
+    share one model_call_details -- and, confirmed live, that shared
+    Logging instance means only ONE terminal success/failure event will
+    ever fire for the whole dispatch (litellm's own has_logged_{event_type}
+    dedup), never one per branch. Reserving one unit per branch and relying
+    on that many independent releases was the wrong model: with only one
+    release ever happening, every other branch's own reservation would leak
+    until its safety TTL on every ordinary multi-model batch call. Admission
+    instead reserves at most one unit per key for the whole dispatch: both
+    branches here admit successfully under a limit of 1, and only one real
+    reservation exists regardless.
     """
     limiter = _make_limiter(time_controller)
     router = _concurrency_router(limit=1)
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
     request_kwargs, _kwargs = _call_context(["end_user_id:u1"])
-    first_admitted = asyncio.Event()
 
-    async def _branch_one() -> None:
-        await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
-        )
-        first_admitted.set()
-        # Held "in flight" while the second branch's admission runs, exactly
-        # like two concurrently in-flight provider calls.
-        await asyncio.sleep(0.05)
-
-    async def _branch_two() -> None:
-        await first_admitted.wait()
+    async def _admit() -> None:
         await limiter.async_filter_deployments(
             model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
         )
 
     results = await asyncio.gather(
-        asyncio.create_task(_branch_one()), asyncio.create_task(_branch_two()), return_exceptions=True
+        asyncio.create_task(_admit()), asyncio.create_task(_admit()), return_exceptions=True
     )
     rejections = [result for result in results if isinstance(result, ProxyRateLimitError)]
-    assert len(rejections) == 1
+    assert rejections == []
+    assert len(_pending_concurrency_keys(request_kwargs)) == 1
 
 
 @pytest.mark.asyncio
-async def test_fast_failing_batch_sibling_does_not_release_a_still_executing_siblings_slot(time_controller):
+async def test_three_batch_siblings_still_dedupe_to_exactly_one_concurrency_reservation(time_controller):
+    """A dispatch's own reservation count does not scale with how many
+    models are in its comma-separated list."""
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+    request_kwargs, _kwargs = _call_context(["end_user_id:u1"])
+
+    async def _admit() -> None:
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+        )
+
+    results = await asyncio.gather(
+        *(asyncio.create_task(_admit()) for _ in range(3)), return_exceptions=True
+    )
+    rejections = [result for result in results if isinstance(result, ProxyRateLimitError)]
+    assert rejections == []
+    assert len(_pending_concurrency_keys(request_kwargs)) == 1
+
+
+@pytest.mark.asyncio
+async def test_rejected_atomic_batch_rolls_back_its_own_newly_staked_concurrency_claim(time_controller):
     """
-    Live repro: racing two comma-separated abatch_completion branches sharing
-    one model_call_details, one bad-keyed for a fast 401, showed the
-    genuinely-executing sibling's own inflight key drop before its real
-    completion finished, admitting a third same-tag caller past a
-    concurrency=1 cap. async_log_failure_event used to release every pending
-    reservation unconditionally regardless of which hop it belonged to; it
-    must release only the failing branch's own slot.
+    A concurrency claim is staked synchronously before the atomic
+    check-and-increment it's part of even runs, to close the race two
+    concurrent siblings could otherwise hit (see
+    _PENDING_CONCURRENCY_KEYS_FIELD's docstring). If that batch then
+    rejects because of a *different* check in it, nothing was actually
+    incremented for the concurrency claim either -- the whole batch is
+    all-or-nothing -- so the staked claim must be rolled back. Left in
+    place, it would falsely tell a later admission this key is already
+    covered by a real reservation that never actually happened.
     """
     limiter = _make_limiter(time_controller)
-    router = _concurrency_router(limit=2)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "concurrency_limits": {
+                        "limits": [{"name": "inflight", "tag_id": "shared_pool", "limit": 2, "period_seconds": 300}]
+                    },
+                    "request_limits": {
+                        "limits": [{"name": "per_period", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300}]
+                    },
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+
+    first_request_kwargs, _first_kwargs = _call_context(["end_user_id:u1", "shared_pool:pool-a"])
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=first_request_kwargs
+    )
+
+    second_request_kwargs, _second_kwargs = _call_context(["end_user_id:u1", "shared_pool:pool-a"])
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=second_request_kwargs
+        )
+
+    assert _pending_concurrency_keys(second_request_kwargs) == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_the_dispatchs_one_surviving_success_event_fully_releases_its_single_reservation(time_controller):
+    """
+    Only one terminal event -- success or failure -- ever fires for the
+    whole abatch_completion dispatch. Since admission reserves exactly one
+    unit for the dispatch regardless of how many branches matched it, that
+    one event's own unconditional release always exactly balances it:
+    whichever branch's data happens to be reflected when it fires, the
+    concurrency slot is fully freed for the request as a whole.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=1)
     limiter.update_variables(llm_router=router)
     healthy = router.model_list
     request_kwargs, kwargs = _call_context(["end_user_id:u1"])
@@ -3231,17 +3295,46 @@ async def test_fast_failing_batch_sibling_does_not_release_a_still_executing_sib
             model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
         )
 
-    # Both branches of one abatch_completion dispatch admit under the
-    # identical shared model_call_details, each its own asyncio.Task --
-    # exactly like Router.abatch_completion's real dispatch, and needed for
-    # _release_stale_hop_reservations' own admission-lineage token to treat
-    # them as two independent lineages rather than two hops of one chain.
     await asyncio.create_task(_admit())
     await asyncio.create_task(_admit())
+    assert len(_pending_concurrency_keys(request_kwargs)) == 1
 
-    # The second branch fails fast (e.g. a bad key on that specific model) --
-    # its own failure event must release only its own slot, not the first
-    # branch's, which is still genuinely executing.
+    kwargs["standard_logging_object"] = {
+        "model_group": "grp",
+        "model_id": "dep-1",
+        "total_tokens": 10,
+        "response_cost": 0.01,
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    assert _pending_concurrency_keys(request_kwargs) == frozenset()
+    await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_dispatchs_one_surviving_failure_event_fully_releases_its_single_reservation(time_controller):
+    """Same as the success-event version above, but for the failure path."""
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=1)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
+
+    async def _admit() -> None:
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+        )
+
+    await asyncio.create_task(_admit())
+    await asyncio.create_task(_admit())
+    assert len(_pending_concurrency_keys(request_kwargs)) == 1
+
     kwargs["standard_logging_object"] = {
         "model_group": "grp",
         "model_id": "dep-1",
@@ -3250,214 +3343,13 @@ async def test_fast_failing_batch_sibling_does_not_release_a_still_executing_sib
     }
     await limiter.async_log_failure_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
 
-    # One slot freed (the failing branch's), one still held (the executing
-    # branch's): a fresh request fits, a second one does not.
+    assert _pending_concurrency_keys(request_kwargs) == frozenset()
     await limiter.async_filter_deployments(
         model="grp",
         healthy_deployments=healthy,
         messages=None,
         request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
     )
-    with pytest.raises(ProxyRateLimitError):
-        await limiter.async_filter_deployments(
-            model="grp",
-            healthy_deployments=healthy,
-            messages=None,
-            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
-        )
-
-
-@pytest.mark.asyncio
-async def test_fast_succeeding_batch_sibling_does_not_release_a_still_executing_siblings_slot(time_controller):
-    """
-    Same live repro as the failure-path version above, but for the more
-    common case: one branch of a comma-separated abatch_completion dispatch
-    finishes (successfully) well before its sibling. async_log_success_event
-    must release only that one branch's own slot.
-    """
-    limiter = _make_limiter(time_controller)
-    router = _concurrency_router(limit=2)
-    limiter.update_variables(llm_router=router)
-    healthy = router.model_list
-    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
-
-    async def _admit() -> None:
-        await limiter.async_filter_deployments(
-            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
-        )
-
-    # Each branch its own asyncio.Task -- see the failure-path test above
-    # for why that's required to model two independent admission lineages.
-    await asyncio.create_task(_admit())
-    await asyncio.create_task(_admit())
-
-    kwargs["standard_logging_object"] = {
-        "model_group": "grp",
-        "model_id": "dep-1",
-        "total_tokens": 10,
-        "response_cost": 0.01,
-    }
-    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
-    await asyncio.sleep(0)
-
-    await limiter.async_filter_deployments(
-        model="grp",
-        healthy_deployments=healthy,
-        messages=None,
-        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
-    )
-    with pytest.raises(ProxyRateLimitError):
-        await limiter.async_filter_deployments(
-            model="grp",
-            healthy_deployments=healthy,
-            messages=None,
-            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
-        )
-
-
-@pytest.mark.asyncio
-async def test_batch_sibling_reserving_no_concurrency_slot_does_not_release_a_still_executing_siblings_slot(
-    time_controller,
-):
-    """
-    Cursor Bugbot finding: `_release_own_concurrency_keys` fell back to
-    releasing every pending reservation whenever this hop's own
-    `own_concurrency_keys` was empty -- including when this hop's context
-    resolved successfully but simply reserved no concurrency slot at all
-    (its own model/tag only has a token limit configured, not a concurrency
-    one). On `abatch_completion` that shared pending list can still hold a
-    genuinely live sibling branch's own reservation (a different
-    model_group whose own admission did reserve a concurrency slot), so the
-    token-only branch's completion used to release the concurrency-limited
-    branch's still-executing slot.
-    """
-    limiter = _make_limiter(time_controller)
-    token_limits = {
-        "token_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 500000, "period_seconds": 86400}]}
-    }
-    router = litellm.Router(
-        model_list=[
-            _deployment(
-                "grp-conc",
-                "dep-conc",
-                {
-                    "concurrency_limits": {
-                        "limits": [{"name": "inflight", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300}]
-                    }
-                },
-            ),
-            _deployment("grp-token", "dep-token", token_limits),
-        ]
-    )
-    limiter.update_variables(llm_router=router)
-    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
-    conc_healthy = [d for d in router.model_list if d["model_info"]["id"] == "dep-conc"]
-    token_healthy = [d for d in router.model_list if d["model_info"]["id"] == "dep-token"]
-
-    async def _admit(model: str, healthy: list) -> None:
-        await limiter.async_filter_deployments(
-            model=model, healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
-        )
-
-    # Both branches of one abatch_completion dispatch admit under the
-    # identical shared model_call_details, each its own asyncio.Task -- see
-    # the concurrency-sibling tests above for why that models two
-    # independent admission lineages.
-    await asyncio.create_task(_admit("grp-conc", conc_healthy))
-    await asyncio.create_task(_admit("grp-token", token_healthy))
-
-    # The token-only branch finishes first. Its own success event resolves a
-    # real context (a token limit matches its tag/model), but reserves no
-    # concurrency slot of its own -- it must not touch the sibling's.
-    kwargs["standard_logging_object"] = {
-        "model_group": "grp-token",
-        "model_id": "dep-token",
-        "total_tokens": 10,
-        "response_cost": 0.01,
-    }
-    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
-    await asyncio.sleep(0)
-
-    # The concurrency-limited branch's own slot must still be held: a fresh
-    # request against the same tag/model is rejected under the limit=1 cap.
-    with pytest.raises(ProxyRateLimitError):
-        await limiter.async_filter_deployments(
-            model="grp-conc",
-            healthy_deployments=conc_healthy,
-            messages=None,
-            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
-        )
-
-
-@pytest.mark.asyncio
-async def test_batch_sibling_with_no_tag_rate_limits_at_all_does_not_release_a_still_executing_siblings_slot(
-    time_controller,
-):
-    """
-    Cursor Bugbot finding: `_release_own_concurrency_keys` still fell back to
-    an unconditional release whenever `_resolve_hop_context` returned `None`
-    -- including the common case of a hop whose own model has no
-    `tag_rate_limits` configured at all, so `resolve_any` finds nothing and
-    `_resolve_hop_context` bails out. That same "nothing configured" check
-    is also the *first* thing this hop's own admission does, before it could
-    ever queue a concurrency reservation -- so a `None` context means this
-    hop reserved nothing of its own, the same as a resolved context with no
-    matching concurrency-unit limit. On `abatch_completion` the still-live
-    sibling's own reservation must survive this branch's completion.
-    """
-    limiter = _make_limiter(time_controller)
-    router = litellm.Router(
-        model_list=[
-            _deployment(
-                "grp-conc",
-                "dep-conc",
-                {
-                    "concurrency_limits": {
-                        "limits": [{"name": "inflight", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300}]
-                    }
-                },
-            ),
-            _deployment("grp-none", "dep-none", {}),
-        ]
-    )
-    limiter.update_variables(llm_router=router)
-    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
-    conc_healthy = [d for d in router.model_list if d["model_info"]["id"] == "dep-conc"]
-    none_healthy = [d for d in router.model_list if d["model_info"]["id"] == "dep-none"]
-
-    async def _admit(model: str, healthy: list) -> None:
-        await limiter.async_filter_deployments(
-            model=model, healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
-        )
-
-    # Both branches of one abatch_completion dispatch admit under the
-    # identical shared model_call_details, each its own asyncio.Task -- see
-    # the concurrency-sibling tests above for why that models two
-    # independent admission lineages.
-    await asyncio.create_task(_admit("grp-conc", conc_healthy))
-    await asyncio.create_task(_admit("grp-none", none_healthy))
-
-    # The unconfigured branch finishes first. Its own success event resolves
-    # no context at all (nothing configured for "grp-none"), and reserved no
-    # concurrency slot of its own -- it must not touch the sibling's.
-    kwargs["standard_logging_object"] = {
-        "model_group": "grp-none",
-        "model_id": "dep-none",
-        "total_tokens": 10,
-        "response_cost": 0.01,
-    }
-    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
-    await asyncio.sleep(0)
-
-    # The concurrency-limited branch's own slot must still be held: a fresh
-    # request against the same tag/model is rejected under the limit=1 cap.
-    with pytest.raises(ProxyRateLimitError):
-        await limiter.async_filter_deployments(
-            model="grp-conc",
-            healthy_deployments=conc_healthy,
-            messages=None,
-            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
-        )
 
 
 @pytest.mark.asyncio
@@ -3467,10 +3359,9 @@ async def test_a_hop_matching_two_concurrency_scoped_entries_releases_both_reser
     traffic: a request matching multiple concurrency-scoped TagRateLimitEntry
     policies reserved one key per matching policy at admission but a
     terminal event released only one entry total, leaking every other match
-    until its safety TTL. Verifies this hook's own release path -- which
-    computes `only_keys` as the full set of every matching policy's own key,
-    not a single arbitrary one -- actually releases all of them, not just
-    the first.
+    until its safety TTL. Verifies this hook's own release path (an
+    unconditional pop of everything still pending for the call) actually
+    releases all of them, not just the first.
     """
     limiter = _make_limiter(time_controller)
     router = litellm.Router(
@@ -3521,6 +3412,145 @@ async def test_a_hop_matching_two_concurrency_scoped_entries_releases_both_reser
     await limiter.async_filter_deployments(
         model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["team_id:t1"]}}
     )
+
+
+@pytest.mark.asyncio
+async def test_real_pipeline_abatch_completion_reserves_and_releases_exactly_one_concurrency_unit(
+    time_controller, monkeypatch
+):
+    """
+    Real-pipeline regression test: drives an actual comma-separated
+    abatch_completion dispatch through the real proxy pre-call pipeline --
+    common_processing_pre_call_logic followed by route_request, exactly
+    what route_llm_request.py does in production -- which is what
+    pre-attaches one shared litellm_logging_obj to every branch before the
+    comma-split. Confirmed live: that shared Logging instance means only
+    ONE terminal success/failure event ever fires for the whole dispatch,
+    never one per branch, since every branch checks the identical
+    instance's has_logged_{event_type} flag before dispatching to any
+    CustomLogger. This drives the real hook (registered in litellm.callbacks,
+    invoked by Router.async_callback_filter_deployments and litellm's own
+    logging worker, not called directly) through a real 3-branch dispatch
+    of the same model against a concurrency limit of 1: without dedup, the
+    second and third branches would each be rejected outright (confirmed
+    empirically without the admission-side fix); with it, all three succeed,
+    and the single reservation is fully released once the one surviving
+    terminal event fires -- checked after an explicit flush of litellm's
+    own async logging worker, not a fixed sleep, since that worker (unlike
+    this hook's own success/failure hooks in the other tests here) runs the
+    completion callback on its own background task, not inline.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.proxy import common_request_processing as cpr_module
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.route_llm_request import route_request
+    from litellm.proxy.utils import ProxyLogging
+
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=1)
+    limiter.update_variables(llm_router=router)
+    monkeypatch.setattr(litellm, "callbacks", [limiter])
+
+    model_string = "grp,grp,grp"
+    base_data = {
+        "model": model_string,
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"tags": ["end_user_id:u1"]},
+    }
+
+    async def mock_add_litellm_data_to_request(*_args, **_kwargs):
+        return dict(base_data)
+
+    monkeypatch.setattr(cpr_module, "add_litellm_data_to_request", mock_add_litellm_data_to_request)
+
+    async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+        return data
+
+    proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=passthrough_pre_call_hook)
+
+    processing_obj = ProxyBaseLLMRequestProcessing(data=dict(base_data))
+    mock_request = MagicMock()
+    mock_request.headers = {}
+    data, _logging_obj = await processing_obj.common_processing_pre_call_logic(
+        request=mock_request,
+        general_settings={},
+        user_api_key_dict=UserAPIKeyAuth(),
+        proxy_logging_obj=proxy_logging_obj,
+        proxy_config=MagicMock(spec=ProxyConfig),
+        route_type="acompletion",
+    )
+
+    dispatch_result = route_request(
+        data=data,
+        llm_router=router,
+        user_model=None,
+        route_type="acompletion",
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+    resolved = await dispatch_result
+    if asyncio.iscoroutine(resolved):
+        resolved = await resolved
+    assert len(resolved) == 3
+    assert not any(isinstance(branch_result, Exception) for branch_result in resolved)
+
+    await GLOBAL_LOGGING_WORKER.flush()
+    await asyncio.sleep(0.2)
+
+    assert _pending_concurrency_keys(data) == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_known_limitation_batch_dispatch_only_accounts_one_branchs_token_usage(time_controller):
+    """
+    Known, accepted limitation (see `_resolve_hop_context`'s own docstring):
+    only one terminal event ever fires for the whole `abatch_completion`
+    dispatch, so only whichever one branch's own `standard_logging_object`
+    is reflected in the shared `model_call_details` at that moment gets
+    accounted -- never the sum of every branch's real usage. Fixing this
+    needs Router-level changes (a distinct Logging instance per branch, or
+    aggregating usage before the one terminal event fires), out of scope
+    for this hook.
+
+    Documents the gap concretely: two branches each genuinely used 100
+    tokens (200 total), but only one terminal event ever fires in reality,
+    so only 100 tokens are ever accounted, not 200. This is not a bug this
+    hook can fix; it's a pre-existing accounting gap the batch-completion
+    fixes elsewhere in this file did not introduce and cannot close.
+    """
+    limiter = _make_limiter(time_controller)
+    token_limits = {
+        "token_limits": {"limits": [{"name": "daily", "tag_id": "end_user_id", "limit": 500000, "period_seconds": 86400}]}
+    }
+    router = litellm.Router(model_list=[_deployment("grp", "dep-1", token_limits)])
+    limiter.update_variables(llm_router=router)
+    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
+    healthy = router.model_list
+
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+
+    # Simulates the one terminal event that actually fires for the whole
+    # dispatch in reality: whichever branch's data happens to be reflected,
+    # each branch here genuinely used 100 tokens, so a correct sum would be
+    # 200 -- only this one branch's 100 is ever visible to account.
+    kwargs["standard_logging_object"] = {
+        "model_group": "grp",
+        "model_id": "dep-1",
+        "total_tokens": 100,
+        "response_cost": 0.01,
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    now = time_controller.now().timestamp()
+    token_key = _expected_bucket_key("grp", "tokens", "daily", "end_user_id", "u1", 86400, now, limit=500000)
+    accounted = float(await limiter.internal_usage_cache.async_get_cache(key=token_key, litellm_parent_otel_span=None))
+    assert accounted == 100.0  # the sibling branch's own real 100 tokens are never accounted at all
 
 
 def _request_limit_router(limit: int) -> "litellm.Router":
@@ -4703,76 +4733,6 @@ def test_concurrency_ttl_floor_does_not_shorten_a_longer_period_seconds():
 
 
 # ---------------------------------------------------------------------------
-# _own_concurrency_key_for_limit / _own_concurrency_keys_for_hop -- the
-# terminal release paths' own recomputation of exactly which reservation(s)
-# a completing hop is entitled to release, mirroring
-# _increment_operation_for_limit's own deployment_scope/tag_value/
-# entry_applies checks.
-# ---------------------------------------------------------------------------
-
-
-def test_own_concurrency_key_for_limit_matches_the_key_admission_would_reserve():
-    entry = TagRateLimitEntry(name="inflight", tag_id="end_user_id", limit=1, period_seconds=300)
-    configured_limit = _ConfiguredLimit(unit="concurrency", entry=entry, deployment_scope=None)
-    admission_key = _inflight_key("grp", configured_limit, "u1", key_hash=None)
-    assert _own_concurrency_key_for_limit(configured_limit, "grp", ["end_user_id:u1"], "dep-1", None, None) == (
-        admission_key
-    )
-
-
-def test_own_concurrency_key_for_limit_is_none_for_a_non_concurrency_unit():
-    entry = TagRateLimitEntry(name="daily", tag_id="end_user_id", limit=500, period_seconds=86400)
-    configured_limit = _ConfiguredLimit(unit="tokens", entry=entry, deployment_scope=None)
-    assert _own_concurrency_key_for_limit(configured_limit, "grp", ["end_user_id:u1"], "dep-1", None, None) is None
-
-
-def test_own_concurrency_key_for_limit_is_none_outside_its_deployment_scope():
-    entry = TagRateLimitEntry(name="inflight", tag_id="end_user_id", limit=1, period_seconds=300)
-    configured_limit = _ConfiguredLimit(unit="concurrency", entry=entry, deployment_scope=("dep-1",))
-    assert _own_concurrency_key_for_limit(configured_limit, "grp", ["end_user_id:u1"], "dep-2", None, None) is None
-    assert _own_concurrency_key_for_limit(configured_limit, "grp", ["end_user_id:u1"], "dep-1", None, None) is not None
-
-
-def test_own_concurrency_key_for_limit_is_none_without_a_matching_tag():
-    entry = TagRateLimitEntry(name="inflight", tag_id="end_user_id", limit=1, period_seconds=300)
-    configured_limit = _ConfiguredLimit(unit="concurrency", entry=entry, deployment_scope=None)
-    assert _own_concurrency_key_for_limit(configured_limit, "grp", ["team_id:t1"], "dep-1", None, None) is None
-
-
-def test_own_concurrency_key_for_limit_folds_in_key_hash_only_when_scoped():
-    scoped_entry = TagRateLimitEntry(
-        name="inflight", tag_id="end_user_id", limit=1, period_seconds=300, scope_by_key_hash=True
-    )
-    scoped_limit = _ConfiguredLimit(unit="concurrency", entry=scoped_entry, deployment_scope=None)
-    key_with_hash = _own_concurrency_key_for_limit(scoped_limit, "grp", ["end_user_id:u1"], "dep-1", "hashA", None)
-    key_with_different_hash = _own_concurrency_key_for_limit(
-        scoped_limit, "grp", ["end_user_id:u1"], "dep-1", "hashB", None
-    )
-    assert key_with_hash != key_with_different_hash
-
-    unscoped_entry = TagRateLimitEntry(name="inflight", tag_id="end_user_id", limit=1, period_seconds=300)
-    unscoped_limit = _ConfiguredLimit(unit="concurrency", entry=unscoped_entry, deployment_scope=None)
-    key_ignoring_hash_a = _own_concurrency_key_for_limit(
-        unscoped_limit, "grp", ["end_user_id:u1"], "dep-1", "hashA", None
-    )
-    key_ignoring_hash_b = _own_concurrency_key_for_limit(
-        unscoped_limit, "grp", ["end_user_id:u1"], "dep-1", "hashB", None
-    )
-    assert key_ignoring_hash_a == key_ignoring_hash_b
-
-
-def test_own_concurrency_keys_for_hop_only_collects_concurrency_unit_entries():
-    concurrency_entry = TagRateLimitEntry(name="inflight", tag_id="end_user_id", limit=1, period_seconds=300)
-    token_entry = TagRateLimitEntry(name="daily", tag_id="end_user_id", limit=500, period_seconds=86400)
-    configured = (
-        _ConfiguredLimit(unit="concurrency", entry=concurrency_entry, deployment_scope=None),
-        _ConfiguredLimit(unit="tokens", entry=token_entry, deployment_scope=None),
-    )
-    keys = _own_concurrency_keys_for_hop(configured, "grp", ["end_user_id:u1"], "dep-1", None, None)
-    assert len(keys) == 1
-
-
-# ---------------------------------------------------------------------------
 # pending-concurrency-key field on model_call_details must survive a detached
 # asyncio.create_task fork (e.g. litellm's own failure-logging dispatch),
 # and a release must never sweep up a key a still-live sibling hop appended
@@ -4851,50 +4811,6 @@ async def test_release_only_own_lineage_leaves_a_concurrent_siblings_reservation
     released = await limiter._pop_pending_concurrency_keys(model_call_details, only_own_lineage=True)
     assert released == (("own-key", None),)
     assert model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] == [("sibling-key", None, sibling_token)]
-
-
-@pytest.mark.asyncio
-async def test_pop_pending_concurrency_keys_only_keys_releases_at_most_one_per_key(time_controller):
-    """
-    only_keys is the terminal (success/failure) release paths' own filter:
-    reservations sharing a key are fungible, so a matching key releases
-    exactly one entry, never every entry sharing that key -- two branches
-    admitted under the identical key must each release their own unit
-    independently, not have one release both at once.
-    """
-    limiter = _make_limiter(time_controller)
-    model_call_details: dict = {
-        _PENDING_CONCURRENCY_KEYS_FIELD: [
-            ("shared-key", None, object()),
-            ("shared-key", None, object()),
-            ("other-key", None, object()),
-        ]
-    }
-
-    first_release = await limiter._pop_pending_concurrency_keys(model_call_details, only_keys=frozenset({"shared-key"}))
-    assert first_release == (("shared-key", None),)
-    assert model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] == [
-        ("shared-key", None, model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD][0][2]),
-        ("other-key", None, model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD][1][2]),
-    ]
-
-    second_release = await limiter._pop_pending_concurrency_keys(
-        model_call_details, only_keys=frozenset({"shared-key"})
-    )
-    assert second_release == (("shared-key", None),)
-    assert model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] == [
-        ("other-key", None, model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD][0][2])
-    ]
-
-
-@pytest.mark.asyncio
-async def test_pop_pending_concurrency_keys_only_keys_ignores_a_non_matching_key(time_controller):
-    limiter = _make_limiter(time_controller)
-    model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: [("sibling-key", None, object())]}
-
-    released = await limiter._pop_pending_concurrency_keys(model_call_details, only_keys=frozenset({"my-own-key"}))
-    assert released == ()
-    assert len(model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD]) == 1
 
 
 # ---------------------------------------------------------------------------
