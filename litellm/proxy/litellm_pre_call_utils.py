@@ -734,7 +734,7 @@ def apply_missing_session_id_policy(
     request: Request,
 ) -> None:
     policy: Final = general_settings.get("missing_session_id") if general_settings else None
-    if policy is None or not _is_llm_inference_route(request):
+    if policy is None or policy == "omit" or not _is_llm_inference_route(request):
         return
     metadata: Final = data.get(_metadata_variable_name)
     if not isinstance(metadata, dict):
@@ -760,7 +760,8 @@ def apply_missing_session_id_policy(
             )
         case _:
             verbose_proxy_logger.warning(
-                "Ignoring unknown general_settings.missing_session_id=%r; expected 'generate' or 'reject'", policy
+                "Ignoring unknown general_settings.missing_session_id=%r; expected 'generate', 'reject' or 'omit'",
+                policy,
             )
 
 

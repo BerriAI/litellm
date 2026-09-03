@@ -580,6 +580,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
                 kwargs=kwargs,
                 metadata=metadata,
                 standard_logging_payload=standard_logging_payload,
+                omit_when_missing=_omits_session_id_when_missing(),
             ),
             request_duration_ms=_get_request_duration_ms(start_time, end_time),
             status=_get_status_for_spend_log(
@@ -603,26 +604,30 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         raise e
 
 
+def _omits_session_id_when_missing() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("missing_session_id") == "omit"
+
+
 def _get_session_id_for_spend_log(
     kwargs: Mapping[str, object],
     metadata: Mapping[str, object] | None,
     standard_logging_payload: StandardLoggingPayload | None,
+    omit_when_missing: bool,
 ) -> str | None:
-    """Only a client-established session id is recorded: the metadata session_id Langfuse reads, or a litellm_session_id that isn't just the metadata trace_id echoed back."""
-    metadata_session_id: Final = metadata.get("session_id") if metadata else None
-    metadata_trace_id: Final = metadata.get("trace_id") if metadata else None
-    sl_session_id: Final = standard_logging_payload.get("session_id") if standard_logging_payload is not None else None
-    litellm_params: Final = kwargs.get("litellm_params")
-    session_id_params: Final[tuple[object, ...]] = (
-        sl_session_id,
-        kwargs.get("litellm_session_id"),
-        litellm_params.get("litellm_session_id") if isinstance(litellm_params, Mapping) else None,
-    )
-    candidates: Final[tuple[object, ...]] = (
-        metadata_session_id,
-        *(c for c in session_id_params if c != metadata_trace_id),
-    )
-    return next((str(c) for c in candidates if c), None)
+    """`omit` trusts only `metadata.session_id`, the key Langfuse reads; `litellm_session_id` may be a copied trace id."""
+    if omit_when_missing:
+        session_id: Final = metadata.get("session_id") if metadata else None
+        return str(session_id) if session_id else None
+
+    from litellm._uuid import uuid
+
+    if standard_logging_payload is not None and standard_logging_payload.get("trace_id") is not None:
+        return str(standard_logging_payload.get("trace_id"))
+    if kwargs.get("litellm_trace_id") is not None:
+        return str(kwargs.get("litellm_trace_id"))
+    return str(uuid.uuid4())
 
 
 def _get_request_duration_ms(start_time: datetime, end_time: datetime) -> int | None:
