@@ -1619,6 +1619,26 @@ describe("Teams - the create form keeps the organization and models picks while 
     expect(orgField()).toBeEnabled();
   });
 
+  it("refuses to create the team in an organization the admin has lost access to", async () => {
+    const user = userEvent.setup();
+    const orgAdminOrgs = ORGS.map((org) => ({ ...org, members: [{ user_id: "user-123", user_role: "org_admin" }] }));
+    mockUseOrganizations.mockReturnValue({ data: orgAdminOrgs });
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Internal User" />);
+    await openCreateModal();
+
+    fireEvent.change(screen.getByTestId("team-name-input"), { target: { value: "Revoked Team" } });
+    await chooseSelectOption(user, orgField(), /Org 1/);
+
+    mockUseOrganizations.mockReturnValue({ data: [orgAdminOrgs[1]] });
+    fireEvent.click(screen.getByText("Additional Settings"));
+
+    const submitButtons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(submitButtons[submitButtons.length - 1]);
+
+    await screen.findByText(/no longer create teams in this organization/i);
+    expect(teamCreateCall).not.toHaveBeenCalled();
+  });
+
   it("starts the form clean again when the modal is closed and reopened", async () => {
     const user = userEvent.setup();
     renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);

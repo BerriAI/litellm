@@ -215,17 +215,33 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
   const [searchToolSettingsOpen, setSearchToolSettingsOpen] = useState(false);
 
+  const adminOrgs = useMemo(
+    () => getAdminOrganizations(userRole, userID, organizations),
+    [userRole, userID, organizations],
+  );
+
   const teamCreateSchema = useMemo(
     () =>
       teamCreateFieldsSchema.superRefine((values, ctx) => {
         if (isOrgAdmin && !values.organization_id) {
           ctx.addIssue({ code: "custom", message: SUPPRESSED_BY_DESCRIPTION, path: ["organization_id"] });
         }
+        const organizationIsStillPickable =
+          values.organization_id == null ||
+          organizations == null ||
+          adminOrgs.some((org) => org.organization_id === values.organization_id);
+        if (!organizationIsStillPickable) {
+          ctx.addIssue({
+            code: "custom",
+            message: "You can no longer create teams in this organization",
+            path: ["organization_id"],
+          });
+        }
         if (additionalSettingsOpen && !isParsableJson(values.secret_manager_settings)) {
           ctx.addIssue({ code: "custom", message: SUPPRESSED_BY_DESCRIPTION, path: ["secret_manager_settings"] });
         }
       }),
-    [isOrgAdmin, additionalSettingsOpen],
+    [isOrgAdmin, additionalSettingsOpen, adminOrgs, organizations],
   );
 
   const form = useZodForm(teamCreateSchema, { defaultValues: EMPTY_TEAM_CREATE_VALUES });
@@ -298,8 +314,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   }, [accessToken, canViewPolicies]);
 
   const openCreateTeamModal = () => {
-    const adminOrgs = getAdminOrganizations(userRole, userID, organizations);
-
     // Org admins must scope a team to an org, so with exactly one we preselect it.
     // Proxy admins can create org-less teams, so the field stays optional regardless of org count.
     if (isOrgAdmin && adminOrgs.length === 1) {
@@ -682,7 +696,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                     )}
                   </FormField>
                   {(() => {
-                    const adminOrgs = getAdminOrganizations(userRole, userID, organizations);
                     const isSingleOrg = adminOrgs.length === 1;
                     const hasNoOrgs = adminOrgs.length === 0;
 
