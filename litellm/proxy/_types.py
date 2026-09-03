@@ -4886,6 +4886,7 @@ class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
     litellm_params: str
     model_info: str
     blocked: bool
+    heuristic_v2_unlimited: bool  # writable-ok: the model write path stamps this internal license marker
     updated_at: str
     updated_by: str
 

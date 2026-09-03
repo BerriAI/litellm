@@ -15,6 +15,8 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 if TYPE_CHECKING:
     from litellm.proxy._types import EnterpriseLicenseData
 
+AUTO_ROUTER_LICENSE_FEATURE: Final = "auto_router"
+
 
 class LicenseCheck:
     """
@@ -148,6 +150,13 @@ class LicenseCheck:
         if "max_teams" not in self.airgapped_license_data or not isinstance(_max_teams_in_license, int):
             return False
         return team_count > _max_teams_in_license
+
+    def allows_feature(self, feature: str) -> bool:
+        license_data: Final = self.airgapped_license_data
+        if license_data is None:
+            return False
+        allowed_features: Final = license_data.get("allowed_features")
+        return isinstance(allowed_features, list) and feature in allowed_features
 
     def verify_license_without_api_request(self, public_key, license_key):
         try:

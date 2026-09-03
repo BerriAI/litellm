@@ -126,6 +126,45 @@ export const selectAutoRouterModelGroups = (deployments: AutoRouterCandidateDepl
 export const selectAutoRouterDeployments = (deployments: AutoRouterDeployment[]): AutoRouterDeployment[] =>
   deployments.filter(isAutoRouterDeployment);
 
+export const usesHeuristicV2Deployment = (deployment: AutoRouterDeployment): boolean => {
+  const config = deployment.litellm_params?.complexity_router_config;
+  return typeof config === "object" && config !== null && "classifier_type" in config
+    ? config.classifier_type === "heuristic_v2"
+    : false;
+};
+
+interface HeuristicV2SelectionParams {
+  isProxyAdmin: boolean;
+  stateLoading: boolean;
+  hasUnlimitedLicense: boolean;
+  slotTaken: boolean;
+  currentOwnsSlot?: boolean;
+}
+
+export interface HeuristicV2Selection {
+  allowed: boolean;
+  lockedReason?: string;
+}
+
+export const heuristicV2Selection = ({
+  isProxyAdmin,
+  stateLoading,
+  hasUnlimitedLicense,
+  slotTaken,
+  currentOwnsSlot = false,
+}: HeuristicV2SelectionParams): HeuristicV2Selection => {
+  if (!isProxyAdmin) return { allowed: false, lockedReason: "Only proxy admins can configure Heuristic v2." };
+  if (currentOwnsSlot) return { allowed: true };
+  if (stateLoading) return { allowed: false, lockedReason: "Checking Heuristic v2 availability..." };
+  if (slotTaken && !hasUnlimitedLicense) {
+    return {
+      allowed: false,
+      lockedReason: "Heuristic v2 is limited to one auto-router. Reach out to tin@berri.ai to learn more.",
+    };
+  }
+  return { allowed: true };
+};
+
 export const selectPlainModelGroups = (deployments: AutoRouterCandidateDeployment[]): ReadonlySet<string> => {
   const autoRouterGroups = selectAutoRouterModelGroups(deployments);
   return new Set(

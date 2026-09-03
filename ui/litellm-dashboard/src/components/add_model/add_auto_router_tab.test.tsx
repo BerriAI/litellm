@@ -73,9 +73,10 @@ const addKeyword = async (user: ReturnType<typeof userEvent.setup>, field: HTMLE
   await user.click(await screen.findByText(`Create "${keyword}"`));
 };
 
-const { mockFetchAvailableModels, mockFetchAllModelDeployments } = vi.hoisted(() => ({
+const { mockFetchAvailableModels, mockFetchAllModelDeployments, mockUseLicenseInfo } = vi.hoisted(() => ({
   mockFetchAvailableModels: vi.fn(),
   mockFetchAllModelDeployments: vi.fn(),
+  mockUseLicenseInfo: vi.fn(),
 }));
 
 const { validateAutoRouterConfig } = vi.hoisted(() => ({
@@ -96,6 +97,10 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/app/(dashboard)/hooks/models/useModels")>();
   return { ...actual, fetchAllModelDeployments: mockFetchAllModelDeployments };
 });
+
+vi.mock("@/app/(dashboard)/hooks/license/useLicenseInfo", () => ({
+  useLicenseInfo: mockUseLicenseInfo,
+}));
 
 vi.mock("./handle_add_auto_router_submit", () => ({
   handleAddAutoRouterSubmit: vi.fn(),
@@ -141,6 +146,7 @@ describe("AddAutoRouterTab", () => {
     testQueryClient.clear();
     mockFetchAvailableModels.mockResolvedValue([]);
     mockFetchAllModelDeployments.mockResolvedValue([]);
+    mockUseLicenseInfo.mockReturnValue({ data: { allowed_features: [] }, isLoading: false });
   });
 
   // Detailed Configuration starts collapsed so the modal opens onto just Name + Template; a caller
@@ -178,6 +184,50 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
 
     expect(screen.queryByTestId("team-dropdown")).not.toBeInTheDocument();
+  });
+
+  it("disables heuristic v2 when another auto-router owns the singleton slot", async () => {
+    mockFetchAllModelDeployments.mockResolvedValue([
+      {
+        model_name: "existing-router",
+        litellm_params: {
+          model: "auto_router/complexity_router",
+          complexity_router_config: { classifier_type: "heuristic_v2" },
+        },
+      },
+    ]);
+    renderWithProviders(<Harness />);
+
+    expandDetailedConfiguration();
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: /Heuristic v2/ })).toHaveAttribute("aria-disabled", "true"),
+    );
+  });
+
+  it("keeps heuristic v2 available when the enterprise license includes auto_router", async () => {
+    mockFetchAllModelDeployments.mockResolvedValue([
+      {
+        model_name: "existing-router",
+        litellm_params: {
+          model: "auto_router/complexity_router",
+          complexity_router_config: { classifier_type: "heuristic_v2" },
+        },
+      },
+    ]);
+    mockUseLicenseInfo.mockReturnValue({
+      data: { allowed_features: ["auto_router"] },
+      isLoading: false,
+    });
+    renderWithProviders(<Harness />);
+
+    expandDetailedConfiguration();
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: /Heuristic v2/ })).not.toHaveAttribute("aria-disabled", "true"),
+    );
   });
 
   it("requires a team admin to pick a team", async () => {

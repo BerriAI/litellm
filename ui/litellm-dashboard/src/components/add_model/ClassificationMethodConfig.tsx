@@ -161,6 +161,7 @@ interface ClassificationMethodConfigProps {
   defaultModel?: string;
   /** Mirrors the backend's proxy-admin-only heuristic_v2 write gate. */
   allowHeuristicV2?: boolean;
+  heuristicV2LockedReason?: string;
 }
 
 const ClassifierTypeRadios: React.FC<{
@@ -168,12 +169,14 @@ const ClassifierTypeRadios: React.FC<{
   classifierType: ClassifierType;
   onTypeChange: (classifierType: ClassifierType) => void;
   allowHeuristicV2: boolean;
-}> = ({ value, classifierType, onTypeChange, allowHeuristicV2 }) => {
+  heuristicV2LockedReason?: string;
+}> = ({ value, classifierType, onTypeChange, allowHeuristicV2, heuristicV2LockedReason }) => {
   const scorerLocked = Boolean(value.custom_tier_set);
   const scorerLockedReason = restrictedBy(value, "heuristicClassifier")?.reason;
   const heuristicV2Locked = scorerLocked || !allowHeuristicV2;
-  const heuristicV2LockedReason =
-    scorerLockedReason ?? (!allowHeuristicV2 ? "Only proxy admins can configure Heuristic v2." : undefined);
+  const lockedReason =
+    scorerLockedReason ??
+    (!allowHeuristicV2 ? heuristicV2LockedReason ?? "Only proxy admins can configure Heuristic v2." : undefined);
   return (
     <RadioGroup
       value={classifierType}
@@ -192,7 +195,7 @@ const ClassifierTypeRadios: React.FC<{
             </span>
           </Label>
         </SimpleTooltip>
-        <SimpleTooltip content={heuristicV2LockedReason}>
+        <SimpleTooltip content={lockedReason}>
           <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
             <RadioGroupItem value="heuristic_v2" className="mt-0.5" disabled={heuristicV2Locked} />
             <span>
@@ -247,6 +250,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   showValidationErrors = false,
   defaultModel,
   allowHeuristicV2 = false,
+  heuristicV2LockedReason,
 }) => {
   const [draft, setDraft] = React.useState<{ id: string; raw: string } | null>(null);
   const hasDefaultModel = Boolean(defaultModel);
@@ -399,6 +403,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         classifierType={classifierType}
         onTypeChange={handleClassifierTypeChange}
         allowHeuristicV2={allowHeuristicV2}
+        heuristicV2LockedReason={heuristicV2LockedReason}
       />
 
       {classifierType === "heuristic_first" && (

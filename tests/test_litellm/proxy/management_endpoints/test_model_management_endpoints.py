@@ -1602,7 +1602,7 @@ class TestTeamModelUpdate:
         )
         prisma_client = MockPrismaClient(team_exists=True, user_admin=False)
 
-        with patch(
+        with patch(  # test-quality-ok: isolates the signed-license entitlement while testing marker behavior
             "litellm.proxy.proxy_server.premium_user",
             True,
         ):
@@ -4110,6 +4110,47 @@ class TestStrategyRouterWriteValidation:
             Exception(f'duplicate key violates unique constraint "{HEURISTIC_V2_SINGLETON_INDEX}"')
         )
         assert not _is_heuristic_v2_slot_unique_violation(Exception("unrelated database error"))
+
+    def test_auto_router_license_marks_heuristic_v2_as_unlimited(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _heuristic_v2_unlimited_marker,
+        )
+
+        with patch(  # test-quality-ok: isolates the unlicensed default while testing marker behavior
+            "litellm.proxy.management_endpoints.model_management_endpoints._license_allows_unlimited_heuristic_v2",
+            return_value=True,
+        ):
+            assert _heuristic_v2_unlimited_marker({"classifier_type": "heuristic_v2"}) is True
+            assert _heuristic_v2_unlimited_marker({"classifier_type": "heuristic"}) is False
+
+        with patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints._license_allows_unlimited_heuristic_v2",
+            return_value=False,
+        ):
+            assert _heuristic_v2_unlimited_marker({"classifier_type": "heuristic_v2"}) is False
+
+    @pytest.mark.asyncio
+    async def test_auto_router_license_skips_singleton_lookup(self):  # test-quality-ok: verifies entitlement bypasses the singleton database path
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _raise_if_heuristic_v2_slot_taken,
+        )
+
+        prisma_client = MagicMock()
+        with patch(  # test-quality-ok: isolates the entitlement branch from global proxy license state
+            "litellm.proxy.management_endpoints.model_management_endpoints._license_allows_unlimited_heuristic_v2",
+            return_value=True,
+        ):
+            await _raise_if_heuristic_v2_slot_taken(
+                prisma_client=prisma_client,
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                incoming_params=LiteLLM_Params(
+                    model="auto_router/complexity_router",
+                    complexity_router_config={"classifier_type": "heuristic_v2"},
+                ),
+                existing_params=None,
+            )
+
+        prisma_client.db.litellm_proxymodeltable.find_many.assert_not_called()
 
     def test_double_prefix_rejected_against_stored_params(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (

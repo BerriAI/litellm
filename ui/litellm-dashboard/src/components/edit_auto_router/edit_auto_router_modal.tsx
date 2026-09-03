@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { z } from "zod/v4";
 import { toast } from "@/lib/toast";
 import { CircleHelp } from "lucide-react";
@@ -9,10 +10,18 @@ import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { isProxyAdminRole } from "@/utils/roles";
 import AccessGroupTagsCombobox from "../add_model/AccessGroupTagsCombobox";
 import ModelChoiceCombobox, { type ModelChoice } from "../add_model/ModelChoiceCombobox";
 import { modelAvailableCall, modelPatchUpdateCall, validateAutoRouterConfig } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
+import { useLicenseInfo } from "@/app/(dashboard)/hooks/license/useLicenseInfo";
+import {
+  autoRouterListKey,
+  fetchAllModelDeployments,
+  heuristicV2Selection,
+  usesHeuristicV2Deployment,
+} from "@/app/(dashboard)/hooks/models/useModels";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
 import { hydrateTierModelParams, normalizeTierModels } from "../add_model/complexity_router_tiers";
 import {
@@ -415,6 +424,28 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
     classifier_type: "heuristic",
   });
   const isComplexityRouterModel = isComplexityRouter(modelData?.litellm_params);
+  const licenseInfo = useLicenseInfo(accessToken);
+  const { data: deployments, isLoading: deploymentsLoading } = useQuery({
+    queryKey: autoRouterListKey(modelData?.model_info?.id ?? "", userRole),
+    queryFn: () => fetchAllModelDeployments(accessToken, "", userRole),
+    enabled: isVisible && Boolean(accessToken),
+  });
+  const currentModelId = modelData?.model_info?.id;
+  const currentOwnsHeuristicV2 = usesHeuristicV2Deployment(modelData ?? {});
+  const anotherRouterOwnsHeuristicV2 =
+    deployments?.some(
+      (deployment) => deployment.model_info?.id !== currentModelId && usesHeuristicV2Deployment(deployment),
+    ) === true;
+  const hasUnlimitedAutoRouterLicense = licenseInfo.data?.allowed_features.includes("auto_router") === true;
+  const heuristicV2StateLoading = deploymentsLoading || licenseInfo.isLoading;
+  const heuristicV2SelectionParams = {
+    isProxyAdmin: isProxyAdminRole(userRole),
+    stateLoading: heuristicV2StateLoading,
+    hasUnlimitedLicense: hasUnlimitedAutoRouterLicense,
+    slotTaken: anotherRouterOwnsHeuristicV2,
+    currentOwnsSlot: currentOwnsHeuristicV2,
+  };
+  const heuristicV2Access = heuristicV2Selection(heuristicV2SelectionParams);
 
   const schema = useMemo(
     () => (isComplexityRouterModel ? complexityRouterSchema : semanticRouterSchema),
@@ -729,6 +760,8 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                     onMatchThresholdChange={setMatchThreshold}
                     escalationKeywords={escalationKeywords}
                     onEscalationKeywordsChange={setEscalationKeywords}
+                    allowHeuristicV2={heuristicV2Access.allowed}
+                    heuristicV2LockedReason={heuristicV2Access.lockedReason}
                   />
                 </div>
               ) : (

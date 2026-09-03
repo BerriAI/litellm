@@ -39,6 +39,7 @@ ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
         "router_general_settings",
         "ignore_invalid_deployments",
         "fallback_access_check",
+        "allow_multiple_heuristic_v2",
     }
 )
 DEFAULT_BATCH_SIZE: Final = int(os.getenv("DEFAULT_BATCH_SIZE", 512))

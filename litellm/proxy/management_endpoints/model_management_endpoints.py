@@ -49,6 +49,7 @@ from litellm.proxy._types import (
     TeamModelDeleteRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_FEATURE
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
@@ -297,6 +298,16 @@ def _effective_complexity_router_config(
     return config if isinstance(config, Mapping) else None
 
 
+def _license_allows_unlimited_heuristic_v2() -> bool:
+    from litellm.proxy.proxy_server import _license_check
+
+    return _license_check.allows_feature(AUTO_ROUTER_LICENSE_FEATURE)
+
+
+def _heuristic_v2_unlimited_marker(complexity_router_config: Mapping[str, object] | None) -> bool:
+    return uses_heuristic_v2(complexity_router_config) and _license_allows_unlimited_heuristic_v2()
+
+
 async def _raise_if_heuristic_v2_slot_taken(
     *,
     prisma_client: PrismaClient,
@@ -320,9 +331,13 @@ async def _raise_if_heuristic_v2_slot_taken(
             code=status.HTTP_403_FORBIDDEN,
             param="litellm_params.complexity_router_config.classifier_type",
         )
+    if _license_allows_unlimited_heuristic_v2():
+        return
     from litellm.proxy.proxy_server import llm_router
 
-    rows: Final = await _proxy_model_table(prisma_client).find_many(where={})
+    rows: Final = await _proxy_model_table(prisma_client).find_many(
+        where={}  # mutable-ok: Prisma requires a mutable filter mapping
+    )
     violation: Final = _heuristic_v2_slot_violation(
         persisted_rows=rows,
         live_model_list=llm_router.model_list if llm_router is not None else (),
@@ -403,8 +418,8 @@ def _is_heuristic_v2_slot_unique_violation(error: Exception) -> bool:
 def _heuristic_v2_slot_proxy_exception() -> ProxyException:
     return ProxyException(
         message=(
-            "Only one complexity router can use classifier_type='heuristic_v2' per proxy. "
-            "Change or delete the existing heuristic_v2 router first."
+            "Heuristic v2 is limited to one auto-router. Change or delete the existing "
+            "heuristic_v2 router first, or reach out to tin@berri.ai to learn more."
         ),
         type=ProxyErrorTypes.validation_error.value,
         code=status.HTTP_400_BAD_REQUEST,
@@ -885,6 +900,9 @@ async def patch_model(
         # Add metadata about update
         update_data["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
         update_data["updated_at"] = cast(str, get_utc_datetime())
+        update_data["heuristic_v2_unlimited"] = _heuristic_v2_unlimited_marker(
+            _effective_complexity_router_config(patch_data.litellm_params, db_model.litellm_params)
+        )
 
         # Perform partial update
         updated_model: Final = await _proxy_model_table(prisma_client).update(
@@ -1135,6 +1153,7 @@ async def _add_model_to_db(
         "model_info": model_params.model_info.model_dump_json(exclude_none=True),
         "created_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
         "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+        "heuristic_v2_unlimited": _heuristic_v2_unlimited_marker(model_params.litellm_params.complexity_router_config),
     }
     if model_params.model_info.id is not None:
         _data["model_id"] = model_params.model_info.id
@@ -2213,9 +2232,14 @@ async def update_model(
                 else:
                     pass
 
-            _data: Final[dict[str, str]] = {
+            _data: Final[dict[str, str | bool]] = {  # mutable-ok: Prisma update payload is built for this write
                 "litellm_params": json.dumps(merged_dictionary),
                 "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+                "heuristic_v2_unlimited": _heuristic_v2_unlimited_marker(
+                    merged_dictionary.get("complexity_router_config")
+                    if isinstance(merged_dictionary.get("complexity_router_config"), Mapping)
+                    else None
+                ),
             }
             model_response: Final = await _proxy_model_table(prisma_client).update(
                 where={"model_id": _model_id},

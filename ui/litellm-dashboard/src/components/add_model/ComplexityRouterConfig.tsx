@@ -485,6 +485,7 @@ interface ComplexityRouterConfigProps {
   onEscalationKeywordsChange?: (keywords: string[]) => void;
   showValidationErrors?: boolean;
   allowHeuristicV2?: boolean;
+  heuristicV2LockedReason?: string;
 }
 
 export const TIER_DESCRIPTIONS: Record<
@@ -607,6 +608,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onEscalationKeywordsChange,
   showValidationErrors = false,
   allowHeuristicV2 = false,
+  heuristicV2LockedReason,
 }) => {
   const customTierSet = value.custom_tier_set;
   const tierRows = activeTierRows(value);
@@ -824,6 +826,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 showValidationErrors={showValidationErrors}
                 defaultModel={defaultModel}
                 allowHeuristicV2={allowHeuristicV2}
+                heuristicV2LockedReason={heuristicV2LockedReason}
               />
             ),
           },

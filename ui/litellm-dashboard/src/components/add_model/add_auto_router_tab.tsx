@@ -20,7 +20,12 @@ import { type ModelWriteScope } from "@/utils/modelPermissions";
 import TeamDropdown from "../common_components/team_dropdown";
 import { type AddAutoRouterValues, handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
-import { autoRouterListKey, fetchAllModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
+import {
+  autoRouterListKey,
+  fetchAllModelDeployments,
+  heuristicV2Selection,
+  usesHeuristicV2Deployment,
+} from "@/app/(dashboard)/hooks/models/useModels";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
   effectiveClassifierType,
@@ -62,6 +67,7 @@ import {
 } from "@/lib/autorouter_presets";
 import { useAutoRouterPresets } from "@/app/(dashboard)/hooks/autoRouter/useAutoRouterPresets";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useLicenseInfo } from "@/app/(dashboard)/hooks/license/useLicenseInfo";
 
 interface AddAutoRouterTabProps {
   handleOk: () => void;
@@ -224,6 +230,17 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     queryFn: () => fetchAllModelDeployments(accessToken, userId ?? "", userRole),
     enabled: Boolean(accessToken),
   });
+  const licenseInfo = useLicenseInfo(accessToken);
+  const hasUnlimitedAutoRouterLicense = licenseInfo.data?.allowed_features.includes("auto_router") === true;
+  const heuristicV2SlotTaken = deployments?.some(usesHeuristicV2Deployment) === true;
+  const heuristicV2StateLoading = deploymentsLoading || licenseInfo.isLoading;
+  const heuristicV2SelectionParams = {
+    isProxyAdmin: createScope === "unscoped-ok",
+    stateLoading: heuristicV2StateLoading,
+    hasUnlimitedLicense: hasUnlimitedAutoRouterLicense,
+    slotTaken: heuristicV2SlotTaken,
+  };
+  const heuristicV2Access = heuristicV2Selection(heuristicV2SelectionParams);
   const modelsLoading = groupsLoading || deploymentsLoading;
   const modelInfo = React.useMemo(() => data ?? [], [data]);
   const {
@@ -615,7 +632,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                       escalationKeywords={escalationKeywords}
                       onEscalationKeywordsChange={setEscalationKeywords}
                       showValidationErrors={showValidationErrors}
-                      allowHeuristicV2={createScope === "unscoped-ok"}
+                      allowHeuristicV2={heuristicV2Access.allowed}
+                      heuristicV2LockedReason={heuristicV2Access.lockedReason}
                     />
                   </div>
                 )}

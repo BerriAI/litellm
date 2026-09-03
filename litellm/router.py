@@ -679,6 +679,7 @@ class Router:
         background_health_check_model_groups: Sequence[str] | None = None,
         enable_weighted_failover: bool = False,
         fallback_access_check: FallbackAccessCheck | None = None,
+        allow_multiple_heuristic_v2: bool = False,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -756,6 +757,7 @@ class Router:
         self.set_verbose = set_verbose
         self.ignore_invalid_deployments = ignore_invalid_deployments
         self.fallback_access_check: Final = fallback_access_check
+        self.allow_multiple_heuristic_v2: Final = allow_multiple_heuristic_v2
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
         self.enable_tag_filtering = enable_tag_filtering
@@ -8702,7 +8704,11 @@ class Router:
 
         complexity_router_config: Final[dict | None] = deployment.litellm_params.complexity_router_config
 
-        if complexity_router_config and complexity_router_config.get("classifier_type") == "heuristic_v2":
+        if (
+            not self.allow_multiple_heuristic_v2
+            and complexity_router_config
+            and complexity_router_config.get("classifier_type") == "heuristic_v2"
+        ):
             for registered in self.complexity_routers.values():
                 if any(tagged.strategy.config.classifier_type == "heuristic_v2" for tagged in registered):
                     raise ValueError(

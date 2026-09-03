@@ -4,6 +4,7 @@ import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isAutoRouterDeployment,
+  heuristicV2Selection,
   selectAutoRouterModelGroups,
   selectPlainModelGroups,
   useAllProxyModels,
@@ -19,6 +20,42 @@ import {
   type PaginatedModelInfoResponse,
   type ProxyModel,
 } from "./useModels";
+
+describe("heuristicV2Selection", () => {
+  it("blocks a second router without the auto_router license feature", () => {
+    const params = {
+      isProxyAdmin: true,
+      stateLoading: false,
+      hasUnlimitedLicense: false,
+      slotTaken: true,
+    };
+    expect(heuristicV2Selection(params)).toEqual({
+      allowed: false,
+      lockedReason: "Heuristic v2 is limited to one auto-router. Reach out to tin@berri.ai to learn more.",
+    });
+  });
+
+  it("allows unlimited routers with the auto_router license feature", () => {
+    const params = {
+      isProxyAdmin: true,
+      stateLoading: false,
+      hasUnlimitedLicense: true,
+      slotTaken: true,
+    };
+    expect(heuristicV2Selection(params).allowed).toBe(true);
+  });
+
+  it("lets the current singleton owner keep heuristic v2 while editing", () => {
+    const params = {
+      isProxyAdmin: true,
+      stateLoading: false,
+      hasUnlimitedLicense: false,
+      slotTaken: true,
+      currentOwnsSlot: true,
+    };
+    expect(heuristicV2Selection(params).allowed).toBe(true);
+  });
+});
 
 vi.mock("@/components/networking", () => ({
   modelInfoCall: vi.fn(),
