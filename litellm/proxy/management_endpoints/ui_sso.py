@@ -48,6 +48,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import (
+    CLI_JWT_EXPIRATION_HOURS,
     CLI_SSO_CLAIM_MAP,
     CLI_SSO_CLAIM_MAX_SCALAR_LENGTH,
     CLI_SSO_SESSION_CACHE_KEY_PREFIX,
@@ -2515,6 +2516,7 @@ async def cli_poll_key(
             poll_response = {
                 "status": "ready",
                 "key": jwt_token,
+                "expires_in": CLI_JWT_EXPIRATION_HOURS * 3600,
                 "user_id": user_id,
                 "team_id": team_id,
                 "teams": user_teams,

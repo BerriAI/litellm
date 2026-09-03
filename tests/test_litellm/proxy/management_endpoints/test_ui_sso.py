@@ -12,6 +12,7 @@ from litellm._uuid import uuid
 
 
 import litellm
+from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
@@ -3540,6 +3541,7 @@ class TestCLIKeyRegenerationFlow:
             assert result["user_id"] == "test-user-789"
             assert result["team_id"] == selected_team
             assert result["teams"] == ["team-a", "team-b", "team-c"]
+            assert result["expires_in"] == CLI_JWT_EXPIRATION_HOURS * 3600
 
             # Verify JWT was generated with correct team and no budget cap
             # (team lookup failed, but team_id is set, so fallback cap must not apply)
