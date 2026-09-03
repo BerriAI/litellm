@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
+import litellm
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
@@ -55,15 +56,22 @@ def build_payload(
     response_message: dict[str, Any] | None = None,
     usage_object: dict[str, Any] | None = None,
     model_parameters: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    model_group: str | None = None,
     prompt_tokens: int = 4447,
 ) -> dict[str, Any]:
+    standard_logging_metadata: dict[str, Any] = {
+        **(metadata or {}),
+        **({"usage_object": usage_object} if usage_object is not None else {}),
+    }
     return {
         "standard_logging_object": {
             "call_type": "acompletion",
             "messages": [{"role": "user", "content": "hi"}] if messages is NOT_GIVEN else messages,
             "response": {"choices": [{"message": response_message or {"role": "assistant", "content": "hello"}}]},
             "model_parameters": model_parameters or {},
-            "metadata": {"usage_object": usage_object} if usage_object is not None else {},
+            "metadata": standard_logging_metadata,
+            "model_group": model_group,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": 507,
             "total_tokens": prompt_tokens + 507,
@@ -244,6 +252,43 @@ def test_no_cache_keys_when_the_provider_reports_no_caching(logger: DataDogLLMOb
     assert "non_cached_input_tokens" not in payload["metrics"]
 
 
+def test_reasoning_tokens_are_reported_as_span_metrics(logger: DataDogLLMObsLogger) -> None:
+    payload = build(logger, usage_object={"completion_tokens_details": {"reasoning_tokens": 128}})
+
+    assert payload["metrics"]["reasoning_output_tokens"] == 128.0
+
+
+def test_responses_reasoning_tokens_are_reported_as_span_metrics(logger: DataDogLLMObsLogger) -> None:
+    payload = build(logger, usage_object={"output_tokens_details": {"reasoning_tokens": 64}})
+
+    assert payload["metrics"]["reasoning_output_tokens"] == 64.0
+
+
+def test_zero_reasoning_tokens_are_not_reported(logger: DataDogLLMObsLogger) -> None:
+    payload = build(logger, usage_object={"completion_tokens_details": {"reasoning_tokens": 0}})
+
+    assert "reasoning_output_tokens" not in payload["metrics"]
+
+
+def test_reasoning_tokens_come_from_the_spelling_that_reports_them(logger: DataDogLLMObsLogger) -> None:
+    """A chat-details mapping without the count must not shadow the responses spelling that has it."""
+    payload = build(
+        logger,
+        usage_object={
+            "completion_tokens_details": {"accepted_prediction_tokens": 5},
+            "output_tokens_details": {"reasoning_tokens": 64},
+        },
+    )
+
+    assert payload["metrics"]["reasoning_output_tokens"] == 64.0
+
+
+def test_boolean_reasoning_tokens_are_not_a_count(logger: DataDogLLMObsLogger) -> None:
+    payload = build(logger, usage_object={"completion_tokens_details": {"reasoning_tokens": True}})
+
+    assert "reasoning_output_tokens" not in payload["metrics"]
+
+
 def test_tool_definitions_are_sent_on_meta(logger: DataDogLLMObsLogger) -> None:
     payload = build(logger, model_parameters={"tools": [TOOL_DEFINITION]})
 
@@ -254,6 +299,340 @@ def test_tool_definitions_are_sent_on_meta(logger: DataDogLLMObsLogger) -> None:
             "schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
         }
     ]
+
+
+def test_cost_tags_include_present_categories_and_dimensions(logger: DataDogLLMObsLogger) -> None:
+    payload = build(
+        logger,
+        metadata={
+            "user_api_key_user_id": "User 42",
+            "user_api_key_alias": "Primary Key",
+            "team_alias": "Platform",
+            "routing_decision": {
+                "tier": "premium",
+                "cause": "high_complexity",
+                "score": 0.91,
+                "escalated": True,
+                "signals": ["long prompt"],
+                "routed_model": "openai/gpt-5",
+            },
+        },
+        model_group="premium-models",
+    )
+
+    assert payload["tags"][-8:] == [
+        "team:platform",
+        "user:user_42",
+        "key_alias:primary_key",
+        "model_group:premium-models",
+        "router_tier:premium",
+        "router_cause:high_complexity",
+        "router_escalated:true",
+        "routed_model:openai/gpt-5",
+    ]
+    assert payload["meta"]["metadata"]["_dd"]["cost_tags"] == [
+        "team",
+        "user",
+        "key_alias",
+        "model_group",
+        "router_tier",
+        "router_cause",
+        "router_escalated",
+        "routed_model",
+    ]
+
+
+def test_missing_cost_tag_values_are_not_declared(logger: DataDogLLMObsLogger) -> None:
+    payload = build(logger, metadata={"team_alias": "Platform"})
+
+    assert payload["meta"]["metadata"]["_dd"]["cost_tags"] == ["team"]
+    assert not any(tag.startswith(("user:", "key_alias:", "model_group:")) for tag in payload["tags"])
+
+
+def test_values_that_normalize_to_empty_are_not_tagged_or_declared(logger: DataDogLLMObsLogger) -> None:
+    payload = build(logger, metadata={"user_api_key_user_id": "___", "user_api_key_alias": "!!!"}, model_group="tier-1")
+
+    assert not any(tag in ("user:", "key_alias:") for tag in payload["tags"])
+    assert payload["meta"]["metadata"]["_dd"]["cost_tags"] == ["model_group"]
+
+
+def test_a_valueless_tag_from_the_shared_builder_is_not_declared(logger: DataDogLLMObsLogger) -> None:
+    """The team tag comes from the shared builder, which emits it bare when the alias normalizes away."""
+    payload = build(logger, metadata={"team_alias": "!!!"}, model_group="tier-1")
+
+    assert "team:" in payload["tags"]
+    assert payload["meta"]["metadata"]["_dd"]["cost_tags"] == ["model_group"]
+
+
+def test_router_fields_are_flattened(logger: DataDogLLMObsLogger) -> None:
+    payload = build(
+        logger,
+        metadata={
+            "routing_decision": {
+                "tier": "premium",
+                "cause": "high_complexity",
+                "score": 0.91,
+                "escalated": True,
+                "signals": ["secret prompt text"],
+                "routed_model": "openai/gpt-5",
+            }
+        },
+        model_group="premium-models",
+    )
+
+    assert payload["meta"]["metadata"]["router_tier"] == "premium"
+    assert payload["meta"]["metadata"]["router_cause"] == "high_complexity"
+    assert payload["meta"]["metadata"]["router_score"] == 0.91
+    assert payload["meta"]["metadata"]["router_escalated"] is True
+    assert payload["meta"]["metadata"]["router_signals"] == ["secret prompt text"]
+    assert payload["meta"]["metadata"]["routed_model"] == "openai/gpt-5"
+
+
+def test_a_context_escalated_route_reports_as_escalated(logger: DataDogLLMObsLogger) -> None:
+    """The router records a size-driven escalation under its own key, and it is still an escalation."""
+    payload = build(logger, metadata={"routing_decision": {"tier": "premium", "context_escalated": True}})
+
+    assert payload["meta"]["metadata"]["router_escalated"] is True
+    assert "router_escalated:true" in payload["tags"]
+
+
+def test_a_routed_request_that_did_not_escalate_reports_false(logger: DataDogLLMObsLogger) -> None:
+    """Without this the escalation dimension is absent on ordinary traffic, so nothing can group by it."""
+    payload = build(logger, metadata={"routing_decision": {"tier": "simple", "cause": "heuristic_scorer"}})
+
+    assert payload["meta"]["metadata"]["router_escalated"] is False
+    assert "router_escalated:false" in payload["tags"]
+    assert "router_escalated" in payload["meta"]["metadata"]["_dd"]["cost_tags"]
+
+
+def test_a_request_that_never_reached_a_router_has_no_router_fields(logger: DataDogLLMObsLogger) -> None:
+    payload = build(logger, model_group="premium-models")
+
+    assert "router_escalated" not in payload["meta"]["metadata"]
+    assert not any(tag.startswith("router_") for tag in payload["tags"])
+
+
+def test_redacted_payload_keeps_metrics_and_removes_sensitive_fields(logger: DataDogLLMObsLogger) -> None:
+    payload = build_payload(
+        messages=[{"role": "user", "content": "secret prompt"}],
+        response_message={"role": "assistant", "content": "secret response"},
+        usage_object={"prompt_tokens_details": {"cached_tokens": 128}},
+        metadata={"routing_decision": {"tier": "premium", "signals": ["secret prompt text"]}},
+        model_parameters={"tools": [TOOL_DEFINITION]},
+    )
+    with patch.dict(os.environ, {"DD_API_KEY": "k", "DD_SITE": "us5.datadoghq.com"}, clear=True):
+        with patch("asyncio.create_task"):
+            redacted_logger = DataDogLLMObsLogger(turn_off_message_logging=True)
+    redacted_payload = redacted_logger.redact_standard_logging_payload_from_model_call_details(payload)
+    result = json.loads(
+        safe_dumps(
+            redacted_logger.create_llm_obs_payload(
+                redacted_payload, datetime(2026, 9, 1, 12, 0, 0), datetime(2026, 9, 1, 12, 0, 2)
+            )
+        )
+    )
+
+    assert result["meta"]["input"]["messages"][0]["content"] == "redacted-by-litellm"
+    assert result["meta"]["output"]["messages"][0]["content"] == "redacted-by-litellm"
+    assert result["meta"]["metadata"]["router_tier"] == "premium"
+    assert "router_signals" not in result["meta"]["metadata"]
+    assert "routing_decision" not in result["meta"]["metadata"]
+    assert "tool_definitions" not in result["meta"]
+    assert result["metrics"]["cache_read_input_tokens"] == 128.0
+    assert result["metrics"]["total_cost"] == 0.02
+
+
+def test_redaction_drops_the_routing_record_carried_in_metadata(logger: DataDogLLMObsLogger) -> None:
+    """The whole routing record rides along in metadata, so dropping the flat copy alone leaks the prompt."""
+    with patch.dict(os.environ, {"DD_API_KEY": "k", "DD_SITE": "us5.datadoghq.com"}, clear=True):
+        with patch("asyncio.create_task"):
+            redacted_logger = DataDogLLMObsLogger(turn_off_message_logging=True)
+    result = json.loads(
+        safe_dumps(
+            redacted_logger.create_llm_obs_payload(
+                build_payload(
+                    metadata={
+                        "routing_decision": {
+                            "tier": "premium",
+                            "cause": "keyword_rule",
+                            "signals": ["secret prompt text"],
+                            "matched_keyword": "secret keyword",
+                            "escalation_keyword": "secret escalation",
+                        }
+                    }
+                ),
+                datetime(2026, 9, 1, 12, 0, 0),
+                datetime(2026, 9, 1, 12, 0, 2),
+            )
+        )
+    )
+
+    assert "routing_decision" not in result["meta"]["metadata"]
+    assert result["meta"]["metadata"]["router_tier"] == "premium"
+    assert result["meta"]["metadata"]["router_cause"] == "keyword_rule"
+    assert "secret" not in safe_dumps(result["meta"]["metadata"])
+
+
+def test_a_failure_span_redacts_its_messages(logger: DataDogLLMObsLogger) -> None:
+    """The redaction hook only runs on success, so the failure span has to redact for itself."""
+    failed = build_payload(messages=[{"role": "user", "content": "secret prompt"}])
+    failed["standard_logging_object"]["status"] = "failure"
+    failed["standard_logging_object"]["response"] = None
+    failed["standard_logging_object"]["error_information"] = {"error_message": "boom", "error_class": "BadRequestError"}
+    with patch.dict(os.environ, {"DD_API_KEY": "k", "DD_SITE": "us5.datadoghq.com"}, clear=True):
+        with patch("asyncio.create_task"):
+            redacted_logger = DataDogLLMObsLogger(turn_off_message_logging=True)
+    result = json.loads(
+        safe_dumps(
+            redacted_logger.create_llm_obs_payload(
+                failed, datetime(2026, 9, 1, 12, 0, 0), datetime(2026, 9, 1, 12, 0, 2)
+            )
+        )
+    )
+
+    assert result["meta"]["input"]["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert result["meta"]["output"]["messages"] == []
+    assert result["status"] == "error"
+
+
+def test_excluding_messages_from_the_logging_payload_still_ships_the_span(logger: DataDogLLMObsLogger) -> None:
+    """`standard_logging_payload_excluded_fields` deletes the key, and a span with no prompt is still a span."""
+    payload = build_payload()
+    del payload["standard_logging_object"]["messages"]
+
+    span = json.loads(
+        safe_dumps(
+            logger.create_llm_obs_payload(payload, datetime(2026, 9, 1, 12, 0, 0), datetime(2026, 9, 1, 12, 0, 2))
+        )
+    )
+
+    assert span["meta"]["input"]["messages"] == []
+    assert span["metrics"]["total_cost"] == 0.02
+
+
+def test_an_explicit_redaction_setting_survives_the_global_params(logger: DataDogLLMObsLogger) -> None:
+    """Global params carry defaults for keys the operator never set, and those must not win."""
+    with patch.dict(os.environ, {"DD_API_KEY": "k", "DD_SITE": "us5.datadoghq.com"}, clear=True):
+        with patch("asyncio.create_task"):
+            with patch.object(  # test-quality-ok: the ctor reads this module global with no injection seam
+                litellm, "datadog_llm_observability_params", {}
+            ):
+                configured_logger = DataDogLLMObsLogger(
+                    turn_off_message_logging=True
+                )  # test-quality-ok: verifies ctor setting
+
+    assert configured_logger.turn_off_message_logging is True
+
+
+def _redacting_logger(
+    **kwargs: Any,
+) -> DataDogLLMObsLogger:  # test-quality-ok: shared test factory accepts init variants
+    with patch.dict(os.environ, {"DD_API_KEY": "k", "DD_SITE": "us5.datadoghq.com"}, clear=True):
+        with patch("asyncio.create_task"):
+            return DataDogLLMObsLogger(**kwargs)
+
+
+def _span_json(logger_under_test: DataDogLLMObsLogger, payload: dict[str, Any]) -> dict[str, Any]:
+    span = logger_under_test.create_llm_obs_payload(
+        payload, datetime(2026, 9, 1, 12, 0, 0), datetime(2026, 9, 1, 12, 0, 2)
+    )
+    return json.loads(safe_dumps(span))
+
+
+def test_redaction_keeps_the_conversation_shape_without_its_content() -> None:
+    """Roles and message count survive so the trace stays legible; contents and tool payloads do not."""
+    result = _span_json(
+        _redacting_logger(turn_off_message_logging=True),
+        build_payload(
+            messages=[
+                {"role": "user", "content": "secret prompt"},
+                {"role": "assistant", "content": None, "tool_calls": [ASSISTANT_TOOL_CALL]},
+            ],
+            response_message={"role": "assistant", "content": "secret response"},
+        ),
+    )
+
+    assert result["meta"]["input"]["messages"] == [
+        {"role": "user", "content": "redacted-by-litellm"},
+        {"role": "assistant", "content": "redacted-by-litellm"},
+    ]
+    assert result["meta"]["output"]["messages"] == [{"role": "assistant", "content": "redacted-by-litellm"}]
+
+
+def test_redaction_drops_unrecognized_and_malformed_message_roles() -> None:
+    """Caller-controlled role values must not bypass redaction or crash span creation."""
+    result = _span_json(
+        _redacting_logger(turn_off_message_logging=True),
+        build_payload(
+            messages=[
+                {"role": "SECRET-39402", "content": "hello"},
+                {"role": ["SECRET-39402"], "content": "hello"},
+                {"role": {"secret": "SECRET-39402"}, "content": "hello"},
+                {"role": "agent", "content": "hello"},
+            ]
+        ),
+    )
+
+    assert result["meta"]["input"]["messages"] == [
+        {"role": "", "content": "redacted-by-litellm"},
+        {"role": "", "content": "redacted-by-litellm"},
+        {"role": "", "content": "redacted-by-litellm"},
+        {"role": "agent", "content": "redacted-by-litellm"},
+    ]
+    assert "SECRET-39402" not in safe_dumps(result)
+
+
+def test_the_deprecated_message_logging_flag_engages_the_same_redaction() -> None:
+    """The platform redacts for `message_logging is not True`, so this callback's own gate must agree."""
+    result = _span_json(
+        _redacting_logger(message_logging=False),
+        build_payload(
+            messages=[{"role": "user", "content": "secret prompt"}],
+            model_parameters={"tools": [TOOL_DEFINITION]},
+            metadata={"routing_decision": {"tier": "premium", "signals": ["secret prompt text"]}},
+        ),
+    )
+
+    assert result["meta"]["input"]["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert "tool_definitions" not in result["meta"]
+    assert "routing_decision" not in result["meta"]["metadata"]
+
+
+def test_a_truthy_redaction_setting_redacts_like_the_shared_hook() -> None:
+    """The shared hook redacts on truthiness, so a config-provided string must not half-redact the span."""
+    result = _span_json(
+        _redacting_logger(turn_off_message_logging="yes"),
+        build_payload(messages=[{"role": "user", "content": "secret prompt"}]),
+    )
+
+    assert result["meta"]["input"]["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+
+
+def test_redaction_drops_every_prompt_carrying_metadata_record(logger: DataDogLLMObsLogger) -> None:
+    """Tool arguments, retrieved text, and the guardrail's copy of the request ride in metadata records too."""
+    sensitive_metadata: dict[str, Any] = {
+        "requester_metadata": {"note": "secret prompt text"},
+        "prompt_management_metadata": {"prompt_id": "p1", "prompt_variables": {"topic": "secret"}},
+        "mcp_tool_call_metadata": {"name": "search", "arguments": {"query": "secret"}},
+        "vector_store_request_metadata": [{"query": "secret"}],
+    }
+
+    def sensitive_payload() -> dict[str, Any]:
+        payload = build_payload(metadata=sensitive_metadata)
+        payload["standard_logging_object"]["guardrail_information"] = [
+            {"guardrail_name": "g", "guardrail_request": {"messages": [{"content": "secret prompt"}]}}
+        ]
+        return payload
+
+    redacted = _span_json(_redacting_logger(turn_off_message_logging=True), sensitive_payload())
+    unredacted = _span_json(logger, sensitive_payload())
+
+    assert "secret" not in safe_dumps(redacted["meta"]["metadata"])
+    for record in sensitive_metadata:
+        assert record not in redacted["meta"]["metadata"]
+        assert record in unredacted["meta"]["metadata"]
+    assert redacted["meta"]["metadata"]["guardrail_information"] is None
+    assert unredacted["meta"]["metadata"]["guardrail_information"] is not None
 
 
 def test_tool_definitions_accept_the_bare_anthropic_shape(logger: DataDogLLMObsLogger) -> None:
@@ -270,6 +649,15 @@ def test_tool_definitions_accept_the_bare_anthropic_shape(logger: DataDogLLMObsL
 
 def test_meta_omits_tool_definitions_when_no_tools_were_offered(logger: DataDogLLMObsLogger) -> None:
     assert "tool_definitions" not in build(logger)["meta"]
+
+
+def test_a_ddtrace_integer_parent_id_is_forwarded_as_its_string(logger: DataDogLLMObsLogger) -> None:
+    """ddtrace hands span ids as ints; dropping them detaches the span from its APM trace."""
+    kwargs = build_payload()
+    kwargs["litellm_params"]["metadata"]["parent_id"] = 8675309
+    start = datetime(2026, 9, 1, 12, 0, 0)
+    span = json.loads(safe_dumps(logger.create_llm_obs_payload(kwargs, start, start + timedelta(seconds=2))))
+    assert span["parent_id"] == "8675309"
 
 
 def test_unparseable_tool_arguments_are_preserved_rather_than_dropped(logger: DataDogLLMObsLogger) -> None:
