@@ -512,6 +512,16 @@ def _anthropic_stream_commits_now(chunk: object, has_generated_content: bool, bu
     return is_anthropic_content_delta_chunk(chunk) or buffered_chunk_count >= MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS
 
 
+async def _anthropic_messages_stream_without_fallback_protection(
+    source_iterator: AsyncIterator[bytes],
+) -> AsyncGenerator[bytes, None]:
+    """No fallback is configured for the requested model group, so there is nothing the
+    buffer-until-content protection in Router._aanthropic_messages_streaming_iterator would
+    protect: forward the source iterator live instead of wrapping it."""
+    async for chunk in source_iterator:
+        yield chunk
+
+
 class FallbackAwareAnthropicMessagesStream:
     """
     Bare async generators can't carry the `_hidden_params` attribute the
@@ -5141,6 +5151,15 @@ class Router:
 
         source_iterator: Final = response
 
+        model_group: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
+        if not self._has_any_configured_fallback(model_group, initial_kwargs):
+            # Nothing to fall back to, so buffering lifecycle frames to protect a mid-stream
+            # fallback attempt would only add latency for no benefit: forward the source
+            # iterator live, exactly as it would stream without this wrapper.
+            return FallbackAwareAnthropicMessagesStream(
+                _anthropic_messages_stream_without_fallback_protection(source_iterator), source_iterator
+            )
+
         async def stream_with_fallbacks() -> AsyncGenerator[bytes, None]:
             from litellm.exceptions import MidStreamFallbackError
 
@@ -8108,6 +8127,36 @@ class Router:
                 if "*" in fallback:
                     return True
         return False
+
+    def _has_any_configured_fallback(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
+        """
+        Whether any fallback deployment - general, context-window, content-policy, or a
+        catch-all default - could resolve for this model group.
+
+        Gates whether _aanthropic_messages_streaming_iterator's buffer-until-content
+        protection is worth paying for: that protection exists so a mid-stream provider
+        error can retry against a fallback deployment before any lifecycle frame commits
+        the client to this attempt. With no fallback destination configured at all, a
+        retry can never happen, so holding message_start/content_block_start hostage
+        until real content arrives protects nothing and only adds latency (most visibly
+        on adaptive-thinking models, where the first content_block_delta can lag
+        message_start by well over a minute).
+        """
+        lookup_groups: Final = fallback_lookup_groups(kwargs, model_group)
+        for fallback_key, configured_fallbacks in (
+            ("fallbacks", self.fallbacks),
+            ("context_window_fallbacks", self.context_window_fallbacks),
+            ("content_policy_fallbacks", self.content_policy_fallbacks),
+        ):
+            fallbacks_value: Final = kwargs.get(fallback_key, configured_fallbacks)
+            if fallbacks_value is not None and (
+                self._get_fallback_model_group_for_lookup_groups(
+                    fallbacks=fallbacks_value, lookup_groups=lookup_groups
+                )
+                is not None
+            ):
+                return True
+        return self._has_default_fallbacks()
 
     def _has_content_policy_fallback(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
         """

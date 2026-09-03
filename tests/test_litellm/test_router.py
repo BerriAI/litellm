@@ -10089,6 +10089,13 @@ def _anthropic_messages_make_wrapper() -> FallbackAwareAnthropicMessagesStream:
 
 
 def _anthropic_messages_make_router() -> Router:
+    """A ``fallbacks`` entry mapping "primary" -> "fallback" is required, not just
+    a second model_list entry: _has_any_configured_fallback gates the whole
+    buffer-until-content mechanism on whether the router could actually resolve
+    a fallback for the model group, so a router with nothing configured under
+    ``fallbacks``/``context_window_fallbacks``/``content_policy_fallbacks``
+    (matching a real deployment with no fallback set up) skips buffering
+    entirely and streams live - see test_anthropic_messages_streaming_iterator_skips_buffering_without_any_configured_fallback."""
     return Router(
         model_list=[
             {
@@ -10104,7 +10111,8 @@ def _anthropic_messages_make_router() -> Router:
                     "model": "bedrock/anthropic.claude-sonnet-4-5",
                 },
             },
-        ]
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
     )
 
 
@@ -10150,6 +10158,29 @@ class _AnthropicMessagesRaisingByteStream:
 
     async def aclose(self) -> None:
         self.closed = True
+
+
+class _AnthropicMessagesHangingByteStream:
+    """Yields the given chunks, then hangs forever on the next `__anext__()`
+    instead of raising StopAsyncIteration - simulates a real upstream stuck
+    mid-thinking-pass, so a test can prove a chunk reached the caller without
+    waiting for the rest of the stream (which, here, never arrives)."""
+
+    def __init__(self, chunks: list) -> None:
+        self._chunks = list(chunks)
+        self._hidden_params: dict = {}
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> bytes:
+        if self._chunks:
+            return self._chunks.pop(0)
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    async def aclose(self) -> None:
+        pass
 
 
 class _AnthropicMessagesFallbackByteStream:
@@ -10262,6 +10293,54 @@ async def test_anthropic_messages_streaming_iterator_flushes_buffered_frames_on_
 
     with pytest.raises(StopAsyncIteration):
         await wrapped.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_streaming_iterator_skips_buffering_without_any_configured_fallback():
+    """Regression: with no fallback configured for the model group (no
+    ``fallbacks``, ``context_window_fallbacks``, ``content_policy_fallbacks``,
+    or catch-all default), lifecycle frames like message_start must reach the
+    caller as soon as the source produces them, not be buffered until real
+    content arrives. Buffering exists to protect a mid-stream fallback
+    attempt; with nothing to fall back to, there is nothing to protect, and
+    the delay is pure added latency (most visible on adaptive-thinking models,
+    where the first content_block_delta can lag message_start by a minute or
+    more). The source here hangs forever after its first chunk, so this can
+    only pass if that chunk was forwarded live rather than buffered."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+            },
+        ]
+    )
+    source = _AnthropicMessagesHangingByteStream([_anthropic_messages_message_start_chunk()])
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(
+        response=source, initial_kwargs={"model": "primary"}
+    )
+
+    first_chunk = await asyncio.wait_for(wrapped.__anext__(), timeout=1.0)
+    assert first_chunk == _anthropic_messages_message_start_chunk()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_streaming_iterator_still_buffers_lifecycle_frames_when_fallback_configured():
+    """Confirms the buffer-until-content protection is still intact once a
+    fallback IS configured for the model group - only the no-fallback case
+    added by this fix skips it. The source hangs forever after message_start,
+    so if it were forwarded live this would resolve within the timeout instead
+    of raising."""
+    router = _anthropic_messages_make_router()
+    source = _AnthropicMessagesHangingByteStream([_anthropic_messages_message_start_chunk()])
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(
+        response=source, initial_kwargs={"model": "primary"}
+    )
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(wrapped.__anext__(), timeout=0.2)
 
 
 @pytest.mark.asyncio

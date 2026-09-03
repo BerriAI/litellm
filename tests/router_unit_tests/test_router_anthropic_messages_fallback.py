@@ -478,6 +478,52 @@ def test_has_content_policy_fallback_default_fallbacks_arm():
     assert router._has_content_policy_fallback("any-group", {"content_policy_fallbacks": [{"other": ["x"]}]}) is False
 
 
+def test_has_any_configured_fallback_general_fallbacks_arm():
+    router = Router(model_list=[FABLE_TIER, OPUS_TARGET], fallbacks=[{"fable-tier": ["opus-target"]}])
+
+    assert router._has_any_configured_fallback("fable-tier", {}) is True
+    assert router._has_any_configured_fallback("other-group", {}) is False
+
+
+def test_has_any_configured_fallback_context_window_fallbacks_arm():
+    router = Router(
+        model_list=[FABLE_TIER, OPUS_TARGET],
+        context_window_fallbacks=[{"fable-tier": ["opus-target"]}],
+    )
+
+    assert router._has_any_configured_fallback("fable-tier", {}) is True
+    assert router._has_any_configured_fallback("other-group", {}) is False
+
+
+def test_has_any_configured_fallback_content_policy_fallbacks_arm():
+    router = Router(
+        model_list=[FABLE_TIER, OPUS_TARGET],
+        content_policy_fallbacks=[{"fable-tier": ["opus-target"]}],
+    )
+
+    assert router._has_any_configured_fallback("fable-tier", {}) is True
+
+
+def test_has_any_configured_fallback_default_fallbacks_arm():
+    router = Router(model_list=[OPUS_TARGET], fallbacks=[{"*": ["opus-target"]}])
+
+    assert router._has_any_configured_fallback("any-group", {}) is True
+
+
+def test_has_any_configured_fallback_nothing_configured():
+    router = Router(model_list=[FABLE_TIER, OPUS_TARGET])
+
+    assert router._has_any_configured_fallback("fable-tier", {}) is False
+
+
+def test_has_any_configured_fallback_honors_per_request_kwargs_override():
+    router = Router(model_list=[FABLE_TIER, OPUS_TARGET])
+
+    assert (
+        router._has_any_configured_fallback("fable-tier", {"fallbacks": [{"fable-tier": ["opus-target"]}]}) is True
+    )
+
+
 def test_get_fallback_model_group_for_lookup_groups_orders_tier_before_requested():
     router = _router(content_policy_fallbacks=None)
     fallbacks = [{"tier1": ["backup-a"]}, {"smart-router": ["backup-b"]}]
