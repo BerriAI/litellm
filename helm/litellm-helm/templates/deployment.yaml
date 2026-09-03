@@ -186,8 +186,8 @@ spec:
             {{- end }}
           {{- end }}
           ports:
-            - name: http
-              containerPort: {{ .Values.service.port }}
+            - name: {{ .Values.service.portName | default "http" }}
+              containerPort: {{ .Values.service.containerPort | default .Values.service.port }}
               protocol: TCP
           livenessProbe:
             httpGet:
