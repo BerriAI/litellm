@@ -35,3 +35,6 @@ tokio-tungstenite.workspace = true
 [[bench]]
 name = "serialization"
 harness = false
+
+[lints]
+workspace = true
