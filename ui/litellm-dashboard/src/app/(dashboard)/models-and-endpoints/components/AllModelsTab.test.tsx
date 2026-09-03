@@ -279,7 +279,7 @@ describe("AllModelsTab", () => {
   it("keeps the exact model group alongside a typed search", async () => {
     render(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);
 
-    fireEvent.change(screen.getByPlaceholderText("Search model names…"), { target: { value: "opus" } });
+    fireEvent.change(screen.getByPlaceholderText("Search model names or IDs…"), { target: { value: "opus" } });
 
     await waitFor(() => expect(lastModelsInfoCall().search).toBe("opus"));
     expect(lastModelsInfoCall().modelName).toBe("claude-opus");

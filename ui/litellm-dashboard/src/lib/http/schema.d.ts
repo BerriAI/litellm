@@ -21135,7 +21135,7 @@ export interface paths {
          *         include_team_models: When true, populate `access_via_team_ids` and `direct_access`
          *             on each model and filter to deployments the caller can use.
          *         page / size: Pagination controls (defaults: page=1, size=50).
-         *         search: Case-insensitive partial match on model name or team public name.
+         *         search: Case-insensitive partial match on model name, model id or team public name.
          *         modelId: Return a single deployment by LiteLLM model id.
          *         teamId: Filter to models with direct access or team membership for this team id.
          *         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
@@ -66130,7 +66130,7 @@ export interface operations {
                 page?: number;
                 /** @description Page size */
                 size?: number;
-                /** @description Search model names (case-insensitive partial match) */
+                /** @description Search model names or model IDs (case-insensitive partial match) */
                 search?: string | null;
                 /** @description Search for a specific model by its unique ID */
                 modelId?: string | null;

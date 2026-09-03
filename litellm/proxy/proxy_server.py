@@ -13133,6 +13133,44 @@ def _byok_row_outside_caller_teams(model_info_dict: dict[str, JsonValue], allowe
 _SORTED_SEARCH_DB_FETCH_CAP: Final = 500
 
 
+def _deployment_matches_search(m: dict[str, Any], search_lower: str) -> bool:
+    """`/v2/model/info?search=`: case-insensitive substring of the public name, the deployment id or the team BYOK public name."""
+    model_info: Final[Mapping[str, object]] = m.get("model_info") or _EMPTY_MAPPING
+    return any(
+        search_lower in str(candidate).lower()
+        for candidate in (m.get("model_name"), model_info.get("id"), model_info.get("team_public_model_name"))
+        if candidate
+    )
+
+
+class _ContainsInsensitive(TypedDict):
+    contains: ReadOnly[str]
+    mode: ReadOnly[Literal["insensitive"]]
+
+
+class _ModelSearchWhere(TypedDict):
+    OR: ReadOnly[tuple[Mapping[str, _ContainsInsensitive], ...]]
+    model_id: ReadOnly[Mapping[str, Mapping[str, tuple[str, ...]]]]
+    model_name: NotRequired[ReadOnly[str]]
+
+
+def _model_search_where(
+    search_lower: str,
+    model_name: str | None,
+    db_model_ids_in_router: Collection[str],
+) -> _ModelSearchWhere:
+    """Prisma `where` for `/v2/model/info?search=`: the substring against `model_name` or `model_id`, narrowed to the exact `model=` group when given, minus rows already served from the router."""
+    contains_search: Final[_ContainsInsensitive] = {"contains": search_lower, "mode": "insensitive"}
+    matches_search: Final[_ModelSearchWhere] = {
+        "OR": ({"model_name": contains_search}, {"model_id": contains_search}),
+        "model_id": {"not": {"in": tuple(db_model_ids_in_router)}},
+    }
+    if model_name is None:
+        return matches_search
+    within_model_group: Final[_ModelSearchWhere] = {**matches_search, "model_name": model_name}
+    return within_model_group
+
+
 async def _fetch_db_models_for_search(
     prisma_client: PrismaClient,
     proxy_config: ProxyConfig,
@@ -13160,11 +13198,11 @@ async def _fetch_db_models_for_search(
     filter for `team_public_model_name` instead and keep the DB cost
     bounded by `search`.
     """
-    db_where_condition: Final[dict[str, Any]] = {
-        "model_name": {"contains": search_lower, "mode": "insensitive"} if model_name is None else model_name
-    }
-    if db_model_ids_in_router:
-        db_where_condition["model_id"] = {"not": {"in": list(db_model_ids_in_router)}}
+    db_where_condition: Final = _model_search_where(
+        search_lower=search_lower,
+        model_name=model_name,
+        db_model_ids_in_router=db_model_ids_in_router,
+    )
 
     # Unsorted searches only need enough DB rows to fill the current
     # page after counting router-side matches. Sorted searches need
@@ -13231,10 +13269,9 @@ async def _apply_search_filter_to_models(
             full match set, so the DB fetch is capped at
             ``_SORTED_SEARCH_DB_FETCH_CAP`` instead of one page.
         model_name: Exact ``model_name`` the caller already narrowed
-            ``all_models`` to (``?model=``). The DB query matches it
-            exactly instead of the substring, and is skipped when the
-            substring cannot occur in it, otherwise rows from other model
-            groups leak into the result and the count.
+            ``all_models`` to (``?model=``). The DB query is narrowed to it
+            too, otherwise rows from other model groups leak into the
+            result and the count.
 
     Returns:
         Tuple of (filtered_models, total_count). total_count is None if not searching.
@@ -13252,16 +13289,6 @@ async def _apply_search_filter_to_models(
     def _is_byok_outside_caller_teams(model_info_dict: dict[str, JsonValue]) -> bool:
         return _byok_row_outside_caller_teams(model_info_dict, allowed_team_ids)
 
-    def _model_matches_search(m: dict[str, Any]) -> bool:
-        # Team BYOK models persist an internal `model_name`
-        # (e.g. `model_name_{team_id}_{uuid}`) and expose the user-facing
-        # name via `model_info.team_public_model_name`. Match both so the
-        # name shown in the UI is searchable.
-        if search_lower in (m.get("model_name") or "").lower():
-            return True
-        team_public_model_name: Final = (m.get("model_info") or {}).get("team_public_model_name") or ""
-        return search_lower in team_public_model_name.lower()
-
     # Filter models in router by search term, dropping BYOK rows that
     # belong to teams the caller is not a member of so search can't leak
     # other teams' models when the request omits `include_team_models` /
@@ -13269,7 +13296,7 @@ async def _apply_search_filter_to_models(
     filtered_router_models: Final = [
         m
         for m in all_models
-        if _model_matches_search(m) and not _is_byok_outside_caller_teams(m.get("model_info") or {})
+        if _deployment_matches_search(m, search_lower) and not _is_byok_outside_caller_teams(m.get("model_info") or {})
     ]
 
     # Separate filtered models into config vs db models, and track db model IDs
@@ -13292,8 +13319,7 @@ async def _apply_search_filter_to_models(
 
     # Query database for additional models with search term
     db_models: list[dict[str, Any]] = []
-    exact_name_can_match: Final = model_name is None or search_lower in model_name.lower()
-    if prisma_client is not None and exact_name_can_match:
+    if prisma_client is not None:
         try:
             db_models, db_models_total_count = await _fetch_db_models_for_search(
                 prisma_client=prisma_client,
@@ -13751,7 +13777,9 @@ async def model_info_v2(
     debug: bool | None = False,
     page: int = Query(1, description="Page number", ge=1),
     size: int = Query(50, description="Page size", ge=1),
-    search: str | None = fastapi.Query(None, description="Search model names (case-insensitive partial match)"),
+    search: str | None = fastapi.Query(
+        None, description="Search model names or model IDs (case-insensitive partial match)"
+    ),
     modelId: str | None = fastapi.Query(None, description="Search for a specific model by its unique ID"),
     teamId: str | None = fastapi.Query(
         None,
@@ -13787,7 +13815,7 @@ async def model_info_v2(
         include_team_models: When true, populate `access_via_team_ids` and `direct_access`
             on each model and filter to deployments the caller can use.
         page / size: Pagination controls (defaults: page=1, size=50).
-        search: Case-insensitive partial match on model name or team public name.
+        search: Case-insensitive partial match on model name, model id or team public name.
         modelId: Return a single deployment by LiteLLM model id.
         teamId: Filter to models with direct access or team membership for this team id.
         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
