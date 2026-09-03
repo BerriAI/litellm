@@ -508,11 +508,12 @@ async def test_global_spend_report_team_group_forwards_team_id(monkeypatch):
 async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
     """
     With group_by_session=true, /spend/logs/ui must page and count SESSIONS,
-    not raw calls: the page query returns one representative row per session
-    (DISTINCT ON the session group key, preferring non-MCP calls, newest
-    first) and the bounded count counts groups. Otherwise the UI collapses a
-    server page of N calls into fewer visible rows while the footer still
-    claims N (issue #38060).
+    not raw calls: the page is one representative row per session (DISTINCT
+    ON the session group key, preferring non-MCP calls, newest first), the
+    bounded count counts groups, and on the default startTime sort the page is
+    selected by keyset (no OFFSET) so deep pages do not degrade. Otherwise the
+    UI collapses a server page of N calls into fewer visible rows while the
+    footer still claims N (issue #38060).
     """
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.spend_tracking.spend_management_endpoints import (
@@ -520,11 +521,26 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
         ui_view_spend_logs,
     )
 
-    page_rows = [
-        {"request_id": "req-1", "metadata": "{}", "session_id": None},
-        {"request_id": "req-2", "metadata": "{}", "session_id": None},
+    group_key = "COALESCE(NULLIF(session_id, ''), request_id), api_key"
+    session_rows = [
+        {"session_key": "req-1", "api_key": "k", "last_activity": "2026-02-16 10:00:00"},
+        {"session_key": "req-2", "api_key": "k", "last_activity": "2026-02-16 09:00:00"},
     ]
-    mock_prisma = _make_ui_spend_logs_mock(count_total=12, page_rows=page_rows)
+    representative_rows = [
+        {"request_id": "req-1", "api_key": "k", "metadata": "{}", "session_id": None},
+        {"request_id": "req-2", "api_key": "k", "metadata": "{}", "session_id": None},
+    ]
+
+    async def mock_query_raw(sql_query, *params):
+        if "COUNT(*) AS total_count" in sql_query:
+            return [{"total_count": 12}]
+        if "DISTINCT ON" in sql_query:
+            return representative_rows
+        return session_rows
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
@@ -544,27 +560,85 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
         sort_order="desc",
         user_api_key_dict=auth,
         group_by_session=True,
+        session_cursor=None,
     )
 
-    group_key = "COALESCE(NULLIF(session_id, ''), request_id), api_key"
+    emitted = [call[0] for call in mock_prisma.db.query_raw.call_args_list]
+    page_sql = emitted[0][0]
+    assert f"GROUP BY {group_key}" in page_sql, f"page must select sessions, not calls. SQL was:\n{page_sql}"
+    assert "OFFSET" not in page_sql, "the startTime page must be keyset-selected, not offset-selected"
+    assert emitted[0][-1] == 51, "the page query fetches page_size + 1 sessions to detect has_more"
 
-    count_call = mock_prisma.db.query_raw.call_args_list[0]
-    count_sql = count_call[0][0]
+    count_call = emitted[1]
+    count_sql = count_call[0]
     assert f"GROUP BY {group_key}" in count_sql, f"grouped total must count sessions. SQL was:\n{count_sql}"
     assert "COUNT(*) OVER ()" not in count_sql
     assert "LIMIT" in count_sql and "FROM (" in count_sql, "the grouped count must stay bounded"
-    assert count_call[0][-1] == SPEND_LOGS_PAGINATION_COUNT_CAP + 1
+    assert count_call[-1] == SPEND_LOGS_PAGINATION_COUNT_CAP + 1
 
-    page_sql = mock_prisma.db.query_raw.call_args_list[1][0][0]
-    assert f"DISTINCT ON ({group_key})" in page_sql, f"page must return one row per session. SQL was:\n{page_sql}"
-    assert f"ORDER BY {group_key}, call_type IN ('call_mcp_tool', 'list_mcp_tools'), \"startTime\" DESC" in page_sql, (
+    rep_sql = emitted[2][0]
+    assert f"DISTINCT ON ({group_key})" in rep_sql, f"page must return one row per session. SQL was:\n{rep_sql}"
+    assert f"ORDER BY {group_key}, call_type IN ('call_mcp_tool', 'list_mcp_tools'), \"startTime\" DESC" in rep_sql, (
         "the session representative must prefer the newest non-MCP call"
     )
-    assert "COUNT(*) OVER ()" not in page_sql
+    assert "COUNT(*) OVER ()" not in rep_sql
 
+    assert [row["request_id"] for row in response["data"]] == ["req-1", "req-2"]
     assert response["total"] == 12
     assert response["total_is_capped"] is False
     assert response["total_pages"] == 1
+    assert response["has_more"] is False
+    assert response["next_session_cursor"] is None
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_ui_group_by_session_offset_pages_for_other_sorts(monkeypatch):
+    """
+    Sorting a grouped listing by a column other than startTime has no keyset
+    to resume from, so it pages the DISTINCT ON representatives with OFFSET.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.spend_tracking.spend_management_endpoints import ui_view_spend_logs
+
+    page_rows = [
+        {"request_id": "req-1", "metadata": "{}", "session_id": None},
+        {"request_id": "req-2", "metadata": "{}", "session_id": None},
+    ]
+    mock_prisma = _make_ui_spend_logs_mock(count_total=12, page_rows=page_rows)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+    mock_request = MagicMock()
+    mock_request.url.path = "/spend/logs/ui"
+
+    response = await ui_view_spend_logs(
+        request=mock_request,
+        api_key=None,
+        user_id=None,
+        request_id=None,
+        start_date="2026-02-16 00:00:00",
+        end_date="2026-02-16 23:59:59",
+        page=2,
+        page_size=50,
+        sort_by="spend",
+        sort_order="desc",
+        user_api_key_dict=auth,
+        group_by_session=True,
+    )
+
+    group_key = "COALESCE(NULLIF(session_id, ''), request_id), api_key"
+    count_sql = mock_prisma.db.query_raw.call_args_list[0][0][0]
+    assert f"GROUP BY {group_key}" in count_sql
+
+    page_call = mock_prisma.db.query_raw.call_args_list[1][0]
+    page_sql = page_call[0]
+    assert f"DISTINCT ON ({group_key})" in page_sql
+    assert "ORDER BY spend DESC" in page_sql
+    assert "OFFSET" in page_sql
+    assert page_call[-2:] == (50, 50), "page 2 of 50 skips the first 50 sessions"
+
+    assert response["total"] == 12
+    assert "next_session_cursor" not in response
 
 
 @pytest.mark.asyncio

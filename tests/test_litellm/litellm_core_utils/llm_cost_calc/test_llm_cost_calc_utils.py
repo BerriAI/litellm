@@ -1663,6 +1663,54 @@ def test_generic_cost_per_token_gpt56_cyber(
 
 
 @pytest.mark.parametrize(
+    "service_tier,tier_multiplier",
+    [(None, 1.0), ("flex", 0.5), ("priority", 2.0), ("fast", 2.0)],
+)
+@pytest.mark.parametrize(
+    "prompt_tokens,input_side_multiplier,output_multiplier",
+    [(100000, 1.0, 1.0), (300000, 2.0, 1.5)],
+)
+def test_generic_cost_per_token_gpt_6_astra_price_sheet(
+    _local_model_cost_map,
+    service_tier,
+    tier_multiplier,
+    prompt_tokens,
+    input_side_multiplier,
+    output_multiplier,
+):
+    """gpt-6-astra launch price sheet: $10 input, $1 cache read, $12.50 cache write, $50 output per 1M tokens.
+
+    Above 272K prompt tokens the input-side rates double and the output rate is 1.5x on the whole
+    request. Flex is half the applicable rate and fast mode, billed as priority, is double it.
+    """
+    cached_tokens = 50000
+    cache_write_tokens = 40000
+    text_tokens = prompt_tokens - cached_tokens - cache_write_tokens
+    completion_tokens = 1000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="gpt-6-astra",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier=service_tier,
+    )
+
+    input_side = tier_multiplier * input_side_multiplier
+    assert prompt_cost == pytest.approx(
+        input_side * (text_tokens * 1e-5 + cached_tokens * 1e-6 + cache_write_tokens * 1.25e-5)
+    )
+    assert completion_cost == pytest.approx(tier_multiplier * output_multiplier * completion_tokens * 5e-5)
+
+
+@pytest.mark.parametrize(
     "model,input_cost,output_cost,cache_read_cost",
     [
         ("azure/gpt-5.6", 5e-6, 3e-5, 5e-7),

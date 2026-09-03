@@ -4,13 +4,16 @@ import json
 import traceback
 from collections import deque
 from collections.abc import AsyncIterator, Mapping
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 
 
 class AnthropicResponsesStreamWrapper:
@@ -31,10 +34,13 @@ class AnthropicResponsesStreamWrapper:
         self,
         responses_stream: Any,
         model: str,
+        litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
     ) -> None:
         self.responses_stream = responses_stream
         self.model = model
         self._message_id: str = f"msg_{uuid.uuid4()}"
+        if litellm_logging_obj is not None:
+            litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
         self._current_block_index: int = -1
         # Map item_id -> content_block_index so we can stop the right block later
         self._item_id_to_block_index: dict[str, int] = {}

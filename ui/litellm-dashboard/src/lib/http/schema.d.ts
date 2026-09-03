@@ -16606,6 +16606,8 @@ export interface paths {
          *             Get list of users by sso_ids. Comma separated list of sso_ids.
          *         user_email: Optional[str]
          *             Filter users by partial email match
+         *         search: Optional[str]
+         *             Combined search: matches users whose user_id or user_email contains the value (case-insensitive)
          *         team: Optional[str]
          *             Filter users by team id. Will match if user has this team in their teams array.
          *         page: int
@@ -25212,6 +25214,11 @@ export interface components {
              */
             model: string;
             /**
+             * Reasoning Effort
+             * @description Reasoning effort override for classifier calls. Leave unset to use the classifier deployment or provider default.
+             */
+            reasoning_effort?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") | null;
+            /**
              * System Prompt
              * @description Replaces the built-in complexity rubric as the classifier's entire system role. When set, neither the default rubric nor the context-window closing line is appended, so the prompt owns the whole taxonomy and the tier names SIMPLE/MEDIUM/COMPLEX/REASONING become whatever buckets it defines: a prompt that classifies data sensitivity routes on that instead of on difficulty. Two consequences of full replacement. The default rubric's closing paragraph is the classifier's prompt-injection defense, telling it that the caller's quoted system prompt and prior turns are material to judge and never instructions; a replacement that omits it lets a caller ask for a tier and get it. And the heuristic fallback still scores complexity, so a router on some other taxonomy wants classifier_fallback='default_model'. Leave unset for the built-in rubric. Only applies when classifier_type is 'llm'.
              */
@@ -25774,9 +25781,9 @@ export interface components {
             mcp_xff_num_trusted_hops?: number | null;
             /**
              * Missing Session Id
-             * @description What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.
+             * @description What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400; 'omit' leaves SpendLogs.session_id null, matching callbacks such as Langfuse that only record a client-established metadata.session_id. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.
              */
-            missing_session_id?: ("generate" | "reject") | null;
+            missing_session_id?: ("generate" | "reject" | "omit") | null;
             /**
              * Model List Healthy Only
              * @description When true, `/models`, `/v1/models/{id}` and `/model/info` hide models whose backing deployments are all unhealthy, for every caller, without needing `healthy_only=true` per request. Requires `background_health_checks: true`, and keeps deployment health state cached without turning on `enable_health_check_routing`, so routing is unaffected. With no health state nothing is hidden. Hiding is presentation-only, a hidden model can still be called.
@@ -44063,7 +44070,11 @@ export interface operations {
     };
     list_containers_containers_get: {
         parameters: {
-            query?: never;
+            query?: {
+                after?: string | null;
+                limit?: number | null;
+                order?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -44077,6 +44088,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -56858,6 +56878,8 @@ export interface operations {
                 exclude_internal_health_checks?: boolean;
                 /** @description Paginate over sessions instead of raw logs: one representative row per session, total counts sessions */
                 group_by_session?: boolean;
+                /** @description Keyset cursor '<last_activity>|<api_key>|<session_key>' from a previous group_by_session page. UI route only, honored when sorting by startTime */
+                session_cursor?: string | null;
             };
             header?: never;
             path?: never;
@@ -56972,6 +56994,8 @@ export interface operations {
                 exclude_internal_health_checks?: boolean;
                 /** @description Paginate over sessions instead of raw logs: one representative row per session, total counts sessions */
                 group_by_session?: boolean;
+                /** @description Keyset cursor '<last_activity>|<api_key>|<session_key>' from a previous group_by_session page. UI route only, honored when sorting by startTime */
+                session_cursor?: string | null;
             };
             header?: never;
             path?: never;
@@ -59826,6 +59850,8 @@ export interface operations {
                 sso_user_ids?: string | null;
                 /** @description Filter users by partial email match */
                 user_email?: string | null;
+                /** @description Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive). */
+                search?: string | null;
                 /** @description Filter users by team id */
                 team?: string | null;
                 /** @description Page number */
@@ -61101,7 +61127,11 @@ export interface operations {
     };
     list_containers_v1_containers_get: {
         parameters: {
-            query?: never;
+            query?: {
+                after?: string | null;
+                limit?: number | null;
+                order?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -61115,6 +61145,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

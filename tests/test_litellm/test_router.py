@@ -35,6 +35,7 @@ from litellm.router import (
     _anthropic_stream_should_drop_pre_content_ping,
     _is_retriable_anthropic_status,
 )
+from litellm.types.router import DeploymentTypedDict
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -7357,6 +7358,71 @@ def test_get_configured_token_limits_coerces_numeric_strings():
     assert router.get_configured_token_limits("quoted-limits-model") == (32000, 8000)
 
 
+def test_get_configured_mode_reads_deployment_model_info():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chat-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"mode": "chat"},
+            }
+        ]
+    )
+
+    assert router.get_configured_mode("chat-model") == "chat"
+
+
+def test_get_configured_mode_returns_none_for_unset_or_unknown():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "no-mode-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+            }
+        ]
+    )
+
+    assert router.get_configured_mode("no-mode-model") is None
+    assert router.get_configured_mode("not-a-real-model") is None
+
+
+def test_get_configured_mode_skips_wildcard_pattern_matching():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+                "model_info": {"mode": "chat"},
+            }
+        ]
+    )
+
+    with patch.object(
+        router.pattern_router, "route", side_effect=AssertionError("pattern route called")
+    ):
+        assert (
+            router.get_configured_mode("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
+            is None
+        )
+
+
+def test_get_configured_mode_treats_malformed_values_as_absent():
+    malformed = ["", "   ", 12345, ["chat"], {"mode": "chat"}, True]
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": f"bad-mode-{i}",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"mode": bad},
+            }
+            for i, bad in enumerate(malformed)
+        ]
+    )
+
+    for i in range(len(malformed)):
+        assert router.get_configured_mode(f"bad-mode-{i}") is None
+
+
 def test_get_configured_display_name_reads_deployment_model_info():
     router = litellm.Router(
         model_list=[
@@ -9274,9 +9340,11 @@ class _FallbackAttemptRecorder(CustomLogger):
     def __init__(self):
         super().__init__()
         self.failed_targets = []
+        self.breadcrumbs_per_target = []
 
     async def log_failure_fallback_event(self, original_model_group, kwargs, original_exception):
         self.failed_targets.append(kwargs.get("model"))
+        self.breadcrumbs_per_target.append(kwargs.get("metadata", {}).get("previous_models", ()))
 
 
 def _cyclic_fallback_router(num_retries=0):
@@ -9347,14 +9415,16 @@ async def test_retry_breadcrumbs_do_not_carry_the_walk_state():
     A retry has to be configured for the walk state to reach log_retry at all."""
     router = _cyclic_fallback_router(num_retries=1)
     capture = _LogCapture(logging.ERROR)
+    recorder = _FallbackAttemptRecorder()
 
-    await _drive_cyclic_fallback(router, capture)
+    await _drive_cyclic_fallback(router, capture, recorder)
 
-    assert router.previous_models, "no retry breadcrumbs were recorded"
+    breadcrumbs = [breadcrumb for hop in recorder.breadcrumbs_per_target for breadcrumb in hop]
+    assert breadcrumbs, "no retry breadcrumbs were recorded"
     assert any(
-        "fallback_depth" in breadcrumb for breadcrumb in router.previous_models
+        "fallback_depth" in breadcrumb for breadcrumb in breadcrumbs
     ), "no breadcrumb carried router walk state, so this test cannot see the leak"
-    for breadcrumb in router.previous_models:
+    for breadcrumb in breadcrumbs:
         assert "attempted_targets" not in breadcrumb
 
 
@@ -9392,13 +9462,92 @@ async def test_retry_breadcrumbs_never_carry_a_forwarded_credential(container_ke
     container still reaches the breadcrumb, but the raw secret never does, whatever key holds it."""
     router = _cyclic_fallback_router(num_retries=1)
     capture = _LogCapture(logging.ERROR)
+    metadata = {}
 
-    await _drive_cyclic_fallback(router, capture, **request_kwargs)
+    await _drive_cyclic_fallback(router, capture, metadata=metadata, **request_kwargs)
 
-    assert router.previous_models, "no retry breadcrumbs were recorded"
-    dumped = json.dumps(router.previous_models, default=str)
+    breadcrumbs = metadata["previous_models"]
+    assert breadcrumbs, "no retry breadcrumbs were recorded"
+    dumped = json.dumps(breadcrumbs, default=str)
     assert container_key in dumped, "the credential-bearing kwarg never reached the breadcrumb, so this test cannot see the leak"
     assert _BREADCRUMB_CREDENTIAL_CANARY not in dumped
+
+
+def _always_failing_router(num_retries):
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "broken-group",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-fake",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            }
+        ],
+        num_retries=num_retries,
+    )
+
+
+async def _fail_one_proxy_shaped_request(router, request_marker):
+    """The proxy hands the router a metadata dict and a proxy_server_request whose body is a
+    shallow copy of the request, so body["metadata"] is the very same dict the router later
+    stamps previous_models onto."""
+    metadata = {"request_marker": request_marker}
+    with pytest.raises(litellm.InternalServerError):
+        await router.acompletion(
+            model="broken-group",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata=metadata,
+            proxy_server_request={
+                "url": "http://localhost:4000/v1/chat/completions",
+                "method": "POST",
+                "headers": {},
+                "body": {"model": "broken-group", "metadata": metadata},
+            },
+        )
+    return metadata["previous_models"]
+
+
+def _nested_breadcrumb_lists(node):
+    if isinstance(node, dict):
+        return [v for k, v in node.items() if k == "previous_models"] + [
+            found for v in node.values() for found in _nested_breadcrumb_lists(v)
+        ]
+    if isinstance(node, (list, tuple)):
+        return [found for item in node for found in _nested_breadcrumb_lists(item)]
+    return []
+
+
+@pytest.mark.asyncio
+async def test_retry_breadcrumbs_stay_per_request_and_flat_across_failing_requests():
+    """Every failed attempt appends a breadcrumb to metadata["previous_models"], and the proxy's
+    request snapshot aliases that same metadata dict. Kept on the Router and copied wholesale,
+    each breadcrumb embedded every earlier one from every earlier request, so the breadcrumb
+    tree, and with it the debug repr of the kwargs, roughly doubled on each failed attempt until
+    a single-worker proxy spent minutes in the redaction regex and stopped answering."""
+    router = _always_failing_router(num_retries=2)
+
+    breadcrumbs_per_request = [
+        await _fail_one_proxy_shaped_request(router, f"request-{request_number}") for request_number in range(1, 7)
+    ]
+
+    for request_number, breadcrumbs in enumerate(breadcrumbs_per_request, start=1):
+        assert len(breadcrumbs) == 3, "one initial attempt plus two retries failed, each leaving one breadcrumb"
+        assert {breadcrumb["metadata"]["request_marker"] for breadcrumb in breadcrumbs} == {f"request-{request_number}"}
+        for breadcrumb in breadcrumbs:
+            assert _nested_breadcrumb_lists(breadcrumb) == []
+    assert len({len(repr(breadcrumbs)) for breadcrumbs in breadcrumbs_per_request}) == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_breadcrumbs_keep_only_the_last_four_attempts():
+    router = _always_failing_router(num_retries=6)
+
+    breadcrumbs = await _fail_one_proxy_shaped_request(router, "request-1")
+
+    assert len(breadcrumbs) == 4
+    assert [breadcrumb["metadata"]["attempted_retries"] for breadcrumb in breadcrumbs] == [3, 4, 5, 6]
 
 
 @pytest.mark.asyncio
@@ -9783,11 +9932,12 @@ def test_model_group_info_intersects_supported_reasoning_efforts():
     assert result.supported_reasoning_efforts == ("minimal", "low", "medium", "high")
 
 
-def test_model_group_info_reasoning_efforts_ignore_a_deployment_off_the_map():
+def test_model_group_info_reasoning_efforts_are_unknown_when_any_deployment_is_off_the_map():
     """The router fills every ModelInfo key, so a deployment absent from the model map arrives with
     supports_reasoning None rather than with the key missing. Its synthesized entry carries no mode,
     which is what separates it from a mapped non-reasoning model, and nothing being known about it is
-    no reason to drop the levels the rest of the group agrees on."""
+    no evidence that the unknown deployment accepts levels its mapped sibling supports. The group
+    therefore reports unknown instead of advertising a value routing might send to either one."""
     router = litellm.Router(
         model_list=[
             {
@@ -9821,7 +9971,7 @@ def test_model_group_info_reasoning_efforts_ignore_a_deployment_off_the_map():
         )
 
     assert result is not None
-    assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high", "max")
+    assert result.supported_reasoning_efforts is None
 
 
 
@@ -9958,11 +10108,11 @@ def test_model_group_info_survives_a_junk_typed_operator_effort_value():
     assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high")
 
 
-def test_model_group_info_reasoning_efforts_ignore_a_mode_the_operator_declared():
+def test_model_group_info_reasoning_efforts_are_unknown_for_an_operator_declared_mode():
     """A deployment is registered in the cost map under its own id with whatever model_info the
     operator wrote, so a mode they set themselves reads back exactly like one the map supplied. Only
-    a mode the map supplied marks the deployment as known, or an off-map deployment carrying any
-    mode empties the group it sits in."""
+    a mode the map supplied marks the deployment as known. An off-map deployment carrying an
+    operator mode remains unknown and must keep the whole group's level support unknown."""
     from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
     mapped_model = "openai/gpt-5.6-sol"
@@ -9993,7 +10143,7 @@ def test_model_group_info_reasoning_efforts_ignore_a_mode_the_operator_declared(
     )
 
     assert result is not None
-    assert result.supported_reasoning_efforts == expected
+    assert result.supported_reasoning_efforts is None
 
 
 class TestAddDeploymentApiBaseProviderResolution:
@@ -12252,6 +12402,120 @@ class TestTierParamsTheTargetAccepts:
         assert accepted == {"reasoning_effort": "max"}
 
 
+class TestRequestReasoningEffortOverride:
+    def test_drop_effort_from_nested_carrier_preserves_other_nested_values(self):
+        params: dict[str, object] = {"output_config": {"effort": "high", "format": "json"}}
+
+        litellm.Router._pop_effort_from_nested_carrier(params, "output_config")
+
+        assert params == {"output_config": {"format": "json"}}
+
+    @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+    def test_is_classifier_internal_call_recognizes_both_metadata_carriers(self, metadata_key):
+        kwargs = {metadata_key: {"internal_call_origin": "autorouter_classifier"}}
+
+        assert litellm.Router._is_classifier_internal_call(kwargs) is True
+        assert litellm.Router._is_classifier_internal_call({metadata_key: {}}) is False
+
+    def test_removes_every_deployment_native_effort_carrier_without_mutating_shared_config(self):
+        extra_body: dict[str, object] = {
+            "reasoning_effort": "high",
+            "thinking": {"type": "enabled"},
+            "output_config": {"effort": "high", "format": "json"},
+            "reasoning": {"effort": "high", "summary": "detailed"},
+            "provider_option": True,
+        }
+        deployment_params: dict[str, object] = {
+            "model": "bedrock/converse/anthropic.claude-3-7-sonnet",
+            "thinking": {"type": "enabled", "budget_tokens": 2048},
+            "output_config": {"effort": "high", "format": {"type": "json_schema"}},
+            "reasoning": {"effort": "high", "summary": "auto"},
+            "extra_body": extra_body,
+        }
+
+        sanitized = litellm.Router._deployment_params_with_request_reasoning_override(
+            deployment_params, {"reasoning_effort": "low"}
+        )
+
+        assert sanitized == {
+            "model": "bedrock/converse/anthropic.claude-3-7-sonnet",
+            "output_config": {"format": {"type": "json_schema"}},
+            "reasoning": {"summary": "auto"},
+            "extra_body": {
+                "output_config": {"format": "json"},
+                "reasoning": {"summary": "detailed"},
+                "provider_option": True,
+            },
+        }
+        assert deployment_params["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+        assert deployment_params["output_config"] == {"effort": "high", "format": {"type": "json_schema"}}
+        assert extra_body["reasoning_effort"] == "high"
+
+    @pytest.mark.parametrize("request_kwargs", [{}, {"reasoning_effort": None}])
+    def test_omitted_override_preserves_deployment_defaults(self, request_kwargs):
+        deployment_params = {
+            "model": "deepseek/deepseek-reasoner",
+            "thinking": {"type": "enabled"},
+            "output_config": {"effort": "high"},
+        }
+
+        assert (
+            litellm.Router._deployment_params_with_request_reasoning_override(deployment_params, request_kwargs)
+            == deployment_params
+        )
+
+    @pytest.mark.asyncio
+    async def test_280_concurrent_overrides_never_mutate_or_leak_through_shared_deployment_params(self):
+        deployment_params = {
+            "model": "fireworks_ai/accounts/fireworks/models/kimi-k2-thinking",
+            "thinking": {"type": "enabled"},
+            "output_config": {"effort": "high", "format": "json"},
+            "extra_body": {"reasoning_effort": "high", "tenant": "shared"},
+        }
+        efforts = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+        results = await asyncio.gather(
+            *(
+                asyncio.to_thread(
+                    litellm.Router._deployment_params_with_request_reasoning_override,
+                    deployment_params,
+                    {"reasoning_effort": efforts[index % len(efforts)]},
+                )
+                for index in range(280)
+            )
+        )
+
+        assert all("thinking" not in result for result in results)
+        assert all(result["output_config"] == {"format": "json"} for result in results)
+        assert all(result["extra_body"] == {"tenant": "shared"} for result in results)
+        assert deployment_params["thinking"] == {"type": "enabled"}
+        assert deployment_params["output_config"] == {"effort": "high", "format": "json"}
+        assert deployment_params["extra_body"] == {"reasoning_effort": "high", "tenant": "shared"}
+
+    @pytest.mark.parametrize(
+        ("metadata", "should_drop"),
+        [({"internal_call_origin": "autorouter_classifier"}, True), ({}, False)],
+        ids=["classifier", "ordinary-request"],
+    )
+    def test_only_classifier_calls_drop_effort_for_an_unsupported_fallback(self, metadata, should_drop):
+        router = litellm.Router(model_list=[])
+        body: dict[str, object] = {"model": "classifier", "reasoning_effort": "low"}
+        kwargs: dict[str, object] = {
+            "reasoning_effort": "low",
+            "metadata": metadata,
+            "proxy_server_request": {"body": body},
+        }
+        deployment: DeploymentTypedDict = {
+            "model_name": "fallback",
+            "litellm_params": {"model": "openai/gpt-4o-mini"},
+        }
+
+        router._drop_unsupported_classifier_reasoning_effort(deployment, "fallback", kwargs)
+
+        assert ("reasoning_effort" not in kwargs) is should_drop
+        assert ("reasoning_effort" not in body) is should_drop
+
+
 class TestPreRoutingTierDrivesFallbacks:
     """#38832: a complexity/auto router picks a tier behind the router name, but fallback
     lookup stayed on the router name, so the tier's configured chain never ran and a
@@ -12437,3 +12701,33 @@ async def test_prompt_management_factory_marks_injection_for_every_deployment(mo
     bucket = captured.get("litellm_metadata") or captured["metadata"]
     assert captured["model_info"]["id"] == "provisional-dep"
     assert bucket["litellm_gateway_injected_cache"] == ""
+
+
+def test_get_configured_mode_reads_deployment_model_info():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "my-tts",
+                "litellm_params": {"model": "openai/some-unmapped-mode-model"},
+                "model_info": {"mode": "audio_speech"},
+            }
+        ]
+    )
+
+    assert router.get_configured_mode("my-tts") == "audio_speech"
+
+
+@pytest.mark.parametrize("model_info", [{}, {"mode": ""}, {"mode": "   "}, {"mode": 123}])
+def test_get_configured_mode_returns_none_for_unset_blank_or_unknown(model_info):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "plain-model",
+                "litellm_params": {"model": "openai/some-unmapped-mode-model"},
+                "model_info": model_info,
+            }
+        ]
+    )
+
+    assert router.get_configured_mode("plain-model") is None
+    assert router.get_configured_mode("unknown-model") is None

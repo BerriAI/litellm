@@ -129,6 +129,32 @@ class TestMCPServerManager:
         assert added_server.args == ["-m", "server"]
         assert added_server.env == {"DEBUG": "1", "TEST": "1"}
 
+    def test_get_mcp_server_by_id_allows_internal_or_unspecified_client_ip(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="private-server",
+            name="private-server",
+            transport=MCPTransport.http,
+            available_on_public_internet=False,
+        )
+        manager.registry[server.server_id] = server
+
+        assert manager.get_mcp_server_by_id(server.server_id) is server
+        assert manager.get_mcp_server_by_id(server.server_id, client_ip="10.0.0.1") is server
+
+    def test_get_mcp_server_by_id_rejects_private_server_for_public_ip(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="private-server",
+            name="private-server",
+            transport=MCPTransport.http,
+            available_on_public_internet=False,
+        )
+        manager.registry[server.server_id] = server
+
+        with patch.object(manager, "_get_general_settings", return_value={}):
+            assert manager.get_mcp_server_by_id(server.server_id, client_ip="8.8.8.8") is None
+
     async def test_create_mcp_client_stdio(self):
         """Test creating MCP client for stdio transport"""
         manager = MCPServerManager()
@@ -2589,6 +2615,69 @@ class TestMCPServerManager:
 
         await manager.preflight_token_exchange(server=server, oauth2_headers=None, user_api_key_auth=None)
         assert resolved == ["good-subject"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "authorization",
+        [
+            "Bearer subj-jwt",
+            "bearer subj-jwt",
+            "BEARER subj-jwt",
+            "Bearer\tsubj-jwt",
+            "Bearer  subj-jwt",
+        ],
+    )
+    async def test_preflight_token_exchange_strips_inbound_authorization_scheme(self, authorization):
+        """The resolver posts inbound_token verbatim as subject_token."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError, ServerSpec, Subject
+
+        resolved: Final[list[str | None]] = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Ok[StaticHeaderAuth, CredError]:
+                resolved.append(subject.inbound_token.get_secret_value() if subject.inbound_token else None)
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server(f"te-preflight-auth-{authorization!r}")
+
+        await manager.preflight_token_exchange(
+            server=server,
+            oauth2_headers={"Authorization": authorization},
+            user_api_key_auth=None,
+        )
+
+        assert resolved == ["subj-jwt"]
+
+    @pytest.mark.asyncio
+    async def test_preflight_token_exchange_preserves_authorization_without_separator(self):
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError, ServerSpec, Subject
+
+        resolved: Final[list[str | None]] = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Ok[StaticHeaderAuth, CredError]:
+                resolved.append(subject.inbound_token.get_secret_value() if subject.inbound_token else None)
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-preflight-auth-no-separator")
+
+        await manager.preflight_token_exchange(
+            server=server,
+            oauth2_headers={"Authorization": "Bearersubj-jwt"},
+            user_api_key_auth=None,
+        )
+
+        assert resolved == ["Bearersubj-jwt"]
 
     @pytest.mark.asyncio
     async def test_preflight_token_exchange_skips_discovery_for_other_auth_modes(self):
@@ -5884,6 +5973,7 @@ class TestMCPServerManager:
         """
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
+            MCPServerAccess,
         )
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 
@@ -5903,19 +5993,22 @@ class TestMCPServerManager:
             object_permission_id="perm_123",
         )
 
-        # Mock MCPRequestHandler.get_allowed_mcp_servers to verify it receives user_api_key_auth
+        # Mock MCPRequestHandler.get_mcp_server_access to verify it receives user_api_key_auth
         with patch.object(
             MCPRequestHandler,
-            "get_allowed_mcp_servers",
+            "get_mcp_server_access",
             new_callable=AsyncMock,
         ) as mock_get_allowed:
             # Configure mock to return servers from object_permission
-            mock_get_allowed.return_value = ["test_server_1", "test_server_2"]
+            mock_get_allowed.return_value = MCPServerAccess(
+                server_ids=("test_server_1", "test_server_2"),
+                scope="scoped",
+            )
 
             # Call get_allowed_mcp_servers with user_api_key_auth
             result = await manager.get_allowed_mcp_servers(user_api_key_auth)
 
-            # Verify MCPRequestHandler.get_allowed_mcp_servers was called with user_api_key_auth
+            # Verify MCPRequestHandler.get_mcp_server_access was called with user_api_key_auth
             mock_get_allowed.assert_called_once()
             call_args = mock_get_allowed.call_args
             assert call_args[0][0] is user_api_key_auth  # First positional arg should be user_api_key_auth
@@ -6072,6 +6165,7 @@ class TestMCPServerManager:
         from litellm.proxy import proxy_server as proxy_server_module
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
+            MCPServerAccess,
         )
         from litellm.proxy._experimental.mcp_server.mcp_context import (
             _mcp_active_toolset_id,
@@ -6104,9 +6198,12 @@ class TestMCPServerManager:
                 patch.object(manager, "get_allow_all_keys_server_ids", return_value=["global-server"]),
                 patch.object(
                     MCPRequestHandler,
-                    "get_allowed_mcp_servers",
+                    "get_mcp_server_access",
                     new_callable=AsyncMock,
-                    return_value=["toolset-server"],
+                    return_value=MCPServerAccess(
+                        server_ids=("toolset-server",),
+                        scope="scoped",
+                    ),
                 ),
             ):
                 result = await manager.get_allowed_mcp_servers(user_api_key_auth)
@@ -6204,6 +6301,79 @@ class TestMCPServerManager:
             result = await manager.get_allowed_mcp_servers(user_api_key_auth)
 
         assert set(result) == {"global-server", "submitted-server"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "flag_enabled, via_virtual_key, resolved_server_ids, scope, submitted_server_ids, expected_server_ids",
+        [
+            (False, True, ("granted",), "scoped", (), {"granted", "public"}),
+            (True, True, ("granted",), "scoped", (), {"granted"}),
+            (True, True, ("granted", "public"), "scoped", (), {"granted", "public"}),
+            (True, True, (), "scoped", (), set()),
+            (True, True, (), "unscoped", (), {"public"}),
+            (
+                True,
+                True,
+                ("team-granted",),
+                "scoped",
+                ("submitted",),
+                {"team-granted", "submitted"},
+            ),
+            (
+                True,
+                True,
+                ("team-granted",),
+                "scoped",
+                ("public",),
+                {"team-granted", "public"},
+            ),
+            (True, False, ("granted",), "scoped", (), {"granted", "public"}),
+        ],
+        ids=(
+            "flag_off_preserves_allow_all",
+            "flag_on_scoped_key_excludes_allow_all",
+            "flag_on_keeps_allow_all_when_granted",
+            "flag_on_restricted_empty_excludes_allow_all",
+            "flag_on_unscoped_key_preserves_allow_all",
+            "flag_on_preserves_submitted_byom",
+            "flag_on_preserves_submitted_byom_when_it_is_allow_all",
+            "flag_on_non_virtual_key_preserves_allow_all",
+        ),
+    )
+    async def test_allow_all_keys_scope_flag(
+        self,
+        flag_enabled,
+        via_virtual_key,
+        resolved_server_ids,
+        scope,
+        submitted_server_ids,
+        expected_server_ids,
+    ):  # test-quality-ok: parameterized matrix covers the scope state machine
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPServerAccess
+
+        manager = MCPServerManager()
+        auth = UserAPIKeyAuth(api_key="sk-test", user_id="user-123")
+        auth.via_virtual_key = via_virtual_key
+        access = MCPServerAccess(server_ids=resolved_server_ids, scope=scope)
+
+        with (
+            patch.object(manager, "get_allow_all_keys_server_ids", return_value=["public"]),
+            patch.object(
+                manager,
+                "_get_active_submitted_mcp_server_ids_for_user",
+                new=AsyncMock(return_value=list(submitted_server_ids)),
+            ),
+        ):
+            assert (
+                set(
+                    await manager.get_allowed_mcp_servers(
+                        auth,
+                        access=access,
+                        general_settings={"mcp_allow_all_keys_respects_mcp_scope": flag_enabled},
+                    )
+                )
+                == expected_server_ids
+            )
 
     @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_anonymous_delegate_requires_oauth2(self):
