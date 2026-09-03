@@ -57,6 +57,29 @@ async def test_insert_data_hashes_token_and_upserts(prisma_client: PrismaClient)
 
 
 @pytest.mark.asyncio
+async def test_insert_data_ignore_duplicates_false_uses_create(
+    prisma_client: PrismaClient,
+) -> None:
+    token = "sk-secret-create-1"
+    expected_hash = hashlib.sha256(token.encode()).hexdigest()
+    response = SimpleNamespace(token=expected_hash, key_alias="alias", user_id="u1")
+    prisma_client.db.litellm_verificationtoken.create = AsyncMock(return_value=response)
+    prisma_client.db.litellm_verificationtoken.upsert = AsyncMock()
+
+    result = await prisma_client.insert_data(
+        data={"token": token, "user_id": "u1", "metadata": {"a": 1}},
+        table_name="key",
+        ignore_duplicates=False,
+    )
+
+    create_kwargs = prisma_client.db.litellm_verificationtoken.create.await_args.kwargs
+    assert result is response
+    assert create_kwargs["data"]["token"] == expected_hash
+    assert create_kwargs["include"] == {"litellm_budget_table": True}
+    prisma_client.db.litellm_verificationtoken.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_insert_data_strips_null_budget_limits(prisma_client: PrismaClient) -> None:
     prisma_client.db.litellm_verificationtoken.upsert = AsyncMock(return_value=None)
     await prisma_client.insert_data(
