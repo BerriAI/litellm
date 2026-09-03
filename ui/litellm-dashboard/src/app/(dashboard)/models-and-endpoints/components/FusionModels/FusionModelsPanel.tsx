@@ -315,7 +315,7 @@ function FusionModelDialog({
             {advancedOpen && (
               <div className="grid gap-4 border-t p-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="fusion-timeout">Panel timeout (seconds)</Label>
+                  <Label htmlFor="fusion-timeout">Panel and analyst timeout (seconds)</Label>
                   <Input
                     id="fusion-timeout"
                     type="number"

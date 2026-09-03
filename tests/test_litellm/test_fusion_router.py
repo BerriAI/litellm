@@ -4,6 +4,7 @@ import json
 from collections import deque
 from collections.abc import Mapping, Sequence
 from typing import Final
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -271,6 +272,58 @@ async def test_partial_panel_and_invalid_analyst_degrade_to_raw_responses() -> N
 
 
 @pytest.mark.asyncio
+async def test_analyst_timeout_degrades_to_raw_panel_responses() -> None:
+    class HangingAnalystCompletion(RecordingCompletion):
+        def __init__(self) -> None:
+            super().__init__(
+                {
+                    "outer": [_fusion_call(), _response("Final")],
+                    "panel-a": [_response("Panel A")],
+                    "panel-b": [_response("Panel B")],
+                }
+            )
+            self.analyst_started = asyncio.Event()
+            self.analyst_cancelled = asyncio.Event()
+
+        async def __call__(
+            self,
+            *,
+            model: str,
+            messages: list[AllMessageValues],
+            stream: bool,
+            **kwargs: object,
+        ) -> ModelResponse | CustomStreamWrapper:
+            if model != "analyst":
+                return await super().__call__(model=model, messages=messages, stream=stream, **kwargs)
+            self.calls.append({"model": model, "messages": messages, "stream": stream, **kwargs})
+            self.analyst_started.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                self.analyst_cancelled.set()
+                raise
+            raise AssertionError("unreachable")
+
+    completion = HangingAnalystCompletion()
+    response = await asyncio.wait_for(
+        _router(completion, panel_timeout_seconds=0.2).acompletion(
+            messages=[{"role": "user", "content": "Hard question"}],
+            stream=False,
+            request_kwargs={},
+        ),
+        timeout=2,
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "Final"
+    assert completion.analyst_started.is_set()
+    assert completion.analyst_cancelled.is_set()
+    assert response._hidden_params["fusion"]["analysis_available"] is False
+    payload = json.loads(completion.calls[-1]["messages"][-1]["content"])
+    assert [item["content"] for item in payload["responses"]] == ["Panel A", "Panel B"]
+
+
+@pytest.mark.asyncio
 async def test_all_panel_failures_are_a_typed_tool_result_the_outer_can_recover_from() -> None:
     completion = RecordingCompletion(
         {
@@ -477,6 +530,65 @@ async def test_router_replays_direct_outer_response_as_an_async_stream() -> None
     assert isinstance(rebuilt, ModelResponse)
     assert rebuilt.choices[0].message.content == "Final"
     assert response._hidden_params["fusion"]["invoked"] is False
+
+
+@pytest.mark.asyncio
+async def test_invoked_fusion_closes_suppressed_initial_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    completion = RecordingCompletion(
+        {
+            "outer": [_response("Final")],
+            "panel-a": [_response("Panel A")],
+            "panel-b": [_response("Panel B")],
+            "analyst": [_response(_analysis())],
+        }
+    )
+    router = _router(completion)
+    replay_stream = AsyncMock()
+    monkeypatch.setattr(
+        router,
+        "_initial_outer_call",
+        AsyncMock(return_value=(_fusion_call(), replay_stream)),
+    )
+
+    response = await router.acompletion(
+        messages=[{"role": "user", "content": "Answer"}],
+        stream=True,
+        request_kwargs={},
+    )
+
+    assert isinstance(response, ModelResponse)
+    replay_stream.aclose.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_fusion_search_checks_proxy_permissions_before_router_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+    from litellm.proxy._types import LiteLLM_TeamTable, ProxyException, UserAPIKeyAuth
+    from litellm.proxy.auth import auth_checks
+
+    router = Router(model_list=[])
+    user_api_key_auth = UserAPIKeyAuth(team_id="restricted-team")
+    team = LiteLLM_TeamTable(
+        team_id="restricted-team",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="team-permissions",
+            search_tools=["allowed-search"],
+        ),
+    )
+    get_team_object = AsyncMock(return_value=team)
+    raw_search = AsyncMock(return_value={"results": []})
+    monkeypatch.setattr(auth_checks, "get_team_object", get_team_object)
+    monkeypatch.setattr(router, "asearch", raw_search)
+
+    with pytest.raises(ProxyException, match="Team not allowed to access search tool"):
+        await router._fusion_asearch(  # pyright: ignore[reportPrivateUsage]
+            model="restricted-search",
+            query="evidence",
+            litellm_metadata={"user_api_key_auth": user_api_key_auth},
+        )
+
+    get_team_object.assert_awaited_once()
+    raw_search.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -9463,8 +9463,30 @@ class Router:
             search=self._fusion_asearch,
         )
 
-    async def _fusion_asearch(self, *, model: str, query: str, **kwargs: object) -> object:
-        """Late-bound Search API bridge; Fusion routers are registered before endpoint factories run."""
+    async def _fusion_asearch(  # kwargs-ok: bridge preserves the Router.asearch keyword surface
+        self, *, model: str, query: str, **kwargs: object
+    ) -> object:
+        """Late-bound Search API bridge with the originating caller's permissions."""
+        metadata_values: Final = tuple(kwargs.get(key) for key in ("litellm_metadata", "metadata"))
+        user_api_key_auth: Final = next(
+            (
+                metadata.get("user_api_key_auth")
+                for metadata in metadata_values
+                if isinstance(metadata, Mapping) and metadata.get("user_api_key_auth") is not None
+            ),
+            None,
+        )
+        if user_api_key_auth is not None:
+            from litellm.proxy._types import UserAPIKeyAuth
+            from litellm.proxy.search_endpoints.endpoints import (
+                authorize_search_tool_call,
+            )
+
+            if isinstance(user_api_key_auth, UserAPIKeyAuth):
+                await authorize_search_tool_call(
+                    search_tool_name=model,
+                    user_api_key_dict=user_api_key_auth,
+                )
         return await self.asearch(model=model, query=query, **kwargs)
 
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:

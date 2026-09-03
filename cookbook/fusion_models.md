@@ -41,6 +41,8 @@ Call `fusion/general` exactly like any other model. `invocation: auto` lets the 
 
 `reasoning_effort: none` makes deliberation replace private extended reasoning where a provider supports that parameter. LiteLLM drops it for providers that do not support it. The optional Search Tool supplies search results and bounded page content through LiteLLM's Search API. `max_tool_calls` limits searches separately for every panel model and the analyst; it defaults to 4 and is capped at 16. This first version does not expose a separate URL-fetch tool.
 
+`panel_timeout_seconds` bounds each panel member and the complete analyst phase, including any Search Tool loop. If the analyst times out, the outer model still receives the successful raw panel responses.
+
 The outer model must support function calling. Panel and analyst models only need function calling when a Search Tool is configured. Granting access to the Fusion model lets the request use its administrator-configured model and search dependencies; the panel query and private research are sent to those deployments under their normal provider data policies.
 
 ## Operational behavior

@@ -365,8 +365,7 @@ def _research_tool_calls(response: ModelResponse) -> tuple[ChatCompletionMessage
     return tuple(
         tool_call
         for tool_call in response.choices[0].message.tool_calls or ()
-        if isinstance(tool_call, ChatCompletionMessageToolCall)
-        and tool_call.function.name == "litellm_fusion_search"
+        if isinstance(tool_call, ChatCompletionMessageToolCall) and tool_call.function.name == "litellm_fusion_search"
     )
 
 
@@ -680,13 +679,9 @@ class FusionRouter:
             selected_calls = search_calls[:remaining_searches]
             if not selected_calls:
                 return response
-            current_messages.append(
-                cast(AllMessageValues, response.choices[0].message.model_dump(exclude_none=True))
-            )
+            current_messages.append(cast(AllMessageValues, response.choices[0].message.model_dump(exclude_none=True)))
             current_messages.extend(
-                await asyncio.gather(
-                    *(self._execute_research_call(call, request_kwargs) for call in selected_calls)
-                )
+                await asyncio.gather(*(self._execute_research_call(call, request_kwargs) for call in selected_calls))
             )
             current_messages.extend(
                 {
@@ -761,7 +756,7 @@ class FusionRouter:
         if self.config.reasoning_effort is not None:
             kwargs["reasoning_effort"] = self.config.reasoning_effort
         try:
-            response = await asyncio.wait_for(
+            response: Final = await asyncio.wait_for(
                 self._call_internal_model(
                     model=model,
                     messages=panel_messages,
@@ -802,11 +797,16 @@ class FusionRouter:
         if self.config.reasoning_effort is not None:
             kwargs["reasoning_effort"] = self.config.reasoning_effort
         try:
-            response = await self._call_internal_model(
-                model=model,
-                messages=messages,
-                kwargs=kwargs,
-                request_kwargs=request_kwargs,
+            # One timeout bounds the complete private analyst phase, including
+            # any configured Search Tool loop, just as it bounds panel members.
+            response: Final = await asyncio.wait_for(
+                self._call_internal_model(
+                    model=model,
+                    messages=messages,
+                    kwargs=kwargs,
+                    request_kwargs=request_kwargs,
+                ),
+                timeout=self.config.panel_timeout_seconds,
             )
         except Exception:
             return None
@@ -839,6 +839,12 @@ class FusionRouter:
             if isinstance(hidden, dict):
                 hidden["fusion"] = fusion_metadata
             return replay_stream if replay_stream is not None else initial_response
+
+        # A streamed initial response is fully buffered to discover the private
+        # Fusion call. The direct-response path returns the replay wrapper to
+        # the caller; the invocation path suppresses it, so it owns cleanup.
+        if replay_stream is not None:
+            await replay_stream.aclose()
 
         fusion_metadata["invoked"] = True
         raw_query = _fusion_query(tool_call)

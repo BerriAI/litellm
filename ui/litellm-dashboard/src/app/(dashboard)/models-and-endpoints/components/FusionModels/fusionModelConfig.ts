@@ -83,7 +83,7 @@ export const fusionConfigError = (value: FusionFormValue, requiresTeamScope: boo
   const webAccessError = webAccessConfigError(value);
   if (webAccessError) return webAccessError;
   if (value.panel_timeout_seconds <= 0 || value.panel_timeout_seconds > 600) {
-    return "Panel timeout must be between 1 and 600 seconds.";
+    return "Panel and analyst timeout must be between 1 and 600 seconds.";
   }
   if (value.max_candidate_chars < 1000 || value.max_candidate_chars > 50000) {
     return "Candidate limit must be between 1,000 and 50,000 characters.";
