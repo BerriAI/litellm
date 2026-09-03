@@ -1435,6 +1435,9 @@ dependencies = [
  "aws-sigv4",
  "aws-smithy-runtime-api",
  "aws-types",
+ "base64",
+ "futures-channel",
+ "futures-util",
  "rand 0.8.7",
  "reqwest",
  "serde",
@@ -1442,6 +1445,7 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
 ]
 
@@ -1451,7 +1455,6 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "futures-util",
- "litellm-ai-gateway",
  "litellm-core",
  "litellm-python-interop",
  "pyo3",

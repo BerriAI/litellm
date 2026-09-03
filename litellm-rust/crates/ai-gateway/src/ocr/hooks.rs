@@ -1,11 +1,10 @@
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use litellm_core::error::Error;
+use litellm_core::ocr::{PreparedOcrRequest, ProviderOcrRequest, prepare_ocr_provider_call};
 use serde_json::{Map, Value, json};
 use std::future::Future;
 use std::pin::Pin;
 
-use super::common_utils::{convert_document_url_to_data_uri, string_headers};
-use super::types::{PreparedOcrRequest, ProviderOcrRequest};
 use crate::integrations::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
 };
@@ -74,59 +73,24 @@ impl OcrLifecycleHooks {
         &self,
         request: PreparedOcrRequest,
     ) -> Result<ProviderOcrRequest, Error> {
-        let config = request.config?;
-        let env_lookup = |key: &str| std::env::var(key).ok();
-        let upstream_headers = config.validate_environment(
-            string_headers(request.extra_headers)?,
-            request.api_key.as_deref(),
-            &env_lookup,
-        )?;
-        let url = config.complete_url(
-            request.api_base.as_deref(),
-            &request.model,
-            &request.optional_params,
-            &env_lookup,
-        )?;
-        let model = request.model.clone();
-        let custom_llm_provider = request.custom_llm_provider.clone();
-        let document = if config.requires_data_uri_document() {
-            convert_document_url_to_data_uri(request.document).await?
-        } else {
-            request.document
-        };
-        let body = config
-            .transform_ocr_request(&request.model, document, request.optional_params)?
-            .data;
-        let body = self
-            .run_during_call_guardrails(&model, &custom_llm_provider, &url, body)
-            .await?;
-        Ok(ProviderOcrRequest {
-            model,
-            config,
-            url,
-            body,
-            upstream_headers,
-            timeout: request.timeout,
-        })
+        let provider_request = prepare_ocr_provider_call(request).await?;
+        self.run_during_call_guardrails(provider_request).await
     }
 
     async fn run_during_call_guardrails(
         &self,
-        model: &str,
-        custom_llm_provider: &str,
-        url: &str,
-        body: Value,
-    ) -> Result<Value, Error> {
+        request: ProviderOcrRequest,
+    ) -> Result<ProviderOcrRequest, Error> {
         if self.guardrail_runner.is_empty() {
-            return Ok(body);
+            return Ok(request);
         }
 
         let context = guardrail_context(&self.request_metadata);
         let guardrail_request = GuardrailRequest::new(json!({
-            "model": model,
-            "custom_llm_provider": custom_llm_provider,
-            "url": url,
-            "body": body,
+            "model": request.model(),
+            "custom_llm_provider": request.custom_llm_provider(),
+            "url": request.url(),
+            "body": request.body(),
         }));
         let (guardrail_request, _) = self
             .guardrail_runner
@@ -134,6 +98,7 @@ impl OcrLifecycleHooks {
             .await
             .map_err(guardrail_error_to_core_error)?;
         parse_ocr_during_call_guardrail_request(guardrail_request)
+            .map(|body| request.with_body(body))
     }
 
     fn standard_logging_payload(

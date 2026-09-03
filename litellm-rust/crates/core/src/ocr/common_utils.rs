@@ -3,76 +3,16 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use litellm_core::error::Error;
-use litellm_core::ocr::transformation::OcrProviderConfig;
 use reqwest::Url;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
-use litellm_core::providers::azure_ai::ocr::transformation::{
-    AZURE_AI_OCR_CONFIG, AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG,
-};
-use litellm_core::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
-use litellm_core::providers::vertex_ai::ocr::transformation as vertex_ai;
-use litellm_core::providers::vertex_ai::ocr::transformation::{
-    VERTEX_AI_DEEPSEEK_OCR_CONFIG, VERTEX_AI_OCR_CONFIG,
-};
+use super::client::http_client;
+use crate::Error;
+use crate::http_utils::truncate_error_body;
 
-use crate::client::http_client;
-
-const ERROR_BODY_MAX_CHARS: usize = 256;
-const AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: f64 = 50.0;
 const MAX_SAFE_FETCH_REDIRECTS: usize = 10;
-
-pub(super) fn truncate_error_body(body: &str) -> String {
-    if body.chars().count() <= ERROR_BODY_MAX_CHARS {
-        return body.to_string();
-    }
-    let truncated: String = body.chars().take(ERROR_BODY_MAX_CHARS).collect();
-    format!("{truncated}... (truncated)")
-}
-
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub(super) fn ocr_provider_config(
-    provider: &str,
-    model: &str,
-) -> Option<&'static dyn OcrProviderConfig> {
-    match provider {
-        "mistral" => Some(&MISTRAL_OCR_CONFIG),
-        "azure_ai" if is_azure_document_intelligence_model(model) => {
-            Some(&AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG)
-        }
-        "azure_ai" => Some(&AZURE_AI_OCR_CONFIG),
-        "vertex_ai" if vertex_ai::is_deepseek_model(model) => Some(&VERTEX_AI_DEEPSEEK_OCR_CONFIG),
-        "vertex_ai" => Some(&VERTEX_AI_OCR_CONFIG),
-        _ => None,
-    }
-}
-
-fn is_azure_document_intelligence_model(model: &str) -> bool {
-    let model = model.to_ascii_lowercase();
-    model.contains("doc-intelligence") || model.contains("documentintelligence")
-}
-
-pub(super) fn string_headers(
-    extra_headers: Option<Map<String, Value>>,
-) -> Result<Vec<(String, String)>, Error> {
-    extra_headers
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(key, value)| {
-            value
-                .as_str()
-                .map(|value| (key.clone(), value.to_string()))
-                .ok_or_else(|| {
-                    Error::InvalidRequest(format!(
-                        "OCR extra_headers.{key} must be a string, got {}",
-                        litellm_core::error::json_type_name(&value)
-                    ))
-                })
-        })
-        .collect()
-}
+const AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS: u64 = 120;
 
 fn document_url_field(document: &Value) -> Result<Option<(&str, &str)>, Error> {
     let Some(object) = document.as_object() else {
