@@ -13,16 +13,15 @@ tests/rust-python-harness/
 │   ├── e2e_parity/
 │   │   ├── __init__.py
 │   │   ├── sdk/
-│   │   │   ├── ocr/
-│   │   │   ├── messages/
-│   │   │   ├── chat_completions/
-│   │   │   └── responses/
-│   │   └── gateway/
+│   │   │   └── ocr/
 │   │
 │   ├── trace_parity/
 │   │   ├── __init__.py
-│   │   ├── sdk/
-│   │   └── gateway/
+│   │   └── sdk/
+│   │       ├── chat_completions/
+│   │       ├── messages/
+│   │       ├── ocr/
+│   │       └── transcription/
 │   │
 │   ├── unit_tests_mapping/
 │   │   ├── __init__.py
