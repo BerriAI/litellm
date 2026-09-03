@@ -5,7 +5,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-LEDGER_PATH = Path(__file__).parent / "core" / "ocr" / "ocr_test_ledger.json"
+LEDGER_ROOT = Path(__file__).parent / "core"
+
+
+def ledger_path_for(sdk_function: str) -> Path:
+    return LEDGER_ROOT / sdk_function / f"{sdk_function}_test_ledger.json"
+
+
+LEDGER_PATH = ledger_path_for("ocr")
 
 
 @dataclass(frozen=True, slots=True)
