@@ -55,7 +55,10 @@ RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/
 
 ENV PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries
 
+COPY docker/prod_entrypoint.sh /app/docker/prod_entrypoint.sh
+RUN sed -i 's/\r$//' /app/docker/prod_entrypoint.sh && chmod +x /app/docker/prod_entrypoint.sh
+
 EXPOSE 4000/tcp
 
-ENTRYPOINT ["litellm"]
+ENTRYPOINT ["/app/docker/prod_entrypoint.sh"]
 CMD ["--port", "4000"]
