@@ -14,14 +14,11 @@ asyncio.run) is exercised directly, mirroring the dispatch-contract discipline i
 tests/test_litellm/batches/test_main.py.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.anthropic.batches.handler import AnthropicBatchesHandler
 from litellm.types.utils import LiteLLMBatch

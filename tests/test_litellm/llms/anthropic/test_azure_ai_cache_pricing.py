@@ -3,10 +3,7 @@ Test that Azure AI Anthropic models have cache pricing configured.
 Verifies the fix for issue #19532.
 """
 
-import sys
-import os
 
-sys.path.insert(0, os.path.abspath("../../../../../"))
 
 import litellm
 from litellm import get_model_info

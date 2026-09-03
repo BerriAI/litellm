@@ -18,26 +18,28 @@ import datetime
 import os
 import time
 import traceback
+from collections.abc import Sequence
 from datetime import datetime as datetimeObj
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx import Response
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.integrations.datadog.datadog_mock_client import (
-    should_use_datadog_mock,
-    create_mock_datadog_client,
-)
 from litellm.integrations.datadog.datadog_handler import (
+    get_datadog_base_url_from_env,
     get_datadog_hostname,
     get_datadog_service,
     get_datadog_source,
     get_datadog_tags,
-    get_datadog_base_url_from_env,
+)
+from litellm.integrations.datadog.datadog_mock_client import (
+    create_mock_datadog_client,
+    should_use_datadog_mock,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.llms.custom_httpx.http_handler import (
@@ -51,31 +53,43 @@ from litellm.types.integrations.datadog import (
     DD_ERRORS,
     DD_MAX_BATCH_SIZE,
     DD_MAX_PAYLOAD_SIZE_BYTES,
-    DataDogStatus,
     DatadogInitParams,
     DatadogPayload,
     DatadogProxyFailureHookJsonMessage,
+    DataDogStatus,
 )
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from litellm.types.utils import StandardLoggingPayload
 
 from ..additional_logging_utils import AdditionalLoggingUtils
 
+if TYPE_CHECKING:
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+
+class _DatadogLoggingKwargs(TypedDict, total=False):
+    """The subset of logging ``kwargs`` that the Datadog payload builder reads."""
+
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
+
+
 # max number of logs DD API can accept
 
 
 # specify what ServiceTypes are logged as success events to DD. (We don't want to spam DD traces with large number of service types)
-DD_LOGGED_SUCCESS_SERVICE_TYPES = [
+DD_LOGGED_SUCCESS_SERVICE_TYPES: Final = [
     ServiceTypes.RESET_BUDGET_JOB,
 ]
 
 
 def _resolve_dd_batch_size() -> int:
-    raw = os.getenv("DD_BATCH_SIZE")
+    raw: Final = os.getenv("DD_BATCH_SIZE")
     if raw is None:
         return DD_MAX_BATCH_SIZE
     try:
-        value = int(raw)
+        value: Final = int(raw)
     except ValueError:
         verbose_logger.warning(
             "Datadog: ignoring invalid DD_BATCH_SIZE=%r, using %s",
@@ -86,6 +100,11 @@ def _resolve_dd_batch_size() -> int:
     return max(1, min(value, DD_MAX_BATCH_SIZE))
 
 
+def _span_attribute(span: object, name: str) -> object:
+    """Read an optional attribute off whatever span object the active tracer hands back."""
+    return getattr(span, name, None)
+
+
 class DataDogLogger(
     CustomBatchLogger,
     AdditionalLoggingUtils,
@@ -93,10 +112,10 @@ class DataDogLogger(
     # Class variables or attributes
     def __init__(
         self,
-        dd_api_key: Optional[str] = None,
-        dd_site: Optional[str] = None,
-        dd_agent_host: Optional[str] = None,
-        dd_agent_port: Optional[str] = None,
+        dd_api_key: str | None = None,
+        dd_site: str | None = None,
+        dd_agent_host: str | None = None,
+        dd_agent_port: str | None = None,
         allow_env_credentials: bool = True,
         **kwargs,
     ):
@@ -135,14 +154,14 @@ class DataDogLogger(
             #########################################################
             # Handle datadog_params set as litellm.datadog_params
             #########################################################
-            dict_datadog_params = self._get_datadog_params()
+            dict_datadog_params: Final = self._get_datadog_params()
             kwargs.update(dict_datadog_params)
 
             self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
             # Configure DataDog endpoint (Agent or Direct API)
             # Prefer explicit kwargs, then fall back to env vars
-            resolved_agent_host = dd_agent_host or os.getenv("LITELLM_DD_AGENT_HOST")
+            resolved_agent_host: Final = dd_agent_host or os.getenv("LITELLM_DD_AGENT_HOST")
             if resolved_agent_host:
                 self._configure_dd_agent(
                     dd_agent_host=resolved_agent_host,
@@ -158,7 +177,7 @@ class DataDogLogger(
                 )
 
             # Optional override for testing
-            dd_base_url = get_datadog_base_url_from_env()
+            dd_base_url: Final = get_datadog_base_url_from_env()
             if dd_base_url:
                 self.intake_url = f"{dd_base_url}/api/v2/logs"
             self.sync_client = _get_httpx_client()
@@ -170,20 +189,20 @@ class DataDogLogger(
                 batch_size=_resolve_dd_batch_size(),
             )
         except Exception as e:
-            verbose_logger.exception(f"Datadog: Got exception on init Datadog client {str(e)}")
+            verbose_logger.exception("Datadog: Got exception on init Datadog client %s", e)
             raise e
 
-    def _get_datadog_params(self) -> Dict:
+    def _get_datadog_params(self) -> dict:
         """
         Get the datadog_params from litellm.datadog_params
 
         These are params specific to initializing the DataDogLogger e.g. turn_off_message_logging
         """
-        dict_datadog_params: Dict = {}
+        dict_datadog_params: dict = {}
         if litellm.datadog_params is not None:
             if isinstance(litellm.datadog_params, DatadogInitParams):
                 dict_datadog_params = litellm.datadog_params.model_dump()
-            elif isinstance(litellm.datadog_params, Dict):
+            elif isinstance(litellm.datadog_params, dict):
                 # only allow params that are of DatadogInitParams
                 dict_datadog_params = DatadogInitParams(**litellm.datadog_params).model_dump()
         return dict_datadog_params
@@ -191,8 +210,8 @@ class DataDogLogger(
     def _configure_dd_agent(
         self,
         dd_agent_host: str,
-        dd_agent_port: Optional[str] = None,
-        dd_api_key: Optional[str] = None,
+        dd_agent_port: str | None = None,
+        dd_api_key: str | None = None,
         allow_env_credentials: bool = True,
     ) -> None:
         """
@@ -204,17 +223,17 @@ class DataDogLogger(
             dd_api_key: Datadog API key. Falls back to DD_API_KEY env var when allow_env_credentials is True. Optional when using agent.
             allow_env_credentials: When False, never read the API key from DD_API_KEY env var.
         """
-        resolved_port = dd_agent_port or os.getenv("LITELLM_DD_AGENT_PORT", "10518")  # default port for logs
+        resolved_port: Final = dd_agent_port or os.getenv("LITELLM_DD_AGENT_PORT", "10518")  # default port for logs
         self.intake_url = f"http://{dd_agent_host}:{resolved_port}/api/v2/logs"
         self.DD_API_KEY = dd_api_key or (
             os.getenv("DD_API_KEY") if allow_env_credentials else None
         )  # Optional when using agent
-        verbose_logger.debug(f"Datadog: Using DD Agent at {self.intake_url}")
+        verbose_logger.debug("Datadog: Using DD Agent at %s", self.intake_url)
 
     def _configure_dd_direct_api(
         self,
-        dd_api_key: Optional[str] = None,
-        dd_site: Optional[str] = None,
+        dd_api_key: str | None = None,
+        dd_site: str | None = None,
         allow_env_credentials: bool = True,
     ) -> None:
         """
@@ -228,8 +247,8 @@ class DataDogLogger(
         Raises:
             Exception: If required credentials are not provided via args or env vars
         """
-        resolved_api_key = dd_api_key or (os.getenv("DD_API_KEY") if allow_env_credentials else None)
-        resolved_site = dd_site or os.getenv("DD_SITE")
+        resolved_api_key: Final = dd_api_key or (os.getenv("DD_API_KEY") if allow_env_credentials else None)
+        resolved_site: Final = dd_site or os.getenv("DD_SITE")
 
         if resolved_api_key is None:
             raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>")
@@ -256,8 +275,7 @@ class DataDogLogger(
             await self._log_async_event(kwargs, response_obj, start_time, end_time)
 
         except Exception as e:
-            verbose_logger.exception(f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}")
-            pass
+            verbose_logger.exception("Datadog Layer Error - %s\n%s", e, traceback.format_exc())
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -265,16 +283,15 @@ class DataDogLogger(
             await self._log_async_event(kwargs, response_obj, start_time, end_time)
 
         except Exception as e:
-            verbose_logger.exception(f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}")
-            pass
+            verbose_logger.exception("Datadog Layer Error - %s\n%s", e, traceback.format_exc())
 
     async def async_post_call_failure_hook(
         self,
         request_data: dict,
         original_exception: Exception,
-        user_api_key_dict: Any,
-        traceback_str: Optional[str] = None,
-    ) -> Optional[Any]:
+        user_api_key_dict: "UserAPIKeyAuth",
+        traceback_str: str | None = None,
+    ) -> "HTTPException | None":
         """
         Log proxy-level failures (e.g. 401 auth, DB connection errors) to Datadog.
 
@@ -288,23 +305,23 @@ class DataDogLogger(
             )
             from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-            error_information = StandardLoggingPayloadSetup.get_error_information(
+            error_information: Final = StandardLoggingPayloadSetup.get_error_information(
                 original_exception=original_exception,
                 traceback_str=traceback_str,
             )
-            _code = error_information.get("error_code") or ""
-            status_code: Optional[int] = None
+            _code: Final = error_information.get("error_code") or ""
+            status_code: int | None = None
             if _code and str(_code).strip().isdigit():
                 status_code = int(_code)
 
             # Use project-standard sanitized user context when running in proxy
-            user_context: Dict[str, Any] = {}
+            user_context: dict[str, object] = {}
             try:
                 from litellm.proxy.litellm_pre_call_utils import (
                     LiteLLMProxyRequestSetup,
                 )
 
-                _meta = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+                _meta: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
                     user_api_key_dict=user_api_key_dict
                 )
                 user_context = dict(_meta) if isinstance(_meta, dict) else _meta
@@ -319,7 +336,7 @@ class DataDogLogger(
                 if hasattr(user_api_key_dict, "end_user_id"):
                     user_context["end_user_id"] = getattr(user_api_key_dict, "end_user_id", None)
 
-            message_payload: DatadogProxyFailureHookJsonMessage = {
+            message_payload: Final[DatadogProxyFailureHookJsonMessage] = {
                 "exception": error_information.get("error_message") or str(original_exception),
                 "error_class": error_information.get("error_class") or original_exception.__class__.__name__,
                 "status_code": status_code,
@@ -327,7 +344,7 @@ class DataDogLogger(
                 "user_api_key_dict": user_context,
             }
 
-            dd_payload = DatadogPayload(
+            dd_payload: Final = DatadogPayload(
                 ddsource=get_datadog_source(),
                 ddtags=",".join(get_datadog_tags()),
                 hostname=get_datadog_hostname(),
@@ -341,7 +358,7 @@ class DataDogLogger(
             if len(self.log_queue) >= self.batch_size:
                 await self.flush_queue()
         except Exception as e:
-            verbose_logger.exception(f"Datadog: async_post_call_failure_hook - {str(e)}\n{traceback.format_exc()}")
+            verbose_logger.exception("Datadog: async_post_call_failure_hook - %s\n%s", e, traceback.format_exc())
         return None
 
     async def async_send_batch(self):
@@ -359,7 +376,7 @@ class DataDogLogger(
             verbose_logger.exception("Datadog: log_queue does not exist")
             return
 
-        batch_to_send = self.log_queue[:]
+        batch_to_send: Final = self.log_queue[:]
         self.log_queue = []
 
         try:
@@ -372,18 +389,18 @@ class DataDogLogger(
             if self.is_mock_mode:
                 verbose_logger.debug("[DATADOG MOCK] Mock mode enabled - API calls will be intercepted")
 
-            undelivered = await self._send_with_413_split(batch_to_send)
+            undelivered: Final = await self._send_with_413_split(batch_to_send)
             if undelivered:
                 self.log_queue = undelivered + self.log_queue
 
             if self.is_mock_mode:
-                verbose_logger.debug(f"[DATADOG MOCK] Batch of {len(batch_to_send)} events successfully mocked")
+                verbose_logger.debug("[DATADOG MOCK] Batch of %s events successfully mocked", len(batch_to_send))
 
         except Exception as e:
             self.log_queue = batch_to_send + self.log_queue
-            verbose_logger.exception(f"Datadog Error sending batch API - {str(e)}\n{traceback.format_exc()}")
+            verbose_logger.exception("Datadog Error sending batch API - %s\n%s", e, traceback.format_exc())
 
-    async def _send_with_413_split(self, batch: List) -> List:
+    async def _send_with_413_split(self, batch: list) -> list:
         """
         Send a batch, halving any sub-batch that exceeds Datadog's intake limits before
         sending, and halving again on a 413 (payload too large) response, since Datadog
@@ -396,7 +413,7 @@ class DataDogLogger(
         that could not be delivered because of a non-413 (transient) error, so the caller
         re-queues only those and never the events already accepted by Datadog.
         """
-        pending: List[List] = [batch]
+        pending: Final[list[list]] = [batch]
         while pending:
             chunk = pending.pop()
             if not chunk:
@@ -412,7 +429,7 @@ class DataDogLogger(
                 if isinstance(e, MaskedHTTPStatusError) and e.status_code == 413:
                     response = e.response
                 else:
-                    verbose_logger.exception(f"Datadog Error sending batch API - {str(e)}")
+                    verbose_logger.exception("Datadog Error sending batch API - %s", e)
                     return self._undelivered(chunk, pending)
 
             if response.status_code == 413:
@@ -441,7 +458,7 @@ class DataDogLogger(
         return []
 
     @staticmethod
-    def _undelivered(chunk: List, pending: List[List]) -> List:
+    def _undelivered(chunk: list, pending: list[list]) -> list:
         return chunk + [event for remaining in reversed(pending) for event in remaining]
 
     @staticmethod
@@ -456,7 +473,7 @@ class DataDogLogger(
 
         if len(chunk) > DD_MAX_BATCH_SIZE:
             return True
-        payload_size_bytes = len(safe_dumps(chunk).encode("utf-8"))
+        payload_size_bytes: Final = len(safe_dumps(chunk).encode("utf-8"))
         return payload_size_bytes > DD_MAX_PAYLOAD_SIZE_BYTES
 
     async def flush_queue(self):
@@ -494,14 +511,14 @@ class DataDogLogger(
                 )
 
             # Build headers
-            headers = {}
+            headers: Final = {}
             # Add API key if available (required for direct API, optional for agent)
             if self.DD_API_KEY:
                 headers["DD-API-KEY"] = self.DD_API_KEY
 
-            response = self.sync_client.post(
+            response: Final = self.sync_client.post(
                 url=self.intake_url,
-                json=dd_payload,  # type: ignore
+                json=dd_payload,
                 headers=headers,
             )
 
@@ -516,12 +533,10 @@ class DataDogLogger(
             )
 
         except Exception as e:
-            verbose_logger.exception(f"Datadog Layer Error - {str(e)}\n{traceback.format_exc()}")
-            pass
-        pass
+            verbose_logger.exception("Datadog Layer Error - %s\n%s", e, traceback.format_exc())
 
     async def _log_async_event(self, kwargs, response_obj, start_time, end_time):
-        dd_payload = self.create_datadog_logging_payload(
+        dd_payload: Final = self.create_datadog_logging_payload(
             kwargs=kwargs,
             response_obj=response_obj,
             start_time=start_time,
@@ -529,7 +544,7 @@ class DataDogLogger(
         )
 
         self.log_queue.append(dd_payload)
-        verbose_logger.debug(f"Datadog, event added to queue. Will flush in {self.flush_interval} seconds...")
+        verbose_logger.debug("Datadog, event added to queue. Will flush in %s seconds...", self.flush_interval)
 
         if len(self.log_queue) >= self.batch_size:
             await self.flush_queue()
@@ -541,9 +556,9 @@ class DataDogLogger(
     ) -> DatadogPayload:
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-        json_payload = safe_dumps(standard_logging_object)
+        json_payload: Final = safe_dumps(standard_logging_object)
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
-        dd_payload = DatadogPayload(
+        dd_payload: Final = DatadogPayload(
             ddsource=get_datadog_source(),
             ddtags=",".join(get_datadog_tags(standard_logging_object=standard_logging_object)),
             hostname=get_datadog_hostname(),
@@ -556,8 +571,8 @@ class DataDogLogger(
 
     def create_datadog_logging_payload(
         self,
-        kwargs: Union[dict, Any],
-        response_obj: Any,
+        kwargs: _DatadogLoggingKwargs,
+        response_obj: object,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
     ) -> DatadogPayload:
@@ -565,8 +580,8 @@ class DataDogLogger(
         Helper function to create a datadog payload for logging
 
         Args:
-            kwargs (Union[dict, Any]): request kwargs
-            response_obj (Any): llm api response
+            kwargs: request kwargs, read for its standard logging object
+            response_obj: llm api response
             start_time (datetime.datetime): start time of request
             end_time (datetime.datetime): end time of request
 
@@ -574,7 +589,7 @@ class DataDogLogger(
             DatadogPayload: defined in types.py
         """
 
-        standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
+        standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
         if standard_logging_object is None:
             raise ValueError("standard_logging_object not found in kwargs")
 
@@ -585,13 +600,13 @@ class DataDogLogger(
         # Build the initial payload
         self.truncate_standard_logging_payload_content(standard_logging_object)
 
-        dd_payload = self._create_datadog_logging_payload_helper(
+        dd_payload: Final = self._create_datadog_logging_payload_helper(
             standard_logging_object=standard_logging_object,
             status=status,
         )
         return dd_payload
 
-    async def async_send_compressed_data(self, data: List) -> Response:
+    async def async_send_compressed_data(self, data: list) -> Response:
         """
         Async helper to send compressed data to datadog self.intake_url
 
@@ -605,10 +620,10 @@ class DataDogLogger(
 
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-        compressed_data = gzip.compress(safe_dumps(data).encode("utf-8"))
+        compressed_data: Final = gzip.compress(safe_dumps(data).encode("utf-8"))
 
         # Build headers
-        headers = {
+        headers: Final = {
             "Content-Encoding": "gzip",
             "Content-Type": "application/json",
         }
@@ -617,9 +632,9 @@ class DataDogLogger(
         if self.DD_API_KEY:
             headers["DD-API-KEY"] = self.DD_API_KEY
 
-        response = await self.async_client.post(
+        response: Final = await self.async_client.post(
             url=self.intake_url,
-            data=compressed_data,  # type: ignore
+            data=compressed_data,
             headers=headers,
         )
         return response
@@ -627,11 +642,11 @@ class DataDogLogger(
     async def async_service_failure_hook(
         self,
         payload: ServiceLoggerPayload,
-        error: Optional[str] = "",
-        parent_otel_span: Optional[Any] = None,
-        start_time: Optional[Union[datetimeObj, float]] = None,
-        end_time: Optional[Union[float, datetimeObj]] = None,
-        event_metadata: Optional[dict] = None,
+        error: str | None = "",
+        parent_otel_span: object = None,
+        start_time: datetimeObj | float | None = None,
+        end_time: float | datetimeObj | None = None,
+        event_metadata: dict | None = None,
     ):
         """
         Logs failures from Redis, Postgres (Adjacent systems), as 'WARNING' on DataDog
@@ -639,12 +654,12 @@ class DataDogLogger(
         - example - Redis is failing / erroring, will be logged on DataDog
         """
         try:
-            _payload_dict = payload.model_dump()
+            _payload_dict: Final = payload.model_dump()
             _payload_dict.update(event_metadata or {})
             from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-            _dd_message_str = safe_dumps(_payload_dict)
-            _dd_payload = DatadogPayload(
+            _dd_message_str: Final = safe_dumps(_payload_dict)
+            _dd_payload: Final = DatadogPayload(
                 ddsource=get_datadog_source(),
                 ddtags=",".join(get_datadog_tags()),
                 hostname=get_datadog_hostname(),
@@ -656,17 +671,16 @@ class DataDogLogger(
             self.log_queue.append(_dd_payload)
 
         except Exception as e:
-            verbose_logger.exception(f"Datadog: Logger - Exception in async_service_failure_hook: {e}")
-        pass
+            verbose_logger.exception("Datadog: Logger - Exception in async_service_failure_hook: %s", e)
 
     async def async_service_success_hook(
         self,
         payload: ServiceLoggerPayload,
-        error: Optional[str] = "",
-        parent_otel_span: Optional[Any] = None,
-        start_time: Optional[Union[datetimeObj, float]] = None,
-        end_time: Optional[Union[float, datetimeObj]] = None,
-        event_metadata: Optional[dict] = None,
+        error: str | None = "",
+        parent_otel_span: object = None,
+        start_time: datetimeObj | float | None = None,
+        end_time: float | datetimeObj | None = None,
+        event_metadata: dict | None = None,
     ):
         """
         Logs success from Redis, Postgres (Adjacent systems), as 'INFO' on DataDog
@@ -678,13 +692,13 @@ class DataDogLogger(
             if payload.service not in DD_LOGGED_SUCCESS_SERVICE_TYPES:
                 return
 
-            _payload_dict = payload.model_dump()
+            _payload_dict: Final = payload.model_dump()
             _payload_dict.update(event_metadata or {})
 
             from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-            _dd_message_str = safe_dumps(_payload_dict)
-            _dd_payload = DatadogPayload(
+            _dd_message_str: Final = safe_dumps(_payload_dict)
+            _dd_payload: Final = DatadogPayload(
                 ddsource=get_datadog_source(),
                 ddtags=",".join(get_datadog_tags()),
                 hostname=get_datadog_hostname(),
@@ -696,11 +710,11 @@ class DataDogLogger(
             self.log_queue.append(_dd_payload)
 
         except Exception as e:
-            verbose_logger.exception(f"Datadog: Logger - Exception in async_service_failure_hook: {e}")
+            verbose_logger.exception("Datadog: Logger - Exception in async_service_failure_hook: %s", e)
 
     def _create_v0_logging_payload(
         self,
-        kwargs: Union[dict, Any],
+        kwargs: dict,
         response_obj: Any,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
@@ -712,14 +726,14 @@ class DataDogLogger(
         (Not Recommended) If you want this to get logged set `litellm.datadog_use_v1 = True`
         """
 
-        litellm_params = kwargs.get("litellm_params", {})
-        metadata = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
-        messages = kwargs.get("messages")
-        optional_params = kwargs.get("optional_params", {})
-        call_type = kwargs.get("call_type", "litellm.completion")
-        cache_hit = kwargs.get("cache_hit", False)
+        litellm_params: Final = kwargs.get("litellm_params", {})
+        metadata: Final = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
+        messages: Final = kwargs.get("messages")
+        optional_params: Final = kwargs.get("optional_params", {})
+        call_type: Final = kwargs.get("call_type", "litellm.completion")
+        cache_hit: Final = kwargs.get("cache_hit", False)
         usage = response_obj["usage"]
-        id = response_obj.get("id", str(uuid.uuid4()))
+        id: Final = response_obj.get("id", str(uuid.uuid4()))
         usage = dict(usage)
         try:
             response_time = (end_time - start_time).total_seconds() * 1000
@@ -734,7 +748,7 @@ class DataDogLogger(
         # Clean Metadata before logging - never log raw metadata
         # the raw metadata can contain circular references which leads to infinite recursion
         # we clean out all extra litellm metadata params before logging
-        clean_metadata = {}
+        clean_metadata: Final = {}
         if isinstance(metadata, dict):
             for key, value in metadata.items():
                 # clean litellm metadata before logging
@@ -748,7 +762,7 @@ class DataDogLogger(
                     clean_metadata[key] = value
 
         # Build the initial payload
-        payload = {
+        payload: Final = {
             "id": id,
             "call_type": call_type,
             "cache_hit": cache_hit,
@@ -767,11 +781,11 @@ class DataDogLogger(
 
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-        json_payload = safe_dumps(payload)
+        json_payload: Final = safe_dumps(payload)
 
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
 
-        dd_payload = DatadogPayload(
+        dd_payload: Final = DatadogPayload(
             ddsource=get_datadog_source(),
             ddtags=",".join(get_datadog_tags()),
             hostname=get_datadog_hostname(),
@@ -788,38 +802,38 @@ class DataDogLogger(
         """Attach Datadog APM trace context if one is active."""
 
         try:
-            trace_context = self._get_active_trace_context()
+            trace_context: Final = self._get_active_trace_context()
             if trace_context is None:
                 return
 
             dd_payload["dd.trace_id"] = trace_context["trace_id"]
-            span_id = trace_context.get("span_id")
+            span_id: Final = trace_context.get("span_id")
             if span_id is not None:
                 dd_payload["dd.span_id"] = span_id
         except Exception:
             verbose_logger.exception("Datadog: Failed to attach trace context to payload")
 
-    def _get_active_trace_context(self) -> Optional[Dict[str, str]]:
+    def _get_active_trace_context(self) -> dict[str, str] | None:
         try:
             current_span = None
-            current_span_fn = getattr(tracer, "current_span", None)
+            current_span_fn: Final = getattr(tracer, "current_span", None)
             if callable(current_span_fn):
                 current_span = current_span_fn()
 
             if current_span is None:
-                current_root_span_fn = getattr(tracer, "current_root_span", None)
+                current_root_span_fn: Final = getattr(tracer, "current_root_span", None)
                 if callable(current_root_span_fn):
                     current_span = current_root_span_fn()
 
             if current_span is None:
                 return None
 
-            trace_id = getattr(current_span, "trace_id", None)
+            trace_id: Final = _span_attribute(current_span, "trace_id")
             if trace_id is None:
                 return None
 
-            span_id = getattr(current_span, "span_id", None)
-            trace_context: Dict[str, str] = {"trace_id": str(trace_id)}
+            span_id: Final = _span_attribute(current_span, "span_id")
+            trace_context: Final[dict[str, str]] = {"trace_id": str(trace_id)}
             if span_id is not None:
                 trace_context["span_id"] = str(span_id)
             return trace_context
@@ -835,13 +849,13 @@ class DataDogLogger(
             create_dummy_standard_logging_payload,
         )
 
-        standard_logging_object = create_dummy_standard_logging_payload()
-        dd_payload = self._create_datadog_logging_payload_helper(
+        standard_logging_object: Final = create_dummy_standard_logging_payload()
+        dd_payload: Final = self._create_datadog_logging_payload_helper(
             standard_logging_object=standard_logging_object,
             status=DataDogStatus.INFO,
         )
-        log_queue = [dd_payload]
-        response = await self.async_send_compressed_data(log_queue)
+        log_queue: Final = [dd_payload]
+        response: Final = await self.async_send_compressed_data(log_queue)
         try:
             response.raise_for_status()
             return IntegrationHealthCheckStatus(
@@ -862,7 +876,7 @@ class DataDogLogger(
     async def get_request_response_payload(
         self,
         request_id: str,
-        start_time_utc: Optional[datetimeObj],
-        end_time_utc: Optional[datetimeObj],
-    ) -> Optional[dict]:
+        start_time_utc: datetimeObj | None,
+        end_time_utc: datetimeObj | None,
+    ) -> dict | None:
         pass

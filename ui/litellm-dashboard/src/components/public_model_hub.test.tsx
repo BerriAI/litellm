@@ -134,6 +134,27 @@ describe("PublicModelHub", () => {
       expect(within(gpt35Row as HTMLElement).getByText("Unknown")).toBeInTheDocument();
     });
   });
+  it("shows no models when the search has no matches (LIT-5230 regression)", async () => {
+    const networkingModule = await import("./networking");
+    vi.mocked(networkingModule.modelHubPublicModelsCall).mockResolvedValue([
+      { model_group: "gpt-4", providers: ["openai"], mode: "chat" },
+      { model_group: "claude-3", providers: ["anthropic"], mode: "chat" },
+    ]);
+
+    render(<PublicModelHub />);
+    expect(await screen.findByText("gpt-4")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Search model names... (smart search enabled)"), {
+      target: { value: "zzzz" },
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("gpt-4")).not.toBeInTheDocument();
+      expect(screen.queryByText("claude-3")).not.toBeInTheDocument();
+      expect(screen.getByText("No matching models")).toBeInTheDocument();
+    });
+  });
+
   it("handles non-array response gracefully (regression test for e.filter crash)", async () => {
     const networkingModule = await import("./networking");
     // Mock the API to return an object (like an error response) instead of an array
@@ -225,5 +246,20 @@ describe("public hub MCP details modal", () => {
     // so finding it proves the modal rendered and the url assertion is not vacuous.
     await screen.findByText("Server Overview");
     expect(screen.queryByText(PUBLIC_SERVER_URL)).not.toBeInTheDocument();
+  });
+
+  it("closes the server details modal from its close control", async () => {
+    const networkingModule = await import("./networking");
+    vi.mocked(networkingModule.mcpHubPublicServersCall).mockResolvedValue([mockMcpServer]);
+
+    render(<PublicModelHub />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
+    fireEvent.click(await screen.findByRole("button", { name: "exa_test" }));
+    await screen.findByText("Server Overview");
+
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
+
+    await waitFor(() => expect(screen.queryByText("Server Overview")).not.toBeInTheDocument());
   });
 });

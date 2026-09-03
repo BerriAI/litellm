@@ -49,11 +49,5 @@ Rules for adding or changing an LLM provider/route in `litellm-rust`. `messages`
 
 ## Checks before push
 
-25. Run, and keep green:
-    ```bash
-    cd litellm-rust
-    cargo fmt --check
-    cargo clippy -p litellm-ai-gateway --all-targets --features server -- -D warnings
-    cargo clippy -p litellm-core -p litellm-python-bridge --all-targets -- -D warnings
-    cargo test --workspace
-    ```
+25. Run, and keep green, the commands under "Checks" in `litellm-rust/CLAUDE.md`.
+    That list is the single source of truth and matches what GitHub Actions runs.

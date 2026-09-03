@@ -12,13 +12,10 @@ The wrapper should properly handle this by:
 - Properly managing content_block_stop/start events for subsequent content
 """
 
-import os
-import sys
 from typing import List
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,

@@ -4,12 +4,12 @@
  * Reuses FallbackGroupConfig with the primary model locked
  */
 
-import { Button } from "antd";
+import { Button } from "@/components/ui/button";
 import { useQuery } from "@tanstack/react-query";
-import { Pencil } from "lucide-react";
+import { LoaderCircle, Pencil } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
-import NotificationManager from "../../../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { AddFallbacksModal } from "./AddFallbacksModal";
 import { FallbackGroup, FallbackGroupConfig } from "./FallbackGroupConfig";
 
@@ -69,7 +69,7 @@ export default function EditFallbacks({
     setIsSaving(true);
     try {
       await onChange(updatedFallbacks);
-      NotificationManager.success(`Fallbacks for ${primaryModel} updated successfully!`);
+      toast.success(`Fallbacks for ${primaryModel} updated successfully!`);
       onClose();
     } catch (error) {
       console.error("Error updating fallbacks:", error);
@@ -87,17 +87,12 @@ export default function EditFallbacks({
         maxFallbacks={maxFallbacks}
         disablePrimaryModel
       />
-      <div className="flex items-center justify-end space-x-3 pt-6 mt-6 border-t border-gray-100">
-        <Button type="default" onClick={onClose} disabled={isSaving}>
+      <div className="flex items-center justify-end space-x-3 pt-6 mt-6 border-t border-border">
+        <Button variant="outline" onClick={onClose} disabled={isSaving}>
           Cancel
         </Button>
-        <Button
-          type="primary"
-          icon={<Pencil className="w-4 h-4" />}
-          onClick={handleSave}
-          disabled={isSaving || group.fallbackModels.length === 0}
-          loading={isSaving}
-        >
+        <Button onClick={handleSave} disabled={isSaving || group.fallbackModels.length === 0}>
+          {isSaving ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Pencil className="w-4 h-4" />}
           {isSaving ? "Saving Changes..." : "Save Changes"}
         </Button>
       </div>

@@ -20,6 +20,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     extract_custom_tool_names,
     is_custom_tool_call,
+    openai_shaped_tool_call_item_id,
     unwrap_custom_tool_arguments,
     build_tool_call_item_kwargs,
     convert_custom_tool_to_function_tool,
@@ -128,6 +129,41 @@ class TestCustomToolUtilities:
         assert kwargs["type"] == "function_call"
         assert kwargs["arguments"] == raw
         assert "input" not in kwargs
+
+    def test_openai_shaped_tool_call_item_id_prefixes_foreign_ids(self):
+        """Anthropic-style tool ids must be normalized to OpenAI's item id
+        shapes (fc/ctc prefixes) so replaying the item to OpenAI does not 400
+        with "Expected an ID that begins with 'fc'"."""
+        assert openai_shaped_tool_call_item_id("function_call", "toolu_01Abc") == "fc_toolu_01Abc"
+        assert openai_shaped_tool_call_item_id("function_call", "srvtoolu_01Xyz") == "fc_srvtoolu_01Xyz"
+        assert openai_shaped_tool_call_item_id("custom_tool_call", "toolu_01Abc") == "ctc_toolu_01Abc"
+        assert openai_shaped_tool_call_item_id("function_call", "fc_already") == "fc_already"
+        assert openai_shaped_tool_call_item_id("custom_tool_call", "ctc_already") == "ctc_already"
+        assert openai_shaped_tool_call_item_id("function_call", "") == ""
+        assert openai_shaped_tool_call_item_id("message", "toolu_01Abc") == "toolu_01Abc"
+
+    def test_build_tool_call_item_kwargs_normalizes_item_id_keeps_call_id(self):
+        """The streaming item id gets the OpenAI shape while call_id stays raw
+        so tool_result pairing (which keys off call_id) keeps working."""
+        function_kwargs = build_tool_call_item_kwargs(
+            call_id="toolu_01Abc",
+            name="get_weather",
+            arguments_or_input="{}",
+            status="completed",
+            custom_tool_names=set(),
+        )
+        assert function_kwargs["id"] == "fc_toolu_01Abc"
+        assert function_kwargs["call_id"] == "toolu_01Abc"
+
+        custom_kwargs = build_tool_call_item_kwargs(
+            call_id="toolu_01Def",
+            name="apply_patch",
+            arguments_or_input=json.dumps({"content": "patch"}),
+            status="completed",
+            custom_tool_names={"apply_patch"},
+        )
+        assert custom_kwargs["id"] == "ctc_toolu_01Def"
+        assert custom_kwargs["call_id"] == "toolu_01Def"
 
     def test_unwrap_custom_tool_arguments_oversized_returns_raw(self):
         """Arguments larger than the safety cap are returned unchanged to avoid
@@ -292,6 +328,52 @@ class TestTransformationCustomTools:
         assert item.type == "function_call"
         assert item.name == "regular_tool"
         assert item.arguments == json.dumps({"param": "value"})
+
+    def test_transform_anthropic_tool_call_ids_get_openai_item_id_shape(self):
+        """Anthropic tool ids (toolu_/srvtoolu_) surfacing through the bridge
+        must be emitted with fc/ctc-prefixed item ids so a Responses client can
+        replay them to OpenAI verbatim, while call_id stays raw for pairing."""
+        from litellm.types.utils import ModelResponse, Choices, Message, ChatCompletionMessageToolCall, Function
+
+        client_call = ChatCompletionMessageToolCall(
+            id="toolu_01ClientCall",
+            type="function",
+            function=Function(name="get_weather", arguments=json.dumps({"city": "SF"})),
+        )
+        server_call = ChatCompletionMessageToolCall(
+            id="srvtoolu_01ServerCall",
+            type="function",
+            function=Function(name="web_search", arguments=json.dumps({"query": "zig"})),
+        )
+        custom_call = ChatCompletionMessageToolCall(
+            id="toolu_01CustomCall",
+            type="function",
+            function=Function(name="apply_patch", arguments=json.dumps({"content": "patch content"})),
+        )
+
+        message = Message(role="assistant", content=None, tool_calls=[client_call, server_call, custom_call])
+        choices = [Choices(index=0, message=message, finish_reason="tool_calls")]
+        response = ModelResponse(
+            id="test_response", choices=choices, created=1234567890, model="claude-sonnet-4-5", object="chat.completion"
+        )
+        responses_api_request = {
+            "tools": [{"type": "custom", "name": "apply_patch"}, {"type": "function", "name": "get_weather"}]
+        }
+
+        result = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+            response, responses_api_request=responses_api_request
+        )
+
+        assert [item.id for item in result] == [
+            "fc_toolu_01ClientCall",
+            "fc_srvtoolu_01ServerCall",
+            "ctc_toolu_01CustomCall",
+        ]
+        assert [item.call_id for item in result] == [
+            "toolu_01ClientCall",
+            "srvtoolu_01ServerCall",
+            "toolu_01CustomCall",
+        ]
 
     def test_transform_mixed_tool_calls(self):
         """Test transformation with both custom and regular tool calls."""
