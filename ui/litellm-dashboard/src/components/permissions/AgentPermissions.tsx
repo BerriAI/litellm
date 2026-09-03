@@ -3,6 +3,7 @@ import { UserGroupIcon } from "@heroicons/react/outline";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { getAgentsList } from "../networking";
+import { InheritedGrant, inheritedGrantTooltip } from "./inheritedGrants";
 
 interface Agent {
   agent_id: string;
@@ -14,11 +15,9 @@ interface Agent {
 interface AgentPermissionsProps {
   agents: string[];
   agentAccessGroups?: string[];
-  inheritedAgents?: string[];
+  inheritedAgents?: InheritedGrant[];
   accessToken?: string | null;
 }
-
-const INHERITED_AGENT_TOOLTIP = "Granted through one of the team's access groups";
 
 export function AgentPermissions({
   agents,
@@ -27,7 +26,7 @@ export function AgentPermissions({
   accessToken,
 }: AgentPermissionsProps) {
   const [agentDetails, setAgentDetails] = useState<Agent[]>([]);
-  const inheritedOnlyAgents = inheritedAgents.filter((agent) => !agents.includes(agent));
+  const inheritedOnlyAgents = inheritedAgents.filter((grant) => !agents.includes(grant.id));
   const agentIdCount = agents.length + inheritedOnlyAgents.length;
 
   // Fetch agent details when component mounts
@@ -58,9 +57,9 @@ export function AgentPermissions({
   };
 
   const mergedItems = [
-    ...agents.map((agent) => ({ type: "agent", value: agent, inherited: false })),
-    ...inheritedOnlyAgents.map((agent) => ({ type: "agent", value: agent, inherited: true })),
-    ...agentAccessGroups.map((group) => ({ type: "accessGroup", value: group, inherited: false })),
+    ...agents.map((agent) => ({ type: "agent", value: agent, tooltip: `Full ID: ${agent}` })),
+    ...inheritedOnlyAgents.map((grant) => ({ type: "agent", value: grant.id, tooltip: inheritedGrantTooltip(grant) })),
+    ...agentAccessGroups.map((group) => ({ type: "accessGroup", value: group, tooltip: "" })),
   ];
   const totalCount = mergedItems.length;
 
@@ -86,17 +85,8 @@ export function AgentPermissions({
                           <span className="text-sm font-medium text-foreground truncate">
                             {getAgentDisplayName(item.value)}
                           </span>
-                          {item.inherited && (
-                            <span className="ml-1 px-1.5 py-0.5 text-[9px] font-semibold text-purple-600 bg-purple-50 border border-purple-200 rounded-sm uppercase tracking-wide shrink-0 dark:text-purple-300 dark:bg-purple-950 dark:border-purple-800">
-                              Inherited
-                            </span>
-                          )}
                         </TooltipTrigger>
-                        <TooltipContent>
-                          {item.inherited
-                            ? `${INHERITED_AGENT_TOOLTIP}. Full ID: ${item.value}`
-                            : `Full ID: ${item.value}`}
-                        </TooltipContent>
+                        <TooltipContent>{item.tooltip}</TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
                   ) : (

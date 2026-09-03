@@ -3,11 +3,12 @@ import VectorStorePermissions from "./permissions/VectorStorePermissions";
 import MCPServerPermissions from "./permissions/MCPServerPermissions";
 import AgentPermissions from "./permissions/AgentPermissions";
 import type { ObjectPermission } from "./object_permission_types";
+import type { InheritedGrant } from "./permissions/inheritedGrants";
 
 interface ObjectPermissionsViewProps {
   objectPermission?: ObjectPermission | null;
-  inheritedMcpServerIds?: string[];
-  inheritedAgentIds?: string[];
+  inheritedMcpServers?: InheritedGrant[];
+  inheritedAgents?: InheritedGrant[];
   variant?: "card" | "inline";
   className?: string;
   accessToken?: string | null;
@@ -15,8 +16,8 @@ interface ObjectPermissionsViewProps {
 
 export function ObjectPermissionsView({
   objectPermission,
-  inheritedMcpServerIds = [],
-  inheritedAgentIds = [],
+  inheritedMcpServers = [],
+  inheritedAgents = [],
   variant = "card",
   className = "",
   accessToken,
@@ -38,13 +39,13 @@ export function ObjectPermissionsView({
         mcpAccessGroups={mcpAccessGroups}
         mcpToolPermissions={mcpToolPermissions}
         mcpToolsets={mcpToolsets}
-        inheritedMcpServers={inheritedMcpServerIds}
+        inheritedMcpServers={inheritedMcpServers}
         accessToken={accessToken}
       />
       <AgentPermissions
         agents={agents}
         agentAccessGroups={agentAccessGroups}
-        inheritedAgents={inheritedAgentIds}
+        inheritedAgents={inheritedAgents}
         accessToken={accessToken}
       />
       <div className="min-w-0 rounded-md border border-border p-4">

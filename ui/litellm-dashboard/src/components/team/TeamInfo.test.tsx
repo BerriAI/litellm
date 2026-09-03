@@ -305,7 +305,8 @@ describe("TeamInfoView", () => {
       );
     });
 
-    it("shows MCP servers and agents inherited from access groups in the Object Permissions card", async () => {
+    it("shows MCP servers and agents inherited from access groups in the Object Permissions card, naming the group on hover", async () => {
+      const user = userEvent.setup();
       vi.mocked(networking.fetchMCPServers).mockResolvedValue([
         { server_id: "mcp-github-1234", server_name: "github", alias: "github" },
       ]);
@@ -318,16 +319,33 @@ describe("TeamInfoView", () => {
           access_group_ids: ["ag-1"],
           access_group_mcp_server_ids: ["mcp-github-1234"],
           access_group_agent_ids: ["agent-support-5678"],
+          access_group_details: [
+            {
+              access_group_id: "ag-1",
+              access_group_name: "platform-tools",
+              models: [],
+              mcp_server_ids: ["mcp-github-1234"],
+              agent_ids: ["agent-support-5678"],
+            },
+          ],
         }),
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
 
-      expect(await screen.findByText(/github \(mcp\.\.\.1234\)/)).toBeInTheDocument();
-      expect(await screen.findByText(/support_agent \(age\.\.\.5678\)/)).toBeInTheDocument();
-      expect(screen.getAllByText("Inherited")).toHaveLength(2);
+      const serverRow = await screen.findByText(/github \(mcp\.\.\.1234\)/);
+      const agentRow = await screen.findByText(/support_agent \(age\.\.\.5678\)/);
       expect(screen.queryByText("No MCP servers, access groups, or toolsets configured")).not.toBeInTheDocument();
       expect(screen.queryByText("No agents or access groups configured")).not.toBeInTheDocument();
+
+      await user.hover(serverRow);
+      expect(
+        await screen.findByText("Granted via access group platform-tools. Full ID: mcp-github-1234"),
+      ).toBeInTheDocument();
+      await user.hover(agentRow);
+      expect(
+        await screen.findByText("Granted via access group platform-tools. Full ID: agent-support-5678"),
+      ).toBeInTheDocument();
     });
 
     it("keeps the all-proxy-models badge non-clickable", async () => {
