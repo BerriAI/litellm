@@ -8,15 +8,20 @@ Covers the security behavior of:
                                   session key only after the password is written
 """
 
+import hashlib
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import jwt
 import pytest
+import respx
 from fastapi import HTTPException
 
 import litellm
-from litellm.proxy._types import InvitationClaim
+from litellm.proxy._types import InvitationClaim, ProxyException
+
+_POLICY_NO_BREACH_CHECK = {"password_policy_check_breached_passwords": False}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -386,7 +391,9 @@ async def test_claim_token_rejects_concurrent_reuse_before_password_write():
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
         patch("litellm.proxy.proxy_server.master_key", "sk-test"),
-        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch(  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
         patch(
             "litellm.proxy.proxy_server.generate_key_helper_fn",
             new_callable=AsyncMock,
@@ -426,7 +433,9 @@ async def test_claim_token_sets_accepted_at_after_password_written():
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
         patch("litellm.proxy.proxy_server.master_key", "sk-test"),
-        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch(  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
         patch("litellm.proxy.proxy_server.premium_user", False),
         patch(
             "litellm.proxy.proxy_server.generate_key_helper_fn",
@@ -483,7 +492,9 @@ async def test_claim_token_rolls_back_invite_when_session_key_mint_fails():
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
         patch("litellm.proxy.proxy_server.master_key", "sk-test"),
-        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch(  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
         patch(
             "litellm.proxy.proxy_server.generate_key_helper_fn",
             new_callable=AsyncMock,
@@ -505,3 +516,124 @@ async def test_claim_token_rolls_back_invite_when_session_key_mint_fails():
     }
     assert rollback_kwargs["data"]["accepted_at"] is None
     assert rollback_kwargs["data"]["is_accepted"] is False
+
+
+# ---------------------------------------------------------------------------
+# POST /onboarding/claim_token - password policy
+# ---------------------------------------------------------------------------
+
+
+def _hibp_url_for(password: str) -> str:
+    sha1 = hashlib.sha1(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()
+    return f"https://api.pwnedpasswords.com/range/{sha1[:5]}"
+
+
+def _hibp_suffix_for(password: str) -> str:
+    return hashlib.sha1(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()[5:]
+
+
+@pytest.mark.asyncio
+async def test_claim_token_rejects_short_password_before_consuming_invite():
+    """Default policy requires 12 characters; the invite must stay claimable."""
+    from litellm.proxy.proxy_server import claim_onboarding_link
+
+    invite = _make_invite(is_accepted=False)
+    prisma = _make_prisma(invite, _make_user())
+    request = _make_claim_request(_make_onboarding_token())
+    data = InvitationClaim(
+        invitation_link="invite-abc",
+        user_id="user-123",
+        password="Sh0rt!pw",
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
+        patch("litellm.proxy.proxy_server.master_key", "sk-test"),  # test-quality-ok: same as above
+        patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: same as above
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await claim_onboarding_link(data=data, request=request)
+
+    assert exc_info.value.code == "400"
+    assert "at least 12 characters" in exc_info.value.message
+    prisma.db.litellm_invitationlink.update_many.assert_not_called()
+    prisma.db.litellm_usertable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_claim_token_rejects_breached_password_before_consuming_invite():
+    """A password found in the HIBP corpus must be rejected and never stored."""
+    from litellm.proxy.proxy_server import claim_onboarding_link
+
+    password = "P@ssword123456"
+    respx.get(_hibp_url_for(password)).mock(
+        return_value=httpx.Response(200, text=f"{_hibp_suffix_for(password)}:1387")
+    )
+
+    invite = _make_invite(is_accepted=False)
+    prisma = _make_prisma(invite, _make_user())
+    request = _make_claim_request(_make_onboarding_token())
+    data = InvitationClaim(
+        invitation_link="invite-abc",
+        user_id="user-123",
+        password=password,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
+        patch("litellm.proxy.proxy_server.master_key", "sk-test"),  # test-quality-ok: same as above
+        patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: same as above
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await claim_onboarding_link(data=data, request=request)
+
+    assert exc_info.value.code == "400"
+    assert "data breaches" in exc_info.value.message
+    prisma.db.litellm_invitationlink.update_many.assert_not_called()
+    prisma.db.litellm_usertable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_claim_token_fails_open_when_hibp_unreachable():
+    """An HIBP outage must never block onboarding: the claim proceeds."""
+    from litellm.proxy.proxy_server import claim_onboarding_link
+
+    password = "NewP@ssw0rd-2026"
+    respx.get(_hibp_url_for(password)).mock(side_effect=httpx.ConnectError("no route to host"))
+
+    invite = _make_invite(is_accepted=False)
+    user = _make_user()
+    prisma = _make_prisma(invite, user)
+    request = _make_claim_request(_make_onboarding_token())
+    data = InvitationClaim(
+        invitation_link="invite-abc",
+        user_id="user-123",
+        password=password,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
+        patch("litellm.proxy.proxy_server.master_key", "sk-test"),  # test-quality-ok: same as above
+        patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: same as above
+        patch("litellm.proxy.proxy_server.premium_user", False),  # test-quality-ok: same as above
+        patch(  # test-quality-ok: same as above
+            "litellm.proxy.proxy_server.generate_key_helper_fn",
+            new_callable=AsyncMock,
+            return_value={"token": "sk-generated-key", "user_id": "user-123"},
+        ),
+        patch(  # test-quality-ok: same as above
+            "litellm.proxy.proxy_server.get_custom_url",
+            return_value="http://localhost:4000/",
+        ),
+        patch(  # test-quality-ok: same as above
+            "litellm.proxy.proxy_server.get_disabled_non_admin_personal_key_creation",
+            return_value=False,
+        ),
+        patch("litellm.proxy.proxy_server.get_server_root_path", return_value=""),  # test-quality-ok: same as above
+    ):
+        result = await claim_onboarding_link(data=data, request=request)
+
+    assert "token" in result
+    prisma.db.litellm_usertable.update.assert_called_once()

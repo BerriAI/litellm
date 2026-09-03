@@ -2,20 +2,52 @@
 Tests for the configurable password-strength policy in
 `litellm.proxy.auth.password_policy`, enforced on every path that persists a
 new or changed password for a locally-managed user.
+
+The breach-check (HIBP) tests inject a real AsyncHTTPHandler wrapping an
+httpx.MockTransport, so no network is touched and nothing is monkeypatched.
 """
 
+import hashlib
+
+import httpx
 import pytest
 
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.password_policy import (
     DEFAULT_MIN_LENGTH,
     MIN_ALLOWED_LENGTH,
     PasswordPolicy,
     get_password_policy,
+    validate_password_not_breached,
     validate_password_policy,
 )
 
 STRONG_PASSWORD = "Str0ng!Passw0rd"
+
+
+def _sha1_upper(password: str) -> str:
+    return hashlib.sha1(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()
+
+
+def _client_with_transport(handler) -> AsyncHTTPHandler:
+    http_handler = AsyncHTTPHandler()
+    http_handler.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return http_handler
+
+
+def _client_never_called() -> AsyncHTTPHandler:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"unexpected HTTP call to {request.url}")
+
+    return _client_with_transport(handler)
+
+
+def _client_returning(body: str, status_code: int = 200) -> AsyncHTTPHandler:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, text=body)
+
+    return _client_with_transport(handler)
 
 
 def test_get_password_policy_defaults_to_pif_baseline():
@@ -134,3 +166,105 @@ def test_validate_password_policy_rejects_unicode_letter_as_special_character():
 def test_validate_password_policy_accepts_real_special_character_with_unicode_letters():
     """Same base password as the rejection test above, plus an actual symbol."""
     assert validate_password_policy("Passwörd1234!", {}) is None
+
+
+@pytest.mark.asyncio
+async def test_breach_check_skipped_when_disabled():
+    result = await validate_password_not_breached(
+        password="password12345",  # breached in reality, but the check is off
+        general_settings={"password_policy_check_breached_passwords": False},
+        client=_client_never_called(),
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_rejects_breached_password():
+    password = "correct horse battery staple"
+    sha1 = _sha1_upper(password)
+    body = f"AAAA000000000000000000000000000000A:0\r\n{sha1[5:]}:42\r\nBBBB000000000000000000000000000000B:7"
+
+    with pytest.raises(ProxyException) as exc_info:
+        await validate_password_not_breached(password=password, general_settings={}, client=_client_returning(body))
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == ProxyErrorTypes.validation_error
+    assert exc_info.value.param == "password"
+    assert "data breaches" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_only_sha1_prefix_leaves_the_proxy():
+    password = "a very secret password"
+    sha1 = _sha1_upper(password)
+    captured_requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(200, text="0000000000000000000000000000000000A:1")
+
+    result = await validate_password_not_breached(
+        password=password, general_settings={}, client=_client_with_transport(handler)
+    )
+    assert result is None
+
+    (request,) = captured_requests
+    assert request.url.path == f"/range/{sha1[:5]}"
+    assert sha1[5:] not in str(request.url)
+    assert request.headers["Add-Padding"] == "true"
+    assert "litellm" in request.headers["User-Agent"]
+
+
+@pytest.mark.asyncio
+async def test_ignores_padding_entries_with_zero_count():
+    """HIBP padding entries (requested via Add-Padding) carry count 0 and must
+    not be treated as breaches when they collide with the password's suffix."""
+    password = "a padded-away password"
+    sha1 = _sha1_upper(password)
+
+    result = await validate_password_not_breached(
+        password=password, general_settings={}, client=_client_returning(f"{sha1[5:]}:0")
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_accepts_password_absent_from_breach_corpus():
+    result = await validate_password_not_breached(
+        password="a genuinely novel password",
+        general_settings={},
+        client=_client_returning("0018A45C4D1DEF81644B54AB7F969B88D65:1\r\n00D4F6E8FA6EECAD2A3AA415EEC418D38EC:2"),
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_breach_check_fails_open_on_network_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no route to host")
+
+    result = await validate_password_not_breached(
+        password="password12345",  # breached, but HIBP is unreachable
+        general_settings={},
+        client=_client_with_transport(handler),
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_breach_check_fails_open_on_http_error_status():
+    result = await validate_password_not_breached(
+        password="password12345",
+        general_settings={},
+        client=_client_returning("service unavailable", status_code=503),
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_breach_check_fails_open_on_malformed_response_body():
+    result = await validate_password_not_breached(
+        password="password12345",
+        general_settings={},
+        client=_client_returning(f"{_sha1_upper('password12345')[5:]}:not-a-number"),
+    )
+    assert result is None
