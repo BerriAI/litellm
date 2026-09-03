@@ -11226,9 +11226,7 @@ async def audio_speech(
         if isinstance(e, ProxyException):
             raise e
         if isinstance(e, HTTPException):
-            http_status_code: Final = (
-                e.status_code if isinstance(e.status_code, int) else status.HTTP_400_BAD_REQUEST
-            )
+            http_status_code: Final = e.status_code if isinstance(e.status_code, int) else status.HTTP_400_BAD_REQUEST
             raise ProxyException(
                 message=str(e.detail),
                 type=getattr(e, "type", "None"),
