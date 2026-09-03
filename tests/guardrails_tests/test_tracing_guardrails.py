@@ -808,7 +808,68 @@ def test_guardrail_status_fields_computation():
     assert status_fields_no_guardrail.get("guardrail_status") == "not_run"
 
 
-def test_guardrail_status_fields_severity_across_entries():
+@pytest.mark.parametrize(
+    "status, guardrail_information, expected_guardrail_status",
+    [
+        pytest.param(
+            "failure",
+            [
+                {"guardrail_status": "success"},
+                {"guardrail_status": "guardrail_intervened"},
+            ],
+            "guardrail_intervened",
+            id="pre_call_success_before_blocker",
+        ),
+        pytest.param(
+            "failure",
+            [
+                {"guardrail_status": "guardrail_intervened"},
+                {"guardrail_status": "success"},
+            ],
+            "guardrail_intervened",
+            id="blocker_before_success",
+        ),
+        pytest.param(
+            "failure",
+            [
+                {"guardrail_status": "success"},
+                {"guardrail_status": "guardrail_failed_to_respond"},
+            ],
+            "guardrail_failed_to_respond",
+            id="failure_outranks_success",
+        ),
+        pytest.param(
+            "failure",
+            [
+                {"guardrail_status": "guardrail_failed_to_respond"},
+                {"guardrail_status": "guardrail_intervened"},
+            ],
+            "guardrail_intervened",
+            id="intervention_outranks_failure",
+        ),
+        pytest.param(
+            "success",
+            [
+                {"guardrail_status": "success"},
+                {"guardrail_status": "success"},
+            ],
+            "success",
+            id="all_success_stays_success",
+        ),
+        pytest.param(
+            "failure",
+            [
+                {"guardrail_status": "some_new_status"},
+                {"guardrail_status": "blocked"},
+            ],
+            "guardrail_intervened",
+            id="unknown_status_does_not_mask_blocker",
+        ),
+    ],
+)
+def test_guardrail_status_fields_severity_across_entries(
+    status, guardrail_information, expected_guardrail_status
+):
     """
     A blocked request must never be reported as a guardrail success.
 
@@ -820,62 +881,7 @@ def test_guardrail_status_fields_severity_across_entries():
     """
     from litellm.litellm_core_utils.litellm_logging import _get_status_fields
 
-    # pre_call success recorded BEFORE the blocking guardrail's entry
-    masked_then_blocked = [
-        {"guardrail_status": "success"},
-        {"guardrail_status": "guardrail_intervened"},
-    ]
     fields = _get_status_fields(
-        status="failure", guardrail_information=masked_then_blocked, error_str=None
+        status=status, guardrail_information=guardrail_information, error_str=None
     )
-    assert fields.get("guardrail_status") == "guardrail_intervened"
-
-    # order-independence: blocker first, success second
-    blocked_then_success = [
-        {"guardrail_status": "guardrail_intervened"},
-        {"guardrail_status": "success"},
-    ]
-    fields = _get_status_fields(
-        status="failure", guardrail_information=blocked_then_success, error_str=None
-    )
-    assert fields.get("guardrail_status") == "guardrail_intervened"
-
-    # a guardrail failure outranks a sibling's success
-    success_then_failure = [
-        {"guardrail_status": "success"},
-        {"guardrail_status": "guardrail_failed_to_respond"},
-    ]
-    fields = _get_status_fields(
-        status="failure", guardrail_information=success_then_failure, error_str=None
-    )
-    assert fields.get("guardrail_status") == "guardrail_failed_to_respond"
-
-    # an intervention outranks a sibling's failure
-    failure_then_intervened = [
-        {"guardrail_status": "guardrail_failed_to_respond"},
-        {"guardrail_status": "guardrail_intervened"},
-    ]
-    fields = _get_status_fields(
-        status="failure", guardrail_information=failure_then_intervened, error_str=None
-    )
-    assert fields.get("guardrail_status") == "guardrail_intervened"
-
-    # all-success stays success
-    all_success = [
-        {"guardrail_status": "success"},
-        {"guardrail_status": "success"},
-    ]
-    fields = _get_status_fields(
-        status="success", guardrail_information=all_success, error_str=None
-    )
-    assert fields.get("guardrail_status") == "success"
-
-    # an unknown status is ignored rather than masking a later entry
-    unknown_then_blocked = [
-        {"guardrail_status": "some_new_status"},
-        {"guardrail_status": "blocked"},
-    ]
-    fields = _get_status_fields(
-        status="failure", guardrail_information=unknown_then_blocked, error_str=None
-    )
-    assert fields.get("guardrail_status") == "guardrail_intervened"
+    assert fields.get("guardrail_status") == expected_guardrail_status

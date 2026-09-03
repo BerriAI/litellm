@@ -5854,24 +5854,29 @@ def _get_status_fields(
     #########################################################
     # Map - guardrail_information.guardrail_status to guardrail_status
     #########################################################
-    # Aggregate across ALL guardrail entries by severity, not first-wins: a
+    # Severity order, least severe first. The status aggregates across ALL
+    # guardrail entries rather than taking the first non-"not_run" one: a
     # pre_call guardrail that passed (e.g. a mask) records its entry before a
-    # later guardrail's block, and taking the first non-"not_run" entry would
-    # report a blocked request as "success".
-    GUARDRAIL_STATUS_PRECEDENCE: Final[dict[GuardrailStatus, int]] = {
-        "guardrail_intervened": 3,
-        "guardrail_failed_to_respond": 2,
-        "success": 1,
-        "not_run": 0,
-    }
-    guardrail_status: GuardrailStatus = "not_run"
-    if guardrail_information and isinstance(guardrail_information, list):
-        for information in guardrail_information:
-            if isinstance(information, dict):
-                raw_status = information.get("guardrail_status", "not_run")
-                mapped_status = GUARDRAIL_STATUS_MAP.get(raw_status, "not_run")
-                if GUARDRAIL_STATUS_PRECEDENCE[mapped_status] > GUARDRAIL_STATUS_PRECEDENCE[guardrail_status]:
-                    guardrail_status = mapped_status
+    # later guardrail's block, and first-wins would report a blocked request
+    # as "success".
+    GUARDRAIL_STATUS_SEVERITY: Final[tuple[GuardrailStatus, ...]] = (
+        "not_run",
+        "success",
+        "guardrail_failed_to_respond",
+        "guardrail_intervened",
+    )
+    entries: Final[Sequence[object]] = (
+        guardrail_information if isinstance(guardrail_information, list) else ()
+    )
+    guardrail_status: Final[GuardrailStatus] = max(
+        (
+            GUARDRAIL_STATUS_MAP.get(entry.get("guardrail_status", "not_run"), "not_run")
+            for entry in entries
+            if isinstance(entry, dict)
+        ),
+        key=GUARDRAIL_STATUS_SEVERITY.index,
+        default="not_run",
+    )
 
     return StandardLoggingPayloadStatusFields(llm_api_status=llm_api_status, guardrail_status=guardrail_status)
 
