@@ -7,6 +7,7 @@ from ...shared.reporting.models import SDK_FUNCTIONS, Coverage
 from ...shared.reporting.strategy import (
     CaseDefinition,
     NotImplementedCaseSpec,
+    RunnerArgumentDefinition,
     StrategyDefinition,
     SuiteCaseSpec,
 )
@@ -37,4 +38,9 @@ STRATEGY: Final = StrategyDefinition(
     cases=CASES,
     run=run_mapping_cases,
     render=render_mapping_results,
+    runner_argument=RunnerArgumentDefinition(
+        option="--detail",
+        metavar="MODE",
+        help="show individual test names; any value enables full detail",
+    ),
 )

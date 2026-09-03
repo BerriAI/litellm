@@ -236,7 +236,7 @@ def _assert_unavailable_cell(strategy: Strategy, case: HarnessCase, section_titl
     expected_result: Final = "NOT RUN" if expected is RunStatus.NOT_IMPLEMENTED else "SKIPPED"
     expected_implemented: Final = 0 if expected is RunStatus.NOT_IMPLEMENTED else 1
     assert f"Result: {expected_result}" in report
-    assert f"Coverage: {expected_implemented}/1 cases implemented" in report
+    assert f"Harness support: {expected_implemented}/1 cases implemented" in report
 
 
 def test_every_unavailable_case_finishes_and_explains_itself() -> None:
@@ -264,7 +264,7 @@ def test_every_unavailable_case_finishes_and_explains_itself() -> None:
         ("e2e_parity", "--surface", "--pytest-arg"),
         ("trace_parity", "--surface", "--pytest-arg"),
         ("unit_tests_parity", "--pytest-arg", "--surface"),
-        ("unit_tests_mapping", "--function", "--surface"),
+        ("unit_tests_mapping", "--detail", "--surface"),
         ("unit_tests_rust", "--function", "--surface"),
     ),
 )
@@ -407,7 +407,7 @@ def test_run_reports_not_implemented_surface_as_not_run(
 
     assert exit_code == 0
     assert "Result: NOT RUN" in captured.out
-    assert "Coverage: 0/1 cases implemented" in captured.out
+    assert "Harness support: 0/1 cases implemented" in captured.out
     assert "Cases: 1 selected, 1 not implemented, 0 skipped" in captured.out
     assert "Not implemented" in captured.out
     assert "No gateway OCR trace-parity case is registered." in captured.out

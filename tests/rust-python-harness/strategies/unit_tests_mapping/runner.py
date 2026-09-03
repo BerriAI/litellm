@@ -39,6 +39,7 @@ def _run_mapping_case(
     suites: Mapping[SdkFunction, MappingSuite],
     python_inventory: PythonInventory,
     rust_inventory: RustInventory,
+    detailed: bool,
 ) -> None:
     result: Final = report.results[case.key]
     spec: Final = case.spec
@@ -65,7 +66,10 @@ def _run_mapping_case(
         report.failures.append((nodeid, str(error)))
         return
     problems: Final = _audit_problems(audit)
-    artifact: Final = ResultArtifact(MAPPING_REPORT_ARTIFACT, "\n".join(mapping_report_lines(audit)))
+    artifact: Final = ResultArtifact(
+        MAPPING_REPORT_ARTIFACT,
+        "\n".join(mapping_report_lines(audit, detailed=detailed)),
+    )
     result.record(nodeid, RunStatus.FAILED if problems else RunStatus.PASSED, artifacts=(artifact,))
     report.failures.extend((nodeid, problem) for problem in problems)
     on_update(report)
@@ -81,10 +85,19 @@ def run_mapping_cases(
     python_inventory: PythonInventory = collect_python_tests,
     rust_inventory: RustInventory = enumerate_rust_tests,
 ) -> tuple[int, HarnessRun]:
-    del runner_args
     report: Final = HarnessRun.from_cases(cases)
+    detailed: Final = bool(runner_args)
     for case in cases:
-        _run_mapping_case(case, repo_root, report, on_update, suites, python_inventory, rust_inventory)
+        _run_mapping_case(
+            case,
+            repo_root,
+            report,
+            on_update,
+            suites,
+            python_inventory,
+            rust_inventory,
+            detailed,
+        )
     report.finished_at = monotonic()
     on_update(report)
     failed: Final = any(

@@ -15,7 +15,9 @@ def _render_result(result: CaseResult) -> str:
         for artifact in artifacts
         if artifact.kind == MAPPING_REPORT_ARTIFACT
     )
-    return "\n".join((render_case_outcome(result), *reports))
+    if reports:
+        return "\n".join((f"Case: {result.case.display_name}", *reports))
+    return render_case_outcome(result)
 
 
 def render_mapping_results(results: Sequence[CaseResult]) -> tuple[ReportSection, ...]:

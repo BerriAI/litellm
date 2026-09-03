@@ -122,7 +122,7 @@ def test_report_separates_successful_execution_from_incomplete_coverage() -> Non
 
     assert code == 0
     assert "Result: PASSED" in rendered
-    assert "Coverage: 1/2 cases implemented" in rendered
+    assert "Harness support: 1/2 cases implemented" in rendered
     assert "Cases: 2 selected, 1 not implemented, 0 skipped" in rendered
 
 

@@ -144,7 +144,7 @@ def final_report(run: HarnessRun, exit_code: int, strategies: Sequence[Strategy]
     summary: Final = (
         "Rust <-> Python parity report\n\n"
         f"Result: {run_result}\n"
-        f"Coverage: {implemented}/{len(statuses)} cases implemented\n"
+        f"Harness support: {implemented}/{len(statuses)} cases implemented\n"
         f"Cases: {len(statuses)} selected, {not_implemented} not implemented, {skipped_cells} skipped\n"
         f"Checks: {run.completed_checks}/{run.unique_checks} completed, {passed} passed, "
         f"{failed} failed, {errors} errors, {skipped} skipped\n"
