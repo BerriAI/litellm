@@ -660,6 +660,15 @@ from litellm.proxy.utils import (
 )
 from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.repositories.base_repository import SupportsModelDump
+from litellm.repositories.config_repository import (
+    LITELLM_SETTINGS_PARAM,
+    ConfigRepository,
+    SettingsApplied,
+    SettingsRejected,
+    SettingsTransform,
+    SettingsUpdate,
+    decode_settings,
+)
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.router import (
@@ -4602,6 +4611,35 @@ class ProxyConfig:
             },
         )
         await invalidate_config_param("environment_variables")
+
+    async def update_litellm_settings(self, apply: SettingsTransform) -> SettingsUpdate:
+        """Apply ``apply`` to the persisted ``litellm_settings`` and persist what it returns.
+
+        DB-backed config takes the atomic single-row path, so callers racing each other
+        serialize instead of losing one another's writes. Without a DB the config is a
+        YAML file a single process owns, so the read-modify-write there stays the
+        existing ``get_config``/``save_config`` pair.
+        """
+        if prisma_client is not None and (
+            general_settings.get("store_model_in_db", False) is True or store_model_in_db
+        ):
+            db_result: Final = await ConfigRepository(prisma_client).update_litellm_settings(apply)
+            match db_result:
+                case SettingsApplied():
+                    await invalidate_config_param(LITELLM_SETTINGS_PARAM)
+                case SettingsRejected():
+                    pass
+            return db_result
+
+        config: Final = await self.get_config()
+        file_result: Final = apply(decode_settings(config.get(LITELLM_SETTINGS_PARAM)))
+        match file_result:
+            case SettingsApplied(settings=settings):
+                config[LITELLM_SETTINGS_PARAM] = dict(settings)
+                await self.save_config(new_config=config)
+            case SettingsRejected():
+                pass
+        return file_result
 
     def _check_for_os_environ_vars(
         self, config: dict, depth: int = 0, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH
@@ -12325,7 +12363,6 @@ async def run_thread(
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
-from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     AccessGroupRepository,

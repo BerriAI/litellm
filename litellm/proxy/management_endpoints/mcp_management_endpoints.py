@@ -36,7 +36,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 try:
     from prisma.errors import RecordNotFoundError, UniqueViolationError
@@ -67,6 +67,11 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 from litellm.proxy.management_helpers.audit_logs import (
     get_audit_log_changed_by,
     is_audit_logging_enabled,
+)
+from litellm.repositories.config_repository import (
+    SettingsApplied,
+    SettingsRejected,
+    SettingsUpdate,
 )
 from litellm.repositories.table_repositories import (
     MCPServerRepository,
@@ -2782,8 +2787,6 @@ if MCP_AVAILABLE:
             )
             from litellm.proxy.proxy_server import proxy_config
 
-            # Load existing config
-            config: Final = await proxy_config.get_config()
             # Check if user has admin permissions
             if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
                 raise HTTPException(
@@ -2793,9 +2796,6 @@ if MCP_AVAILABLE:
                     },
                 )
 
-            if litellm.public_mcp_servers is None:
-                litellm.public_mcp_servers = []
-
             for server_id in request.mcp_server_ids:
                 server = global_mcp_server_manager.get_mcp_server_by_id(server_id=server_id)
                 if server is None:
@@ -2804,26 +2804,28 @@ if MCP_AVAILABLE:
                         detail=f"MCP Server with ID {server_id} not found",
                     )
 
-            litellm.public_mcp_servers = request.mcp_server_ids
+            def publish_mcp_servers(settings: Mapping[str, object]) -> SettingsUpdate:
+                return SettingsApplied(settings={**settings, "public_mcp_servers": request.mcp_server_ids})
 
-            # Update config with new settings
-            if "litellm_settings" not in config or config["litellm_settings"] is None:
-                config["litellm_settings"] = {}
+            result: Final = await proxy_config.update_litellm_settings(publish_mcp_servers)
+            match result:
+                case SettingsRejected(reason=reason):
+                    raise HTTPException(status_code=400, detail=reason)
+                case SettingsApplied():
+                    litellm.public_mcp_servers = request.mcp_server_ids
 
-            config["litellm_settings"]["public_mcp_servers"] = litellm.public_mcp_servers
+                    verbose_proxy_logger.debug(
+                        "Updated public mcp servers to: %s by user: %s",
+                        request.mcp_server_ids,
+                        user_api_key_dict.user_id,
+                    )
 
-            # Save the updated config
-            await proxy_config.save_config(new_config=config)
-
-            verbose_proxy_logger.debug(
-                "Updated public mcp servers to: %s by user: %s", litellm.public_mcp_servers, user_api_key_dict.user_id
-            )
-
-            return {
-                "message": "Successfully updated public mcp servers",
-                "public_mcp_servers": litellm.public_mcp_servers,
-                "updated_by": user_api_key_dict.user_id,
-            }
+                    return {
+                        "message": "Successfully updated public mcp servers",
+                        "public_mcp_servers": request.mcp_server_ids,
+                        "updated_by": user_api_key_dict.user_id,
+                    }
+            assert_never(result)
         except HTTPException:
             raise
         except Exception as e:

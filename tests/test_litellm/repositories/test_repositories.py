@@ -2,8 +2,10 @@
 Tests for gateway repository layer.
 """
 
+import asyncio
 import json
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,7 +17,12 @@ from litellm.models.credentials import CredentialItem
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.config_repository import (
+    ConfigRepository,
+    SettingsApplied,
+    SettingsRejected,
+    public_hub_list,
+)
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.object_permission_repository import (
@@ -2387,3 +2394,171 @@ class TestCountBillableUsers:
         client.db.litellm_usertable = _RacyTable()
         repo = UserRepository(client)
         assert await repo.count_billable_users() == 0
+
+
+class _RacyConfigTable:
+    """One `LiteLLM_Config` row store whose reads are slow enough for two writers to
+    interleave, which is what makes an unserialized read-modify-write lose an entry."""
+
+    def __init__(self, rows: Dict[str, str], read_delay: float):
+        self.rows = rows
+        self.read_delay = read_delay
+
+    async def find_unique(self, *, where):
+        param_name = where["param_name"]
+        param_value = self.rows.get(param_name)
+        await asyncio.sleep(self.read_delay)
+        if param_value is None:
+            return None
+        return SimpleNamespace(param_name=param_name, param_value=param_value)
+
+    async def upsert(self, *, where, data):
+        param_name = where["param_name"]
+        self.rows[param_name] = data["update"]["param_value"]
+        return SimpleNamespace(param_name=param_name, param_value=self.rows[param_name])
+
+
+class _AdvisoryLockTx:
+    """Emulates `pg_advisory_xact_lock`: the lock is taken by the raw query and released
+    only when the surrounding transaction ends."""
+
+    def __init__(self, table, locks):
+        self.litellm_config = table
+        self._locks = locks
+        self._held = None
+
+    async def query_raw(self, query, *args):
+        if "pg_advisory_xact_lock" not in query:
+            return []
+        self._held = self._locks.setdefault(args[0], asyncio.Lock())
+        await self._held.acquire()
+        return [{"locked": True}]
+
+    def release(self):
+        if self._held is not None:
+            self._held.release()
+            self._held = None
+
+
+class _AdvisoryLockTxManager:
+    def __init__(self, table, locks):
+        self._tx = _AdvisoryLockTx(table, locks)
+
+    async def __aenter__(self):
+        return self._tx
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        self._tx.release()
+        return None
+
+
+class _RacyConfigPrisma:
+    def __init__(self, rows=None, read_delay: float = 0.05):
+        self.table = _RacyConfigTable(dict(rows or {}), read_delay)
+        self.locks: Dict[str, asyncio.Lock] = {}
+        self.db = SimpleNamespace(litellm_config=self.table)
+
+    def tx(self):
+        return _AdvisoryLockTxManager(self.table, self.locks)
+
+
+def _append_public_agent(agent_id: str):
+    def apply(settings):
+        current = public_hub_list(settings, "public_agent_groups", ())
+        return SettingsApplied(
+            settings={**settings, "public_agent_groups": [*current, agent_id]}
+        )
+
+    return apply
+
+
+class TestConfigRepositoryAtomicSettings:
+    """`update_litellm_settings` is the AI Hub publish path: two publishes in flight at
+    once must both survive, and neither may rewrite an unrelated config row."""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_publishes_keep_both_entries(self):
+        prisma = _RacyConfigPrisma()
+        repo = ConfigRepository(prisma)
+
+        await asyncio.gather(
+            repo.update_litellm_settings(_append_public_agent("agent-1")),
+            repo.update_litellm_settings(_append_public_agent("agent-2")),
+        )
+
+        stored = json.loads(prisma.table.rows["litellm_settings"])
+        assert sorted(stored["public_agent_groups"]) == ["agent-1", "agent-2"]
+
+    @pytest.mark.asyncio
+    async def test_unserialized_read_modify_write_loses_one_entry(self):
+        """Proves the rig above really does interleave: the pre-fix shape, which read the
+        row outside any lock, drops whichever publish read first."""
+        prisma = _RacyConfigPrisma()
+
+        async def publish_without_the_lock(agent_id: str):
+            record = await prisma.table.find_unique(where={"param_name": "litellm_settings"})
+            settings = json.loads(record.param_value) if record is not None else {}
+            current = list(settings.get("public_agent_groups", []))
+            await prisma.table.upsert(
+                where={"param_name": "litellm_settings"},
+                data={
+                    "create": {},
+                    "update": {
+                        "param_value": json.dumps(
+                            {**settings, "public_agent_groups": [*current, agent_id]}
+                        )
+                    },
+                },
+            )
+
+        await asyncio.gather(
+            publish_without_the_lock("agent-1"),
+            publish_without_the_lock("agent-2"),
+        )
+
+        stored = json.loads(prisma.table.rows["litellm_settings"])
+        assert len(stored["public_agent_groups"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_publish_leaves_other_config_rows_untouched(self):
+        """A publish owns one key, so it must not rewrite `general_settings` from
+        whatever snapshot it happened to load."""
+        prisma = _RacyConfigPrisma(
+            rows={"general_settings": json.dumps({"master_key": "sk-original"})}
+        )
+        repo = ConfigRepository(prisma)
+
+        await repo.update_litellm_settings(_append_public_agent("agent-1"))
+
+        assert json.loads(prisma.table.rows["general_settings"]) == {
+            "master_key": "sk-original"
+        }
+
+    @pytest.mark.asyncio
+    async def test_publish_sees_the_value_written_under_the_lock(self):
+        """The transform is handed the row read inside its own transaction, so the second
+        publish's duplicate check runs against the first publish's write."""
+        prisma = _RacyConfigPrisma()
+        repo = ConfigRepository(prisma)
+        seen = []
+
+        def record_then_append(settings):
+            seen.append(public_hub_list(settings, "public_agent_groups", ()))
+            return _append_public_agent("agent-2")(settings)
+
+        await repo.update_litellm_settings(_append_public_agent("agent-1"))
+        await repo.update_litellm_settings(record_then_append)
+
+        assert seen == [("agent-1",)]
+
+    @pytest.mark.asyncio
+    async def test_rejected_transform_writes_nothing(self):
+        prisma = _RacyConfigPrisma()
+        repo = ConfigRepository(prisma)
+
+        result = await repo.update_litellm_settings(
+            lambda settings: SettingsRejected(reason="already public")
+        )
+
+        assert isinstance(result, SettingsRejected)
+        assert "litellm_settings" not in prisma.table.rows

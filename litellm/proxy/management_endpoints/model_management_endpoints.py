@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -74,6 +75,11 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
     is_ptu_cost_attribution_enabled,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.repositories.config_repository import (
+    SettingsApplied,
+    SettingsRejected,
+    SettingsUpdate,
+)
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ModelTableRepository
@@ -2147,32 +2153,26 @@ async def update_public_model_groups(
                 detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
             )
 
-        # Load existing config first (this may overwrite in-memory litellm settings
-        # from DB values via _update_config_from_db), so set the in-memory value AFTER
-        config: Final = await proxy_config.get_config()
+        def publish_model_groups(settings: Mapping[str, object]) -> SettingsUpdate:
+            return SettingsApplied(settings={**settings, "public_model_groups": request.model_groups})
 
-        # Update config with new settings
-        if "litellm_settings" not in config:
-            config["litellm_settings"] = {}
+        result: Final = await proxy_config.update_litellm_settings(publish_model_groups)
+        match result:
+            case SettingsRejected(reason=reason):
+                raise HTTPException(status_code=400, detail=reason)
+            case SettingsApplied():
+                litellm.public_model_groups = request.model_groups
 
-        config["litellm_settings"]["public_model_groups"] = request.model_groups
+                verbose_proxy_logger.debug(
+                    "Updated public model groups to: %s by user: %s", request.model_groups, user_api_key_dict.user_id
+                )
 
-        # Save the updated config
-        await proxy_config.save_config(new_config=config)
-
-        # Set in-memory value AFTER get_config() and save_config() to avoid
-        # get_config() overwriting with stale DB value
-        litellm.public_model_groups = request.model_groups
-
-        verbose_proxy_logger.debug(
-            "Updated public model groups to: %s by user: %s", request.model_groups, user_api_key_dict.user_id
-        )
-
-        return {
-            "message": "Successfully updated public model groups",
-            "public_model_groups": request.model_groups,
-            "updated_by": user_api_key_dict.user_id,
-        }
+                return {
+                    "message": "Successfully updated public model groups",
+                    "public_model_groups": request.model_groups,
+                    "updated_by": user_api_key_dict.user_id,
+                }
+        assert_never(result)
 
     except Exception as e:
         verbose_proxy_logger.exception("Error updating public model groups: %s", e)
@@ -2215,32 +2215,26 @@ async def update_useful_links(
                 },
             )
 
-        # Load existing config first (this may overwrite in-memory litellm settings
-        # from DB values via _update_config_from_db), so set the in-memory value AFTER
-        config: Final = await proxy_config.get_config()
+        def publish_useful_links(settings: Mapping[str, object]) -> SettingsUpdate:
+            return SettingsApplied(settings={**settings, "public_model_groups_links": request.useful_links})
 
-        # Update config with new settings
-        if "litellm_settings" not in config:
-            config["litellm_settings"] = {}
+        result: Final = await proxy_config.update_litellm_settings(publish_useful_links)
+        match result:
+            case SettingsRejected(reason=reason):
+                raise HTTPException(status_code=400, detail=reason)
+            case SettingsApplied():
+                litellm.public_model_groups_links = request.useful_links
 
-        config["litellm_settings"]["public_model_groups_links"] = request.useful_links
+                verbose_proxy_logger.debug(
+                    "Updated useful links to: %s by user: %s", request.useful_links, user_api_key_dict.user_id
+                )
 
-        # Save the updated config
-        await proxy_config.save_config(new_config=config)
-
-        # Set in-memory value AFTER get_config() and save_config() to avoid
-        # get_config() overwriting with stale DB value
-        litellm.public_model_groups_links = request.useful_links
-
-        verbose_proxy_logger.debug(
-            "Updated useful links to: %s by user: %s", request.useful_links, user_api_key_dict.user_id
-        )
-
-        return {
-            "message": "Successfully updated useful links",
-            "useful_links": request.useful_links,
-            "updated_by": user_api_key_dict.user_id,
-        }
+                return {
+                    "message": "Successfully updated useful links",
+                    "useful_links": request.useful_links,
+                    "updated_by": user_api_key_dict.user_id,
+                }
+        assert_never(result)
 
     except Exception as e:
         verbose_proxy_logger.exception("Error updating public model groups: %s", e)

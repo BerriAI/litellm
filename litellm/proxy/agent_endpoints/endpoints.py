@@ -49,6 +49,12 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.utils import get_custom_url
+from litellm.repositories.config_repository import (
+    SettingsApplied,
+    SettingsRejected,
+    SettingsUpdate,
+    public_hub_list,
+)
 from litellm.types.agents import (
     AgentCard,
     AgentConfig,
@@ -939,34 +945,34 @@ async def make_agent_public(
             if agent is None:
                 raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
-        config: Final = await proxy_config.get_config()
+        public_agent: Final = agent
 
-        current_public_agent_groups: Final = list(litellm.public_agent_groups or [])
-        if not AGENT_REGISTRY.ids_for_agent(agent.agent_id).isdisjoint(current_public_agent_groups):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Agent with name {agent.agent_name} already in public agent groups",
-            )
-        updated_public_agent_groups: Final = [*current_public_agent_groups, agent.agent_id]
+        def publish_agent(settings: Mapping[str, object]) -> SettingsUpdate:
+            current: Final = public_hub_list(settings, "public_agent_groups", litellm.public_agent_groups or ())
+            if not AGENT_REGISTRY.ids_for_agent(public_agent.agent_id).isdisjoint(current):
+                return SettingsRejected(
+                    reason=f"Agent with name {public_agent.agent_name} already in public agent groups"
+                )
+            return SettingsApplied(settings={**settings, "public_agent_groups": [*current, public_agent.agent_id]})
 
-        if "litellm_settings" not in config or config["litellm_settings"] is None:
-            config["litellm_settings"] = {}
+        result: Final = await proxy_config.update_litellm_settings(publish_agent)
+        match result:
+            case SettingsRejected(reason=reason):
+                raise HTTPException(status_code=400, detail=reason)
+            case SettingsApplied(settings=updated):
+                published: Final = list(public_hub_list(updated, "public_agent_groups", ()))
+                litellm.public_agent_groups = published
 
-        config["litellm_settings"]["public_agent_groups"] = updated_public_agent_groups
+                verbose_proxy_logger.debug(
+                    "Updated public agent groups to: %s by user: %s", published, user_api_key_dict.user_id
+                )
 
-        await proxy_config.save_config(new_config=config)
-
-        litellm.public_agent_groups = updated_public_agent_groups
-
-        verbose_proxy_logger.debug(
-            "Updated public agent groups to: %s by user: %s", updated_public_agent_groups, user_api_key_dict.user_id
-        )
-
-        return {
-            "message": "Successfully updated public agent groups",
-            "public_agent_groups": updated_public_agent_groups,
-            "updated_by": user_api_key_dict.user_id,
-        }
+                return {
+                    "message": "Successfully updated public agent groups",
+                    "public_agent_groups": published,
+                    "updated_by": user_api_key_dict.user_id,
+                }
+        assert_never(result)
     except HTTPException:
         raise
     except Exception as e:
@@ -1026,8 +1032,6 @@ async def make_agents_public(
         )
         from litellm.proxy.proxy_server import proxy_config
 
-        # Load existing config
-        config: Final = await proxy_config.get_config()
         # Check if user has admin permissions
         if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
             raise HTTPException(
@@ -1036,9 +1040,6 @@ async def make_agents_public(
                     "error": f"Only proxy admins can update public model groups. Your role={user_api_key_dict.user_role}"
                 },
             )
-
-        if litellm.public_agent_groups is None:
-            litellm.public_agent_groups = []
 
         for agent_id in request.agent_ids:
             agent = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
@@ -1051,26 +1052,26 @@ async def make_agents_public(
                 if agent is None:
                     raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
-        litellm.public_agent_groups = request.agent_ids
+        def publish_agents(settings: Mapping[str, object]) -> SettingsUpdate:
+            return SettingsApplied(settings={**settings, "public_agent_groups": request.agent_ids})
 
-        # Update config with new settings
-        if "litellm_settings" not in config or config["litellm_settings"] is None:
-            config["litellm_settings"] = {}
+        result: Final = await proxy_config.update_litellm_settings(publish_agents)
+        match result:
+            case SettingsRejected(reason=reason):
+                raise HTTPException(status_code=400, detail=reason)
+            case SettingsApplied():
+                litellm.public_agent_groups = request.agent_ids
 
-        config["litellm_settings"]["public_agent_groups"] = litellm.public_agent_groups
+                verbose_proxy_logger.debug(
+                    "Updated public agent groups to: %s by user: %s", request.agent_ids, user_api_key_dict.user_id
+                )
 
-        # Save the updated config
-        await proxy_config.save_config(new_config=config)
-
-        verbose_proxy_logger.debug(
-            "Updated public agent groups to: %s by user: %s", litellm.public_agent_groups, user_api_key_dict.user_id
-        )
-
-        return {
-            "message": "Successfully updated public agent groups",
-            "public_agent_groups": litellm.public_agent_groups,
-            "updated_by": user_api_key_dict.user_id,
-        }
+                return {
+                    "message": "Successfully updated public agent groups",
+                    "public_agent_groups": request.agent_ids,
+                    "updated_by": user_api_key_dict.user_id,
+                }
+        assert_never(result)
     except HTTPException:
         raise
     except Exception as e:
