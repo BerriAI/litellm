@@ -1,8 +1,10 @@
 import logging
 import logging.config
 import sys
+import time
 from collections.abc import Callable
 from io import StringIO
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -65,6 +67,50 @@ def test_redact_string_catches_secret_patterns():
 
     normal = "Loaded model gpt-4 with 3 replicas on us-east-1"
     assert redact_string(normal) == normal
+
+
+@pytest.mark.parametrize(
+    "connection_string",
+    [
+        "postgres://admin:pass3cret@db.example.com:5432/mydb",
+        "redis://:pass3cret@cache.example.com:6379",
+        "postgres://admin:pass/s3cret@db.example.com:5432/mydb",
+        "amqp://admin:pass:s3cret@rabbit:5672",
+        "https://ad@min:pass3cret@host",
+        # An unencoded "@" inside the password, with a ":" after it
+        "postgresql://admin:p@ss3cret:2026@db.example.com:5432/mydb",
+        "amqp://guest:gu@st3cret:1@rabbit:5672/",
+        # An AWS RDS IAM auth token is a presigned query string used as the
+        # password, so the userinfo runs to several hundred characters.
+        "postgresql://litellm:host%3A5432%2F%3FAction%3Dconnect%26X-Amz-Signature%3D"
+        + "f" * 540
+        + "s3cret@db.host:5432/litellm",
+    ],
+)
+def test_redact_string_still_catches_connection_string_credentials(connection_string):
+    """The bounded userinfo pattern must keep matching real connection strings."""
+    assert "s3cret" not in redact_string(connection_string)
+
+
+def _redaction_cost(url_bytes: int) -> float:
+    url: Final = "/x?u=" + "a://" * (url_bytes // 4)
+
+    def once() -> float:
+        started = time.perf_counter()
+        redact_string(url)
+        return time.perf_counter() - started
+
+    return min(once() for _ in range(3))
+
+
+def test_redact_string_stays_sub_quadratic_on_a_long_adversarial_url():
+    """Access-log redaction runs on attacker-controlled request lines, so quadrupling
+    a URL of scheme separators must not multiply the cost by sixteen. Comparing two
+    sizes rather than asserting a wall-clock ceiling keeps this honest on a slow box:
+    the unbounded pattern this replaced cost 5s at 4 KB and 314s at 16 KB."""
+    growth: Final = _redaction_cost(16 * 1024) / _redaction_cost(4 * 1024)
+
+    assert growth < 11.0, f"cost grew {growth:.1f}x for 4x the URL length"
 
 
 def test_redact_string_catches_minimum_length_virtual_key():

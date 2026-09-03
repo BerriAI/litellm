@@ -33,6 +33,11 @@ from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal
 from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.router_strategy.adaptive_router.classifier import classify_prompt
+from litellm.router_strategy.complexity_router.tier_predictor import (
+    TierSuccessPredictor,
+    resolve_tier_artifact,
+)
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     ModelResponse,
@@ -790,9 +795,11 @@ class ClassificationOutcome(NamedTuple):
     signals: tuple[str, ...]
     cause: Literal[
         "heuristic_scorer",
+        "heuristic_v2",
         "reasoning_override",
         "llm_classifier",
         "heuristic_first_short_circuit",
+        "hybrid_short_circuit",
         "housekeeping",
         "classifier_plugin",
         "classifier_fallback",
@@ -976,6 +983,11 @@ class ComplexityRouter(CustomLogger):
         self._classifier_response_format: Mapping[str, object] | None = (
             type_to_response_format_param(_tier_classification_model(self.config.classifier_wire_labels()))
             if llm_classifier_configured
+            else None
+        )
+        self._tier_success_predictor: TierSuccessPredictor | None = (
+            TierSuccessPredictor(resolve_tier_artifact(self.config.heuristic_v2_artifact))
+            if self.config.classifier_type == "heuristic_v2"
             else None
         )
 
@@ -1230,6 +1242,15 @@ class ComplexityRouter(CustomLogger):
 
         return tier, weighted_score, tuple(signals), "heuristic_scorer"
 
+    def _is_near_tier_boundary(self, score: float, margin: float) -> bool:
+        boundaries: Final = self._effective_tier_boundaries()
+        active_boundaries: Final = (
+            boundaries["simple_medium"],
+            boundaries["medium_complex"],
+            boundaries["complex_reasoning"],
+        )
+        return any(abs(score - boundary) <= margin for boundary in active_boundaries)
+
     def _effective_reasoning_override_min_score(self) -> float:
         """The score a request must reach before the reasoning-marker override may promote it.
 
@@ -1350,14 +1371,36 @@ class ComplexityRouter(CustomLogger):
         custom tier set, and classifier_fallback otherwise decides between the heuristic scorer and
         default_model. The outcome's `cause` reports which path actually ran.
         """
+        if self.config.classifier_type == "heuristic_v2":
+            return self._classify_with_heuristic_v2(prompt)
         if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
         if self.config.classifier_type == "heuristic_first" and self.config.classifier_llm_config is not None:
             return await self._classify_heuristic_first(prompt, system_prompt, request_kwargs, messages)
+        if self.config.classifier_type == "hybrid" and self.config.classifier_llm_config is not None:
+            return await self._classify_hybrid(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type != "llm" or self.config.classifier_llm_config is None:
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
+
+    def _classify_with_heuristic_v2(self, prompt: str) -> ClassificationOutcome:
+        predictor: Final = self._tier_success_predictor
+        if predictor is None:
+            raise ValueError("heuristic v2 predictor is not configured")
+        request_type: Final = classify_prompt(prompt)
+        prediction: Final = predictor.predict(prompt, request_type)
+        tier: Final = TIER_SEVERITY_ORDER[prediction.required_tier - 1]
+        probability_signals: Final = tuple(
+            f"tier-probability:{candidate.value.lower()}={prediction.probabilities[index]:.6f}"
+            for index, candidate in enumerate(TIER_SEVERITY_ORDER, start=1)
+        )
+        return ClassificationOutcome(
+            tier=tier,
+            score=None,
+            signals=(f"request-type:{request_type.value}", *probability_signals),
+            cause="heuristic_v2",
+        )
 
     async def _classify_heuristic_first(
         self,
@@ -1385,6 +1428,29 @@ class ComplexityRouter(CustomLogger):
         )
         if decided_cheaply:
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="heuristic_first_short_circuit")
+        return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
+
+    async def _classify_hybrid(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: dict[str, Any] | None,  # mutable-ok: handed to _classify_with_llm as-is
+        messages: Sequence[Mapping[str, object]] | None,
+    ) -> ClassificationOutcome:
+        """Score locally, and only pay for the classifier when the score sits near a tier boundary.
+
+        Where heuristic_first asks how CHEAP the scorer's tier is, this asks how DECIDED it is, so a
+        confident score keeps its tier at every tier including the most expensive one. Two things make
+        a score undecided: landing within hybrid_boundary_margin of an active boundary, where a
+        hair's difference in score would have named the adjacent tier and its model pool, and firing
+        no dimension at all, which scores 0.0 and lands SIMPLE by default rather than by evidence.
+        """
+        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
+        scored: Final = ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        margin: Final = self.config.hybrid_boundary_margin
+        decided: Final = margin is not None and bool(signals) and not self._is_near_tier_boundary(score, margin)
+        if decided:
+            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="hybrid_short_circuit")
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
 
     async def _llm_classifier_outcome(

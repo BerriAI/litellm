@@ -1149,10 +1149,11 @@ class MCPRequestHandler:
         would miss a real outage wrapped inside it."""
         from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 
-        if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
+        outage: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(e)
+        if outage is not None:
             raise HTTPException(
                 status_code=503,
-                detail="Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
+                detail=PrismaDBExceptionHandler.database_unavailable_message(outage),
             ) from None
 
     @staticmethod
