@@ -2941,11 +2941,9 @@ async def test_insert_spend_log_asks_for_an_immediate_flush_on_responses_calls(c
     A `previous_response_id` chained straight off the previous turn reads the DB, so a
     Responses row cannot sit in this worker's queue until the monitor's next poll.
     """
-    from litellm.proxy.utils import PrismaClient
-
     db_writer = DBSpendUpdateWriter()
     prisma = _tool_usage_prisma()
-    PrismaClient.spend_log_flush_requested.clear()
+    prisma.spend_log_flush_requested = asyncio.Event()
 
     await db_writer._insert_spend_log_to_db(
         payload={"request_id": "req-1", "call_type": call_type},
@@ -2953,8 +2951,7 @@ async def test_insert_spend_log_asks_for_an_immediate_flush_on_responses_calls(c
     )
 
     assert prisma.spend_log_transactions == [{"request_id": "req-1", "call_type": call_type}]
-    assert PrismaClient.spend_log_flush_requested.is_set() is expects_flush
-    PrismaClient.spend_log_flush_requested.clear()
+    assert prisma.spend_log_flush_requested.is_set() is expects_flush
 
 
 @pytest.mark.asyncio
