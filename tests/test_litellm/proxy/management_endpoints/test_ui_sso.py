@@ -8906,10 +8906,10 @@ async def test_cli_funnel_reports_an_uncaptured_assertion(monkeypatch):
             "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
             AsyncMock(return_value=user_info),
         ),
-        patch(
-            "litellm.proxy.management_endpoints.ui_sso._fetch_cli_sso_team_details",
-            AsyncMock(return_value=[]),
-        ),
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso.fetch_cli_sso_team_details",
+                AsyncMock(return_value=[]),
+            ),
         patch(
             "litellm.proxy.management_endpoints.ui_sso.build_cli_sso_attribution_metadata",
             return_value={},
