@@ -365,7 +365,9 @@ pub(super) async fn poll_document_intelligence(
 
         let mut request_builder = http_client().get(operation_url);
         for (key, value) in headers {
-            if key.eq_ignore_ascii_case("ocp-apim-subscription-key") {
+            if key.eq_ignore_ascii_case("ocp-apim-subscription-key")
+                || key.eq_ignore_ascii_case("authorization")
+            {
                 request_builder = request_builder.header(key, value);
             }
         }
