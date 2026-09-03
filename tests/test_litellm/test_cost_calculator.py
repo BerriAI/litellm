@@ -4768,3 +4768,20 @@ def test_collect_and_combine_realtime_usage_stores_partitioned_text_tokens() -> 
     assert combined.completion_tokens_details.reasoning_tokens == 95
     assert combined.completion_tokens_details.text_tokens == 38
     assert combined.completion_tokens_details.audio_tokens == 0
+def test_cost_per_token_none_token_counts_cost_zero():
+    prompt_cost, completion_cost = cost_per_token(
+        model="gpt-4o-mini", prompt_tokens=None, completion_tokens=None
+    )
+    assert prompt_cost == 0.0
+    assert completion_cost == 0.0
+
+
+def test_cost_per_token_string_token_counts_coerced():
+    prompt_cost, completion_cost = cost_per_token(
+        model="gpt-4o-mini", prompt_tokens="10", completion_tokens=5
+    )
+    expected_prompt, expected_completion = cost_per_token(
+        model="gpt-4o-mini", prompt_tokens=10, completion_tokens=5
+    )
+    assert prompt_cost == expected_prompt
+    assert completion_cost == expected_completion
