@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import moment from "moment";
 import { NuqsTestingAdapter, type UrlUpdateEvent } from "nuqs/adapters/testing";
@@ -138,33 +138,39 @@ describe("RequestLogsPanel", () => {
     respondWith([]);
   });
 
-  describe("multi-call session collapsing", () => {
-    const sessionRows = [
-      logEntry({ request_id: "req-mcp", call_type: "call_mcp_tool", session_id: "sess-1", session_total_count: 3 }),
-      logEntry({ request_id: "req-llm", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
-      logEntry({ request_id: "req-llm-2", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
-    ];
-
-    it("collapses a multi-call session to a single representative row", async () => {
-      respondWith(sessionRows);
+  describe("server-grouped session pagination (#38060)", () => {
+    it("requests session-grouped pages of 10 rows by default", async () => {
       renderPanel();
 
-      await waitFor(() => expect(row("req-mcp") ?? row("req-llm") ?? row("req-llm-2")).not.toBeNull());
-
-      const rendered = ["req-mcp", "req-llm", "req-llm-2"].filter((id) => row(id) !== null);
-      expect(rendered).toHaveLength(1);
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.params?.group_by_session).toBe(true);
+      expect(lastCall()?.page_size).toBe(10);
     });
 
-    it("prefers an LLM call over an MCP call as the session's representative", async () => {
-      respondWith(sessionRows);
+    it("renders every row the server returns without client-side collapsing", async () => {
+      respondWith([
+        logEntry({ request_id: "req-a", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-b", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-c", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+      ]);
       renderPanel();
 
-      await waitFor(() => expect(row("req-llm")).not.toBeNull());
-      expect(row("req-mcp")).toBeNull();
+      await waitFor(() => expect(row("req-a")).not.toBeNull());
+      expect(row("req-b")).not.toBeNull();
+      expect(row("req-c")).not.toBeNull();
     });
 
-    it("shows the session's call count and composition on the representative row", async () => {
-      respondWith(sessionRows);
+    it("shows the session's call count on the server-picked representative row", async () => {
+      respondWith([
+        logEntry({
+          request_id: "req-llm",
+          call_type: "acompletion",
+          session_id: "sess-1",
+          session_total_count: 3,
+          session_llm_count: 2,
+          mcp_tool_call_count: 1,
+        }),
+      ]);
       renderPanel();
 
       await waitFor(() => expect(row("req-llm")).not.toBeNull());
@@ -190,7 +196,7 @@ describe("RequestLogsPanel", () => {
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
 
-      await user.type(screen.getByTestId("datatable-search"), "req-on-another-page");
+      fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "req-on-another-page" } });
 
       await waitFor(() => {
         const call = lastCall();
@@ -210,15 +216,16 @@ describe("RequestLogsPanel", () => {
       await user.click(screen.getByRole("button", { name: /Last 24 Hours/i }));
       await user.click(await screen.findByRole("button", { name: "Last 15 Minutes" }));
 
-      await waitFor(() => {
+      const windowSeconds = () => {
         const call = lastCall();
         if (!call) throw new Error("no call");
-        const diff = moment
+        return moment
           .utc(call.end_date, "YYYY-MM-DD HH:mm:ss")
           .diff(moment.utc(call.start_date, "YYYY-MM-DD HH:mm:ss"), "seconds");
-        expect(diff).toBeGreaterThanOrEqual(15 * 60);
-        expect(diff).toBeLessThanOrEqual(16 * 60);
-      });
+      };
+
+      await waitFor(() => expect(windowSeconds()).toBeGreaterThanOrEqual(15 * 60));
+      expect(windowSeconds()).toBeLessThanOrEqual(16 * 60);
     });
 
     it("restores the default 24 hour window when filters are reset", async () => {
@@ -228,7 +235,7 @@ describe("RequestLogsPanel", () => {
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
       await user.click(screen.getByRole("button", { name: /Last 24 Hours/i }));
       await user.click(await screen.findByRole("button", { name: "Last 15 Minutes" }));
-      await waitFor(() => expect(screen.getByRole("button", { name: /Last 15 Minutes/i })).toBeInTheDocument());
+      expect(await screen.findByRole("button", { name: /Last 15 Minutes/i })).toBeInTheDocument();
 
       await user.click(screen.getByRole("button", { name: "Reset Filters" }));
 
@@ -262,8 +269,8 @@ describe("RequestLogsPanel", () => {
       expect(historyModes()).toEqual(["push"]);
       await waitFor(() => {
         expect(drawer()).toHaveTextContent("open");
-        expect(drawer()).toHaveAttribute("data-log-id", "req-1");
       });
+      expect(drawer()).toHaveAttribute("data-log-id", "req-1");
     });
 
     it("opens the drawer on load when ?log_id= matches a log in the loaded page", async () => {
@@ -272,8 +279,8 @@ describe("RequestLogsPanel", () => {
 
       await waitFor(() => {
         expect(drawer()).toHaveTextContent("open");
-        expect(drawer()).toHaveAttribute("data-log-id", "req-2");
       });
+      expect(drawer()).toHaveAttribute("data-log-id", "req-2");
     });
 
     it("fetches the log by request_id and opens the drawer when it is not in the loaded page", async () => {
@@ -286,8 +293,8 @@ describe("RequestLogsPanel", () => {
 
       await waitFor(() => {
         expect(drawer()).toHaveTextContent("open");
-        expect(drawer()).toHaveAttribute("data-log-id", "req-old");
       });
+      expect(drawer()).toHaveAttribute("data-log-id", "req-old");
 
       const byIdCall = vi
         .mocked(uiSpendLogsCall)
@@ -295,6 +302,7 @@ describe("RequestLogsPanel", () => {
       if (!byIdCall) throw new Error("expected a by-id uiSpendLogsCall");
       expect(byIdCall.page).toBe(1);
       expect(byIdCall.page_size).toBe(1);
+      expect(byIdCall.params?.group_by_session).toBeUndefined();
     });
 
     it("closing the drawer removes ?log_id= from the URL and closes the drawer", async () => {
@@ -344,8 +352,8 @@ describe("RequestLogsPanel", () => {
       expect(historyModes()).toEqual(["push"]);
       await waitFor(() => {
         expect(drawer()).toHaveTextContent("open");
-        expect(drawer()).toHaveAttribute("data-session-id", "sess-solo");
       });
+      expect(drawer()).toHaveAttribute("data-session-id", "sess-solo");
     });
 
     it("clicking a log row clears a lingering ?session_id= so the drawer shows the clicked log", async () => {
@@ -366,8 +374,8 @@ describe("RequestLogsPanel", () => {
       expect(urlParams().get("session_id")).toBeNull();
       await waitFor(() => {
         expect(drawer()).toHaveAttribute("data-log-id", "req-b");
-        expect(drawer()).toHaveAttribute("data-session-id", "");
       });
+      expect(drawer()).toHaveAttribute("data-session-id", "");
     });
 
     it("closing a drawer opened via a session id clears both params", async () => {
@@ -394,9 +402,9 @@ describe("RequestLogsPanel", () => {
 
       await waitFor(() => {
         expect(drawer()).toHaveTextContent("open");
-        expect(drawer()).toHaveAttribute("data-log-id", "req-llm");
-        expect(drawer()).toHaveAttribute("data-session-id", "sess-1");
       });
+      expect(drawer()).toHaveAttribute("data-session-id", "sess-1");
+      expect(drawer()).toHaveAttribute("data-log-id", "req-llm");
     });
 
     it("clicking a multi-call session's row writes ?session_id= alongside ?log_id=", async () => {
@@ -433,6 +441,44 @@ describe("RequestLogsPanel", () => {
     });
   });
 
+  describe("hide health checks", () => {
+    const toggle = () => screen.getByRole("switch", { name: "Hide Health Checks" });
+
+    it("defaults to showing health checks and refetches without them from page 1 when toggled on", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.params?.exclude_internal_health_checks).toBe(false);
+      expect(toggle()).not.toBeChecked();
+
+      await user.click(toggle());
+
+      await waitFor(() => expect(lastCall()?.params?.exclude_internal_health_checks).toBe(true));
+      expect(lastCall()?.page).toBe(1);
+      expect(toggle()).toBeChecked();
+      expect(sessionStorage.getItem("excludeInternalHealthChecks")).toBe("true");
+    });
+
+    it("restores the persisted toggle from sessionStorage", async () => {
+      sessionStorage.setItem("excludeInternalHealthChecks", "true");
+      renderPanel();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.params?.exclude_internal_health_checks).toBe(true);
+      expect(toggle()).toBeChecked();
+    });
+
+    it("falls back to showing health checks when the persisted value is malformed", async () => {
+      sessionStorage.setItem("excludeInternalHealthChecks", "{not json");
+      renderPanel();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.params?.exclude_internal_health_checks).toBe(false);
+      expect(toggle()).not.toBeChecked();
+    });
+  });
+
   describe("live tail", () => {
     it("shows the auto-refresh banner on the first page and hides it once stopped", async () => {
       const user = userEvent.setup();
@@ -442,7 +488,7 @@ describe("RequestLogsPanel", () => {
 
       await user.click(screen.getByRole("button", { name: "Stop" }));
 
-      expect(screen.queryByText("Auto-refreshing every 15 seconds")).toBeNull();
+      expect(screen.queryByText("Auto-refreshing every 15 seconds")).not.toBeInTheDocument();
     });
   });
 });

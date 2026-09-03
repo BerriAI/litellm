@@ -4,7 +4,7 @@ import { AlertTriangle, CircleCheck, Copy, ExternalLink, Info, LoaderCircle } fr
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { testConnectionRequest } from "../networking";
 import { prepareModelAddRequest } from "./handle_add_model_submit";
 
@@ -54,7 +54,7 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
       const response = await testConnectionRequest(accessToken, litellmParamsObj, modelInfoObj, modelInfoObj?.mode);
 
       if (response.status === "success") {
-        NotificationsManager.success("Connection test successful!");
+        toast.success("Connection test successful!");
         setError(null);
         setIsSuccess(true);
       } else {
@@ -191,7 +191,7 @@ ${formattedBody}
               className="mt-2"
               onClick={() => {
                 navigator.clipboard.writeText(curlCommand || "");
-                NotificationsManager.success("Copied to clipboard");
+                toast.success("Copied to clipboard");
               }}
             >
               <Copy data-icon="inline-start" />

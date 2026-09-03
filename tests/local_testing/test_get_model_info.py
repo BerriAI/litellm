@@ -1,16 +1,12 @@
 # What is this?
 ## Unit testing for the 'get_model_info()' function
 import os
-import sys
 import traceback
 import json
 
 
 from typing import List, Dict, Any
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 import pytest
 
 import litellm
@@ -134,7 +130,6 @@ def test_get_model_info_bedrock_region():
         "ft:gpt-3.5-turbo:my-org:custom_suffix:id",
         "ft:gpt-4-0613:my-org:custom_suffix:id",
         "ft:davinci-002:my-org:custom_suffix:id",
-        "ft:gpt-4-0613:my-org:custom_suffix:id",
         "ft:babbage-002:my-org:custom_suffix:id",
         "gpt-35-turbo",
         "ada",

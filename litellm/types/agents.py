@@ -1,7 +1,8 @@
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from pydantic import BaseModel, PrivateAttr
+from pydantic import BaseModel, PrivateAttr, StrictInt
 from typing_extensions import Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -25,7 +26,7 @@ class AgentExtension(TypedDict, total=False):
     uri: str  # required
     description: str | None
     required: bool | None
-    params: dict[str, Any] | None
+    params: dict[str, object] | None
 
 
 # AgentCapabilities
@@ -70,10 +71,10 @@ class MutualTLSSecurityScheme(SecuritySchemeBase, total=False):
 class OAuthFlows(TypedDict, total=False):
     """Defines the configuration for the supported OAuth 2.0 flows."""
 
-    authorizationCode: dict[str, Any] | None
-    clientCredentials: dict[str, Any] | None
-    implicit: dict[str, Any] | None
-    password: dict[str, Any] | None
+    authorizationCode: dict[str, object] | None
+    clientCredentials: dict[str, object] | None
+    implicit: dict[str, object] | None
+    password: dict[str, object] | None
 
 
 class OAuth2SecurityScheme(SecuritySchemeBase, total=False):
@@ -129,7 +130,7 @@ class AgentCardSignature(TypedDict, total=False):
 
     protected: str  # required
     signature: str  # required
-    header: dict[str, Any] | None
+    header: dict[str, object] | None
 
 
 # AgentCard
@@ -179,7 +180,7 @@ class AgentObjectPermission(TypedDict, total=False):
 class AgentConfig(TypedDict, total=False):
     agent_name: Required[str]
     agent_card_params: Required[AgentCard]
-    litellm_params: dict[str, Any]  # allow for any future litellm params
+    litellm_params: dict[str, object]  # allow for any future litellm params
     object_permission: AgentObjectPermission
     tpm_limit: int | None
     rpm_limit: int | None
@@ -192,7 +193,7 @@ class AgentConfig(TypedDict, total=False):
 class PatchAgentRequest(TypedDict, total=False):
     agent_name: str
     agent_card_params: AgentCard
-    litellm_params: dict[str, Any]
+    litellm_params: dict[str, object]
     object_permission: AgentObjectPermission
     tpm_limit: int | None
     rpm_limit: int | None
@@ -214,9 +215,9 @@ class AgentKeySummary(BaseModel):
 class AgentResponse(BaseModel):
     agent_id: str
     agent_name: str
-    litellm_params: dict[str, Any] | None = None
+    litellm_params: dict[str, object] | None = None
     agent_card_params: dict[str, Any]
-    object_permission: dict[str, Any] | None = None
+    object_permission: dict[str, object] | None = None
     spend: float | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
@@ -225,6 +226,7 @@ class AgentResponse(BaseModel):
     static_headers: dict[str, str] | None = None
     extra_headers: list[str] | None = None
     keys: list[AgentKeySummary] | None = None
+    search_score: float | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     created_by: str | None = None
@@ -250,7 +252,7 @@ class AgentCreateResponse(LiteLLMPydanticObjectBase):
     name: str | None = None
     model_config = {"extra": "allow"}
 
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
 
 class AgentDeleteResult(LiteLLMPydanticObjectBase):
@@ -264,7 +266,7 @@ class AgentDeleteResult(LiteLLMPydanticObjectBase):
     deleted: bool = True
     model_config = {"extra": "allow"}
 
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
 
 class AgentListResponse(LiteLLMPydanticObjectBase):
@@ -274,11 +276,11 @@ class AgentListResponse(LiteLLMPydanticObjectBase):
     a plain dict so no fields are silently dropped.
     """
 
-    agents: list[dict[str, Any]] = []
+    agents: list[dict[str, object]] = []
     next_page_token: str | None = None
     model_config = {"extra": "allow"}
 
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
 
 class AgentVersionsResponse(LiteLLMPydanticObjectBase):
@@ -288,11 +290,11 @@ class AgentVersionsResponse(LiteLLMPydanticObjectBase):
     field of the form ``agents/{agent_id}/versions/{uuid}``.
     """
 
-    agent_versions: list[dict[str, Any]] = []
+    agent_versions: list[dict[str, object]] = []
     next_page_token: str | None = None
     model_config = {"extra": "allow"}
 
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
 
 class AgentMakePublicResponse(BaseModel):
@@ -306,19 +308,32 @@ class MakeAgentsPublicRequest(BaseModel):
 
 
 def _normalize_a2a_jsonrpc_response(
-    response_dict: dict[str, Any],
-    request_id: Any | None = None,
-) -> dict[str, Any]:
+    response_dict: Mapping[str, object],
+    request_id: object | None = None,
+) -> dict[str, object]:
     """
     Ensure JSON-RPC responses include ``id`` when the caller supplied one.
 
     The a2a SDK may omit ``id`` on error payloads even when the upstream agent
     returned it. Backfill from the outbound request id so LiteLLM can surface the
     agent error instead of failing Pydantic validation.
+
+    JSON-RPC 2.0 requires the response id to equal the request id, so a string or
+    integer request id is carried over as-is. Anything else is stringified, which
+    is the only representation the response model accepts.
+
+    A caller that supplied no id leaves the response id null, which is what the
+    spec requires for an error that cannot be correlated to a request. ``bool`` counts
+    as "anything else" despite subclassing ``int``, so ``true`` is never relayed as
+    ``1``, where it would collide with a real integer id.
     """
     normalized: Final = dict(response_dict)
-    if normalized.get("id") is None and request_id is not None:
-        normalized["id"] = str(request_id)
+    if isinstance(normalized.get("id"), bool):
+        normalized["id"] = str(normalized["id"])
+    elif normalized.get("id") is None and request_id is not None:
+        normalized["id"] = (
+            request_id if isinstance(request_id, (str, int)) and not isinstance(request_id, bool) else str(request_id)
+        )
     return normalized
 
 
@@ -331,24 +346,24 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
     """
 
     # A2A response fields
-    id: str
+    id: str | StrictInt | None = None
     jsonrpc: str = "2.0"
-    result: dict[str, Any] | None = None
-    error: dict[str, Any] | None = None
+    result: dict[str, object] | None = None
+    error: dict[str, object] | None = None
 
     # LiteLLM usage tracking
-    usage: dict[str, Any] | None = None
+    usage: dict[str, object] | None = None
 
     model_config = {"extra": "allow"}
 
     # LiteLLM private attributes for logging/cost tracking
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
     @classmethod
     def from_a2a_response(
         cls,
         response: "SendMessageResponse",
-        request_id: Any | None = None,
+        request_id: object | None = None,
     ) -> "LiteLLMSendMessageResponse":
         """
         Create a LiteLLMSendMessageResponse from an a2a SDK SendMessageResponse.
@@ -360,15 +375,16 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        response_dict = response.model_dump(mode="json", exclude_none=True)
-        response_dict = _normalize_a2a_jsonrpc_response(response_dict, request_id=request_id)
-        return cls(**response_dict)
+        response_dict: Final = _normalize_a2a_jsonrpc_response(
+            response.model_dump(mode="json", exclude_none=True), request_id=request_id
+        )
+        return cls.model_validate(response_dict)
 
     @classmethod
     def from_dict(
         cls,
-        response_dict: dict[str, Any],
-        request_id: Any | None = None,
+        response_dict: Mapping[str, object],
+        request_id: object | None = None,
     ) -> "LiteLLMSendMessageResponse":
         """
         Create a LiteLLMSendMessageResponse from a dict.
@@ -380,4 +396,4 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        return cls(**_normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))
+        return cls.model_validate(_normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))

@@ -1,6 +1,6 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi, MockedFunction } from "vitest";
-import { renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { KeyResponse } from "../key_team_helpers/key_list";
@@ -212,7 +212,7 @@ describe("TeamVirtualKeysTable", () => {
 
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
-    await waitFor(() => expect(screen.getByTestId("sort-header-created_at")).toBeInTheDocument());
+    expect(await screen.findByTestId("sort-header-created_at")).toBeInTheDocument();
     await user.click(screen.getByTestId("sort-header-created_at"));
 
     await waitFor(() =>
@@ -264,7 +264,7 @@ describe("TeamVirtualKeysTable", () => {
     await user.click(await screen.findByTestId("datatable-filters-trigger"));
     const drawerBody = await screen.findByTestId("filter-drawer-body");
     const userInput = within(drawerBody).getByPlaceholderText("Filter by user ID…");
-    await user.type(userInput, "user-42");
+    fireEvent.change(userInput, { target: { value: "user-42" } });
     await user.click(screen.getByTestId("filter-drawer-apply"));
 
     await waitFor(() =>
@@ -288,7 +288,7 @@ describe("TeamVirtualKeysTable", () => {
 
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
-    await user.type(await screen.findByTestId("datatable-search"), "check-002");
+    fireEvent.change(await screen.findByTestId("datatable-search"), { target: { value: "check-002" } });
 
     await waitFor(() =>
       expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ selectedKeyAlias: "check-002" })),

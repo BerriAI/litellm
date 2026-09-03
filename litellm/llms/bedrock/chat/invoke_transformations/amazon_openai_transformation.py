@@ -13,6 +13,10 @@ import httpx
 
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.request_metadata import (
+    bedrock_request_metadata_headers,
+    merge_bedrock_invoke_headers,
+)
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.passthrough.utils import CommonUtils
 from litellm.types.llms.openai import AllMessageValues
@@ -169,9 +173,12 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         """
         Validate the environment and return headers.
 
-        For Bedrock, we don't need Bearer token auth since we use AWS SigV4.
+        For Bedrock, we don't need Bearer token auth since we use AWS SigV4. This path signs the
+        same ``/model/{id}/invoke`` endpoint as ``AmazonInvokeConfig``, so it owns the request
+        metadata header on the same terms rather than letting a caller supply it.
         """
-        return headers
+        owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
+        return merge_bedrock_invoke_headers(headers, (), metadata_headers, owned_names)
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BedrockError:
         """Return the appropriate error class for Bedrock."""

@@ -30,31 +30,26 @@ test.describe("MCP Servers", () => {
     await expect(discovery).toBeVisible({ timeout: 5_000 });
     await discovery.getByRole("button", { name: /Custom Server/i }).click();
 
-    const formModal = page.locator(".ant-modal:visible").filter({ hasText: "MCP Server Name" });
+    const formModal = page.getByRole("dialog").filter({ hasText: "MCP Server Name" });
     await expect(formModal).toBeVisible({ timeout: 5_000 });
 
     // Name — no spaces or hyphens per validateMCPServerName
     const uniqueName = `e2e_mcp_${Date.now()}`;
     createdServerName = uniqueName;
-    await formModal.locator('input[id="server_name"]').fill(uniqueName);
+    await formModal.getByLabel("MCP Server Name").fill(uniqueName);
 
-    // Transport: Streamable HTTP — the only value the proxy actually accepts is "http"
-    const transportField = formModal.locator(".ant-form-item", { hasText: "Transport Type" });
-    await transportField.locator(".ant-select").click();
-    await page.locator(".ant-select-dropdown:visible").getByText("Streamable HTTP").click();
+    // Transport: Streamable HTTP — the only value the proxy actually accepts is "http".
+    // Select popups are portaled to the body, so the option lookup is page-scoped.
+    await formModal.getByRole("combobox", { name: "Transport Type" }).click();
+    await page.getByRole("option", { name: "Streamable HTTP" }).click();
 
     // URL — use a fake URL; the form just persists it, it doesn't have to be reachable
-    await formModal.locator('input[id="url"]').fill("https://e2e-fake-mcp.test.local/mcp");
+    await formModal.getByLabel("MCP Server URL").fill("https://e2e-fake-mcp.test.local/mcp");
 
-    // Authentication: None
-    // The auth_type Form.Item has no label prop (CreateMCPServer.tsx), so
-    // it can't be anchored by label text. Scope via the enclosing Collapse
-    // panel ("Authentication") instead — that anchor is stable even if the
-    // placeholder copy changes.
-    const authSection = formModal.locator(".ant-collapse-item", { hasText: /^Authentication/ });
-    const authField = authSection.locator(".ant-form-item").first();
-    await authField.locator(".ant-select").click();
-    await page.locator(".ant-select-dropdown:visible").getByText("None", { exact: true }).click();
+    // Authentication: None. "Authentication" is exact so it can't also match the
+    // "Authentication Value" field that some auth types reveal below it.
+    await formModal.getByRole("combobox", { name: "Authentication", exact: true }).click();
+    await page.getByRole("option", { name: "None", exact: true }).click();
 
     // Submit
     await formModal.getByRole("button", { name: /^Add MCP Server$/ }).click();

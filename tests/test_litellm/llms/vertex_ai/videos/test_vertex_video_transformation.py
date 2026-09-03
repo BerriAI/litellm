@@ -4,18 +4,38 @@ Tests for Vertex AI (Veo) video generation transformation.
 
 import base64
 import json
-import os
-from unittest.mock import MagicMock, Mock, patch
+from collections.abc import Mapping
+from pathlib import Path
+from typing import cast
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
 
+import litellm
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.openai.cost_calculation import video_generation_cost
 from litellm.llms.vertex_ai.videos.transformation import (
     VertexAIVideoConfig,
     _convert_image_to_vertex_format,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoObject
+
+VEO_31_LITE_VERTEX_MODEL = "vertex_ai/veo-3.1-lite-generate-001"
+ROOT_MODEL_COST_PATH = (
+    Path(__file__).parents[5] / "model_prices_and_context_window.json"
+)
+BACKUP_MODEL_COST_PATH = (
+    Path(__file__).parents[5]
+    / "litellm"
+    / "model_prices_and_context_window_backup.json"
+)
+ModelCostMap = Mapping[str, Mapping[str, object]]
+
+
+def _load_model_cost_map(path: Path) -> ModelCostMap:
+    return cast(ModelCostMap, json.loads(path.read_text()))
 
 
 class TestVertexAIVideoConfig:
@@ -93,22 +113,15 @@ class TestVertexAIVideoConfig:
         # Should NOT include endpoint
         assert not url.endswith(":predictLongRunning")
 
-    def test_get_complete_url_missing_project(self):
+    def test_get_complete_url_missing_project(self, monkeypatch):
         """Test that missing vertex_project raises error."""
-        litellm_params = {}
+        monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.setattr(litellm, "vertex_project", None)
 
-        # Note: The method might not raise if vertex_project can be fetched from env
-        # This test verifies the behavior when completely missing
-        try:
-            url = self.config.get_complete_url(
-                model="veo-002", api_base=None, litellm_params=litellm_params
+        with pytest.raises(ValueError, match="vertex_project is required"):
+            self.config.get_complete_url(
+                model="veo-002", api_base=None, litellm_params={}
             )
-            # If no error is raised, vertex_project was obtained from environment
-            # In that case, just verify a URL was returned
-            assert url is not None
-        except ValueError as e:
-            # Expected behavior when vertex_project is truly missing
-            assert "vertex_project is required" in str(e)
 
     def test_get_complete_url_default_location(self):
         """Test URL construction with default location."""
@@ -122,6 +135,56 @@ class TestVertexAIVideoConfig:
         assert "us-central1" in url
         # Should NOT include endpoint
         assert not url.endswith(":predictLongRunning")
+
+    def test_veo_31_lite_model_cost_entries_match_pricing(self):
+        for path in (ROOT_MODEL_COST_PATH, BACKUP_MODEL_COST_PATH):
+            model_cost = _load_model_cost_map(path)
+            info = model_cost.get(VEO_31_LITE_VERTEX_MODEL)
+
+            assert info is not None, f"{VEO_31_LITE_VERTEX_MODEL} missing from {path}"
+            assert info["litellm_provider"] == "vertex_ai-video-models"
+            assert info["mode"] == "video_generation"
+            assert info["max_input_tokens"] == 1024
+            assert info["output_cost_per_second"] == 0.05
+            assert info["output_cost_per_second_1080p"] == 0.08
+            assert info["supported_modalities"] == ["text", "image"]
+
+    def test_veo_31_lite_provider_routing_from_local_model_map(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
+        vertex_video_models = {
+            model_name.removeprefix("vertex_ai/")
+            for model_name, info in model_cost.items()
+            if info.get("litellm_provider") == "vertex_ai-video-models"
+        }
+        monkeypatch.setattr(litellm, "vertex_ai_video_models", vertex_video_models)
+
+        model, custom_llm_provider, _, _ = get_llm_provider(
+            model="veo-3.1-lite-generate-001"
+        )
+
+        assert model == "veo-3.1-lite-generate-001"
+        assert custom_llm_provider == "vertex_ai"
+
+    def test_veo_31_lite_cost_uses_resolution_tiers(self):
+        model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
+        model_info = model_cost[VEO_31_LITE_VERTEX_MODEL]
+
+        assert video_generation_cost(
+            model=VEO_31_LITE_VERTEX_MODEL,
+            duration_seconds=10.0,
+            custom_llm_provider="vertex_ai",
+            model_info=dict(model_info),
+            video_resolution="720p",
+        ) == pytest.approx(0.5)
+        assert video_generation_cost(
+            model=VEO_31_LITE_VERTEX_MODEL,
+            duration_seconds=10.0,
+            custom_llm_provider="vertex_ai",
+            model_info=dict(model_info),
+            video_resolution="1080p",
+        ) == pytest.approx(0.8)
 
     def test_transform_video_create_request(self):
         """Test transformation of video creation request."""
@@ -216,6 +279,95 @@ class TestVertexAIVideoConfig:
 
         assert mapped["durationSeconds"] == 8
         assert mapped["aspectRatio"] == "16:9"
+        assert "resolution" not in mapped
+
+    @pytest.mark.parametrize(
+        ("model", "size", "expected_resolution"),
+        (
+            (VEO_31_LITE_VERTEX_MODEL, "1280x720", "720p"),
+            (
+                VEO_31_LITE_VERTEX_MODEL.removeprefix("vertex_ai/"),
+                "1920x1080",
+                "1080p",
+            ),
+        ),
+    )
+    def test_map_openai_size_to_resolution_for_resolution_tier_model(
+        self,
+        model: str,
+        size: str,
+        expected_resolution: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
+        monkeypatch.setitem(
+            litellm.model_cost,
+            VEO_31_LITE_VERTEX_MODEL,
+            dict(model_cost[VEO_31_LITE_VERTEX_MODEL]),
+        )
+
+        mapped = self.config.map_openai_params(
+            video_create_optional_params={"size": size},
+            model=model,
+            drop_params=False,
+        )
+
+        assert mapped["aspectRatio"] == "16:9"
+        assert mapped["resolution"] == expected_resolution
+
+    def test_map_openai_size_does_not_infer_resolution_for_veo_2(self):
+        mapped = self.config.map_openai_params(
+            video_create_optional_params={"size": "1920x1080"},
+            model="vertex_ai/veo-2.0-generate-001",
+            drop_params=False,
+        )
+
+        assert mapped["aspectRatio"] == "16:9"
+        assert "resolution" not in mapped
+
+    def test_map_openai_size_does_not_infer_resolution_for_existing_veo_3(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        model = "veo-3.1-generate-001"
+        model_key = f"vertex_ai/{model}"
+        model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
+        monkeypatch.setitem(litellm.model_cost, model_key, dict(model_cost[model_key]))
+
+        mapped = self.config.map_openai_params(
+            video_create_optional_params={"size": "1920x1080"},
+            model=model,
+            drop_params=False,
+        )
+
+        assert mapped["aspectRatio"] == "16:9"
+        assert "resolution" not in mapped
+
+    def test_map_openai_size_does_not_override_provider_resolution(self):
+        mapped = self.config.map_openai_params(
+            video_create_optional_params={
+                "size": "1920x1080",
+                "parameters": {"resolution": "720p"},
+            },
+            model=VEO_31_LITE_VERTEX_MODEL,
+            drop_params=False,
+        )
+
+        assert mapped["aspectRatio"] == "16:9"
+        assert "resolution" not in mapped
+        assert mapped["parameters"] == {"resolution": "720p"}
+
+    def test_map_openai_size_does_not_override_direct_resolution(self):
+        mapped = self.config.map_openai_params(
+            video_create_optional_params={
+                "size": "1920x1080",
+                "resolution": "720p",
+            },
+            model=VEO_31_LITE_VERTEX_MODEL,
+            drop_params=False,
+        )
+
+        assert mapped["aspectRatio"] == "16:9"
+        assert mapped["resolution"] == "720p"
 
     def test_map_openai_params_default_duration(self):
         """Test that durationSeconds is omitted when not provided."""
@@ -485,7 +637,7 @@ class TestVertexAIVideoConfig:
             },
         }
 
-        url, data = self.config.transform_video_edit_request(
+        url, data, files = self.config.transform_video_edit_request(
             prompt="Make it brighter",
             video_id=operation_name,
             api_base=api_base,
@@ -494,6 +646,7 @@ class TestVertexAIVideoConfig:
             prefetched_source_data=prefetched,
         )
 
+        assert files is None
         assert url.endswith(":predictLongRunning")
         assert "veo-3.1-generate-001" in url
         instance = data["instances"][0]
@@ -513,7 +666,7 @@ class TestVertexAIVideoConfig:
             },
         }
 
-        _, data = self.config.transform_video_edit_request(
+        _, data, _ = self.config.transform_video_edit_request(
             prompt="Make it darker",
             video_id=operation_name,
             api_base=api_base,

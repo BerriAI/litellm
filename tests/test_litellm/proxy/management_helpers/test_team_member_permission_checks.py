@@ -1,12 +1,7 @@
-import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy._types import KeyManagementRoutes, Member, ProxyException
 from litellm.proxy.management_helpers.team_member_permission_checks import (

@@ -2,22 +2,20 @@ import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import BulkEditUserModal from "./BulkEditUsers";
+import BulkCreateUsersButton from "@/components/bulk_create_users_button";
 import { CreateUserButton } from "@/components/CreateUserButton";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import EditUserModal from "./edit_user";
 import {
   getPossibleUserRoles,
   getProxyBaseUrl,
   invitationCreateCall,
   userListCall,
   UserListResponse,
-  userUpdateUserCall,
 } from "@/components/networking";
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 
-import { updateExistingKeys } from "@/utils/dataUtils";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
@@ -30,7 +28,7 @@ import {
   SortingState,
 } from "@tanstack/react-table";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { modelAvailableCall, userDeleteCall } from "@/components/networking";
 import { DefaultUserSettingsForm } from "./default-user-settings/DefaultUserSettingsForm";
 import { UsersTable } from "./view_users/UsersTable";
@@ -76,8 +74,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const [selectedUserId, setSelectedUserId] = useQueryState("user", parseAsString.withOptions({ history: "push" }));
   const [openInEditMode, setOpenInEditMode] = useState(false);
 
-  const [editModalVisible, setEditModalVisible] = useState(false);
-  const [selectedUser, setSelectedUser] = useState<UserInfo | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [userToDelete, setUserToDelete] = useState<UserInfo | null>(null);
@@ -161,16 +157,16 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const handleResetPassword = useCallback(
     async (userId: string) => {
       if (!accessToken) {
-        NotificationsManager.fromBackend("Access token not found");
+        toast.fromError("Access token not found");
         return;
       }
       try {
-        NotificationsManager.success("Generating password reset link...");
+        toast.success("Generating password reset link...");
         const data = await invitationCreateCall(accessToken, userId);
         setInvitationLinkData(data);
         setIsInvitationLinkModalVisible(true);
       } catch (error) {
-        NotificationsManager.fromBackend("Failed to generate password reset link");
+        toast.fromError("Failed to generate password reset link");
       }
     },
     [accessToken],
@@ -189,10 +185,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           return { ...previousData, users: updatedUsers };
         });
 
-        NotificationsManager.success("User deleted successfully");
+        toast.success("User deleted successfully");
       } catch (error) {
         console.error("Error deleting user:", error);
-        NotificationsManager.fromBackend("Failed to delete user");
+        toast.fromError("Failed to delete user");
       } finally {
         setIsDeleteModalOpen(false);
         setUserToDelete(null);
@@ -204,39 +200,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   const cancelDelete = () => {
     setIsDeleteModalOpen(false);
     setUserToDelete(null);
-  };
-
-  const handleEditCancel = async () => {
-    setSelectedUser(null);
-    setEditModalVisible(false);
-  };
-
-  const handleEditSubmit = async (editedUser: any) => {
-    if (!accessToken || !token || !userRole || !userID) {
-      return;
-    }
-
-    try {
-      const response = await userUpdateUserCall(accessToken, editedUser, null);
-      queryClient.setQueriesData<UserListResponse>({ queryKey: ["userList"] }, (previousData) => {
-        if (previousData === undefined) return previousData;
-        const updatedUsers = previousData.users.map((user) => {
-          if (user.user_id === response.data.user_id) {
-            return updateExistingKeys(user, response.data);
-          }
-          return user;
-        });
-
-        return { ...previousData, users: updatedUsers };
-      });
-
-      NotificationsManager.success(`User ${editedUser.user_id} updated successfully`);
-    } catch (error) {
-      console.error("There was an error updating the user", error);
-    }
-    setSelectedUser(null);
-    setEditModalVisible(false);
-    // Close the modal
   };
 
   const handleToggleSelectionMode = () => {
@@ -365,12 +328,11 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           {!userListQuery.isLoading && userID && accessToken && (
             <>
               {isProxyAdmin && (
-                <CreateUserButton
-                  userID={userID}
-                  accessToken={accessToken}
-                  teams={teams}
-                  possibleUIRoles={possibleUIRoles}
-                />
+                <CreateUserButton userID={userID} accessToken={accessToken} possibleUIRoles={possibleUIRoles} />
+              )}
+
+              {isProxyAdmin && (
+                <BulkCreateUsersButton accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
               )}
 
               {isProxyAdmin && (
@@ -438,14 +400,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
       )}
 
       {/* Existing Modals */}
-      <EditUserModal
-        visible={editModalVisible}
-        possibleUIRoles={possibleUIRoles}
-        onCancel={handleEditCancel}
-        user={selectedUser}
-        onSubmit={handleEditSubmit}
-      />
-
       <DeleteResourceModal
         isOpen={isDeleteModalOpen}
         title="Delete User?"

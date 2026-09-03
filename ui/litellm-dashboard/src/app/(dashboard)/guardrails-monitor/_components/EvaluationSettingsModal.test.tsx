@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
 
 const mockFetchAvailableModels = vi.fn();
@@ -60,7 +60,7 @@ describe("EvaluationSettingsModal", () => {
 
     const promptBox = screen.getByDisplayValue(/Evaluate whether this guardrail's decision was correct/);
     await user.clear(promptBox);
-    await user.type(promptBox, "custom prompt");
+    fireEvent.change(promptBox, { target: { value: "custom prompt" } });
     expect(screen.getByDisplayValue("custom prompt")).toBeInTheDocument();
 
     await user.click(screen.getByText("Reset to default"));

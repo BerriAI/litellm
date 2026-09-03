@@ -700,7 +700,6 @@ def test_expand_wildcard_deployments_non_wildcard_passthrough():
 
 def test_expand_wildcard_deployments_openai_wildcard():
     """openai/* should expand into ≥1 known openai model entries."""
-    from unittest.mock import patch
 
     from litellm.proxy.auth.model_checks import (
         expand_wildcard_deployments_for_model_info,

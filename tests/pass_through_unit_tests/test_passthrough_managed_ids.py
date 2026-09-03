@@ -18,14 +18,11 @@ from __future__ import annotations
 
 import base64
 import json
-import sys
-import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.llms.base_llm.managed_resources.utils import (

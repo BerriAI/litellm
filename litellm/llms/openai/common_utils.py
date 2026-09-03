@@ -7,16 +7,25 @@ import inspect
 import json
 import os
 import ssl
+import time
+import uuid
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Optional
 
 import httpx
 import openai
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from openai.types.chat import ChatCompletion, ChatCompletionChunk, ChatCompletionMessage
+from openai.types.chat.chat_completion import Choice
+from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
+from openai.types.chat.chat_completion_chunk import ChoiceDelta
+from openai.types.completion_usage import CompletionUsage
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
 
 import litellm
+from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
@@ -111,6 +120,79 @@ def drop_params_from_unprocessable_entity_error(
     return new_data
 
 
+_OUTPUT_TOKEN_LIMIT_ERROR_MARKER: Final[str] = (
+    "could not finish the message because max_tokens or model output limit was reached"
+)
+
+
+def is_output_token_limit_error(e: openai.BadRequestError) -> bool:
+    """
+    True when OpenAI/Azure rejected a chat request because the output budget could not fit a single visible token.
+
+    GPT-5.x turns that case into a 400 while returning a length-truncated 200 for marginally larger budgets, so the
+    match has to stay pinned to the full provider sentence to avoid swallowing genuine bad requests.
+    """
+    return _OUTPUT_TOKEN_LIMIT_ERROR_MARKER in e.message.lower()
+
+
+def _output_token_limit_completion(model: str, prompt_tokens: int) -> ChatCompletion:
+    return ChatCompletion(
+        id=f"chatcmpl-{uuid.uuid4()}",
+        choices=(
+            Choice(
+                index=0,
+                finish_reason="length",
+                message=ChatCompletionMessage(role="assistant", content=""),
+            ),
+        ),
+        created=int(time.time()),
+        model=model,
+        object="chat.completion",
+        usage=CompletionUsage(completion_tokens=0, prompt_tokens=prompt_tokens, total_tokens=prompt_tokens),
+    )
+
+
+def _output_token_limit_chunk(model: str) -> ChatCompletionChunk:
+    return ChatCompletionChunk(
+        id=f"chatcmpl-{uuid.uuid4()}",
+        choices=(
+            ChunkChoice(
+                index=0,
+                finish_reason="length",
+                delta=ChoiceDelta(role="assistant", content=""),
+            ),
+        ),
+        created=int(time.time()),
+        model=model,
+        object="chat.completion.chunk",
+    )
+
+
+def _iter_once(chunk: ChatCompletionChunk) -> Iterator[ChatCompletionChunk]:
+    yield chunk
+
+
+async def _aiter_once(chunk: ChatCompletionChunk) -> AsyncIterator[ChatCompletionChunk]:
+    yield chunk
+
+
+def build_output_token_limit_response(
+    e: openai.BadRequestError, data: Mapping[str, object], is_async: bool
+) -> tuple[httpx.Headers, ChatCompletion | Iterator[ChatCompletionChunk] | AsyncIterator[ChatCompletionChunk]]:
+    """Synthesize the length-truncated response the provider itself returns for slightly larger output budgets.
+
+    The provider billed the prompt it processed but sends no usage object with the 400, so the prompt is estimated
+    the way every other usage-less path estimates it: reporting zero would spend input tokens against no budget.
+    """
+    model: Final[str] = str(data.get("model", ""))
+    messages: Final = data.get("messages")
+    prompt_tokens: Final = token_counter(model=model, messages=messages) if isinstance(messages, list) else 0
+    if not data.get("stream"):
+        return e.response.headers, _output_token_limit_completion(model, prompt_tokens)
+    chunk: Final = _output_token_limit_chunk(model)
+    return e.response.headers, (_aiter_once(chunk) if is_async else _iter_once(chunk))
+
+
 class BaseOpenAILLM:
     """
     Base class for OpenAI LLMs for getting their httpx clients and SSL verification settings
@@ -186,6 +268,7 @@ class BaseOpenAILLM:
             "max_retries",
             "organization",
             "api_base",
+            "workload_identity_config",
         )
         openai_client_fields: Final = (
             BaseOpenAILLM.get_openai_client_initialization_param_fields(client_type=client_type)
@@ -222,14 +305,16 @@ class BaseOpenAILLM:
 
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration()
+        transport: Final = AsyncHTTPHandler._create_async_transport(
+            ssl_context=(ssl_config if isinstance(ssl_config, ssl.SSLContext) else None),
+            ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
+            shared_session=shared_session,
+        )
 
         return httpx.AsyncClient(
             verify=ssl_config,
-            transport=AsyncHTTPHandler._create_async_transport(
-                ssl_context=(ssl_config if isinstance(ssl_config, ssl.SSLContext) else None),
-                ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
-                shared_session=shared_session,
-            ),
+            transport=transport,
+            mounts=AsyncHTTPHandler._create_httpx_proxy_mounts(transport, verify=ssl_config, cert=None),
             follow_redirects=True,
         )
 

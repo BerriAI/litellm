@@ -10,11 +10,34 @@ legacy internal names with `general_settings.use_team_public_model_name: false`.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
 if TYPE_CHECKING:
     from litellm.router import Router
+
+
+def configured_display_names(
+    entries: Sequence[tuple[str, str]],
+    llm_router: Router | None,
+) -> Mapping[str, str]:
+    """response_id -> configured `model_info.display_name` for the listing entries
+    that have one.
+
+    Metadata is looked up by each entry's internal lookup id (so team-scoped rows
+    resolve), while the returned map is keyed by the public response id the
+    Anthropic-shaped listing is built from. Entries without a configured name are
+    omitted so the listing falls back to the id itself.
+    """
+    if llm_router is None:
+        return MappingProxyType({})
+    resolved: Final = (
+        (response_id, llm_router.get_configured_display_name(lookup_id)) for response_id, lookup_id in entries
+    )
+    return MappingProxyType(
+        {response_id: display_name for response_id, display_name in resolved if display_name is not None}
+    )
 
 
 class TeamModelNameTranslator:

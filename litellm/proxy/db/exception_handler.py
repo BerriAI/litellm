@@ -1,4 +1,4 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from typing import Any, Final, TypeVar
 
 from litellm._logging import verbose_proxy_logger
@@ -9,9 +9,42 @@ from litellm.proxy._types import (
 )
 from litellm.secret_managers.main import str_to_bool
 
-# Bounds the __cause__/__context__ walk in is_database_service_unavailable_error_in_chain.
+# Bounds the __cause__/__context__ walk in find_database_service_unavailable_error_in_chain.
 # Real exception chains are a few links deep; the cap also makes the walk cycle-safe.
 _MAX_EXCEPTION_CHAIN_DEPTH: Final = 20
+
+_TRANSIENT_DB_UNAVAILABLE_MESSAGE: Final = (
+    "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."
+)
+
+
+def _exception_chain(e: BaseException) -> Iterator[BaseException]:
+    current = e  # rebind-ok: advances one link per iteration of the bounded walk
+    for _ in range(_MAX_EXCEPTION_CHAIN_DEPTH):
+        yield current
+        following = current.__cause__ or current.__context__
+        if following is None:
+            return
+        current = following
+
+
+def _database_service_unavailable_errors(e: BaseException) -> tuple[Exception, ...]:
+    return tuple(
+        link
+        for link in _exception_chain(e)
+        if isinstance(link, Exception) and PrismaDBExceptionHandler.is_database_service_unavailable_error(link)
+    )
+
+
+def _exception_types(*candidates: object) -> tuple[type[BaseException], ...]:
+    """Keep only the real exception classes among ``candidates``.
+
+    The predicates below resolve prisma's error classes at call time, so a test
+    that swaps ``sys.modules["prisma"]`` for a ``MagicMock`` hands them mocks,
+    and ``isinstance`` against a mock raises ``TypeError`` instead of answering
+    False. Dropping the non-types lets the call fall through to the other checks.
+    """
+    return tuple(c for c in candidates if isinstance(c, type) and issubclass(c, BaseException))
 
 
 class PrismaDBExceptionHandler:
@@ -59,7 +92,7 @@ class PrismaDBExceptionHandler:
 
         if isinstance(e, DB_CONNECTION_ERROR_TYPES):
             return True
-        if isinstance(e, prisma.engine.errors.EngineConnectionError):
+        if isinstance(e, _exception_types(prisma.engine.errors.EngineConnectionError)):
             return True
         return isinstance(e, ProxyException) and e.type == ProxyErrorTypes.no_db_connection
 
@@ -81,7 +114,7 @@ class PrismaDBExceptionHandler:
         """
         import prisma
 
-        data_layer_errors: Final = (
+        data_layer_errors: Final = _exception_types(
             prisma.errors.DataError,
             prisma.errors.UniqueViolationError,
             prisma.errors.ForeignKeyViolationError,
@@ -94,7 +127,7 @@ class PrismaDBExceptionHandler:
             return False
         if isinstance(e, DB_CONNECTION_ERROR_TYPES):
             return True
-        if isinstance(e, prisma.errors.PrismaError):
+        if isinstance(e, _exception_types(prisma.errors.PrismaError)):
             return True
         if isinstance(e, ProxyException) and e.type == ProxyErrorTypes.no_db_connection:
             return True
@@ -138,13 +171,13 @@ class PrismaDBExceptionHandler:
             return True
         if isinstance(
             e,
-            (
+            _exception_types(
                 prisma.errors.ClientNotConnectedError,
                 prisma.errors.HTTPClientClosedError,
             ),
         ):
             return True
-        if isinstance(e, prisma.errors.PrismaError):
+        if isinstance(e, _exception_types(prisma.errors.PrismaError)):
             error_message: Final = str(e).lower()
             connection_keywords: Final = (
                 "can't reach database server",
@@ -167,6 +200,22 @@ class PrismaDBExceptionHandler:
         return False
 
     @staticmethod
+    def is_deadlock_error(e: Exception) -> bool:
+        """True iff ``e`` is a Postgres deadlock (P2034 / 40P01) surfaced through prisma."""
+        import prisma
+
+        if not isinstance(e, _exception_types(prisma.errors.PrismaError)):
+            return False
+        if getattr(e, "code", None) == "P2034":
+            return True
+        error_message = str(e).lower()
+        return (
+            "deadlock detected" in error_message
+            or "40p01" in error_message
+            or "write conflict or a deadlock" in error_message
+        )
+
+    @staticmethod
     def is_prisma_engine_internal_error(e: Exception) -> bool:
         """True iff ``e`` is a non-``PrismaError`` exception raised from inside
         prisma-client-py's query-engine layer.
@@ -186,7 +235,7 @@ class PrismaDBExceptionHandler:
         """
         import prisma
 
-        if isinstance(e, prisma.errors.PrismaError):
+        if isinstance(e, _exception_types(prisma.errors.PrismaError)):
             return False
         tb = getattr(e, "__traceback__", None)
         while tb is not None:
@@ -253,6 +302,51 @@ class PrismaDBExceptionHandler:
         )
 
     @staticmethod
+    def is_permanent_database_fault(e: Exception) -> bool:
+        """True for a service-unavailable failure that will not clear on its
+        own: an engine-layer ``PrismaError`` (missing or version-skewed engine
+        binary, engine error status, misused transaction) that is neither the
+        transient ``EngineConnectionError`` nor a reconnectable transport failure.
+
+        Picks only the wording of a 503, never whether one is sent;
+        ``is_database_service_unavailable_error`` stays the status gate.
+        """
+        if PrismaDBExceptionHandler.is_database_connection_error(e):
+            return False
+        if PrismaDBExceptionHandler.is_database_transport_error(e):
+            return False
+        return PrismaDBExceptionHandler.is_database_infrastructure_error(e)
+
+    @staticmethod
+    def database_unavailable_message(e: Exception) -> str:
+        """The 503 detail for a service-unavailable database failure: retry
+        guidance for a transient outage, a pointer at the deployment for a
+        fault that retrying cannot fix. A permanent fault anywhere in the
+        exception chain wins, since the transport error that surfaced it is
+        not what blocks recovery."""
+        fault: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(e) or e
+        if not PrismaDBExceptionHandler.is_permanent_database_fault(fault):
+            return _TRANSIENT_DB_UNAVAILABLE_MESSAGE
+        return (
+            "Service Unavailable, the authentication database query engine reported "
+            f"{type(fault).__name__}, which is not a transient outage and will not clear by retrying. "
+            "The proxy deployment needs attention."
+        )
+
+    @staticmethod
+    def find_database_service_unavailable_error_in_chain(e: BaseException) -> Exception | None:
+        """The exception in the ``__cause__`` / ``__context__`` chain that
+        ``is_database_service_unavailable_error`` accepts, or ``None``. Callers
+        that word a response by the kind of outage need the wrapped database
+        error itself, not just the fact that one is present. A permanent fault
+        outranks a transient one wherever it sits in the chain: a reconnect that
+        dies on a missing engine binary raises the transport error last, but the
+        binary is what keeps the database down."""
+        outages: Final = _database_service_unavailable_errors(e)
+        permanent: Final = next(filter(PrismaDBExceptionHandler.is_permanent_database_fault, outages), None)
+        return permanent if permanent is not None else next(iter(outages), None)
+
+    @staticmethod
     def is_database_service_unavailable_error_in_chain(e: BaseException) -> bool:
         """Like ``is_database_service_unavailable_error`` but also walks the
         ``__cause__`` / ``__context__`` chain.
@@ -269,14 +363,7 @@ class PrismaDBExceptionHandler:
 
         The walk is depth-bounded, which also makes it cycle-safe.
         """
-        current: BaseException | None = e
-        for _ in range(_MAX_EXCEPTION_CHAIN_DEPTH):
-            if not isinstance(current, Exception):
-                return False
-            if PrismaDBExceptionHandler.is_database_service_unavailable_error(current):
-                return True
-            current = current.__cause__ or current.__context__
-        return False
+        return PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(e) is not None
 
     @staticmethod
     def handle_db_exception(e: Exception):
@@ -319,6 +406,7 @@ async def call_with_db_reconnect_retry(
     coro_factory: Callable[[], Awaitable[_ReadResultT]],
     *,
     reason: str,
+    retry_safe_error_types: tuple[type[Exception], ...] | None = None,
     timeout_seconds: float | None = None,
     lock_timeout_seconds: float | None = None,
 ) -> _ReadResultT:
@@ -334,7 +422,8 @@ async def call_with_db_reconnect_retry(
       2. On exception, if it is NOT a transport error (per
          `is_database_transport_error`), re-raise — data-layer errors like
          `UniqueViolationError` mean the DB is reachable, reconnect would be
-         pointless.
+         pointless. Transport errors outside `retry_safe_error_types` are
+         re-raised too.
       3. If `prisma_client` does not expose `attempt_db_reconnect`, re-raise.
          This guards against partial stand-ins / older clients in tests.
       4. Call `prisma_client.attempt_db_reconnect(reason=...)`. If it returns
@@ -355,6 +444,10 @@ async def call_with_db_reconnect_retry(
             `attempt_db_reconnect` and the `_db_auth_reconnect_*` defaults.
         coro_factory: Zero-arg callable returning the read awaitable.
         reason: Telemetry tag forwarded to `attempt_db_reconnect`.
+        retry_safe_error_types: Which transport errors may be replayed, or
+            None for every transport error. A non-idempotent write must narrow
+            this to `DB_RETRY_SAFE_ERROR_TYPES`, where the statements provably
+            never reached the database.
         timeout_seconds: Optional override for the reconnect cycle timeout.
             Defaults to `prisma_client._db_auth_reconnect_timeout_seconds`,
             then to 2.0s.
@@ -375,6 +468,8 @@ async def call_with_db_reconnect_retry(
         return await coro_factory()
     except Exception as first_exc:
         if not PrismaDBExceptionHandler.is_database_transport_error(first_exc):
+            raise
+        if retry_safe_error_types is not None and not isinstance(first_exc, retry_safe_error_types):
             raise
         if not hasattr(prisma_client, "attempt_db_reconnect"):
             raise

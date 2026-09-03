@@ -1,7 +1,9 @@
 import json
 import os
-import sys
+import re
 import traceback
+
+import httpx
 
 import openai
 import pytest
@@ -9,9 +11,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
@@ -314,7 +313,6 @@ def test_openai_azure_embedding():
         pytest.fail(f"Error occurred: {e}")
 
 
-from openai.types.embedding import Embedding
 
 
 def _openai_mock_response(*args, **kwargs):
@@ -537,13 +535,19 @@ def test_demo_tokens_as_input_to_embeddings_fails_for_titan():
 
     with pytest.raises(
         litellm.BadRequestError,
-        match='litellm.BadRequestError: BedrockException - {"message":"Malformed input request: expected type: String, found: JSONArray, please reformat your input and try again."}',
+        match=re.escape(
+            'litellm.BadRequestError: BedrockException - {"message":"Malformed input request: '
+            'expected type: String, found: JSONArray, please reformat your input and try again."}'
+        ),
     ):
         litellm.embedding(model="amazon.titan-embed-text-v1", input=[[1]])
 
     with pytest.raises(
         litellm.BadRequestError,
-        match='litellm.BadRequestError: BedrockException - {"message":"Malformed input request: expected type: String, found: Integer, please reformat your input and try again."}',
+        match=re.escape(
+            'litellm.BadRequestError: BedrockException - {"message":"Malformed input request: '
+            'expected type: String, found: Integer, please reformat your input and try again."}'
+        ),
     ):
         litellm.embedding(
             model="amazon.titan-embed-text-v1",
@@ -570,7 +574,6 @@ def test_hf_embedding():
 
 # test_hf_embedding()
 
-from unittest.mock import MagicMock, patch
 
 
 def tgi_mock_post(*args, **kwargs):
@@ -1254,56 +1257,42 @@ def test_jina_ai_img_embeddings(input_data, expected_payload_input):
         assert sent_data["input"] == expected_payload_input
 
 
-def test_encoding_format_defaults_to_float_for_openai_sdk(monkeypatch):
+def test_encoding_format_omitted_by_default_for_openai_sdk(monkeypatch):
     """
-    When encoding_format is not provided, LiteLLM sends `float` for OpenAI-path embeddings.
+    When encoding_format is not provided, LiteLLM leaves it out of the upstream request.
 
     Optional global override: `LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT`.
     """
     monkeypatch.delenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", raising=False)
-    with patch(
-        "litellm.llms.openai.openai.OpenAIChatCompletion._get_openai_client"
-    ) as mock_get_client:
-        # Create a mock client instance
-        mock_client_instance = MagicMock()
-        mock_get_client.return_value = mock_client_instance
+    captured_bodies = []
 
-        # Mock the embeddings.with_raw_response.create method
-        mock_response = MagicMock()
-        mock_response.parse.return_value = MagicMock(
-            model_dump=lambda: {
-                "data": [{"embedding": [0.1, 0.2, 0.3], "index": 0}],
-                "model": "text-embedding-ada-002",
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
                 "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}],
+                "model": "text-embedding-ada-002",
                 "usage": {"prompt_tokens": 1, "total_tokens": 1},
-            }
-        )
-        mock_response.headers = {}
-
-        mock_client_instance.embeddings.with_raw_response.create.return_value = (
-            mock_response
+            },
         )
 
-        # Call the embedding function without encoding_format
-        response = embedding(
-            model="text-embedding-ada-002",
-            input="Hello world",
-        )
+    client = openai.OpenAI(
+        api_key="sk-test", http_client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
 
-        # Get the call arguments to verify what was sent to OpenAI SDK
-        call_args = mock_client_instance.embeddings.with_raw_response.create.call_args
-        assert (
-            call_args is not None
-        ), "OpenAI SDK embeddings.create should have been called"
+    response = embedding(
+        model="text-embedding-ada-002",
+        input="Hello world",
+        api_key="sk-test",
+        client=client,
+    )
 
-        call_kwargs = call_args[1]  # Get kwargs
-
-        assert "encoding_format" in call_kwargs
-        assert (
-            call_kwargs["encoding_format"] == "float"
-        ), "encoding_format should default to float when not provided by user"
-
-        print("✅ PASS: encoding_format='float' is correctly passed to OpenAI SDK")
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+    assert "encoding_format" not in captured_bodies[0], (
+        "encoding_format should be omitted from the upstream request when not provided by user"
+    )
 
 
 def test_encoding_format_explicit_value_preserved():

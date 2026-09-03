@@ -753,3 +753,41 @@ class TestCheckResponsesCost:
         call_kwargs = mock_aget.call_args[1]
         assert "model" not in call_kwargs.get("litellm_metadata", {})
         assert "model_group" not in call_kwargs.get("litellm_metadata", {})
+
+    @pytest.mark.asyncio
+    async def test_poll_stamps_internal_call_origin_so_the_read_is_billed(
+        self, check_responses_cost_instance, mock_prisma_client
+    ):
+        """A background create returns queued with no usage, so this poll's retrieval is the only
+        place the job's spend is ever seen. Without the origin stamp it is priced at zero like a
+        user-facing read (LIT-5602) and the job is never billed."""
+        from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+        from litellm.litellm_core_utils.internal_call_metadata import (
+            is_unbilled_non_inference_call,
+        )
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = "resp_test_billed"
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-billed"
+        mock_job.file_object = {"model": "gpt-5", "id": "resp_test_billed"}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
+            mock_aget.return_value = mock_response
+            await check_responses_cost_instance.check_responses_cost()
+
+        metadata = mock_aget.call_args[1]["litellm_metadata"]
+        foreground_read = {"background": False}
+        assert metadata[INTERNAL_CALL_ORIGIN_METADATA_KEY] == "background_response_cost_poll"
+        assert is_unbilled_non_inference_call("aget_responses", metadata, foreground_read) is False
+        assert is_unbilled_non_inference_call("aget_responses", None, foreground_read) is True

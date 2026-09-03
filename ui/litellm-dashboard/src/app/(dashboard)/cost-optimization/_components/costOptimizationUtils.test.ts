@@ -11,6 +11,7 @@ import {
   formatRangeLabel,
   isAnthropicModel,
   localIsoDay,
+  savingsSeriesOf,
   toCumulative,
   topToolsBySpend,
   usd,
@@ -64,6 +65,28 @@ const modelDay = (date: string, models: Record<string, Partial<SpendMetrics>>): 
     entities: {},
     api_keys: {},
   },
+});
+
+describe("savingsSeriesOf", () => {
+  it("plots the LiteLLM-injected caching share, sorted oldest first", () => {
+    // Total and injected caching deliberately differ: every chart derives from
+    // SAVINGS_DRIVERS, so the caching series must follow the injected figure.
+    const sharedSavings: Partial<SpendMetrics> = {
+      compression_savings_spend: 0.1,
+      prompt_caching_savings_spend: 0.5,
+      autorouter_savings_spend: 0.05,
+    };
+    const newestFirst = [day("2026-07-02", {}), day("2026-07-01", {})].map((d, i) => ({
+      ...d,
+      metrics: metrics({ ...sharedSavings, gateway_injected_caching_savings_spend: i === 0 ? 0.2 : 0.3 }),
+    }));
+
+    const series = savingsSeriesOf(newestFirst);
+
+    expect(series.map((p) => p.date)).toEqual(["Jul 1", "Jul 2"]);
+    expect(series[0]).toMatchObject({ Compression: 0.1, "Prompt caching": 0.3, "Auto-router": 0.05 });
+    expect(series[1]).toMatchObject({ Compression: 0.1, "Prompt caching": 0.2, "Auto-router": 0.05 });
+  });
 });
 
 describe("computeCacheLeakage", () => {

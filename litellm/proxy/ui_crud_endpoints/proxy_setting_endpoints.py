@@ -3,17 +3,25 @@ import asyncio
 import json
 import os
 from collections import Counter
-from collections.abc import Mapping
-from typing import Any, Final, Protocol, TypeVar
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import (
+    Final,
+    NamedTuple,
+    Protocol,
+    cast,  # noqa: TID251  # prisma types Json columns as fields.Json but de-serializes them to plain python on read
+)
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
 from pydantic import ConfigDict, JsonValue, ValidationError, create_model
 from pydantic.fields import FieldInfo
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
+from litellm.proxy._experimental.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.config_resolvers.sso import (
@@ -25,11 +33,13 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attributio
 from litellm.proxy.utils import invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
     SSOConfigRepository,
     UISettingsRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
+from litellm.types.mcp import MCPToolSearchSettings
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     SSOConfig,
@@ -37,15 +47,30 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 
 router: Final = APIRouter()
 
-_DbRecordT: Final = TypeVar("_DbRecordT", covariant=True)
+
+JsonSchemaItems: Final = TypedDict(
+    "JsonSchemaItems",
+    {"$ref": ReadOnly[str], "enum": ReadOnly[Sequence[JsonValue]]},
+    total=False,
+)
 
 
-class _PrismaTableActions(Protocol[_DbRecordT]):
-    async def find_unique(self, where: Mapping[str, object]) -> _DbRecordT | None: ...
+class JsonSchemaNode(TypedDict, total=False):
+    type: ReadOnly[str]
+    description: ReadOnly[str]
+    enum: ReadOnly[Sequence[JsonValue]]
+    anyOf: ReadOnly[Sequence["JsonSchemaNode"]]
+    items: ReadOnly["JsonSchemaItems"]
+    properties: ReadOnly[Mapping[str, "JsonSchemaNode"]]
 
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> _DbRecordT: ...
 
-    async def upsert(self, where: Mapping[str, object], data: Mapping[str, object]) -> _DbRecordT: ...
+_EMPTY_SCHEMA_DEFS: Final[Mapping[str, "JsonSchemaNode"]] = MappingProxyType({})
+
+
+class JsonSchemaPropertyEntry(TypedDict):
+    description: ReadOnly[str]
+    type: ReadOnly[str]
+    items: NotRequired[ReadOnly["JsonSchemaItems"]]
 
 
 class _SsoSettingsMappingRow(Protocol):
@@ -53,13 +78,10 @@ class _SsoSettingsMappingRow(Protocol):
     def sso_settings(self) -> Mapping[str, object] | None: ...
 
 
-class _HasSsoSettingsMappingTable(Protocol):
-    @property
-    def table(self) -> _PrismaTableActions[_SsoSettingsMappingRow]: ...
-
-
-def _sso_settings_mapping_db(repo: _HasSsoSettingsMappingTable) -> _PrismaTableActions[_SsoSettingsMappingRow]:
-    return repo.table
+def _sso_settings_mapping_db(repo: SSOConfigRepository) -> TableActions[_SsoSettingsMappingRow]:
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
+        "TableActions[_SsoSettingsMappingRow]", repo.table
+    )
 
 
 class _StoredSsoSettingsRow(Protocol):
@@ -67,12 +89,7 @@ class _StoredSsoSettingsRow(Protocol):
     def sso_settings(self) -> object: ...
 
 
-class _HasStoredSsoSettingsTable(Protocol):
-    @property
-    def table(self) -> _PrismaTableActions[_StoredSsoSettingsRow]: ...
-
-
-def _stored_sso_settings_db(repo: _HasStoredSsoSettingsTable) -> _PrismaTableActions[_StoredSsoSettingsRow]:
+def _stored_sso_settings_db(repo: SSOConfigRepository) -> TableActions[_StoredSsoSettingsRow]:
     return repo.table
 
 
@@ -81,13 +98,10 @@ class _UiSettingsRow(Protocol):
     def ui_settings(self) -> str | Mapping[str, JsonValue] | None: ...
 
 
-class _HasUiSettingsTable(Protocol):
-    @property
-    def table(self) -> _PrismaTableActions[_UiSettingsRow]: ...
-
-
-def _ui_settings_db(repo: _HasUiSettingsTable) -> _PrismaTableActions[_UiSettingsRow]:
-    return repo.table
+def _ui_settings_db(repo: UISettingsRepository) -> TableActions[_UiSettingsRow]:
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
+        "TableActions[_UiSettingsRow]", repo.table
+    )
 
 
 class _ConfigParamRow(Protocol):
@@ -95,13 +109,10 @@ class _ConfigParamRow(Protocol):
     def param_value(self) -> str | Mapping[str, object] | None: ...
 
 
-class _HasConfigParamTable(Protocol):
-    @property
-    def table(self) -> _PrismaTableActions[_ConfigParamRow]: ...
-
-
-def _config_param_db(repo: _HasConfigParamTable) -> _PrismaTableActions[_ConfigParamRow]:
-    return repo.table
+def _config_param_db(repo: ConfigRepository) -> TableActions[_ConfigParamRow]:
+    return cast(  # cast-ok: prisma's LiteLLM_Config actions object, whose Json column parses to a mapping
+        "TableActions[_ConfigParamRow]", repo.table
+    )
 
 
 # Maps each UIThemeConfig field to the env var the UI branding path reads it
@@ -110,6 +121,7 @@ def _config_param_db(repo: _HasConfigParamTable) -> _PrismaTableActions[_ConfigP
 # reflect a deployment branded purely through process env.
 _UI_THEME_FIELD_ENV_VARS: Final[dict[str, str]] = {
     "logo_url": "UI_LOGO_PATH",
+    "logo_url_dark": "UI_LOGO_PATH_DARK",
     "favicon_url": "LITELLM_FAVICON_URL",
 }
 
@@ -156,6 +168,14 @@ class UIThemeConfig(BaseModel):
         description="URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL",
     )
 
+    logo_url_dark: str | None = Field(
+        default=None,
+        description=(
+            "URL or path to a custom logo image for dark mode. Can be a local file path or HTTP/HTTPS URL. "
+            "Leave unset to reuse logo_url in dark mode"
+        ),
+    )
+
     # Favicon configuration
     favicon_url: str | None = Field(
         default=None,
@@ -166,10 +186,10 @@ class UIThemeConfig(BaseModel):
 class SettingsResponse(BaseModel):
     """Base response model for settings with values and schema information"""
 
-    values: dict[str, Any]
+    values: dict[str, object]
     """The current configuration values"""
 
-    field_schema: dict[str, Any]
+    field_schema: dict[str, object]
     """Schema information including descriptions and property types for UI display"""
 
 
@@ -430,6 +450,10 @@ class MCPSemanticFilterSettingsResponse(SettingsResponse):
     """Response model for MCP semantic filter settings"""
 
 
+class MCPToolSearchSettingsResponse(SettingsResponse):
+    """Response model for native MCP tool search settings"""
+
+
 @router.get(
     "/get/allowed_ips",
     tags=["Budget & Spend Tracking"],
@@ -557,6 +581,62 @@ async def delete_allowed_ip(
     return {"message": f"IP {ip_address.ip} deleted successfully", "status": "success"}
 
 
+def _resolve_non_null_variant(field_info: JsonSchemaNode) -> JsonSchemaNode:
+    """Pydantic v2 renders Optional fields as ``anyOf: [actual_type, null]``."""
+    if "anyOf" not in field_info:
+        return field_info
+    return next((variant for variant in field_info["anyOf"] if variant.get("type") != "null"), field_info)
+
+
+def _schema_items_entry(resolved: JsonSchemaNode, defs: Mapping[str, JsonSchemaNode]) -> "JsonSchemaItems | None":
+    """Items info (including enum values) for array fields, so the UI can render a multi-select dropdown."""
+    if "items" not in resolved:
+        return None
+    items: Final = resolved["items"]
+    if "$ref" not in items:
+        return items
+    ref_def: Final = defs.get(items["$ref"].split("/")[-1])
+    if ref_def is None or "enum" not in ref_def:
+        return None
+    enum_items: Final[JsonSchemaItems] = {"enum": ref_def["enum"]}
+    return enum_items
+
+
+def _schema_property_entry(field_info: JsonSchemaNode, defs: Mapping[str, JsonSchemaNode]) -> JsonSchemaPropertyEntry:
+    resolved: Final = _resolve_non_null_variant(field_info)
+    items_entry: Final = _schema_items_entry(resolved, defs)
+    description: Final = field_info.get("description", "")
+    type_name: Final = resolved.get("type", "string")
+    if items_entry is None:
+        entry: Final[JsonSchemaPropertyEntry] = {"description": description, "type": type_name}
+        return entry
+    entry_with_items: Final[JsonSchemaPropertyEntry] = {
+        "description": description,
+        "type": type_name,
+        "items": items_entry,
+    }
+    return entry_with_items
+
+
+class _RootSchema(NamedTuple):
+    description: str
+    properties: Mapping[str, JsonSchemaNode]
+    nested_defs: Mapping[str, JsonSchemaNode]
+    defs: Mapping[str, JsonSchemaNode]
+
+
+def _root_schema(settings_class: type[BaseModel]) -> _RootSchema:
+    from pydantic import TypeAdapter
+
+    raw_schema: Final = TypeAdapter(settings_class).json_schema(by_alias=True)
+    return _RootSchema(
+        description=raw_schema.get("description", ""),
+        properties=raw_schema["properties"],
+        nested_defs=raw_schema.get("definitions", _EMPTY_SCHEMA_DEFS),
+        defs=raw_schema["$defs"] if "$defs" in raw_schema else raw_schema.get("definitions", _EMPTY_SCHEMA_DEFS),
+    )
+
+
 async def _get_settings_with_schema(
     settings_key: str,
     settings_class: type[BaseModel],
@@ -570,69 +650,43 @@ async def _get_settings_with_schema(
         settings_class: The Pydantic class to use for schema
         config: The config dictionary
     """
-    from pydantic import TypeAdapter
-
     litellm_settings: Final = config.get("litellm_settings", {}) or {}
     settings_data: Final = litellm_settings.get(settings_key, {}) or {}
 
     # Create the settings object
     settings: Final = settings_class(**(settings_data))
     # Get the schema
-    schema: Final = TypeAdapter(settings_class).json_schema(by_alias=True)
+    root_schema: Final = _root_schema(settings_class)
 
     # Convert to dict for response
     settings_dict: Final = settings.model_dump()
 
     # Add descriptions to the response
-    result: Final = {
-        "values": settings_dict,
-        "field_schema": {
-            "description": schema.get("description", ""),
-            "properties": {},
-        },
+    schema_properties_out: Final[Mapping[str, JsonSchemaPropertyEntry]] = {
+        field_name: _schema_property_entry(field_info, root_schema.defs)
+        for field_name, field_info in root_schema.properties.items()
     }
 
-    # Add property descriptions
-    defs: Final = schema.get("$defs", schema.get("definitions", {}))
-    for field_name, field_info in schema["properties"].items():
-        # For Optional fields, Pydantic v2 uses anyOf with [actual_type, null].
-        # Resolve the non-null variant to get the real type and items.
-        resolved = field_info
-        if "anyOf" in field_info:
-            for variant in field_info["anyOf"]:
-                if variant.get("type") != "null":
-                    resolved = variant
-                    break
-
-        prop_entry: dict = {
-            "description": field_info.get("description", ""),
-            "type": resolved.get("type", "string"),
-        }
-        # Pass through items info (including enum values) for array fields
-        # so the UI can render a multi-select dropdown
-        if "items" in resolved:
-            items = resolved["items"]
-            # Resolve $ref to enum definitions if needed
-            if "$ref" in items:
-                ref_name = items["$ref"].split("/")[-1]
-                ref_def = defs.get(ref_name, {})
-                if "enum" in ref_def:
-                    prop_entry["items"] = {"enum": ref_def["enum"]}
-            else:
-                prop_entry["items"] = items
-        result["field_schema"]["properties"][field_name] = prop_entry
-
     # Add nested object descriptions
-    for def_name, def_schema in schema.get("definitions", {}).items():
-        result["field_schema"][def_name] = {
+    nested_defs_out: Final[Mapping[str, Mapping[str, object]]] = {
+        def_name: {
             "description": def_schema.get("description", ""),
             "properties": {
                 prop_name: {"description": prop_info.get("description", "")}
                 for prop_name, prop_info in def_schema.get("properties", {}).items()
             },
         }
+        for def_name, def_schema in root_schema.nested_defs.items()
+    }
 
-    return result
+    return {
+        "values": settings_dict,
+        "field_schema": {
+            "description": root_schema.description,
+            "properties": schema_properties_out,
+            **nested_defs_out,
+        },
+    }
 
 
 @router.get(
@@ -666,7 +720,7 @@ async def get_internal_user_settings():
 )
 async def get_default_team_settings():
     """
-    Get all SSO settings from the litellm_settings configuration.
+    Get the default team parameters (litellm_settings.default_team_params).
     Returns a structured object with values and descriptions for UI display.
     """
     from litellm.proxy.proxy_server import proxy_config
@@ -787,7 +841,7 @@ async def update_default_team_member_budget(teams: list[NewUserRequestTeam], use
 
 
 async def _update_litellm_setting(
-    settings: DefaultInternalUserParams | DefaultTeamSSOParams | MCPSemanticFilterSettings,
+    settings: DefaultInternalUserParams | DefaultTeamSSOParams | MCPSemanticFilterSettings | MCPToolSearchSettings,
     settings_key: str,
     success_message: str,
     user_api_key_dict: UserAPIKeyAuth,
@@ -813,7 +867,7 @@ async def _update_litellm_setting(
             detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
-    in_memory_var: Final = settings.model_dump(exclude_none=True)
+    in_memory_var: Final = settings.model_dump(mode="json", exclude_none=True)
 
     # Load existing config first, then set in-memory value after,
     # because get_config() may overwrite litellm.<key> with stale DB values
@@ -894,8 +948,9 @@ async def update_default_team_settings(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Update the default team parameters for SSO users.
-    These settings will be applied to new teams created from SSO.
+    Update the default team parameters (litellm_settings.default_team_params).
+    Applied to every new team for fields not explicitly provided in the create request;
+    `models` only applies to teams automatically created via SSO Groups.
     """
     if settings.organization_id is not None:
         await _validate_default_organization_exists(settings.organization_id)
@@ -938,32 +993,29 @@ async def get_sso_settings():
     resolved: Final = resolve_sso_config(sso_db_settings, os.environ)
 
     # Get the schema for UI display
-    from pydantic import TypeAdapter
-
-    schema: Final = TypeAdapter(SSOConfig).json_schema(by_alias=True)
+    root_schema: Final = _root_schema(SSOConfig)
 
     # Convert to dict for response, masking OAuth client secrets so plaintext
     # is never sent to the UI.
     sso_dict: Final = mask_sensitive_keys(resolved.config.model_dump(), set(SSO_SECRET_FIELDS))
 
     # Add descriptions to the response
-    result: Final = {
-        "values": sso_dict,
-        "provenance": resolved.provenance,
-        "field_schema": {
-            "description": schema.get("description", ""),
-            "properties": {},
-        },
-    }
-
-    # Add property descriptions
-    for field_name, field_info in schema["properties"].items():
-        result["field_schema"]["properties"][field_name] = {
+    schema_properties_out: Final[Mapping[str, Mapping[str, str]]] = {
+        field_name: {
             "description": field_info.get("description", ""),
             "type": field_info.get("type", "string"),
         }
+        for field_name, field_info in root_schema.properties.items()
+    }
 
-    return result
+    return {
+        "values": sso_dict,
+        "provenance": resolved.provenance,
+        "field_schema": {
+            "description": root_schema.description,
+            "properties": schema_properties_out,
+        },
+    }
 
 
 @router.patch(
@@ -1183,6 +1235,7 @@ async def update_ui_theme_settings(
     )
 
     _validate_public_image_url(theme_config.logo_url, "logo_url")
+    _validate_public_image_url(theme_config.logo_url_dark, "logo_url_dark")
     _validate_public_image_url(theme_config.favicon_url, "favicon_url")
 
     if store_model_in_db is not True:
@@ -1203,16 +1256,18 @@ async def update_ui_theme_settings(
         config["litellm_settings"] = {}
     config["litellm_settings"]["ui_theme_config"] = theme_data
 
-    # UI_LOGO_PATH and LITELLM_FAVICON_URL are the only environment variables
-    # this endpoint owns. A non-empty value sets the var; an empty or missing
-    # one clears it back to the default. Apply to the live process immediately,
-    # then persist only these two keys so an unrelated env var (a YAML/OS value
-    # merged in by get_config) is never snapshotted into the DB.
+    # The vars below are the only environment variables this endpoint owns, and
+    # they must stay in step with _UI_THEME_FIELD_ENV_VARS. A non-empty value
+    # sets the var; an empty or missing one clears it back to the default. Apply
+    # to the live process immediately, then persist only those keys so an
+    # unrelated env var (a YAML/OS value merged in by get_config) is never
+    # snapshotted into the DB.
     def _clean(url: str | None) -> str | None:
         return url if url is not None and url.strip() else None
 
     env_updates: Final[dict[str, str | None]] = {
         "UI_LOGO_PATH": _clean(theme_config.logo_url),
+        "UI_LOGO_PATH_DARK": _clean(theme_config.logo_url_dark),
         "LITELLM_FAVICON_URL": _clean(theme_config.favicon_url),
     }
     for env_key, env_value in env_updates.items():
@@ -1310,11 +1365,64 @@ async def update_mcp_semantic_filter_settings(
     return result
 
 
+@router.get(
+    "/get/mcp_tool_search_settings",
+    tags=["Settings"],  # mutable-ok: FastAPI's route decorator only accepts a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI's route decorator only accepts a list
+    response_model=MCPToolSearchSettingsResponse,
+)
+async def get_mcp_tool_search_settings(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> Mapping[str, object]:
+    """
+    Get the `litellm_settings.mcp_tool_search` configuration used by the native `mcp_tool_search` virtual tool.
+    """
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected. Please connect a database.")
+
+    config: Final = await proxy_config.get_config()
+
+    return await _get_settings_with_schema(
+        settings_key=MCP_TOOL_SEARCH_SETTINGS_KEY,
+        settings_class=MCPToolSearchSettings,
+        config=config,
+    )
+
+
+@router.patch(
+    "/update/mcp_tool_search_settings",
+    tags=["Settings"],  # mutable-ok: FastAPI's route decorator only accepts a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI's route decorator only accepts a list
+)
+async def update_mcp_tool_search_settings(
+    settings: MCPToolSearchSettings,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> Mapping[str, object]:
+    """
+    Update `litellm_settings.mcp_tool_search` in the database.
+    Settings will be picked up by all pods within approximately 10 seconds via background polling.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can update MCP tool search settings.",
+        )
+
+    return await _update_litellm_setting(
+        settings=settings,
+        settings_key=MCP_TOOL_SEARCH_SETTINGS_KEY,
+        success_message="MCP tool search settings updated successfully. Changes will be applied across all pods within 10 seconds.",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+
 UI_SETTINGS_CACHE_KEY: Final = "ui_settings:settings_dict"
 UI_SETTINGS_CACHE_TTL: Final = 600  # 10 minutes
 
 
-async def get_ui_settings_cached() -> dict[str, Any]:
+async def get_ui_settings_cached() -> dict[str, JsonValue]:
     """
     Return the persisted UI settings dict, using DualCache for reads.
 
@@ -1545,13 +1653,22 @@ async def update_ui_settings(
     tags=["UI Theme Settings"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def upload_logo(file: UploadFile = File(...)):
+async def upload_logo(
+    file: UploadFile = File(...),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Upload a custom logo for the admin UI.
     Accepts image files (PNG, JPG, JPEG, SVG) and stores them for use in the UI.
     """
     import os
     from pathlib import Path
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can upload a UI logo.",
+        )
 
     # Validate file type
     allowed_extensions: Final = {".png", ".jpg", ".jpeg", ".svg"}
@@ -1563,9 +1680,11 @@ async def upload_logo(file: UploadFile = File(...)):
             detail=f"Invalid file type. Allowed types: {', '.join(allowed_extensions)}",
         )
 
-    # Validate file size (max 5MB)
-    file_content: Final = await file.read()
-    if len(file_content) > 5 * 1024 * 1024:  # 5MB
+    # Read bounded to one byte past the limit, so an oversized upload is never
+    # fully buffered in memory before being rejected.
+    max_logo_size_bytes: Final = 5 * 1024 * 1024
+    file_content: Final = await file.read(max_logo_size_bytes + 1)
+    if len(file_content) > max_logo_size_bytes:
         raise HTTPException(status_code=400, detail="File size too large. Maximum size is 5MB.")
 
     # Create uploads directory if it doesn't exist

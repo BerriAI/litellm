@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 import litellm
@@ -137,7 +139,7 @@ def test_gpt5_codex_temperature_error(config: OpenAIConfig):
     """Test that GPT-5-Codex raises error for unsupported temperature when drop_params=False."""
     with pytest.raises(
         litellm.utils.UnsupportedParamsError,
-        match="gpt-5 models \\(including gpt-5-codex\\)",
+        match=re.escape("gpt-5-codex doesn't support temperature=0.7 while reasoning is active"),
     ):
         config.map_openai_params(
             non_default_params={"temperature": 0.7},
@@ -1309,3 +1311,197 @@ def test_responses_gpt54_allow_temperature_effort_none(
         drop_params=False,
     )
     assert params["temperature"] == 0.7
+
+
+@pytest.mark.parametrize("model", ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+def test_gpt5_6_forwards_reasoning_effort_max_for_the_responses_bridge(config: OpenAIConfig, model: str):
+    """A chat request carrying tools or a reasoning summary is converted to /v1/responses further
+    down main.py, and that surface accepts max. This runs before litellm has decided to bridge, so
+    refusing max here would break the cursor thinking-max shape that works today. Plain chat
+    completions still answer max with a provider 400, and the capability list below is what keeps
+    the level out of the picker."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "max"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "max"
+
+
+@pytest.mark.parametrize("model", ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+def test_gpt5_6_never_advertises_reasoning_effort_max(model: str):
+    """/v1/chat/completions answers max with "Unsupported value: 'reasoning_effort' does not support
+    'max' with this model. Supported values are: 'none', 'low', 'medium', 'high', and 'xhigh'", so no
+    gpt-5.6 entry asserts supports_max_reasoning_effort and the advertised set stops at xhigh."""
+    from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+
+    resolved = resolve_supported_reasoning_efforts(litellm.get_model_info(model), deployment_is_mapped=True)
+    assert resolved is not None
+    assert "max" not in resolved
+    assert "xhigh" in resolved
+
+
+def test_gpt5_6_keeps_reasoning_effort_max_on_the_responses_api(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """/v1/responses accepts max for gpt-5.6, and that is the surface the cursor thinking-max
+    variant resolves onto, so the responses path keeps carrying the level chat refuses."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            reasoning={"effort": "max"},
+        ),
+        model="gpt-5.6",
+        drop_params=False,
+    )
+    assert params["reasoning"] == {"effort": "max"}
+
+
+def test_gpt5_forwards_levels_the_chat_gate_does_not_own(config: OpenAIConfig):
+    """Only xhigh is gated on this surface. max reaches the provider (or the responses bridge) and
+    is answered there, which is what happened before per-group capabilities existed."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "max"},
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "max"
+
+
+def test_gpt5_rejects_xhigh_for_models_without_the_flag(config: OpenAIConfig):
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "xhigh"},
+            optional_params={},
+            model="gpt-5.1",
+            drop_params=False,
+        )
+
+
+def test_gpt5_drops_xhigh_when_requested(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=True,
+    )
+    assert "reasoning_effort" not in params
+
+
+class TestDefaultReasoningEffortGatesSamplingParams:
+    """A non-default temperature rides on the effort RESOLVING to "none", which for a request
+    that omits reasoning_effort is the model's declared default_reasoning_effort - not on the
+    model merely supporting "none". gpt-5.5 and gpt-5.6 support it and do not default to it,
+    so reading one fact as the other forwarded temperature=0 and the provider rejected it.
+
+    Every expectation below was measured against the live provider before being pinned here.
+    """
+
+    @pytest.mark.parametrize(
+        "model, effort, temperature_survives",
+        [
+            # declares default_reasoning_effort="none": reasoning is off, sampling is free
+            ("gpt-5.1", None, True),
+            ("gpt-5.2", None, True),
+            ("gpt-5.4", None, True),
+            ("gpt-5.4-nano", None, True),
+            # declares no default: reasoning is active, so the provider takes only temperature=1
+            ("gpt-5.5", None, False),
+            ("gpt-5.6", None, False),
+            ("gpt-5.6-terra", None, False),
+            ("gpt-5.6-sol", None, False),
+            # an explicit effort always wins over the declared default, both ways
+            ("gpt-5.6-terra", "none", True),
+            ("gpt-5.6-terra", "medium", False),
+            ("gpt-5.1", "medium", False),
+        ],
+    )
+    def test_temperature_follows_the_resolved_effort(self, model, effort, temperature_survives):
+        params = {"temperature": 0} if effort is None else {"temperature": 0, "reasoning_effort": effort}
+        mapped = OpenAIGPT5Config().map_openai_params(
+            non_default_params=params,
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        assert ("temperature" in mapped) is temperature_survives
+
+    @pytest.mark.parametrize("model, top_p_survives", [("gpt-5.1", True), ("gpt-5.6-terra", False)])
+    def test_the_same_rule_gates_top_p(self, model, top_p_survives):
+        """top_p/logprobs are gated by the identical condition, so they were identically wrong."""
+        mapped = OpenAIGPT5Config().map_openai_params(
+            non_default_params={"top_p": 0.5},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        assert ("top_p" in mapped) is top_p_survives
+
+    def test_an_undeclared_model_is_refused_rather_than_forwarded(self):
+        """Without drop_params the caller gets an actionable 400 naming the remedy, instead of
+        the provider's own rejection arriving from an upstream it did not address."""
+        with pytest.raises(litellm.utils.UnsupportedParamsError, match="default_reasoning_effort"):
+            OpenAIGPT5Config().map_openai_params(
+                non_default_params={"temperature": 0},
+                optional_params={},
+                model="gpt-5.6-terra",
+                drop_params=False,
+            )
+
+
+class TestACatalogueOlderThanTheCodeDoesNotStripTemperature:
+    """The cost map is fetched from the published branch at import time, so it can be OLDER than
+    the code reading it. On such a map every model looks undeclared, and reading that as
+    "reasoning is active" silently stripped temperature from the gpt-5.1/5.2/5.4 deployments that
+    accept it - a regression caused by data lag rather than by anything about the model.
+
+    Absence of the key only means something once the catalogue is known to carry it at all.
+    """
+
+    @staticmethod
+    def _map_without_the_key(monkeypatch: pytest.MonkeyPatch) -> None:
+        stripped = {
+            name: {k: v for k, v in entry.items() if k != "default_reasoning_effort"}
+            if isinstance(entry, dict)
+            else entry
+            for name, entry in litellm.model_cost.items()
+        }
+        monkeypatch.setattr(litellm, "model_cost", stripped)
+
+    @pytest.mark.parametrize("model", ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-nano"])
+    def test_a_pre_feature_catalogue_keeps_the_answer_it_gave_before(self, monkeypatch, model):
+        """These models accept temperature=0, verified against the provider. On a map that predates
+        the key they must keep it, exactly as they did before this feature existed."""
+        self._map_without_the_key(monkeypatch)
+
+        mapped = OpenAIGPT5Config().map_openai_params(
+            non_default_params={"temperature": 0},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        assert mapped.get("temperature") == 0
+
+    @pytest.mark.parametrize("model", ["gpt-5.1", "gpt-5.4"])
+    def test_the_same_holds_for_the_sampling_params(self, monkeypatch, model):
+        self._map_without_the_key(monkeypatch)
+
+        mapped = OpenAIGPT5Config().map_openai_params(
+            non_default_params={"top_p": 0.5},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        assert mapped.get("top_p") == 0.5
+
+    def test_once_the_catalogue_declares_the_key_the_conservative_answer_returns(self):
+        """The bundled map DOES carry the key, so an undeclared model there is a real statement
+        that its default is not none, and temperature is dropped."""
+        mapped = OpenAIGPT5Config().map_openai_params(
+            non_default_params={"temperature": 0},
+            optional_params={},
+            model="gpt-5.6-terra",
+            drop_params=True,
+        )
+        assert "temperature" not in mapped
