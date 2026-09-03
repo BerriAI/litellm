@@ -1,10 +1,7 @@
 """Validate gateway endpoints that map to Rust ai-gateway."""
 from fastapi.testclient import TestClient
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
-from shared.tracing.tracer import ExecutionTracer, print_trace_table
+from rust_python_harness.shared.tracing.tracer import ExecutionTracer, print_trace_table
 
 
 RUST_IMPLEMENTATIONS = {
