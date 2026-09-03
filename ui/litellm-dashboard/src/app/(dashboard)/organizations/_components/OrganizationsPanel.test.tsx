@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { NuqsTestingAdapter, type UrlUpdateEvent } from "nuqs/adapters/testing";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type OrganizationsTableComponent from "./OrganizationsTable";
+import type { Organization } from "@/components/networking";
 import type OrganizationInfoViewComponent from "@/components/organization/organization_view";
 
 vi.mock("@/components/vector_store_management/VectorStoreSelector", () => ({
@@ -14,13 +15,54 @@ vi.mock("@/components/mcp_server_management/MCPServerSelector", () => ({
   __esModule: true,
   default: () => null,
 }));
+type AuthState = { accessToken: string | null; userId: string | null; userRole: string | null };
+const SIGNED_OUT: AuthState = { accessToken: null, userId: null, userRole: null };
+const SIGNED_IN: AuthState = { accessToken: "sk-test", userId: "user-1", userRole: "Admin" };
+let authState: AuthState = SIGNED_OUT;
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
-  default: () => ({
-    accessToken: null,
-    userId: null,
-    userRole: null,
-  }),
+  default: () => authState,
 }));
+
+const makeOrganization = (organization_id: string, organization_alias: string): Organization => ({
+  organization_id,
+  organization_alias,
+  budget_id: "",
+  metadata: {},
+  models: [],
+  spend: 0,
+  model_spend: {},
+  created_at: "2024-01-01T00:00:00Z",
+  created_by: "user-1",
+  updated_at: "2024-01-01T00:00:00Z",
+  updated_by: "user-1",
+  litellm_budget_table: null,
+  teams: null,
+  users: null,
+  members: null,
+});
+const ALPHA_ORG_ID = "ff9eb074-3f07-4e13-91fb-5337fb10d760";
+const BETA_ORG_ID = "0a1b2c3d-1111-4222-8333-444455556666";
+const SERVER_ORGANIZATIONS: Organization[] = [
+  makeOrganization(ALPHA_ORG_ID, "Alpha Org"),
+  makeOrganization(BETA_ORG_ID, "Beta Org"),
+  makeOrganization("9f8e7d6c-9999-4888-8777-666655554444", "Gamma Org"),
+];
+const matchesServerFilters = (organization: Organization, orgId: string | null, orgAlias: string | null) => {
+  const idMatches = !orgId || organization.organization_id === orgId;
+  const aliasMatches = !orgAlias || organization.organization_alias.toLowerCase().includes(orgAlias.toLowerCase());
+  return idMatches && aliasMatches;
+};
+vi.mock("@/components/networking", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/networking")>();
+  return {
+    ...actual,
+    organizationListCall: (_accessToken: string, orgId: string | null = null, orgAlias: string | null = null) =>
+      Promise.resolve(
+        SERVER_ORGANIZATIONS.filter((organization) => matchesServerFilters(organization, orgId, orgAlias)),
+      ),
+    modelAvailableCall: () => Promise.resolve({ data: [] }),
+  };
+});
 type OrganizationsTableProps = React.ComponentProps<typeof OrganizationsTableComponent>;
 type OrganizationInfoViewProps = React.ComponentProps<typeof OrganizationInfoViewComponent>;
 
@@ -80,6 +122,7 @@ const expectQueryString = (queryString: string) =>
   waitFor(() => expect(onUrlUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ queryString })));
 
 beforeEach(() => {
+  authState = SIGNED_OUT;
   capturedTableProps = null;
   mockOrgInfoView.mockClear();
   onUrlUpdate.mockClear();
@@ -166,5 +209,40 @@ describe("OrganizationsPanel - org detail deep link (?org=)", () => {
     expect(mockOrgInfoView).toHaveBeenLastCalledWith(
       expect.objectContaining({ organizationId: "org-plain", editOrg: false }),
     );
+  });
+});
+
+describe("OrganizationsPanel - search by organization name or ID", () => {
+  const renderSignedInPanel = async () => {
+    authState = SIGNED_IN;
+    renderPanel();
+    await waitFor(() => expect(capturedTableProps?.organizations).toHaveLength(SERVER_ORGANIZATIONS.length));
+  };
+
+  const search = (value: string) =>
+    fireEvent.change(screen.getByPlaceholderText("Search by organization name or ID"), { target: { value } });
+
+  const visibleOrganizationIds = () =>
+    capturedTableProps?.organizations.map((organization) => organization.organization_id);
+
+  it.each([
+    ["a full organization_id", ALPHA_ORG_ID, ALPHA_ORG_ID],
+    ["a substring of an organization_id", "5337fb10", ALPHA_ORG_ID],
+    ["an alias substring, ignoring case", "BETA", BETA_ORG_ID],
+  ])("keeps only the organization matching %s and drops the others", async (_label, query, expectedId) => {
+    await renderSignedInPanel();
+
+    search(query);
+
+    await waitFor(() => expect(visibleOrganizationIds()).toEqual([expectedId]));
+  });
+
+  it("shows the search empty state when neither an alias nor an id matches", async () => {
+    await renderSignedInPanel();
+
+    search("no-such-org");
+
+    await waitFor(() => expect(capturedTableProps?.organizations).toEqual([]));
+    expect(capturedTableProps?.searchActive).toBe(true);
   });
 });

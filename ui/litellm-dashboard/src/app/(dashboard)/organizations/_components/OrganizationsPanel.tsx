@@ -3,10 +3,10 @@ import { useUserModels } from "@/app/(dashboard)/hooks/models/useModels";
 import OrganizationFilters, { FilterState } from "@/app/(dashboard)/organizations/OrganizationFilters";
 import { useQueryClient } from "@tanstack/react-query";
 import { parseAsString, useQueryState } from "nuqs";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { toast } from "@/lib/toast";
-import { organizationDeleteCall } from "@/components/networking";
+import { Organization, organizationDeleteCall } from "@/components/networking";
 import { OrgCreateDialog } from "@/components/organization/org-create/OrgCreateDialog";
 import OrganizationInfoView from "@/components/organization/organization_view";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,15 @@ interface OrganizationsPanelProps {
   premiumUser: boolean;
 }
 
+const matchesOrganizationSearch = (organization: Organization, search: string): boolean => {
+  const needle = search.trim().toLowerCase();
+  return (
+    needle === "" ||
+    organization.organization_alias.toLowerCase().includes(needle) ||
+    organization.organization_id.toLowerCase().includes(needle)
+  );
+};
+
 const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, accessToken, premiumUser }) => {
   const [selectedOrgId, setSelectedOrgId] = useQueryState("org", parseAsString.withOptions({ history: "push" }));
   const [editOrg, setEditOrg] = useState(false);
@@ -27,16 +36,18 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
   const [isDeleting, setIsDeleting] = useState(false);
   const [isOrgModalVisible, setIsOrgModalVisible] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
-  const [filters, setFilters] = useState<FilterState>({ org_id: "", org_alias: "" });
+  const [filters, setFilters] = useState<FilterState>({ org_id: "", search: "" });
 
   const queryClient = useQueryClient();
-  const { data: organizations = [], isLoading } = useOrganizations({
-    org_id: filters.org_id,
-    org_alias: filters.org_alias,
-  });
+  const { data: organizations = [], isLoading } = useOrganizations({ org_id: filters.org_id });
   const { data: userModels = [] } = useUserModels();
 
-  const searchActive = Boolean(filters.org_id || filters.org_alias);
+  const visibleOrganizations = useMemo(
+    () => organizations.filter((organization) => matchesOrganizationSearch(organization, filters.search)),
+    [organizations, filters.search],
+  );
+
+  const searchActive = Boolean(filters.org_id || filters.search);
 
   const refetchOrganizations = () => queryClient.invalidateQueries({ queryKey: organizationKeys.lists() });
 
@@ -45,7 +56,7 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
   };
 
   const handleFilterReset = () => {
-    setFilters({ org_id: "", org_alias: "" });
+    setFilters({ org_id: "", search: "" });
   };
 
   const handleDelete = (orgId: string | null) => {
@@ -129,7 +140,7 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
             onReset={handleFilterReset}
           />
           <OrganizationsTable
-            organizations={organizations}
+            organizations={visibleOrganizations}
             isLoading={isLoading}
             userRole={userRole}
             searchActive={searchActive}
