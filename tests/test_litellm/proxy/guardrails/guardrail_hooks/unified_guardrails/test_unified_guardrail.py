@@ -2289,3 +2289,82 @@ class TestTranslationMappingsAreReadLive:
             for name, value in vars(unified_module).items()
             if isinstance(value, dict) and CallTypes.aocr in value
         ]
+
+
+class TestUnscannedStreamIsAnnounced:
+    """The streaming hook must never forward a whole response unscanned without saying so."""
+
+    @staticmethod
+    async def _drive(caplog, monkeypatch, request_route, mappings, response_chunks):
+        _patch_translation_mappings(monkeypatch, mappings)
+
+        async def stream():
+            for chunk in response_chunks:
+                yield chunk
+
+        caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
+        unified_module.verbose_proxy_logger.addHandler(caplog.handler)
+        try:
+            chunks = [
+                chunk
+                async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(
+                        api_key="test", request_route=request_route
+                    ),
+                    response=stream(),
+                    request_data={
+                        "guardrail_to_apply": RecordingGuardrail(),
+                        "metadata": {"guardrails": ["recording-guardrail"]},
+                    },
+                )
+            ]
+        finally:
+            unified_module.verbose_proxy_logger.removeHandler(caplog.handler)
+
+        return chunks, [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno >= logging.WARNING
+        ]
+
+    @pytest.mark.asyncio
+    async def test_warns_when_the_call_type_has_no_translation_handler(
+        self, caplog, monkeypatch
+    ):
+        chunks, warnings = await self._drive(
+            caplog,
+            monkeypatch,
+            request_route="/chat/completions",
+            mappings={CallTypes.aembedding: _NoopTranslation},
+            response_chunks=[
+                ModelResponseStream(
+                    choices=[StreamingChoices(index=0, delta=Delta(content=content))]
+                )
+                for content in ("a", "b", "c")
+            ],
+        )
+
+        assert len(chunks) == 3
+        assert any(
+            "no guardrail translation handler" in message
+            and "recording-guardrail" in message
+            and "/chat/completions" in message
+            for message in warnings
+        ), warnings
+
+    @pytest.mark.asyncio
+    async def test_warns_when_the_call_type_cannot_be_resolved(self, caplog, monkeypatch):
+        chunks, warnings = await self._drive(
+            caplog,
+            monkeypatch,
+            request_route="/v1/not-a-mapped-route",
+            mappings=load_guardrail_translation_mappings(),
+            response_chunks=[{"event": "delta", "text": content} for content in ("a", "b", "c")],
+        )
+
+        assert len(chunks) == 3
+        assert any(
+            "call type could not be resolved" in message
+            and "recording-guardrail" in message
+            for message in warnings
+        ), warnings
