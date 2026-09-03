@@ -2704,6 +2704,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
     )
+    forward_spend_logs_metadata_to_llm_api: bool | None = Field(
+        None,
+        description=(
+            "If True, sends the request's resolved spend_logs_metadata (key, team and caller values merged) to the "
+            "LLM API as the x-litellm-spend-logs-metadata header, so an upstream LiteLLM proxy records it in its own "
+            "SpendLogs. Proxy-wide: only enable it when the configured upstreams are LiteLLM proxies you trust with "
+            "those identifiers. Default is False."
+        ),
+    )
     mcp_required_fields: list[str] | None = Field(
         None,
         description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",

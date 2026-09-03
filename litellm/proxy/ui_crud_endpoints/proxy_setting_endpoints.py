@@ -264,6 +264,16 @@ class UISettings(BaseModel):
         ),
     )
 
+    forward_spend_logs_metadata_to_llm_api: bool = Field(
+        default=False,
+        description=(
+            "Sends the request's resolved spend_logs_metadata (key, team and caller values merged) to the upstream "
+            "LLM as the x-litellm-spend-logs-metadata header, so an upstream LiteLLM proxy records it in its own "
+            "SpendLogs. Use for proxy-to-proxy setups where per-user attribution has to survive the hop. Proxy-wide, "
+            "so enable it only when the configured upstreams are LiteLLM proxies you trust with those identifiers."
+        ),
+    )
+
     disable_agents_for_internal_users: bool = Field(
         default=False,
         description="If true, internal users cannot access agent management endpoints or the Agents page in the UI.",
@@ -317,6 +327,7 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "require_auth_for_public_ai_hub",
     "allow_public_health_readiness_details",
     "forward_client_headers_to_llm_api",
+    "forward_spend_logs_metadata_to_llm_api",
     "forward_llm_provider_auth_headers",
     "disable_agents_for_internal_users",
     "allow_agents_for_team_admins",
@@ -354,6 +365,7 @@ def _derived_ui_setting_value(key: str) -> object:
 _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
     "allow_public_health_readiness_details",
     "forward_client_headers_to_llm_api",
+    "forward_spend_logs_metadata_to_llm_api",
     "forward_llm_provider_auth_headers",
     "disable_agents_for_internal_users",
     "allow_agents_for_team_admins",

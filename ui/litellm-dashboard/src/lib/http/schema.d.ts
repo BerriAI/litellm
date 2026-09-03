@@ -25659,6 +25659,11 @@ export interface components {
              */
             forward_client_headers_to_llm_api?: boolean | null;
             /**
+             * Forward Spend Logs Metadata To Llm Api
+             * @description If True, sends the request's resolved spend_logs_metadata (key, team and caller values merged) to the LLM API as the x-litellm-spend-logs-metadata header, so an upstream LiteLLM proxy records it in its own SpendLogs. Proxy-wide: only enable it when the configured upstreams are LiteLLM proxies you trust with those identifiers. Default is False.
+             */
+            forward_spend_logs_metadata_to_llm_api?: boolean | null;
+            /**
              * Global Max Parallel Requests
              * @description global max parallel requests to allow for a proxy instance.
              */

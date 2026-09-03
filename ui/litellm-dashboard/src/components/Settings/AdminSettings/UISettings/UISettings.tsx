@@ -56,6 +56,7 @@ export default function UISettings() {
   const requireAuthForPublicAIHubProperty = schema?.properties?.require_auth_for_public_ai_hub;
   const forwardClientHeadersProperty = schema?.properties?.forward_client_headers_to_llm_api;
   const forwardLLMProviderAuthHeadersProperty = schema?.properties?.forward_llm_provider_auth_headers;
+  const forwardSpendLogsMetadataProperty = schema?.properties?.forward_spend_logs_metadata_to_llm_api;
   const enableProjectsUIProperty = schema?.properties?.enable_projects_ui;
   const enableChatUIProperty = schema?.properties?.enable_chat_ui;
   const enabledPagesProperty = schema?.properties?.enabled_ui_pages_internal_users;
@@ -127,6 +128,20 @@ export default function UISettings() {
   const handleToggleForwardLLMProviderAuthHeaders = (checked: boolean) => {
     updateSettings(
       { forward_llm_provider_auth_headers: checked },
+      {
+        onSuccess: () => {
+          toast.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          toast.fromError(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleForwardSpendLogsMetadata = (checked: boolean) => {
+    updateSettings(
+      { forward_spend_logs_metadata_to_llm_api: checked },
       {
         onSuccess: () => {
           toast.success("UI settings updated successfully");
@@ -339,6 +354,17 @@ export default function UISettings() {
               description={
                 forwardLLMProviderAuthHeadersProperty?.description ??
                 "Forwards provider auth headers (x-api-key, x-goog-api-key, api-key, ocp-apim-subscription-key) to the upstream LLM, overriding any deployment-configured key for that request. Enable for Claude Code BYOK (clients bring their own API key). Independent of the client-headers toggle — enable only the one(s) you need."
+              }
+            />
+            <SettingRow
+              checked={Boolean(values.forward_spend_logs_metadata_to_llm_api)}
+              disabled={isUpdating}
+              onCheckedChange={handleToggleForwardSpendLogsMetadata}
+              ariaLabel={forwardSpendLogsMetadataProperty?.description ?? "Forward spend logs metadata to LLM API"}
+              label="Forward spend logs metadata to LLM API"
+              description={
+                forwardSpendLogsMetadataProperty?.description ??
+                "Sends the request's resolved spend_logs_metadata (key, team and caller values merged) to the upstream LLM as the x-litellm-spend-logs-metadata header, so an upstream LiteLLM proxy records it in its own SpendLogs. Use for proxy-to-proxy setups where per-user attribution has to survive the hop. Proxy-wide, so enable it only when the configured upstreams are LiteLLM proxies you trust with those identifiers."
               }
             />
             {enableProjectsUIProperty && (

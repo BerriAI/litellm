@@ -34,12 +34,16 @@ const buildSettingsResponse = (overrides?: Partial<Record<string, unknown>>) => 
         require_auth_for_public_ai_hub: {
           description: "Require authentication for public AI Hub",
         },
+        forward_spend_logs_metadata_to_llm_api: {
+          description: "Forward spend logs metadata to LLM API",
+        },
       },
     },
     values: {
       disable_model_add_for_internal_users: false,
       disable_team_admin_delete_team_user: false,
       require_auth_for_public_ai_hub: false,
+      forward_spend_logs_metadata_to_llm_api: false,
     },
   },
   isLoading: false,
@@ -148,6 +152,34 @@ describe("UISettings", () => {
 
     expect(mutateMock).toHaveBeenCalledWith(
       { require_auth_for_public_ai_hub: true },
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onError: expect.any(Function),
+      }),
+    );
+    expect(toast.success).toHaveBeenCalledWith("UI settings updated successfully");
+  });
+  it("should toggle forward spend logs metadata setting and call update", () => {
+    const mutateMock = vi.fn((_settings, options) => {
+      options?.onSuccess?.();
+    });
+
+    mockUseUpdateUISettings.mockReturnValue({
+      mutate: mutateMock,
+      isPending: false,
+      error: null,
+    });
+
+    render(<UISettings />);
+
+    const toggle = screen.getByRole("switch", { name: "Forward spend logs metadata to LLM API" });
+
+    act(() => {
+      fireEvent.click(toggle);
+    });
+
+    expect(mutateMock).toHaveBeenCalledWith(
+      { forward_spend_logs_metadata_to_llm_api: true },
       expect.objectContaining({
         onSuccess: expect.any(Function),
         onError: expect.any(Function),

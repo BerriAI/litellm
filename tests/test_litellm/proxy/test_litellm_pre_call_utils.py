@@ -14,6 +14,7 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
+from litellm.constants import MAX_SPEND_LOGS_METADATA_HEADER_BYTES, SPEND_LOGS_METADATA_HEADER_NAME
 from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
@@ -7895,3 +7896,214 @@ async def test_missing_session_id_unknown_value_is_ignored():
     )
 
     assert "session_id" not in updated["metadata"]
+
+
+def _spend_logs_metadata_request(header_value: str | None = None) -> MagicMock:
+    request = _request_for("/v1/chat/completions")
+    headers = {"Content-Type": "application/json"}
+    if header_value is not None:
+        headers[SPEND_LOGS_METADATA_HEADER_NAME] = header_value
+    request.headers = headers
+    return request
+
+
+def _proxy_chain_auth(
+    metadata: dict | None = None,
+    team_metadata: dict | None = None,
+) -> UserAPIKeyAuth:
+    """Downstream virtual key carrying per-user attribution, plus a team-level default."""
+    return UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata=(
+            metadata
+            if metadata is not None
+            else {"spend_logs_metadata": {"user_id": "U0099887", "username": "jdoe"}}
+        ),
+        team_metadata=(
+            team_metadata
+            if team_metadata is not None
+            else {"spend_logs_metadata": {"cost_center": "CC-42", "user_id": "team-default"}}
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_forward_spend_logs_metadata_covers_litellm_metadata_routes():
+    """
+    `/v1/responses` and `/v1/messages` keep request metadata under `litellm_metadata`, not
+    `metadata`, so reading the slot by name is what makes the feature work on them at all.
+    """
+    request = _spend_logs_metadata_request()
+    request.scope = {"path": "/v1/responses"}
+    request.url.path = "/v1/responses"
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "input": "hi"},
+        request=request,
+        user_api_key_dict=_proxy_chain_auth(),
+        proxy_config=MagicMock(),
+        general_settings={"forward_spend_logs_metadata_to_llm_api": True},
+    )
+
+    assert "litellm_metadata" in updated, "route should resolve to the litellm_metadata slot"
+    forwarded = json.loads(updated["headers"][SPEND_LOGS_METADATA_HEADER_NAME])
+    assert forwarded == updated["litellm_metadata"]["spend_logs_metadata"]
+    assert forwarded["user_id"] == "U0099887"
+
+
+@pytest.mark.asyncio
+async def test_forward_spend_logs_metadata_overrides_caller_supplied_extra_headers():
+    """
+    `extra_headers` in the request body wins over `headers` in every provider handler, so a
+    caller could otherwise forge the attribution the upstream proxy records for them.
+    """
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4o",
+            "messages": [],
+            "extra_headers": {SPEND_LOGS_METADATA_HEADER_NAME: json.dumps({"user_id": "forged"})},
+        },
+        request=_spend_logs_metadata_request(),
+        user_api_key_dict=_proxy_chain_auth(),
+        proxy_config=MagicMock(),
+        general_settings={"forward_spend_logs_metadata_to_llm_api": True},
+    )
+
+    resolved = json.loads(updated["headers"][SPEND_LOGS_METADATA_HEADER_NAME])
+    assert resolved["user_id"] == "U0099887"
+    forged = json.loads(updated["extra_headers"][SPEND_LOGS_METADATA_HEADER_NAME])
+    assert forged == resolved, "the proxy's resolved value must win over the request body"
+
+
+@pytest.mark.asyncio
+async def test_forward_spend_logs_metadata_keeps_globally_configured_headers():
+    """
+    Providers read `headers or litellm.headers`, replacing rather than merging, so creating
+    `data["headers"]` here would silently drop `litellm_settings.headers` from the call.
+    """
+    original = litellm.headers
+    litellm.headers = {"x-org-routing": "eu"}
+    try:
+        updated = await add_litellm_data_to_request(
+            data={"model": "gpt-4o", "messages": []},
+            request=_spend_logs_metadata_request(),
+            user_api_key_dict=_proxy_chain_auth(),
+            proxy_config=MagicMock(),
+            general_settings={"forward_spend_logs_metadata_to_llm_api": True},
+        )
+    finally:
+        litellm.headers = original
+
+    assert updated["headers"]["x-org-routing"] == "eu"
+    assert json.loads(updated["headers"][SPEND_LOGS_METADATA_HEADER_NAME])["user_id"] == "U0099887"
+
+
+@pytest.mark.asyncio
+async def test_forward_spend_logs_metadata_emits_resolved_key_and_team_values():
+    """
+    LIT-3371: proxy-to-proxy attribution. `forward_client_headers_to_llm_api` only relays
+    headers the caller sent, so `spend_logs_metadata` resolved from the downstream virtual
+    key or its team never reached the upstream proxy. The opt-in must emit the fully
+    resolved dict, which means it has to run after the key AND team merges.
+    """
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "messages": []},
+        request=_spend_logs_metadata_request(header_value=json.dumps({"request_id": "req-1"})),
+        user_api_key_dict=_proxy_chain_auth(),
+        proxy_config=MagicMock(),
+        general_settings={"forward_spend_logs_metadata_to_llm_api": True},
+    )
+
+    forwarded = json.loads(updated["headers"][SPEND_LOGS_METADATA_HEADER_NAME])
+    assert forwarded == {
+        "request_id": "req-1",
+        "user_id": "U0099887",
+        "username": "jdoe",
+        "cost_center": "CC-42",
+    }
+    # the header must carry exactly what this proxy logs for itself
+    assert forwarded == updated["metadata"]["spend_logs_metadata"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "general_settings",
+    [
+        {},
+        {"forward_spend_logs_metadata_to_llm_api": False},
+        {"forward_client_headers_to_llm_api": True},
+    ],
+)
+async def test_forward_spend_logs_metadata_is_opt_in(general_settings: dict[str, object]):
+    """The values are customer identifiers, so nothing is emitted without the explicit opt-in."""
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "messages": []},
+        request=_spend_logs_metadata_request(),
+        user_api_key_dict=_proxy_chain_auth(),
+        proxy_config=MagicMock(),
+        general_settings=general_settings,
+    )
+
+    assert SPEND_LOGS_METADATA_HEADER_NAME not in updated.get("headers", {})
+    assert updated["metadata"]["spend_logs_metadata"]["user_id"] == "U0099887"
+
+
+@pytest.mark.asyncio
+async def test_forward_spend_logs_metadata_keeps_other_forwarded_headers():
+    """The emitted header is merged into the forwarded-header map, never replacing it."""
+    request = _spend_logs_metadata_request()
+    request.headers = {"Content-Type": "application/json", "x-custom-trace": "trace-1"}
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "messages": []},
+        request=request,
+        user_api_key_dict=_proxy_chain_auth(),
+        proxy_config=MagicMock(),
+        general_settings={
+            "forward_client_headers_to_llm_api": True,
+            "forward_spend_logs_metadata_to_llm_api": True,
+        },
+    )
+
+    assert updated["headers"]["x-custom-trace"] == "trace-1"
+    assert json.loads(updated["headers"][SPEND_LOGS_METADATA_HEADER_NAME])["user_id"] == "U0099887"
+
+
+@pytest.mark.asyncio
+async def test_forward_spend_logs_metadata_skips_oversized_value():
+    """
+    An oversized header makes the upstream reject the whole request, so drop the header
+    rather than the traffic. Everything else about the request is unchanged.
+    """
+    oversized = {"blob": "x" * (MAX_SPEND_LOGS_METADATA_HEADER_BYTES + 1)}
+    request = _spend_logs_metadata_request()
+    request.headers = {"Content-Type": "application/json", "x-custom-trace": "trace-1"}
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "messages": []},
+        request=request,
+        user_api_key_dict=_proxy_chain_auth(metadata={"spend_logs_metadata": oversized}, team_metadata={}),
+        proxy_config=MagicMock(),
+        general_settings={
+            "forward_client_headers_to_llm_api": True,
+            "forward_spend_logs_metadata_to_llm_api": True,
+        },
+    )
+
+    assert SPEND_LOGS_METADATA_HEADER_NAME not in updated["headers"]
+    assert updated["headers"]["x-custom-trace"] == "trace-1"
+    assert updated["metadata"]["spend_logs_metadata"] == oversized
+
+
+@pytest.mark.asyncio
+async def test_forward_spend_logs_metadata_noop_without_values():
+    """A key with no spend_logs_metadata must not add an empty header."""
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "messages": []},
+        request=_spend_logs_metadata_request(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"forward_spend_logs_metadata_to_llm_api": True},
+    )
+
+    assert SPEND_LOGS_METADATA_HEADER_NAME not in updated.get("headers", {})

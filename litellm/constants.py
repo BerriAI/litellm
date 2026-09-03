@@ -1514,6 +1514,14 @@ ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS: Final = {
 # Works for all LLM pass-through endpoints (Vertex AI, Anthropic, Bedrock, etc.)
 PASS_THROUGH_HEADER_PREFIX: Final = "x-pass-"
 
+# Request header an upstream LiteLLM proxy reads to populate SpendLogs `spend_logs_metadata`.
+SPEND_LOGS_METADATA_HEADER_NAME: Final = "x-litellm-spend-logs-metadata"
+# Cap on the JSON-encoded `x-litellm-spend-logs-metadata` value a downstream proxy emits.
+# Kept well under the 8KB per-header limit common to uvicorn/nginx/ALB so an oversized
+# key or team `spend_logs_metadata` is dropped with a warning instead of making the
+# upstream reject the whole request.
+MAX_SPEND_LOGS_METADATA_HEADER_BYTES: Final = 4096
+
 BASE_MCP_ROUTE: Final = "/mcp"
 
 BATCH_STATUS_POLL_INTERVAL_SECONDS: Final = int(os.getenv("BATCH_STATUS_POLL_INTERVAL_SECONDS", 3600))  # 1 hour

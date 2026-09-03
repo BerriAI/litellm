@@ -141,7 +141,8 @@ class ResponsesAPIRequestUtils:
     ) -> dict[str, object] | None:
         """
         Merge headers forwarded by the proxy (`headers` kwarg, set when
-        `forward_client_headers_to_llm_api` is enabled) into `extra_headers`.
+        `forward_client_headers_to_llm_api` or `forward_spend_logs_metadata_to_llm_api`
+        is enabled) into `extra_headers`.
 
         `extra_headers` wins on conflicts, since it is set explicitly by the caller.
         Header names are compared case-insensitively, as HTTP defines them.
