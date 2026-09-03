@@ -278,7 +278,10 @@ bindings = "pyo3"
 features = ["extension-module"]
 profile = "release"
 editable-profile = "dev"
-include = ["litellm/proxy/_experimental/out/**"]
+include = [
+    "litellm/proxy/_experimental/out/**",
+    "litellm/router_strategy/complexity_router/artifacts/*.json",
+]
 exclude = [
     "litellm/proxy/enterprise",
     "litellm/proxy/enterprise/**",

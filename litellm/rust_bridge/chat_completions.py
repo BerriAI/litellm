@@ -13,7 +13,6 @@ retrying it there would bill the customer for the same work twice.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Protocol
@@ -27,6 +26,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     convert_to_model_response_object,
 )
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
+from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.loader import get_native_bridge
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.types.utils import ModelResponse
@@ -43,8 +43,6 @@ RUST_CHAT_COMPLETIONS_PROVIDERS: Final = frozenset({"anthropic", "bedrock"})
 _LITELLM_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 RUST_RESPONSE_HEADER: Final = "x-litellm-rust"
-
-_TRUTHY_ENV_VALUES: Final = frozenset({"1", "true", "yes", "on"})
 
 
 class RustChatCompletions(Protocol):
@@ -181,10 +179,6 @@ def load_rust_achat_completions() -> RustAchatCompletions | None:
     return loaded
 
 
-def _env_enables_rust() -> bool:
-    return os.getenv("LITELLM_RUST", "").strip().lower() in _TRUTHY_ENV_VALUES
-
-
 def _load_rust_decline() -> RustChatCompletionsDecline | None:
     if _STATE.decline is not None:
         return _STATE.decline
@@ -253,8 +247,8 @@ def rust_chat_completions_accepts(
         return False
     if stream:
         return False
-    opted_in: Final = litellm_params is not None and litellm_params.get("rust") is True
-    if not opted_in and not _env_enables_rust():
+    request_override: Final = litellm_params.get("rust") if litellm_params is not None else None
+    if not rust_enabled(request_override=request_override if isinstance(request_override, bool) else None):
         return False
     if _litellm_metadata_reaches_the_provider(custom_llm_provider, litellm_params):
         verbose_logger.debug("Rust chat completions declined (litellm metadata user_id); using the Python path")

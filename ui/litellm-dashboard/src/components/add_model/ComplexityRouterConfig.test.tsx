@@ -127,6 +127,31 @@ describe("ComplexityRouterConfig", () => {
     expect(onChange).toHaveBeenCalledWith(expectedValue);
   });
 
+  it("selects heuristic v2 without requiring a classifier model or showing weighted scoring", () => {
+    const onChange = vi.fn();
+    const { rerender } = renderWithProviders(
+      <ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={onChange} />,
+    );
+
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    fireEvent.click(screen.getByText("Heuristic v2"));
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classifier_type: "heuristic_v2",
+        classifier_llm_config: undefined,
+      }),
+    );
+
+    const heuristicV2Value: ComplexityRouterConfigValue = { ...defaultValue, classifier_type: "heuristic_v2" };
+    rerender(<ComplexityRouterConfig modelInfo={mockModelInfo} value={heuristicV2Value} onChange={onChange} />);
+
+    expect(screen.queryByText("Classifier Model")).not.toBeInTheDocument();
+    expect(screen.queryByText("Advanced scoring")).not.toBeInTheDocument();
+    expect(screen.getByText(/estimates success probability for all four tiers/)).toBeInTheDocument();
+    expect(screen.queryByText(/Score < 0.15/)).not.toBeInTheDocument();
+  });
+
   it("should show classifier fields and use the configured values when classifier_type is llm", () => {
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
