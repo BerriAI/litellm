@@ -5527,10 +5527,6 @@ async def test_streaming_end_of_stream_block_emits_error_frame_instead_of_trunca
     error frame instead. The finish chunk is withheld while the end-of-stream
     scan runs, so on a block it is dropped rather than relayed before the
     frame."""
-    from litellm.llms import load_guardrail_translation_mappings
-    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
-        unified_guardrail as unified_module,
-    )
     from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
         UnifiedLLMGuardrails,
     )
@@ -5569,20 +5565,16 @@ async def test_streaming_end_of_stream_block_emits_error_frame_instead_of_trunca
         yield _chunk("the forbidden ")
         yield _chunk("topic answer", finish_reason="stop")
 
-    unified_module.endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
-    try:
-        with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
-            mock_api.side_effect = guardrail._get_http_exception_for_blocked_guardrail(blocked_response)
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.side_effect = guardrail._get_http_exception_for_blocked_guardrail(blocked_response)
 
-            out = []
-            async for item in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
-                user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/chat/completions"),
-                response=_mock_stream(),
-                request_data={"guardrail_to_apply": guardrail, "model": "gpt-4"},
-            ):
-                out.append(item)
-    finally:
-        unified_module.endpoint_guardrail_translation_mappings = None
+        out = []
+        async for item in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/chat/completions"),
+            response=_mock_stream(),
+            request_data={"guardrail_to_apply": guardrail, "model": "gpt-4"},
+        ):
+            out.append(item)
 
     assert len(out) == 2
     assert isinstance(out[0], ModelResponseStream)
