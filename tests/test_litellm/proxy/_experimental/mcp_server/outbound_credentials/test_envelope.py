@@ -30,7 +30,6 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
     DecryptFailed,
     EnvelopeIdentity,
     EnvelopeKeys,
-    EnvelopeLifetimeUnrepresentable,
     EnvelopeMintError,
     EnvelopeTooLarge,
     Expired,
@@ -161,7 +160,7 @@ def test_claim_layout_and_no_plaintext_token_in_envelope():
     assert _REFRESH_TOKEN not in json.dumps(claims)
 
 
-def test_unrepresentable_access_lifetime_is_a_typed_mint_error():
+def test_large_access_lifetime_is_capped():
     grant = UpstreamTokenGrant(
         access_token=SecretStr(_ACCESS_TOKEN),
         token_type="Bearer",
@@ -170,9 +169,8 @@ def test_unrepresentable_access_lifetime_is_a_typed_mint_error():
 
     result = mint_envelope(_IDENTITY, grant, _KEYS, _NOW)
 
-    assert isinstance(result, EnvelopeLifetimeUnrepresentable)
-    assert result.tag == "envelope_lifetime_unrepresentable"
-    assert result.expires_in == 10**30
+    assert isinstance(result, SealedEnvelope)
+    assert result.expires_at == _NOW + timedelta(seconds=MAX_ENVELOPE_TTL_SECONDS)
 
 
 def _refresh_credential() -> RefreshCredential:
@@ -259,7 +257,7 @@ def test_refresh_envelope_never_leaks_the_refresh_token_in_plaintext():
     "expires_in, expected_ttl",
     [
         (600, 600),
-        (MAX_ENVELOPE_TTL_SECONDS + 82800, MAX_ENVELOPE_TTL_SECONDS + 82800),
+        (MAX_ENVELOPE_TTL_SECONDS + 82800, MAX_ENVELOPE_TTL_SECONDS),
         (None, MAX_ENVELOPE_TTL_SECONDS),
     ],
 )
@@ -277,11 +275,11 @@ def test_expiry_honored_against_injected_clock():
     assert isinstance(open_envelope(token, _KEYS, _NOW + timedelta(seconds=601)), Expired)
 
 
-def test_upstream_token_lifetime_is_enforced_on_open():
+def test_envelope_lifetime_is_capped_on_open():
     grant = UpstreamTokenGrant(access_token=SecretStr(_ACCESS_TOKEN), token_type="Bearer", expires_in=86400)
     token = _sealed_token(grant)
-    just_before_expiry = _NOW + timedelta(seconds=86399)
-    at_expiry = _NOW + timedelta(seconds=86400)
+    just_before_expiry = _NOW + timedelta(seconds=MAX_ENVELOPE_TTL_SECONDS - 1)
+    at_expiry = _NOW + timedelta(seconds=MAX_ENVELOPE_TTL_SECONDS)
     assert isinstance(open_envelope(token, _KEYS, just_before_expiry), OpenedEnvelope)
     assert isinstance(open_envelope(token, _KEYS, at_expiry), Expired)
 

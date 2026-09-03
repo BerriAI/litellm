@@ -471,7 +471,7 @@ def _open_claims(
 def _envelope_ttl_seconds(upstream_expires_in: int | None) -> int:
     if upstream_expires_in is None:
         return MAX_ENVELOPE_TTL_SECONDS
-    return upstream_expires_in
+    return min(upstream_expires_in, MAX_ENVELOPE_TTL_SECONDS)
 
 
 def _refresh_ttl_seconds(upstream_refresh_expires_in: int | None) -> int:

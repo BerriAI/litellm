@@ -67,18 +67,15 @@ def _patch_responses_dispatch():
             side_effect=_provider_by_model,
         ),
         patch(
-            "litellm.responses.mcp.litellm_proxy_mcp_handler."
-            "LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway",
+            "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway",
             return_value=False,
         ),
         patch(
-            "litellm.responses.main.ProviderConfigManager"
-            ".get_provider_responses_api_config",
+            "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
             return_value=None,
         ),
         patch(
-            "litellm.responses.main.litellm_completion_transformation_handler"
-            ".response_api_handler",
+            "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
             return_value=MagicMock(),
         ),
     ]
@@ -140,7 +137,6 @@ def _make_cache_control_case() -> tuple[
 
 
 class TestResponsesAPIPromptManagement:
-
     def test_str_input_coerced_and_merged(self):
         """[A] str input is wrapped into a message list before being passed to the hook."""
         template_messages: List[AllMessageValues] = [
@@ -171,9 +167,7 @@ class TestResponsesAPIPromptManagement:
         logging_obj.get_chat_completion_prompt.assert_called_once()
         call_kwargs = logging_obj.get_chat_completion_prompt.call_args.kwargs
         # str was coerced to a single user message before being passed to the hook
-        assert call_kwargs["messages"] == [
-            {"role": "user", "content": "Tell me about AI."}
-        ]
+        assert call_kwargs["messages"] == [{"role": "user", "content": "Tell me about AI."}]
         assert call_kwargs["prompt_id"] == "summariser-prompt"
 
     def test_list_input_merged_with_template(self):
@@ -573,6 +567,36 @@ def test_resolve_prompt_swapped_provider_allows_swap_without_credentials():
             swapped_model="gpt-4o-mini",
             custom_llm_provider="anthropic",
             kwargs={},
+            prompt_id="p1",
+        )
+        == "openai"
+    )
+
+
+@pytest.mark.parametrize("authorization_header", ["Authorization", "authorization"])
+def test_resolve_prompt_swapped_provider_rejects_authorization_extra_headers(authorization_header: str):
+    import litellm
+    from litellm.responses.main import _resolve_prompt_swapped_provider
+
+    with pytest.raises(litellm.BadRequestError, match="Refusing to send"):
+        _resolve_prompt_swapped_provider(
+            original_model="anthropic/claude-haiku-4-5",
+            swapped_model="gpt-4o-mini",
+            custom_llm_provider="anthropic",
+            kwargs={"extra_headers": {authorization_header: "Bearer secret"}},
+            prompt_id="p1",
+        )
+
+
+def test_resolve_prompt_swapped_provider_allows_harmless_extra_headers():
+    from litellm.responses.main import _resolve_prompt_swapped_provider
+
+    assert (
+        _resolve_prompt_swapped_provider(
+            original_model="anthropic/claude-haiku-4-5",
+            swapped_model="gpt-4o-mini",
+            custom_llm_provider="anthropic",
+            kwargs={"extra_headers": {"X-Request-ID": "request-1"}},
             prompt_id="p1",
         )
         == "openai"
