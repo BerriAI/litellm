@@ -1875,8 +1875,8 @@ class ComplexityRouter(CustomLogger):
                 if allowed_models is not None
                 else full_pool
             )
-            auto_pick: Final = await self._pick_from_auto_setup_policy(tier_key, pool)
-            return auto_pick if auto_pick is not None else self._pick_from_tier_value(pool, tier_key)
+            direct_auto_pick: Final = await self._pick_from_auto_setup_policy(tier_key, pool)
+            return direct_auto_pick if direct_auto_pick is not None else self._pick_from_tier_value(pool, tier_key)
 
         from litellm.types.router import RoutingContext
 
@@ -1906,8 +1906,12 @@ class ComplexityRouter(CustomLogger):
             # silently bypassed. Raise instead, matching the Router-level plugin
             # pipeline's own fail-closed behavior for the same situation.
             raise ValueError(f"No candidate models left for tier {tier_key} after routing-plugin filtering")
-        auto_pick: Final = await self._pick_from_auto_setup_policy(tier_key, context.candidate_models)
-        return auto_pick if auto_pick is not None else self._pick_from_tier_value(context.candidate_models, tier_key)
+        filtered_auto_pick: Final = await self._pick_from_auto_setup_policy(tier_key, context.candidate_models)
+        return (
+            filtered_auto_pick
+            if filtered_auto_pick is not None
+            else self._pick_from_tier_value(context.candidate_models, tier_key)
+        )
 
     def _ensure_adaptive_router(self) -> Any | None:
         if not self.config.adaptive:
