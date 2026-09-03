@@ -207,6 +207,7 @@ def _processor_for(exporter: SpanExporter, use_simple: bool | None) -> SpanProce
 #: Distinct tenant destinations whose exporters stay alive. Each holds a connection
 #: pool and a batch thread, so the cache is bounded and evicts least-recently-used.
 _MAX_CACHED_DESTINATION_PROCESSORS: Final = 32
+_MAX_RETIRED_DESTINATION_PROCESSORS: Final = 8
 
 
 class _ResourceWrappedReadableSpan(ReadableSpan):
@@ -254,6 +255,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._lock: Final = threading.Lock()
         self._build: Final = processor_factory if processor_factory is not None else _destination_processor
         self._processors: OrderedDict[object, SpanProcessor] = OrderedDict()  # mutable-ok: bounded LRU
+        self._retired: OrderedDict[object, SpanProcessor] = OrderedDict()  # mutable-ok: bounded drain list
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         return None
@@ -279,6 +281,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 verbose_logger.debug("OTel V2 fan-out: processor shutdown failed: %s", exc)
         with self._lock:
             self._processors.clear()
+            self._retired.clear()
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         results: Final = tuple(self._flush_one(processor, timeout_millis) for processor in self._snapshot())
@@ -286,7 +289,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
 
     def _snapshot(self) -> tuple[SpanProcessor, ...]:
         with self._lock:
-            return tuple(self._processors.values())
+            return (*self._processors.values(), *self._retired.values())
 
     @staticmethod
     def _flush_one(processor: SpanProcessor, timeout_millis: int) -> bool:
@@ -312,12 +315,25 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 _shutdown_quietly(built)
                 return existing
             self._processors[key] = built
-            if len(self._processors) > _MAX_CACHED_DESTINATION_PROCESSORS:
-                # Evict without shutting down: another thread may be inside ``on_end``
-                # holding the victim, and a shut-down BatchSpanProcessor drops spans
-                # silently. Same rule as ArizePhoenixLogger's per-project cache.
-                self._processors.popitem(last=False)
+            overflowed: Final = self._retired_on_overflow_locked()
+        if overflowed is not None:
+            _shutdown_quietly(overflowed)
         return built
+
+    def _retired_on_overflow_locked(self) -> SpanProcessor | None:
+        """Drop the LRU processor past the cap; return one only once it is safe to close.
+
+        ``on_end`` hands a processor back and then exports outside the lock, so shutting
+        an evicted one down there loses that span. Evictions retire to drain instead, and
+        the retirees are capped so they cannot accumulate a thread each.
+        """
+        if len(self._processors) <= _MAX_CACHED_DESTINATION_PROCESSORS:
+            return None
+        _, evicted = self._processors.popitem(last=False)
+        self._retired[id(evicted)] = evicted
+        if len(self._retired) <= _MAX_RETIRED_DESTINATION_PROCESSORS:
+            return None
+        return self._retired.popitem(last=False)[1]
 
 
 def _destination_processor(destination: "OtelDestination") -> SpanProcessor | None:
