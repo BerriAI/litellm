@@ -198,4 +198,29 @@ describe("DeleteResourceModal", () => {
     renderWithProviders(<DeleteResourceModal {...defaultProps} isOpen={false} />);
     expect(screen.queryByText("Delete Resource")).not.toBeInTheDocument();
   });
+
+  // Regression test for https://github.com/BerriAI/litellm/issues/38732
+  // Key names cannot contain surrounding whitespace, so copy-paste often
+  // includes an accidental leading or trailing space. The delete button should
+  // be enabled as long as the trimmed input matches the trimmed confirmation.
+  it("should enable delete button when input matches after trimming leading/trailing whitespace", () => {
+    renderWithProviders(<DeleteResourceModal {...defaultProps} requiredConfirmation="my-api-key" />);
+    const input = screen.getByPlaceholderText("my-api-key");
+
+    fireEvent.change(input, { target: { value: " my-api-key" } }); // leading space
+    expect(screen.getByRole("button", { name: /delete/i })).toBeEnabled();
+
+    fireEvent.change(input, { target: { value: "my-api-key " } }); // trailing space
+    expect(screen.getByRole("button", { name: /delete/i })).toBeEnabled();
+
+    fireEvent.change(input, { target: { value: " my-api-key " } }); // both
+    expect(screen.getByRole("button", { name: /delete/i })).toBeEnabled();
+  });
+
+  it("should keep delete button disabled when non-whitespace characters differ", () => {
+    renderWithProviders(<DeleteResourceModal {...defaultProps} requiredConfirmation="my-api-key" />);
+    const input = screen.getByPlaceholderText("my-api-key");
+    fireEvent.change(input, { target: { value: "my-api-ke" } }); // actually wrong
+    expect(screen.getByRole("button", { name: /delete/i })).toBeDisabled();
+  });
 });
