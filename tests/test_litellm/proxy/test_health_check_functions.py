@@ -24,12 +24,8 @@ from litellm.proxy.utils import PrismaClient
 def mock_prisma():
     """Simplified mock PrismaClient with bound methods"""
     client = MagicMock()
-    client.db.litellm_healthchecktable.create = AsyncMock(
-        return_value={"id": "test-id"}
-    )
-    client.db.litellm_healthchecktable.find_many = AsyncMock(
-        return_value=[{"id": "1", "model_name": "test"}]
-    )
+    client.db.litellm_healthchecktable.create = AsyncMock(return_value={"id": "test-id"})
+    client.db.litellm_healthchecktable.find_many = AsyncMock(return_value=[{"id": "1", "model_name": "test"}])
 
     # Bind actual methods
     import types
@@ -55,14 +51,10 @@ def mock_prisma():
         ("healthy", 1, 0, False),  # Database error case
     ],
 )
-async def test_save_health_check_result(
-    mock_prisma, status, healthy, unhealthy, should_succeed
-):
+async def test_save_health_check_result(mock_prisma, status, healthy, unhealthy, should_succeed):
     """Test health check result saving with various scenarios"""
     if not should_succeed:
-        mock_prisma.db.litellm_healthchecktable.create.side_effect = Exception(
-            "DB Error"
-        )
+        mock_prisma.db.litellm_healthchecktable.create.side_effect = Exception("DB Error")
 
     result = await mock_prisma.save_health_check_result(
         model_name="test-model",
@@ -190,9 +182,7 @@ def test_aggregate_health_check_results():
         {"model": "gpt-4", "error": "Rate limit exceeded"},
     ]
 
-    result = _aggregate_health_check_results(
-        model_param_to_info, healthy_endpoints, unhealthy_endpoints
-    )
+    result = _aggregate_health_check_results(model_param_to_info, healthy_endpoints, unhealthy_endpoints)
 
     # Check gpt-3.5-turbo is healthy
     gpt35_key = ("model-123", "gpt-3.5-turbo")
@@ -223,9 +213,7 @@ def test_aggregate_health_check_results_multiple_endpoints():
     ]
     unhealthy_endpoints = []
 
-    result = _aggregate_health_check_results(
-        model_param_to_info, healthy_endpoints, unhealthy_endpoints
-    )
+    result = _aggregate_health_check_results(model_param_to_info, healthy_endpoints, unhealthy_endpoints)
 
     key = ("model-123", "gpt-3.5-turbo")
     assert result[key]["healthy_count"] == 2
@@ -401,7 +389,7 @@ async def test_save_background_health_checks_to_db():
 
     start_time = 1234567890.0
 
-    await _save_background_health_checks_to_db(
+    persisted = await _save_background_health_checks_to_db(
         mock_prisma,
         model_list,
         healthy_endpoints,
@@ -410,7 +398,8 @@ async def test_save_background_health_checks_to_db():
         "background_health_check",
     )
 
-    # Should call get_all_latest_health_checks and save_health_check_result
+    # Should call get_all_latest_health_checks and save_health_check_result, and report completion
+    assert persisted is True
     mock_prisma.get_all_latest_health_checks.assert_called_once()
     mock_prisma.save_health_check_result.assert_called_once()
 
@@ -421,22 +410,112 @@ async def test_save_background_health_checks_to_db():
     assert call_kwargs["checked_by"] == "background_health_check"
 
 
+def _two_model_results():
+    return {
+        ("model-1", "gpt-4"): {
+            "model_name": "gpt-4",
+            "model_id": "model-1",
+            "healthy_count": 1,
+            "unhealthy_count": 0,
+            "error_message": None,
+        },
+        ("model-2", "gpt-4o"): {
+            "model_name": "gpt-4o",
+            "model_id": "model-2",
+            "healthy_count": 0,
+            "unhealthy_count": 1,
+            "error_message": "boom",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_save_health_check_results_if_changed_awaits_every_write_and_reports_success():
+    """Writes are awaited, not detached, so the caller can tell the cycle's persistence completed."""
+    mock_prisma = MagicMock()
+    mock_prisma.save_health_check_result = AsyncMock(return_value={"id": "row"})
+
+    persisted = await _save_health_check_results_if_changed(
+        mock_prisma, _two_model_results(), {}, 1234567890.0, "background_health_check"
+    )
+
+    assert (persisted, mock_prisma.save_health_check_result.await_count) == (True, 2)
+
+
+@pytest.mark.asyncio
+async def test_save_health_check_results_if_changed_reports_failure_when_a_write_returns_none():
+    """save_health_check_result swallows DB errors and returns None; that must surface as False."""
+    mock_prisma = MagicMock()
+    mock_prisma.save_health_check_result = AsyncMock(side_effect=[{"id": "row"}, None])
+
+    persisted = await _save_health_check_results_if_changed(
+        mock_prisma, _two_model_results(), {}, 1234567890.0, "background_health_check"
+    )
+
+    assert (persisted, mock_prisma.save_health_check_result.await_count) == (False, 2)
+
+
+@pytest.mark.asyncio
+async def test_save_health_check_results_if_changed_reports_success_when_nothing_needed_writing():
+    mock_prisma = MagicMock()
+    mock_prisma.save_health_check_result = AsyncMock()
+    model_results = {
+        ("model-1", "gpt-4"): {
+            "model_name": "gpt-4",
+            "model_id": "model-1",
+            "healthy_count": 1,
+            "unhealthy_count": 0,
+            "error_message": None,
+        },
+    }
+    latest_checks_map = {
+        "model-1": MagicMock(status="healthy", checked_at=datetime.now(timezone.utc) - timedelta(minutes=5)),
+    }
+
+    persisted = await _save_health_check_results_if_changed(
+        mock_prisma, model_results, latest_checks_map, 1234567890.0, "background_health_check"
+    )
+
+    assert (persisted, mock_prisma.save_health_check_result.await_count) == (True, 0)
+
+
+def _one_model_setup():
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "model_info": {"id": "model-123"},
+            "litellm_params": {"model": "gpt-3.5-turbo"},
+        },
+    ]
+    return model_list, [{"model": "gpt-3.5-turbo"}], []
+
+
+@pytest.mark.asyncio
+async def test_save_background_health_checks_to_db_returns_false_when_a_write_fails():
+    mock_prisma = MagicMock()
+    mock_prisma.get_all_latest_health_checks = AsyncMock(return_value=[])
+    mock_prisma.save_health_check_result = AsyncMock(return_value=None)
+    model_list, healthy_endpoints, unhealthy_endpoints = _one_model_setup()
+
+    persisted = await _save_background_health_checks_to_db(
+        mock_prisma, model_list, healthy_endpoints, unhealthy_endpoints, 1234567890.0, "background_health_check"
+    )
+
+    assert (persisted, mock_prisma.save_health_check_result.await_count) == (False, 1)
+
+
 @pytest.mark.asyncio
 async def test_save_background_health_checks_to_db_no_prisma():
     """Test graceful handling when no prisma client"""
-    result = await _save_background_health_checks_to_db(
-        None, [], [], [], 0.0, "background_health_check"
-    )
-    assert result is None
+    result = await _save_background_health_checks_to_db(None, [], [], [], 0.0, "background_health_check")
+    assert result is False
 
 
 @pytest.mark.asyncio
 async def test_save_background_health_checks_to_db_exception_handling():
     """Test exception handling in background health check save"""
     mock_prisma = MagicMock()
-    mock_prisma.get_all_latest_health_checks = AsyncMock(
-        side_effect=Exception("DB Error")
-    )
+    mock_prisma.get_all_latest_health_checks = AsyncMock(side_effect=Exception("DB Error"))
 
     model_list = [
         {
@@ -446,12 +525,13 @@ async def test_save_background_health_checks_to_db_exception_handling():
         },
     ]
 
-    # Should not raise exception, should handle gracefully
-    await _save_background_health_checks_to_db(
+    # Must not raise (the health check loop has to survive a DB outage) but must report
+    # the failure, so the window lock can be released for another pod to retry
+    persisted = await _save_background_health_checks_to_db(
         mock_prisma, model_list, [], [], 0.0, "background_health_check"
     )
 
-    # Function should complete without raising
+    assert persisted is False
 
 
 def _raw_latest_row(model_name: str, model_id, checked_at: datetime) -> dict:
@@ -660,12 +740,7 @@ def test_parse_background_health_check_model_groups_unset_returns_none():
 
     assert parse_background_health_check_model_groups(None) is None
     assert parse_background_health_check_model_groups({}) is None
-    assert (
-        parse_background_health_check_model_groups(
-            {"background_health_check_model_groups": None}
-        )
-        is None
-    )
+    assert parse_background_health_check_model_groups({"background_health_check_model_groups": None}) is None
 
 
 def test_parse_background_health_check_model_groups_list_returns_frozenset():
@@ -682,9 +757,7 @@ def test_parse_background_health_check_model_groups_malformed_raises(bad_value):
     from litellm.proxy.health_check import parse_background_health_check_model_groups
 
     with pytest.raises(ValueError, match="must be a list of model group names"):
-        parse_background_health_check_model_groups(
-            {"background_health_check_model_groups": bad_value}
-        )
+        parse_background_health_check_model_groups({"background_health_check_model_groups": bad_value})
 
 
 def test_filter_deployments_to_model_groups():
@@ -697,9 +770,7 @@ def test_filter_deployments_to_model_groups():
     ]
 
     assert filter_deployments_to_model_groups(model_list, None) == tuple(model_list)
-    assert filter_deployments_to_model_groups(
-        model_list, frozenset({"prod-openai"})
-    ) == (model_list[0], model_list[2])
+    assert filter_deployments_to_model_groups(model_list, frozenset({"prod-openai"})) == (model_list[0], model_list[2])
     assert filter_deployments_to_model_groups(model_list, frozenset()) == ()
 
 
