@@ -1526,12 +1526,14 @@ async def new_team(
                     value=getattr(data, field),
                 )
 
-        # If budget_duration is set, set `budget_reset_at`
-        if complete_team_data.budget_duration is not None:
+        usable_budget_duration: Final = _usable_budget_duration(complete_team_data.budget_duration)
+        if usable_budget_duration is None:
+            complete_team_data.budget_duration = None
+        else:
             from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
             complete_team_data.budget_reset_at = get_budget_reset_time(
-                budget_duration=complete_team_data.budget_duration,
+                budget_duration=usable_budget_duration,
             )
 
         # If budget_limits is set, initialize reset_at for each window
@@ -2403,14 +2405,24 @@ async def patch_team(
         raise handle_exception_on_proxy(e)
 
 
+def _usable_budget_duration(duration: str | None) -> str | None:
+    if duration is None or duration.strip() == "":
+        return None
+    return duration
+
+
 def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
     """Set budget_reset_at in updated_kv if budget_duration is provided."""
-    if data.budget_duration is not None:
+    usable_budget_duration: Final = _usable_budget_duration(data.budget_duration)
+    if usable_budget_duration is not None:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
-        reset_at: Final = get_budget_reset_time(budget_duration=data.budget_duration)
+        reset_at: Final = get_budget_reset_time(budget_duration=usable_budget_duration)
         updated_kv["budget_reset_at"] = reset_at
-    elif "budget_duration" in updated_kv and updated_kv["budget_duration"] is None:
+    elif data.budget_duration is not None or (
+        "budget_duration" in updated_kv and updated_kv["budget_duration"] is None
+    ):
+        updated_kv["budget_duration"] = None
         updated_kv["budget_reset_at"] = None
 
     if data.budget_limits is not None and len(data.budget_limits) > 0:

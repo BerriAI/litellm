@@ -1,9 +1,7 @@
 import unittest
 from datetime import datetime, time, timezone
-from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-import litellm.litellm_core_utils.duration_parser as duration_parser
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     get_next_standardized_reset_time,
@@ -376,13 +374,12 @@ class TestWordFormBudgetDurations(unittest.TestCase):
         self.assertEqual(duration_in_seconds("weekly"), 604800)
         self.assertEqual(duration_in_seconds("monthly"), 2592000)
 
-    def test_invalid_duration_logs_warning_and_falls_back(self):
+    def test_unparseable_duration_raises_instead_of_midnight_fallback(self):
         base_time = datetime(2023, 5, 15, 15, 0, 0, tzinfo=timezone.utc)
-        with patch.object(duration_parser.verbose_logger, "warning") as mock_warning:
-            result = get_next_standardized_reset_time("garbage", base_time, "UTC")
-        self.assertEqual(result, datetime(2023, 5, 16, 0, 0, 0, tzinfo=timezone.utc))
-        mock_warning.assert_called_once()
-        self.assertIn("garbage", mock_warning.call_args.args)
+        for duration in ("", "   ", "garbage", "1x"):
+            with self.assertRaises(ValueError) as ctx:
+                get_next_standardized_reset_time(duration, base_time, "UTC")
+            self.assertIn("Invalid budget_duration", str(ctx.exception))
 
 
 if __name__ == "__main__":
