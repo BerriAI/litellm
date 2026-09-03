@@ -46,6 +46,5 @@ export type LogEntry = {
   mcp_tool_call_count?: number;
   mcp_tool_call_spend?: number;
   session_llm_count?: number;
-  session_mcp_count?: number;
   session_agent_count?: number;
 };

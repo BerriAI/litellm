@@ -26,6 +26,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
+    StreamingScanKey,
     StreamTransformSink,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
@@ -39,6 +40,8 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     role_out_of_guardrail_scope,
     scoped_structured_message_indices,
     stream_item_field,
+    stream_item_fingerprint,
+    stream_item_items,
 )
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -503,12 +506,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         """Block-only streaming path: run the guardrail so an in-flight BLOCK can
         terminate the stream. Text rewrites are not propagated to the client here
         (see ``_process_streaming_transform`` for the incremental_diff path)."""
-        # check if the stream has ended
-        has_stream_ended = False
-        for chunk in responses_so_far:
-            if chunk.choices and chunk.choices[0].finish_reason is not None:
-                has_stream_ended = True
-                break
+        has_stream_ended: Final = self._first_choice_has_finished(responses_so_far)
 
         if has_stream_ended:
             # convert to model response
@@ -706,8 +704,33 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             indices[i]: coerce_stream_holdback_value(holdback[i]) for i in range(len(indices)) if i < len(holdback)
         }
 
+    def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        chunks: Final = tuple(chunk for chunk in responses_so_far if isinstance(chunk, ModelResponseStream))
+        stream_ended: Final = self._first_choice_has_finished(responses_so_far)
+        return StreamingScanKey(
+            texts=tuple(self._combine_streaming_texts(chunks).values()),
+            tool_calls=self._streamed_tool_call_fingerprints(responses_so_far) if stream_ended else (),
+            stream_ended=stream_ended,
+        )
+
+    @staticmethod
+    def _streamed_tool_call_fingerprints(responses_so_far: Sequence[object]) -> tuple[str, ...]:
+        return tuple(
+            stream_item_fingerprint(tool_call)
+            for chunk in responses_so_far
+            for choice in _stream_chunk_choices(chunk)
+            for tool_call in stream_item_items(stream_item_field(choice, "delta"), "tool_calls")
+        )
+
+    @staticmethod
+    def _first_choice_has_finished(responses_so_far: Sequence[object]) -> bool:
+        first_choices: Final = tuple(
+            choices[0] for choices in (_stream_chunk_choices(chunk) for chunk in responses_so_far) if choices
+        )
+        return any(stream_item_field(choice, "finish_reason") is not None for choice in first_choices)
+
     def _combine_streaming_texts(
-        self, responses_so_far: list["ModelResponseStream"]
+        self, responses_so_far: Sequence["ModelResponseStream"]
     ) -> dict[tuple[int, int | None], str]:
         """
         Combine all streaming chunks into complete text per choice.
