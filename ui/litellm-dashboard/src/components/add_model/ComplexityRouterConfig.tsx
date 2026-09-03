@@ -32,6 +32,7 @@ import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
+import { classifierEffortOptionsForModels } from "./ClassifierReasoningEffortSelect";
 import ContextWindowEscalationConfig from "./ContextWindowEscalationConfig";
 import { Restricted, restrictedBy } from "./TierRestrictions";
 import { type TierSetAction, applyTierSetAction, setFallbackTier } from "./tier_set_actions";
@@ -640,9 +641,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       model.supported_reasoning_efforts ?? (model.supports_reasoning ? [...REASONING_EFFORT_OPTIONS] : []),
     ]),
   );
-  const classifierEffortOptionsByModel: Record<string, string[] | null | undefined> = Object.fromEntries(
-    modelInfo.map((model) => [model.model_group, model.supported_reasoning_efforts]),
-  );
+  const classifierEffortOptionsByModel = classifierEffortOptionsForModels(modelInfo);
 
   // Embedding models can't serve a chat-completion role, so they're excluded here.
   const modelOptions = modelInfo

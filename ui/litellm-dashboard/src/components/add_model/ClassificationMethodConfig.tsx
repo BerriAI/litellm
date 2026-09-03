@@ -13,6 +13,7 @@ import ClassifierPromptEditor from "./ClassifierPromptEditor";
 import CustomTierPromptEditor from "./CustomTierPromptEditor";
 import { RestrictedSection, restrictedBy } from "./TierRestrictions";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
+import ClassifierReasoningEffortSelect from "./ClassifierReasoningEffortSelect";
 import type { ReasoningEffort } from "./complexity_router_tiers";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
@@ -53,7 +54,6 @@ const CLASSIFIER_TIMEOUT_ID = "classifier-timeout-ms";
 const CLASSIFIER_CONTEXT_WINDOW_SIZE_ID = "classifier-context-window-size";
 const CLASSIFIER_CONTEXT_BUDGET_CHARS_ID = "classifier-context-budget-chars";
 const HYBRID_BOUNDARY_MARGIN_ID = "hybrid-boundary-margin";
-const CLASSIFIER_PROVIDER_DEFAULT = "__classifier_provider_default__";
 
 const CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK =
   "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
@@ -63,17 +63,6 @@ const CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK =
   "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
   "names stay fixed. The scoring below no longer runs at all, since a failed classifier routes to the default " +
   "model instead:";
-
-type ClassifierEffortStatus = "supported" | "unsupported" | "unverified" | undefined;
-
-const classifierEffortStatusFor = (
-  effort: string | undefined,
-  explicitlySupported: string[] | null | undefined,
-): ClassifierEffortStatus => {
-  if (effort === undefined) return undefined;
-  if (!Array.isArray(explicitlySupported)) return "unverified";
-  return explicitlySupported.includes(effort) ? "supported" : "unsupported";
-};
 
 /**
  * What the scoring breakdown below it actually describes. A custom prompt means the score no longer
@@ -269,16 +258,6 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   const classifierModel = value.classifier_llm_config?.model ?? "";
   const classifierReasoningEffort = value.classifier_llm_config?.reasoning_effort;
   const explicitlySupportedClassifierEfforts = effortOptionsByModel[classifierModel];
-  const classifierEffortStatus = classifierEffortStatusFor(
-    classifierReasoningEffort,
-    explicitlySupportedClassifierEfforts,
-  );
-  const classifierReasoningEffortOptions = Array.from(
-    new Set([
-      ...(explicitlySupportedClassifierEfforts ?? []),
-      ...(classifierReasoningEffort ? [classifierReasoningEffort] : []),
-    ]),
-  );
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
     const nextValue: ComplexityRouterConfigValue = {
@@ -542,64 +521,12 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             />
             {classifierModelMissing && <span className="text-xs text-destructive">A classifier model is required</span>}
           </div>
-          {classifierModel && classifierReasoningEffortOptions.length > 0 && (
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <strong className="font-semibold">Reasoning Effort</strong>
-                <SimpleTooltip content="Sent only to the classifier call. Default leaves the classifier deployment or provider setting unchanged.">
-                  <Info className="size-4 text-muted-foreground" />
-                </SimpleTooltip>
-              </div>
-              <Select
-                items={[
-                  { value: CLASSIFIER_PROVIDER_DEFAULT, label: "Default" },
-                  ...classifierReasoningEffortOptions.map((effort) => ({
-                    value: effort,
-                    label:
-                      effort === classifierReasoningEffort && classifierEffortStatus !== "supported"
-                        ? `${effort} (${classifierEffortStatus})`
-                        : effort,
-                  })),
-                ]}
-                value={classifierReasoningEffort ?? CLASSIFIER_PROVIDER_DEFAULT}
-                onValueChange={(reasoningEffort: string | null) =>
-                  reasoningEffort &&
-                  handleClassifierReasoningEffortChange(
-                    reasoningEffort === CLASSIFIER_PROVIDER_DEFAULT ? undefined : (reasoningEffort as ReasoningEffort),
-                  )
-                }
-              >
-                <SelectTrigger
-                  aria-label={`Reasoning effort for classifier model ${classifierModel}`}
-                  className="w-full"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={CLASSIFIER_PROVIDER_DEFAULT}>Default</SelectItem>
-                  {classifierReasoningEffortOptions.map((effort) => (
-                    <SelectItem key={effort} value={effort}>
-                      {effort === classifierReasoningEffort && classifierEffortStatus !== "supported"
-                        ? `${effort} (${classifierEffortStatus})`
-                        : effort}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {classifierEffortStatus === "unverified" && (
-                <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
-                  This saved effort cannot be verified for the selected model. Choose Default unless you have confirmed
-                  provider support.
-                </p>
-              )}
-              {classifierEffortStatus === "unsupported" && (
-                <p className="mt-1 text-xs text-destructive">
-                  This saved effort is not supported by every deployment in the selected model group. Choose Default or
-                  a supported value before saving.
-                </p>
-              )}
-            </div>
-          )}
+          <ClassifierReasoningEffortSelect
+            model={classifierModel}
+            value={classifierReasoningEffort}
+            explicitlySupported={explicitlySupportedClassifierEfforts}
+            onChange={handleClassifierReasoningEffortChange}
+          />
           <div>
             <Label htmlFor={CLASSIFIER_TIMEOUT_ID} className="block mb-1 font-semibold">
               Timeout (ms)
