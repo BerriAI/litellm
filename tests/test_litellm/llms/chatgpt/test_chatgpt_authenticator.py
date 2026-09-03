@@ -25,9 +25,9 @@ def _make_jwt(payload: dict) -> str:
 
 class TestChatGPTAuthenticator:
     @pytest.fixture
-    def authenticator(self):
-        with patch("os.path.exists", return_value=True):
-            return Authenticator()
+    def authenticator(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+        return Authenticator()
 
     def test_get_access_token_from_file(self, authenticator):
         future_time = time.time() + 3600
