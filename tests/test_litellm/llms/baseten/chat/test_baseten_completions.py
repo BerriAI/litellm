@@ -103,7 +103,6 @@ class TestBasetenGLM53:
         prompt_cost, completion_cost = litellm.cost_per_token(
             "baseten/zai-org/GLM-5.3", usage_object=usage
         )
-        # 600 un-cached * 1.4e-06 + 400 cached * 1.4e-07
         expected_prompt_cost = (600 * 1.4e-06) + (400 * 1.4e-07)
         expected_completion_cost = 500 * 4.4e-06
         assert prompt_cost == pytest.approx(expected_prompt_cost)
