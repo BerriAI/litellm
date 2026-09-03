@@ -172,8 +172,6 @@ class TestLLMHTTPHandlerRealtimeRedaction:
 
 
 class TestProxyStreamingDataGeneratorRedaction:
-    """Test _redact_string on traceback.format_exc() — the pattern at common_request_processing.py:1733."""
-
     def test_redact_traceback_format_exc(self):
         try:
             raise RuntimeError(
