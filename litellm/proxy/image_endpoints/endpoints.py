@@ -21,6 +21,10 @@ from litellm.types.llms.openai import ChatCompletionUserMessage
 
 router: Final = APIRouter()
 
+IMAGE_ARRAY_FIELD: Final = "image[]"
+MASK_ARRAY_FIELD: Final = "mask[]"
+BRACKETED_FILE_FIELDS: Final = frozenset({IMAGE_ARRAY_FIELD, MASK_ARRAY_FIELD})
+
 
 async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
     """
@@ -229,9 +233,9 @@ async def image_edit_api(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     image: list[UploadFile] | None = File(None),
-    image_array: list[UploadFile] | None = File(None, alias="image[]"),
+    image_array: list[UploadFile] | None = File(None, alias=IMAGE_ARRAY_FIELD),
     mask: list[UploadFile] | None = File(None),
-    mask_array: list[UploadFile] | None = File(None, alias="mask[]"),
+    mask_array: list[UploadFile] | None = File(None, alias=MASK_ARRAY_FIELD),
     model: str | None = None,
 ):
     """
@@ -279,7 +283,11 @@ async def image_edit_api(
     #########################################################
     # Read request body and convert UploadFiles to BytesIO
     #########################################################
-    data: Final = await _read_request_body(request=request)
+    data: Final = {
+        key: value
+        for key, value in (await _read_request_body(request=request)).items()
+        if key not in BRACKETED_FILE_FIELDS
+    }
     image_files: Final = await batch_to_bytesio(image)
     mask_files: Final = await batch_to_bytesio(mask)
     if image_files:
