@@ -429,6 +429,59 @@ async def test_configured_search_tool_is_private_to_panel_and_analyst() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_continuation_drops_provider_prose_and_bounds_arguments() -> None:
+    search_queries: list[str] = []
+
+    async def search(*, query: str, **_: object) -> object:
+        search_queries.append(query)
+        return {"results": [{"snippet": "evidence"}]}
+
+    oversized_query = '\\"' * 2000
+    research_call = _response(
+        "unneeded provider prose" * 1000,
+        [
+            {
+                "id": "provider-controlled-id" * 1000,
+                "type": "function",
+                "function": {
+                    "name": "litellm_fusion_search",
+                    "arguments": json.dumps({"query": oversized_query}),
+                },
+            }
+        ],
+    )
+    completion = RecordingCompletion(
+        {
+            "outer": [_fusion_call(), _response("Final")],
+            "panel-a": [research_call, _response("Evidence-backed answer")],
+            "panel-b": [_response("Independent answer")],
+            "analyst": [_response(_analysis())],
+        }
+    )
+
+    await _router(
+        completion,
+        search=search,
+        search_tool_name="web-search",
+        max_tool_calls=1,
+        max_candidate_chars=1000,
+    ).acompletion(
+        messages=[{"role": "user", "content": "Research this"}],
+        stream=False,
+        request_kwargs={},
+    )
+
+    second_panel_call = [call for call in completion.calls if call["model"] == "panel-a"][1]
+    assistant_message = second_panel_call["messages"][-2]
+    bounded_tool_call = assistant_message["tool_calls"][0]
+    assert "content" not in assistant_message
+    assert bounded_tool_call["id"] == "fusion-search-0"
+    assert len(bounded_tool_call["function"]["arguments"]) <= 1000
+    assert len(search_queries[0]) < len(oversized_query)
+    assert second_panel_call["messages"][-1]["tool_call_id"] == "fusion-search-0"
+
+
+@pytest.mark.asyncio
 async def test_reserved_tool_name_and_multiple_choices_are_rejected_before_calls() -> None:
     completion = RecordingCompletion({})
     router = _router(completion)

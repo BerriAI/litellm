@@ -369,6 +369,37 @@ def _research_tool_calls(response: ModelResponse) -> tuple[ChatCompletionMessage
     )
 
 
+def _bounded_search_arguments(query: str | None, max_chars: int) -> str:
+    """Return valid search arguments whose serialized form fits the configured bound."""
+    if query is None:
+        return "{}"
+    low = 0
+    high = len(query)
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        serialized = json.dumps({"query": query[:midpoint]}, ensure_ascii=False, separators=(",", ":"))
+        if len(serialized) <= max_chars:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    return json.dumps({"query": query[:low]}, ensure_ascii=False, separators=(",", ":"))
+
+
+def _bounded_research_tool_call(
+    tool_call: ChatCompletionMessageToolCall,
+    sequence: int,
+    max_chars: int,
+) -> ChatCompletionMessageToolCall:
+    return ChatCompletionMessageToolCall(
+        id=f"fusion-search-{sequence}",
+        type="function",
+        function={
+            "name": "litellm_fusion_search",
+            "arguments": _bounded_search_arguments(_fusion_query(tool_call), max_chars),
+        },
+    )
+
+
 def _response_text(response: ModelResponse) -> str | None:
     if not response.choices:
         return None
@@ -679,17 +710,25 @@ class FusionRouter:
             selected_calls = search_calls[:remaining_searches]
             if not selected_calls:
                 return response
-            current_messages.append(cast(AllMessageValues, response.choices[0].message.model_dump(exclude_none=True)))
-            current_messages.extend(
-                await asyncio.gather(*(self._execute_research_call(call, request_kwargs) for call in selected_calls))
+            completed_searches = self.config.max_tool_calls - remaining_searches
+            bounded_calls = tuple(
+                _bounded_research_tool_call(call, completed_searches + index, self.config.max_candidate_chars)
+                for index, call in enumerate(selected_calls)
+            )
+            # Keep the private transcript inside the reservation ceiling. The
+            # provider's prose and identifiers are not needed for continuation;
+            # only bounded, normalized search calls and their results are retained.
+            current_messages.append(
+                cast(
+                    AllMessageValues,
+                    {
+                        "role": "assistant",
+                        "tool_calls": [call.model_dump(exclude_none=True) for call in bounded_calls],
+                    },
+                )
             )
             current_messages.extend(
-                {
-                    "role": "tool",
-                    "tool_call_id": call.id,
-                    "content": '{"status":"error","error":"search_call_limit_exceeded"}',
-                }
-                for call in search_calls[len(selected_calls) :]
+                await asyncio.gather(*(self._execute_research_call(call, request_kwargs) for call in bounded_calls))
             )
             remaining_searches -= len(selected_calls)
 

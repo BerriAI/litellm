@@ -1079,7 +1079,7 @@ def _estimate_request_model_max_cost(
         llm_router=llm_router,
         input_tokens=input_tokens,
     )
-    internal_call_multiplier: Final = (
+    internal_call_count: Final = (
         fusion_router.config.max_tool_calls + 1 if fusion_router.config.search_tool_name is not None else 1
     )
     internal_request_body: Final = {
@@ -1089,28 +1089,32 @@ def _estimate_request_model_max_cost(
         "max_completion_tokens": fusion_router.config.max_completion_tokens,
     }
     query_token_ceiling: Final = (4 * fusion_router.config.max_candidate_chars) + 1024
-    search_context_token_ceiling: Final = (
-        4 * fusion_router.config.max_candidate_chars * fusion_router.config.max_tool_calls
+    # Each completed search can add one bounded assistant tool call and one
+    # bounded result. Price every progressively larger round independently;
+    # multiplying one flat context estimate misses cumulative transcript growth.
+    search_turn_token_ceiling: Final = (
+        (8 * fusion_router.config.max_candidate_chars) + 1024
         if fusion_router.config.search_tool_name is not None
         else 0
     )
-    panel_input_token_ceiling: Final = query_token_ceiling + search_context_token_ceiling
-    panel_estimates: Final = tuple(
-        (
-            estimate * internal_call_multiplier
-            if (
-                estimate := _estimate_request_max_cost_for_model(
-                    request_body=internal_request_body,
-                    route=route,
-                    model=panel_model,
-                    llm_router=llm_router,
-                    input_tokens=panel_input_token_ceiling,
-                )
+
+    def estimate_internal_calls(model: str, base_input_tokens: int) -> float | None:
+        estimates = tuple(
+            _estimate_request_max_cost_for_model(
+                request_body=internal_request_body,
+                route=route,
+                model=model,
+                llm_router=llm_router,
+                input_tokens=base_input_tokens + (completed_searches * search_turn_token_ceiling),
             )
-            is not None
-            else None
+            for completed_searches in range(internal_call_count)
         )
-        for panel_model in fusion_router.config.panel_models
+        if any(estimate is None for estimate in estimates):
+            return None
+        return sum(cast("tuple[float, ...]", estimates))
+
+    panel_estimates: Final = tuple(
+        estimate_internal_calls(panel_model, query_token_ceiling) for panel_model in fusion_router.config.panel_models
     )
     original_outer_tokens: Final = _count_input_tokens(
         request_body=request_body,
@@ -1121,7 +1125,7 @@ def _estimate_request_model_max_cost(
     candidate_token_ceiling: Final = (
         4 * fusion_router.config.max_candidate_chars * len(fusion_router.config.panel_models)
     ) + 1024
-    analyst_input_tokens: Final = candidate_token_ceiling + query_token_ceiling + search_context_token_ceiling
+    analyst_input_tokens: Final = candidate_token_ceiling + query_token_ceiling
     final_outer_input_tokens: Final = (
         original_outer_tokens
         + candidate_token_ceiling
@@ -1130,15 +1134,7 @@ def _estimate_request_model_max_cost(
         if original_outer_tokens is not None
         else None
     )
-    analyst_estimate = _estimate_request_max_cost_for_model(
-        request_body=internal_request_body,
-        route=route,
-        model=fusion_router.config.resolved_analyst_model,
-        llm_router=llm_router,
-        input_tokens=analyst_input_tokens,
-    )
-    if analyst_estimate is not None:
-        analyst_estimate *= internal_call_multiplier
+    analyst_estimate = estimate_internal_calls(fusion_router.config.resolved_analyst_model, analyst_input_tokens)
     final_outer_estimate: Final = _estimate_request_max_cost_for_model(
         request_body=request_body,
         route=route,

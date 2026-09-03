@@ -1248,8 +1248,8 @@ def test_fusion_reservation_expands_private_search_loops_and_context() -> None:
         )
 
     assert estimated == pytest.approx(8.0)
-    assert ("panel", 13024) in observed
-    assert ("analyst", 18048) in observed
+    assert [tokens for model, tokens in observed if model == "panel"] == [5024, 14048, 23072]
+    assert [tokens for model, tokens in observed if model == "analyst"] == [10048, 19072, 28096]
     final_outer_tokens = [tokens for model, tokens in observed if model == "outer"][-1]
     assert final_outer_tokens is not None and final_outer_tokens >= 26048
 
