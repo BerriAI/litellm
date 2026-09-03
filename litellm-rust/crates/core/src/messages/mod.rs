@@ -20,6 +20,9 @@ use types::{AnthropicMessagesResponse, MessagesRequest};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesResponse, Error> {
+    // Hold the in-flight permit for the whole call, including response
+    // buffering — that buffering is the memory the limit protects.
+    let _permit = crate::concurrency::acquire().await?;
     execute_messages_provider_call(request).await
 }
 

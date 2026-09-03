@@ -1,3 +1,4 @@
+use litellm_core::concurrency;
 use litellm_python_interop::release_count;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -9,6 +10,16 @@ fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
     Ok(stats.into_any().unbind())
 }
 
+#[pyfunction]
+fn native_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
+    let stats = PyDict::new(py);
+    let limits = concurrency::stats();
+    stats.set_item("max_in_flight", limits.max_in_flight)?;
+    stats.set_item("in_flight", limits.in_flight)?;
+    stats.set_item("shed_on_limit", limits.shed_on_limit)?;
+    Ok(stats.into_any().unbind())
+}
+
 #[cfg(feature = "panic-test")]
 #[pyfunction]
 fn _panic_for_test() {
@@ -17,6 +28,7 @@ fn _panic_for_test() {
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
+    module.add_function(wrap_pyfunction!(native_stats, module)?)?;
     #[cfg(feature = "panic-test")]
     module.add_function(wrap_pyfunction!(_panic_for_test, module)?)?;
     Ok(())

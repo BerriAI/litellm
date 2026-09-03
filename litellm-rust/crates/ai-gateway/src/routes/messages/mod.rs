@@ -119,6 +119,8 @@ impl IntoResponse for MessagesRouteError {
                 StatusCode::BAD_REQUEST,
                 format!("messages request is not supported: {reason}"),
             ),
+            // Shed by the in-flight limiter: standard overload signal.
+            Error::Overloaded(message) => (StatusCode::TOO_MANY_REQUESTS, message),
         };
         (
             status,

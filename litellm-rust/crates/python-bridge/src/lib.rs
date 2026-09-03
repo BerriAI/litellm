@@ -68,10 +68,70 @@ mod _native {
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        super::runtime_config::apply_env_settings();
         super::errors::register(module)?;
         super::routes::register(module)?;
         module.add_class::<super::ResponsesWebSocketConnection>()?;
         super::diagnostics::register(module)
+    }
+}
+
+/// Process-level runtime configuration resolved once at module init.
+///
+/// Reads the config-shaped environment here in the host (never in core) and
+/// installs core's in-flight limiter plus the shared runtime's worker-thread
+/// count. Worker threads must be applied before the first async route call:
+/// the runtime is built lazily and `tokio::init` cannot resize it afterwards.
+mod runtime_config {
+    use litellm_core::concurrency;
+
+    use crate::constants::{MAX_IN_FLIGHT_ENV, SHED_ON_LIMIT_ENV, WORKER_THREADS_ENV};
+
+    pub(super) fn apply_env_settings() {
+        apply_worker_threads();
+        apply_in_flight_limits();
+    }
+
+    fn apply_worker_threads() {
+        let Some(workers) = parse_positive_env(WORKER_THREADS_ENV) else {
+            return;
+        };
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .worker_threads(workers)
+            .build();
+        if let Ok(runtime) = runtime {
+            // Leaking is deliberate: the shared runtime must outlive every
+            // route call and the process never tears it down.
+            pyo3_async_runtimes::tokio::init_with_runtime(Box::leak(Box::new(runtime)))
+                .expect("runtime not yet initialized at module init");
+        }
+    }
+
+    fn apply_in_flight_limits() {
+        let Some(max_in_flight) = parse_positive_env(MAX_IN_FLIGHT_ENV) else {
+            return;
+        };
+        let shed_on_limit = std::env::var(SHED_ON_LIMIT_ENV)
+            .map(|raw| {
+                matches!(
+                    raw.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(false);
+        concurrency::init_limits(concurrency::Limits {
+            max_in_flight,
+            shed_on_limit,
+        });
+    }
+
+    /// Parse a positive usize env var, tolerating (ignoring) invalid values.
+    fn parse_positive_env(name: &str) -> Option<usize> {
+        std::env::var(name)
+            .ok()
+            .and_then(|raw| raw.trim().parse::<usize>().ok())
+            .filter(|value| *value > 0)
     }
 }
 
@@ -107,6 +167,7 @@ mod tests {
                 "achat_completions",
                 "ResponsesWebSocketConnection",
                 "gil_stats",
+                "native_stats",
             ];
 
             let public_names: Vec<String> = module
