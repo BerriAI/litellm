@@ -58,6 +58,7 @@ import {
   TeamModelBadge,
   TeamModelBadgeKind,
 } from "./teamModelAccess";
+import { computeInheritedGrants } from "../permissions/inheritedGrants";
 import MetadataKeyValueFields, {
   metadataObjectToPairs,
   metadataPairsSchema,
@@ -862,12 +863,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         agents: [],
         accessGroups: [],
       };
-      if (agents && agents.length > 0) {
-        updateData.object_permission.agents = agents;
-      }
-      if (agentAccessGroups && agentAccessGroups.length > 0) {
-        updateData.object_permission.agent_access_groups = agentAccessGroups;
-      }
+      updateData.object_permission.agents = agents;
+      updateData.object_permission.agent_access_groups = agentAccessGroups;
       delete values.agents_and_groups;
 
       // Handle vector stores permissions
@@ -935,6 +932,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   }
 
   const { team_info: info } = teamData;
+
+  const inheritedMcpServers = computeInheritedGrants(
+    info.access_group_mcp_server_ids,
+    info.access_group_details,
+    (grant) => grant.mcp_server_ids,
+  );
+  const inheritedAgents = computeInheritedGrants(
+    info.access_group_agent_ids,
+    info.access_group_details,
+    (grant) => grant.agent_ids,
+  );
 
   const initialKillSwitchOn = info.metadata?.disable_global_guardrails === true;
 
@@ -1033,7 +1041,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             </div>
           </Card>
 
-          <ObjectPermissionsView objectPermission={info.object_permission} variant="card" accessToken={accessToken} />
+          <ObjectPermissionsView
+            objectPermission={info.object_permission}
+            inheritedMcpServers={inheritedMcpServers}
+            inheritedAgents={inheritedAgents}
+            variant="card"
+            accessToken={accessToken}
+          />
 
           <Card className="block p-6">
             <GuardrailSettingsView
@@ -1883,6 +1897,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
               <ObjectPermissionsView
                 objectPermission={info.object_permission}
+                inheritedMcpServers={inheritedMcpServers}
+                inheritedAgents={inheritedAgents}
                 variant="inline"
                 className="pt-4 border-t border-border"
                 accessToken={accessToken}

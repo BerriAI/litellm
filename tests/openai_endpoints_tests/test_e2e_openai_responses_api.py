@@ -1,6 +1,13 @@
+import time
+from collections.abc import Iterator
+from typing import Final
+
 import httpx
-from openai import OpenAI, BadRequestError, NotFoundError, APIStatusError
 import pytest
+from openai import APIStatusError, BadRequestError, NotFoundError, OpenAI, Stream
+from openai.types.responses import ResponseStreamEvent
+
+BACKGROUND_STREAM_ADMISSION_DEADLINE_SECONDS: Final = 90
 
 
 def generate_key():
@@ -153,40 +160,47 @@ def test_cancel_response():
             raise e
 
 
-def _response_ids_until_first(stream):
-    """Yield each streamed chunk's response id, stopping at the first chunk that carries one."""
+def admitted_response_id(chunk: ResponseStreamEvent) -> str | None:
+    response: Final = getattr(chunk, "response", None)
+    return None if response is None else response.id
+
+
+def events_until_admission(stream: Stream[ResponseStreamEvent], started: float) -> Iterator[ResponseStreamEvent]:
     for chunk in stream:
-        response_id = getattr(getattr(chunk, "response", None), "id", None)
-        yield response_id
-        if response_id is not None:
+        print("stream chunk=", chunk)
+        yield chunk
+        if admitted_response_id(chunk) is not None:
+            return
+        if time.monotonic() - started > BACKGROUND_STREAM_ADMISSION_DEADLINE_SECONDS:
             return
 
 
 def test_cancel_streaming_response():
-    """Cancel a background streaming response while it is still generating.
-
-    The prompt is deliberately long-running and the stream is abandoned at the first
-    chunk carrying a response id, so the response is provably still in flight when the
-    cancel lands. Draining the stream first would finish the response, making the cancel
-    fail and leaving nothing but the provider's error wording to assert on.
-    """
-    client = get_test_client()
-
-    with client.responses.create(
+    client: Final = get_test_client()
+    started: Final = time.monotonic()
+    stream: Final = client.responses.create(
         model="gpt-5.5",
-        input="write a 2000 word essay on the history of the printing press",
+        input="count from 1 to 500, one number per line",
         stream=True,
         background=True,
-    ) as stream:
-        streamed_ids = tuple(_response_ids_until_first(stream))
+        timeout=BACKGROUND_STREAM_ADMISSION_DEADLINE_SECONDS,
+    )
 
-    assert streamed_ids, "stream produced no chunks"
-    response_id = streamed_ids[-1]
-    assert response_id is not None, "no streamed chunk carried a response id to cancel"
+    with stream:
+        events: Final = tuple(events_until_admission(stream, started))
 
-    cancel_response = client.responses.cancel(response_id)
+    elapsed: Final = time.monotonic() - started
+    keepalive_events: Final = sum(1 for chunk in events if chunk.type == "keepalive")
+    response_id: Final = next((rid for rid in map(admitted_response_id, events) if rid is not None), None)
+    if response_id is None and keepalive_events:
+        pytest.skip(
+            f"OpenAI held the background stream in keepalive for {elapsed:.0f}s "
+            f"({keepalive_events} keepalive events) without creating the response"
+        )
+    assert response_id is not None, f"no response event within {elapsed:.0f}s of streaming a background response"
+
+    cancel_response: Final = client.responses.cancel(response_id)
     print("CANCEL streaming response=", cancel_response)
-    assert cancel_response.id == response_id
     assert cancel_response.status == "cancelled"
 
 

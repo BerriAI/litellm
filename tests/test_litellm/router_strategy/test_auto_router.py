@@ -330,36 +330,46 @@ ROUTER_CONFIG: Final = json.dumps(
 )
 
 
-class FailingRouteLayer:
-    """Route layer whose embedding call fails, as it does when the prompt exceeds the encoder's window."""
-
-    def __call__(self, text: str) -> Any:
-        raise ValueError(
-            "Internal_litellm_router API call failed. Error: litellm.InternalServerError: "
-            "input is too large to process. increase the physical batch size"
-        )
-
-
 class FixedRouteLayer:
-    """Route layer that returns whatever the test tells it to, recording the text it was asked about."""
+    """Route layer that returns whatever the test tells it to for the query vector it is handed."""
 
     def __init__(self, route_choice: Any) -> None:
         self.route_choice = route_choice
-        self.seen_text: str | None = None
 
-    def __call__(self, text: str) -> Any:
-        self.seen_text = text
+    async def acall(self, vector: Any) -> Any:
         return self.route_choice
 
 
+def _embedding_response(input: List[str]) -> Any:
+    import litellm
+
+    return litellm.EmbeddingResponse(
+        data=[{"embedding": [0.1, 0.2], "index": i, "object": "embedding"} for i in range(len(input))]
+    )
+
+
 class StubEmbeddingRouter:
-    """Stands in for the LiteLLM Router when the route index has to be built for real."""
+    """Stands in for the LiteLLM Router, recording the text and kwargs each query embedding was made with."""
+
+    def __init__(self) -> None:
+        self.seen_text: str | None = None
+        self.aembedding_kwargs: Dict[str, Any] | None = None
 
     def embedding(self, input: List[str], model: str, **kwargs: Any) -> Any:
-        import litellm
+        return _embedding_response(input)
 
-        return litellm.EmbeddingResponse(
-            data=[{"embedding": [0.1, 0.2], "index": i, "object": "embedding"} for i in range(len(input))]
+    async def aembedding(self, input: List[str], model: str, **kwargs: Any) -> Any:
+        self.seen_text = input[0]
+        self.aembedding_kwargs = kwargs
+        return _embedding_response(input)
+
+
+class FailingEmbeddingRouter(StubEmbeddingRouter):
+    """Router whose query embedding fails, as it does when the prompt exceeds the encoder's window."""
+
+    async def aembedding(self, input: List[str], model: str, **kwargs: Any) -> Any:
+        raise ValueError(
+            "litellm.InternalServerError: input is too large to process. increase the physical batch size"
         )
 
 
@@ -369,7 +379,7 @@ def _auto_router(routelayer: Any, litellm_router_instance: Any = None, **kwargs:
         auto_router_config=ROUTER_CONFIG,
         default_model="fallback-model",
         embedding_model="text-embedding-3-small",
-        litellm_router_instance=litellm_router_instance or MagicMock(),
+        litellm_router_instance=litellm_router_instance or StubEmbeddingRouter(),
         **kwargs,
     )
     auto_router.routelayer = routelayer
@@ -381,7 +391,7 @@ class TestAutoRouterAlwaysResolvesARoutableModel:
 
     @pytest.mark.asyncio
     async def test_should_fall_back_to_default_model_when_the_embedding_call_fails(self):
-        auto_router: Final = _auto_router(FailingRouteLayer())
+        auto_router: Final = _auto_router(FixedRouteLayer(None), litellm_router_instance=FailingEmbeddingRouter())
 
         result: Final = await auto_router.async_pre_routing_hook(
             model="my-auto-router",
@@ -440,8 +450,8 @@ class TestAutoRouterAlwaysResolvesARoutableModel:
     async def test_should_still_route_to_the_matched_route_when_one_matches(self):
         from semantic_router.schema import RouteChoice
 
-        layer: Final = FixedRouteLayer(RouteChoice(name="code-model"))
-        auto_router: Final = _auto_router(layer)
+        router: Final = StubEmbeddingRouter()
+        auto_router: Final = _auto_router(FixedRouteLayer(RouteChoice(name="code-model")), litellm_router_instance=router)
 
         result: Final = await auto_router.async_pre_routing_hook(
             model="my-auto-router",
@@ -451,7 +461,7 @@ class TestAutoRouterAlwaysResolvesARoutableModel:
 
         assert result is not None
         assert result.model == "code-model"
-        assert layer.seen_text == "fix this stack trace"
+        assert router.seen_text == "fix this stack trace"
 
 
 class TestAutoRouterEmbeddingInputCap:
@@ -483,8 +493,8 @@ class TestAutoRouterRoutesResponsesApiInput:
     async def test_should_route_a_string_input_when_messages_is_none(self):
         from semantic_router.schema import RouteChoice
 
-        layer: Final = FixedRouteLayer(RouteChoice(name="code-model"))
-        auto_router: Final = _auto_router(layer)
+        router: Final = StubEmbeddingRouter()
+        auto_router: Final = _auto_router(FixedRouteLayer(RouteChoice(name="code-model")), litellm_router_instance=router)
 
         result: Final = await auto_router.async_pre_routing_hook(
             model="my-auto-router",
@@ -498,14 +508,14 @@ class TestAutoRouterRoutesResponsesApiInput:
         assert result is not None
         assert result.model == "code-model"
         assert result.messages is None
-        assert layer.seen_text == "fix this stack trace"
+        assert router.seen_text == "fix this stack trace"
 
     @pytest.mark.asyncio
     async def test_should_route_a_list_input_with_instructions_when_messages_is_none(self):
         from semantic_router.schema import RouteChoice
 
-        layer: Final = FixedRouteLayer(RouteChoice(name="code-model"))
-        auto_router: Final = _auto_router(layer)
+        router: Final = StubEmbeddingRouter()
+        auto_router: Final = _auto_router(FixedRouteLayer(RouteChoice(name="code-model")), litellm_router_instance=router)
 
         result: Final = await auto_router.async_pre_routing_hook(
             model="my-auto-router",
@@ -525,13 +535,13 @@ class TestAutoRouterRoutesResponsesApiInput:
 
         assert result is not None
         assert result.model == "code-model"
-        assert layer.seen_text is not None
-        assert "fix this stack trace" in layer.seen_text
+        assert router.seen_text is not None
+        assert "fix this stack trace" in router.seen_text
 
     @pytest.mark.asyncio
     async def test_should_skip_routing_when_neither_messages_nor_input_is_present(self):
-        layer: Final = FixedRouteLayer(None)
-        auto_router: Final = _auto_router(layer)
+        router: Final = StubEmbeddingRouter()
+        auto_router: Final = _auto_router(FixedRouteLayer(None), litellm_router_instance=router)
 
         result: Final = await auto_router.async_pre_routing_hook(
             model="my-auto-router",
@@ -540,12 +550,12 @@ class TestAutoRouterRoutesResponsesApiInput:
         )
 
         assert result is None
-        assert layer.seen_text is None
+        assert router.seen_text is None
 
     @pytest.mark.asyncio
     async def test_should_keep_routing_an_empty_messages_list_to_the_default_model(self):
-        layer: Final = FixedRouteLayer(None)
-        auto_router: Final = _auto_router(layer)
+        router: Final = StubEmbeddingRouter()
+        auto_router: Final = _auto_router(FixedRouteLayer(None), litellm_router_instance=router)
 
         result: Final = await auto_router.async_pre_routing_hook(
             model="my-auto-router",
@@ -555,4 +565,42 @@ class TestAutoRouterRoutesResponsesApiInput:
 
         assert result is not None
         assert result.model == "fallback-model"
-        assert layer.seen_text == ""
+        assert router.seen_text == ""
+
+
+class TestAutoRouterAttributesItsEmbeddingSpend:
+    """The query embedding is billed to the key that sent the request, like any other call it made."""
+
+    @pytest.mark.asyncio
+    async def test_should_forward_the_callers_identity_to_the_query_embedding_minus_its_budget_reservation(self):
+        from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+
+        router: Final = StubEmbeddingRouter()
+        auto_router: Final = _auto_router(None, litellm_router_instance=router)
+        request_kwargs: Final = {
+            "metadata": {
+                "user_api_key": "hashed-key",
+                "user_api_key_team_id": "team-1",
+                "user_api_key_budget_reservation": {"reservation_id": "r-1"},
+            },
+            "litellm_session_id": "session-1",
+        }
+
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "fix this stack trace"}],
+        )
+
+        assert result is not None
+        assert router.seen_text == "fix this stack trace"
+        assert router.aembedding_kwargs is not None
+        forwarded: Final = router.aembedding_kwargs["metadata"]
+        assert forwarded["user_api_key"] == "hashed-key"
+        assert forwarded["user_api_key_team_id"] == "team-1"
+        assert forwarded[INTERNAL_CALL_ORIGIN_METADATA_KEY] == "autorouter_classifier"
+        assert "user_api_key_budget_reservation" not in forwarded
+        assert router.aembedding_kwargs["litellm_session_id"] == "session-1"
+        assert router.aembedding_kwargs["proxy_server_request"] == {
+            "body": {"model": "text-embedding-3-small", "input": ["fix this stack trace"]}
+        }
