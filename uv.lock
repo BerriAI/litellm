@@ -10,7 +10,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-08-30T17:51:25.171404Z"
+exclude-newer = "2026-08-31T00:55:41.895302Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -4554,7 +4554,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.10.0,<3.0.0" },
     { name = "pydantic-settings", specifier = ">=2.14.1,<3.0" },
     { name = "pyjwt", marker = "extra == 'proxy'", specifier = ">=2.13.0,<3.0" },
-    { name = "pymongo", marker = "extra == 'mongodb'", specifier = ">=4.17,<5.0" },
+    { name = "pymongo", marker = "extra == 'mongodb'", specifier = ">=4.9,<5.0" },
     { name = "pynacl", marker = "extra == 'proxy'", specifier = ">=1.6.2,<2.0" },
     { name = "pypdf", marker = "extra == 'proxy-runtime'", specifier = ">=6.16.1,<7.0" },
     { name = "pyroscope-io", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.8.16,<1.0" },
