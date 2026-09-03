@@ -903,7 +903,7 @@ async def test_update_key_non_admin_within_ceiling_max_budget_allowed():
     from litellm.proxy._types import UpdateKeyRequest
 
     data = UpdateKeyRequest(key="sk-alice-personal", max_budget=80)
-    await _validate_update_key_data(
+    result = await _validate_update_key_data(
         data=data,
         existing_key_row=_update_key_ceiling_existing_row(50),
         user_api_key_dict=_update_key_ceiling_caller(100),
@@ -912,6 +912,7 @@ async def test_update_key_non_admin_within_ceiling_max_budget_allowed():
         prisma_client=None,
         user_api_key_cache=MagicMock(),
     )
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -1033,7 +1034,7 @@ async def test_update_key_proxy_admin_can_raise_max_budget_above_ceiling():
     from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
     data = UpdateKeyRequest(key="sk-alice-personal", max_budget=200)
-    await _validate_update_key_data(
+    result = await _validate_update_key_data(
         data=data,
         existing_key_row=_update_key_ceiling_existing_row(50),
         user_api_key_dict=UserAPIKeyAuth(
@@ -1047,6 +1048,7 @@ async def test_update_key_proxy_admin_can_raise_max_budget_above_ceiling():
         prisma_client=None,
         user_api_key_cache=MagicMock(),
     )
+    assert result is None
 
 
 @pytest.mark.asyncio
