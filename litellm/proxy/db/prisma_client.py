@@ -937,9 +937,13 @@ class PrismaManager:
                         use_v2_resolver=use_v2_resolver,
                     )
                 else:
+                    from litellm_proxy_extras.prisma_toolchain import (
+                        prisma_command_timeout,
+                        run_prisma,
+                    )
+
                     PrismaManager._raise_if_partitioned_spend_logs()
-                    # Use prisma db push with increased timeout
-                    subprocess.run(
+                    run_prisma(
                         [
                             "prisma",
                             "db",
@@ -947,13 +951,15 @@ class PrismaManager:
                             "--accept-data-loss",
                             "--skip-generate",
                         ],
-                        timeout=60,
-                        check=True,
+                        timeout=prisma_command_timeout(),
+                        env=os.environ.copy(),
+                        stdout=None,
+                        stderr=None,
                     )
                     PrismaManager._apply_replica_identity_full_if_requested()
                     return True
-            except subprocess.TimeoutExpired:
-                verbose_proxy_logger.warning("Attempt %s timed out", attempt + 1)
+            except subprocess.TimeoutExpired as e:
+                verbose_proxy_logger.warning("Attempt %s timed out after %.0fs", attempt + 1, e.timeout)
                 time.sleep(random.randrange(5, 15))
             except subprocess.CalledProcessError as e:
                 attempts_left = 3 - attempt
