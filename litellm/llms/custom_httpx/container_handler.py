@@ -139,7 +139,7 @@ def _build_query_params(
     return {name: value if isinstance(value, str) else str(value) for name, value in supplied if value is not None}
 
 
-def _error_message_from_response(response: httpx.Response) -> str:
+def error_message_from_response(response: httpx.Response) -> str:
     try:
         body: Final = response.json()
     except ValueError:
@@ -153,6 +153,16 @@ def _error_message_from_response(response: httpx.Response) -> str:
     return response.text
 
 
+def raise_for_error_status(response: httpx.Response, container_provider_config: "BaseContainerConfig") -> None:
+    if not httpx.codes.is_error(response.status_code):
+        return
+    raise container_provider_config.get_error_class(
+        error_message=error_message_from_response(response),
+        status_code=response.status_code,
+        headers=response.headers,
+    )
+
+
 def _transform_response(
     response: httpx.Response,
     returns_binary: bool,
@@ -163,7 +173,7 @@ def _transform_response(
     if httpx.codes.is_error(response.status_code):
         raise BaseLLMException(
             status_code=response.status_code,
-            message=_error_message_from_response(response),
+            message=error_message_from_response(response),
             headers=dict(response.headers),
         )
 

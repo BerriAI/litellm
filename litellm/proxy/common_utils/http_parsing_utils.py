@@ -1,10 +1,12 @@
 import json
 import re
-from collections.abc import Collection
-from typing import Any, Final
+from collections.abc import Collection, Mapping
+from types import MappingProxyType, UnionType
+from typing import Any, Final, Union, get_args, get_origin
 
 import orjson
 from fastapi import Request, UploadFile, status
+from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB
@@ -38,6 +40,65 @@ def _is_form_content_type(content_type: str) -> bool:
 def _is_json_content_type(content_type: str) -> bool:
     """True iff the body should be parsed as JSON."""
     return _normalize_media_type(content_type) == "application/json"
+
+
+def _numeric_form_type(annotation: object) -> type[int] | type[float] | None:
+    """The scalar to parse an ``int``/``float``-typed field as, else ``None``."""
+    unwrapped: Final = get_args(annotation)[0] if get_origin(annotation) is ReadOnly else annotation
+    candidates: Final = (
+        tuple(arg for arg in get_args(unwrapped) if arg is not type(None))
+        if get_origin(unwrapped) in (Union, UnionType)
+        else (unwrapped,)
+    )
+    if len(candidates) != 1:
+        return None
+    if candidates[0] is int:
+        return int
+    if candidates[0] is float:
+        return float
+    return None
+
+
+def numeric_form_fields(annotations: Mapping[str, object]) -> Mapping[str, type[int] | type[float]]:
+    """
+    The numeric fields of a request schema, mapped to the scalar to parse them as.
+
+    Only a bare ``int``/``float`` or an optional one qualifies, so container and
+    literal fields are left alone and ``bool`` is excluded on purpose.
+    """
+    return MappingProxyType(
+        {
+            name: scalar
+            for name, annotation in annotations.items()
+            if (scalar := _numeric_form_type(annotation)) is not None
+        }
+    )
+
+
+def _numeric_form_value(value: object, scalar: type[int] | type[float]) -> object:
+    if not isinstance(value, str):
+        return value
+    try:
+        return scalar(value)
+    except ValueError:
+        return value
+
+
+def coerce_numeric_form_fields(
+    parsed_body: Mapping[str, object],
+    numeric_fields: Mapping[str, type[int] | type[float]],
+) -> Mapping[str, object]:
+    """
+    Parse the numeric fields of a form-encoded body back into numbers.
+
+    ``request.form()`` yields every field as a string, so a provider that puts the
+    value in a JSON body would send a string where its API requires a number. A
+    value that will not parse is left as-is for the provider to reject as before.
+    """
+    return {
+        name: _numeric_form_value(value, numeric_fields[name]) if name in numeric_fields else value
+        for name, value in parsed_body.items()
+    }
 
 
 async def _read_request_body(request: Request | None) -> dict:
