@@ -3717,6 +3717,7 @@ async def test_view_spend_logs_summarize_groups_by_day_in_sql(client, monkeypatc
                 "start_date": "2024-01-01",
                 "end_date": "2024-01-03",
                 "api_key": "sk-abc",
+                "request_id": "req-123",
                 "user_id": "u1",
             },
             headers={"Authorization": "Bearer sk-test"},
@@ -3733,6 +3734,7 @@ async def test_view_spend_logs_summarize_groups_by_day_in_sql(client, monkeypatc
             "2024-01-01T00:00:00+00:00",
             "2024-01-03T00:00:00+00:00",
             "hashed::sk-abc",
+            "req-123",
             "u1",
         )
         assert len(data) == 3

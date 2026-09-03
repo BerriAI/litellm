@@ -15,7 +15,6 @@ from typing import (
     Protocol,
     TypedDict,
     TypeVar,
-    cast,  # noqa: TID251  # prisma group_by returns untyped aggregate mappings
 )
 
 import fastapi
