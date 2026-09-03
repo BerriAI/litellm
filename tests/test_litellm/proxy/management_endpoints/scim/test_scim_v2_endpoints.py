@@ -24,6 +24,7 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     SCIMRosterSyncError,
     UserProvisionerHelpers,
     _apply_group_patch_updates,
+    _create_user_if_not_exists,
     _extract_group_member_ids,
     _extract_ids_from_path_filter,
     _handle_group_membership_changes,
@@ -37,8 +38,8 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     delete_group,
     delete_user,
     get_groups,
-    get_users,
     get_service_provider_config,
+    get_users,
     merge_placeholder,
     patch_group,
     patch_team_membership,
@@ -302,6 +303,83 @@ async def test_create_user_uses_default_internal_user_params_role(mocker, monkey
 
     called_args = new_user_mock.call_args.kwargs["data"]
     assert called_args.user_role == LitellmUserRoles.PROXY_ADMIN
+
+
+def _mock_scim_create_user_deps(mocker: MockerFixture, scim_user: SCIMUser) -> AsyncMock:
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable into create_user
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable into create_user
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=scim_user),
+    )
+    return mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable into create_user
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_user",
+        AsyncMock(return_value=NewUserRequest(user_id=scim_user.userName)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_user_without_groups_defers_to_default_team(mocker: MockerFixture, monkeypatch):
+    """IdPs omit groups on POST /Users; teams must stay unset so new_user applies default_internal_user_params.teams"""
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="new-user",
+        emails=[SCIMUserEmail(value="new@example.com")],
+    )
+    monkeypatch.setattr(
+        "litellm.default_internal_user_params",
+        {"teams": [{"team_id": "default-team", "max_budget_in_team": 25}]},
+        raising=False,
+    )
+    new_user_mock = _mock_scim_create_user_deps(mocker, scim_user)
+
+    await create_user(user=scim_user)
+
+    assert new_user_mock.call_args.kwargs["data"].teams is None
+
+
+@pytest.mark.asyncio
+async def test_create_user_with_groups_keeps_idp_teams(mocker: MockerFixture, monkeypatch):
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="new-user",
+        emails=[SCIMUserEmail(value="new@example.com")],
+        groups=[SCIMUserGroup(value="idp-team")],
+    )
+    monkeypatch.setattr(
+        "litellm.default_internal_user_params",
+        {"teams": [{"team_id": "default-team", "max_budget_in_team": 25}]},
+        raising=False,
+    )
+    new_user_mock = _mock_scim_create_user_deps(mocker, scim_user)
+
+    await create_user(user=scim_user)
+
+    assert new_user_mock.call_args.kwargs["data"].teams == ["idp-team"]
+
+
+@pytest.mark.asyncio
+async def test_create_user_if_not_exists_defers_to_default_team(mocker: MockerFixture, monkeypatch):
+    monkeypatch.setattr(
+        "litellm.default_internal_user_params",
+        {"teams": [{"team_id": "default-team", "max_budget_in_team": 25}]},
+        raising=False,
+    )
+    new_user_mock = mocker.patch(  # test-quality-ok: new_user is imported inside the helper, not injectable
+        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user",
+        AsyncMock(return_value=NewUserResponse(user_id="group-user", key="k")),
+    )
+
+    created = await _create_user_if_not_exists(user_id="group-user")
+
+    assert created is not None
+    assert new_user_mock.call_args.kwargs["data"].teams is None
 
 
 @pytest.mark.asyncio
