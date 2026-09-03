@@ -4222,18 +4222,12 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
 
 
 class TestVertexPassthroughDefaultLocationOnShortRoutes:
-    """Regression coverage for LIT-6905.
-
-    ``default_vertex_config`` carries the project and location, yet a route that
-    omits ``/projects/<project>/locations/<location>/`` built the upstream base URL
-    from the still-unresolved URL location and 500ed with ``vertex_location is
-    required``. The base URL must be built after the configured location is
-    applied, and a request with no location anywhere must fail with a clean 400
-    that says where a location can come from, never a 500.
-    """
-
     PROJECT = "test-project"
     SHORT_ROUTE = "publishers/google/models/gemini-2.5-flash:generateContent"
+
+    @staticmethod
+    def _forwarder() -> Mock:
+        return Mock(return_value=AsyncMock(return_value={"status": "success"}))
 
     async def _forward(
         self,
@@ -4241,7 +4235,8 @@ class TestVertexPassthroughDefaultLocationOnShortRoutes:
         endpoint: str,
         default_config: dict | None,
         headers: list[tuple[bytes, bytes]],
-    ) -> tuple[HTTPException | None, dict]:
+        forwarder: Mock,
+    ) -> None:
         from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
             PassthroughEndpointRouter,
         )
@@ -4249,7 +4244,7 @@ class TestVertexPassthroughDefaultLocationOnShortRoutes:
         async def receive():
             return {"type": "http.request", "body": b"{}", "more_body": False}
 
-        request = Request(
+        request: Final = Request(
             {
                 "type": "http",
                 "method": "POST",
@@ -4259,41 +4254,29 @@ class TestVertexPassthroughDefaultLocationOnShortRoutes:
             },
             receive=receive,
         )
-
-        captured: dict = {}
-
-        def fake_create_pass_through_route(**kwargs):
-            captured.update(kwargs)
-            return AsyncMock(return_value={"status": "success"})
-
-        router = PassthroughEndpointRouter()
+        router: Final = PassthroughEndpointRouter()
         if default_config is not None:
             router.set_default_vertex_config(dict(default_config))
-        module = "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints"
+        module: Final = "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints"
         monkeypatch.setattr(f"{module}.passthrough_endpoint_router", router)
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
-        mock_credentials = Mock()
+        mock_credentials: Final = Mock()
         mock_credentials.token = "test-token"
         caller: Final = UserAPIKeyAuth(api_key="test-key")
-        raised: HTTPException | None = None
         with (
             mock.patch(  # test-quality-ok: the route mints its Google token through its own VertexBase, nothing injects the credential loader
                 "litellm.llms.vertex_ai.vertex_llm_base.VertexBase.load_auth",
                 return_value=(mock_credentials, self.PROJECT),
             ),
-            mock.patch(f"{module}.create_pass_through_route", side_effect=fake_create_pass_through_route),
+            mock.patch(f"{module}.create_pass_through_route", new=forwarder),
             mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value=caller)),
         ):
-            try:
-                await vertex_proxy_route(
-                    endpoint=endpoint,
-                    request=request,
-                    fastapi_response=Response(),
-                    user_api_key_dict=caller,
-                )
-            except HTTPException as exc:
-                raised = exc
-        return raised, captured
+            await vertex_proxy_route(
+                endpoint=endpoint,
+                request=request,
+                fastapi_response=Response(),
+                user_api_key_dict=caller,
+            )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -4325,15 +4308,17 @@ class TestVertexPassthroughDefaultLocationOnShortRoutes:
     async def test_default_vertex_config_location_fills_routes_without_project_and_location(
         self, monkeypatch, endpoint, location, expected_target
     ):
-        raised, captured = await self._forward(
+        forwarder: Final = self._forwarder()
+        await self._forward(
             monkeypatch,
             endpoint,
             {"vertex_project": self.PROJECT, "vertex_location": location, "vertex_credentials": "test-creds"},
             [(b"content-type", b"application/json"), (b"authorization", b"Bearer test-key")],
+            forwarder,
         )
-        assert raised is None
-        assert str(captured["target"]) == expected_target
-        assert captured["custom_headers"]["Authorization"] == "Bearer test-token"
+        forwarded: Final = forwarder.call_args.kwargs
+        assert str(forwarded["target"]) == expected_target
+        assert forwarded["custom_headers"]["Authorization"] == "Bearer test-token"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -4347,12 +4332,13 @@ class TestVertexPassthroughDefaultLocationOnShortRoutes:
         ],
     )
     async def test_no_location_anywhere_is_a_400_not_a_500(self, monkeypatch, default_config, headers):
-        raised, captured = await self._forward(monkeypatch, self.SHORT_ROUTE, default_config, headers)
-        assert not captured, "a request with no location must never reach the upstream forwarder"
-        assert raised is not None
-        assert raised.status_code == 400
-        assert "/projects/<project>/locations/<location>/" in str(raised.detail)
-        assert "default_vertex_config" in str(raised.detail)
+        forwarder: Final = self._forwarder()
+        with pytest.raises(HTTPException) as raised:
+            await self._forward(monkeypatch, self.SHORT_ROUTE, default_config, headers, forwarder)
+        forwarder.assert_not_called()
+        assert raised.value.status_code == 400
+        assert "/projects/<project>/locations/<location>/" in str(raised.value.detail)
+        assert "default_vertex_config" in str(raised.value.detail)
 
 
 class TestGetAzureAISearchIndexFromEndpoint:
