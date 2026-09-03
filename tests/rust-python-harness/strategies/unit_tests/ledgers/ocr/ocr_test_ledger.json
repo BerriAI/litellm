@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "sdk_function": "ocr",
   "python_scope": [
     "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
@@ -23,13 +24,13 @@
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_should_encode_azure_document_intelligence_model_id",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "model-id URL percent-encoding has no Rust test; Rust only tests pages/features query building"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_should_reject_dot_segment_azure_document_intelligence_model_id",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "model-id dot-segment validation has no Rust test"
     },
     {
@@ -43,87 +44,85 @@
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_async_transform_ocr_response_preserves_azure_native_fields",
-      "status": "mapped",
-      "rust_file": "litellm-rust/crates/core/src/providers/azure_ai/ocr/transformation.rs",
-      "rust_test": "document_intelligence_response_normalizes_pages",
-      "justification": "async twin of the sync case above, same underlying transform is exercised on the Rust side"
+      "status": "unresolved_portable",
+      "reason": "Async response contract reuses the sync Rust mapping; needs a dedicated gateway polling-path test under LIT-6791"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_transform_ocr_response_tolerates_missing_native_fields",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "tables/keyValuePairs absence tolerance is not asserted by the Rust response test"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_transform_ocr_response_non_succeeded_status_raises",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "no Rust test asserts on a non-succeeded Azure DI status"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_get_supported_ocr_params_includes_features",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "supported-params list content has no Rust equivalent for Azure"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_transform_ocr_response_native_format_carries_raw_operation",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "native req_format raw-operation passthrough is not tested in Rust"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_async_transform_ocr_response_native_format_carries_raw_operation",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "native req_format raw-operation passthrough is not tested in Rust"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_transform_ocr_response_default_format_omits_raw_operation",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "req_format gating of raw-operation output has no Rust test"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_map_ocr_params_passes_through_req_format",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "req_format passthrough in map_ocr_params has no Rust test"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_map_ocr_params_rejects_unknown_req_format_as_bad_request",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "req_format validation error path has no Rust test"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_get_complete_url_omits_req_format_query_param",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "no Rust test asserts req_format is excluded from the built URL"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_map_ocr_params_features",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "features-string normalization in map_ocr_params has no Rust test"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_map_ocr_params_empty_features_list_omitted",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "empty-features omission has no Rust test"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_map_ocr_params_invalid_features_raises",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "features validation error path has no Rust test"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_get_complete_url_appends_features_query",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "features query-param construction has no Rust test"
     },
     {
@@ -137,488 +136,488 @@
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_validate_environment_uses_subscription_key",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "Python-side header derivation from litellm_params; Rust's poll test only checks the header is present, not how it was resolved"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_validate_environment_falls_back_to_entra_token",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "Entra bearer-token fallback logic has no Rust test"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_azure_document_intelligence_api_base.py",
       "python_test": "TestIsAzureDocumentIntelligenceModel::test_matches_doc_intelligence_route",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "model-route string matching is Python-only dispatch logic"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_azure_document_intelligence_api_base.py",
       "python_test": "TestIsAzureDocumentIntelligenceModel::test_matches_documentintelligence_and_is_case_insensitive",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "model-route string matching is Python-only dispatch logic"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_azure_document_intelligence_api_base.py",
       "python_test": "TestIsAzureDocumentIntelligenceModel::test_does_not_match_mistral_route",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "model-route string matching is Python-only dispatch logic"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_azure_document_intelligence_api_base.py",
       "python_test": "TestDocIntelligenceApiBaseResolution::test_generic_azure_ai_base_does_not_hijack_doc_intelligence",
-      "status": "unmapped",
-      "reason": "api_base resolution from the secret manager runs before the Rust bridge is called, no Rust test exists for it"
+      "status": "unresolved_portable",
+      "reason": "Gateway configuration counterpart requires an ownership audit under LIT-6793; api_base resolution from the secret manager runs before the Rust bridge is called, no Rust test exists for it"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_azure_document_intelligence_api_base.py",
       "python_test": "TestDocIntelligenceApiBaseResolution::test_explicit_api_base_is_honoured_for_doc_intelligence",
-      "status": "unmapped",
-      "reason": "api_base precedence resolution is Python-only"
+      "status": "unresolved_portable",
+      "reason": "Gateway configuration counterpart requires an ownership audit under LIT-6793; api_base precedence resolution is Python-only"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_azure_document_intelligence_api_base.py",
       "python_test": "TestDocIntelligenceApiBaseResolution::test_generic_azure_ai_base_still_applies_to_mistral_ocr",
-      "status": "unmapped",
-      "reason": "api_base precedence resolution is Python-only"
+      "status": "unresolved_portable",
+      "reason": "Gateway configuration counterpart requires an ownership audit under LIT-6793; api_base precedence resolution is Python-only"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_use_litellm_rust_toggles_flag",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: Python-side feature-flag toggle, no Rust equivalent"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_env_var_enables_rust_ocr",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: Python-side env-var flag gating"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_load_rust_ocr_returns_injected_impl",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: dependency-injection test hook, not provider behavior"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_native_bridge_loader_returns_none_when_extension_absent",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: native-extension import/loader fallback"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_native_bridge_loader_caches_absent_extension",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: loader caching behavior"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_native_bridge_available_reflects_loader",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: loader availability check"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_load_rust_aocr_returns_injected_impl",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: dependency-injection test hook"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_toggle_without_ocr_arg_preserves_injected_impl",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: injected-impl state retention regression"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_explicit_ocr_none_clears_injected_impl",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: injected-impl clearing behavior"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_load_rust_ocr_none_when_extension_absent",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: degrade path when the native extension is missing"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_load_rust_ocr_uses_compiled_extension",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: native module resolution"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_timeout_to_seconds_handles_float_timeout_and_none",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: Python-side timeout normalization helper"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_bridge_wrapper_forwards_prepared_args_and_wraps_response",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: wrapper argument forwarding, asserted against a fake bridge not the real Rust code"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: async wrapper argument forwarding"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_run_rust_ocr_prepares_request_and_wraps_response",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: request preparation and response wrapping in Python"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_run_rust_ocr_resolves_key_via_secret_manager_when_missing",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "secret-manager: API key resolution happens in Python before the bridge is invoked"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_run_rust_ocr_prefers_explicit_key_over_resolver",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "secret-manager: key precedence resolution"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_run_rust_ocr_uses_provider_api_key_env_var",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "secret-manager: provider-specific env var name resolution"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_prepare_rust_ocr_call_forwards_vertex_routing_metadata",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "secret-manager: vertex routing metadata merge happens in Python"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_prepare_rust_ocr_call_resolves_vertex_routing_metadata_from_secret_manager",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "secret-manager: vertex project/location resolution"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_prepare_rust_ocr_call_resolves_azure_ai_api_base_from_secret_manager",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "secret-manager: azure_ai api_base resolution"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_prepare_rust_ocr_call_resolves_document_intelligence_endpoint",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "secret-manager: doc-intelligence endpoint resolution"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_run_rust_ocr_runs_pre_call_logging",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: Python logging-object pre_call invocation"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_ocr_routes_to_rust_when_enabled",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: routing to a fake bridge, not the real Rust transform"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_ocr_routes_azure_ai_to_rust_when_enabled",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: provider-prefix stripping before routing"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_ocr_rust_path_converts_file_document_before_bridge",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "file-normalization: raw-bytes-to-data-URI conversion happens in Python before the bridge call"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_ocr_exception_type_uses_resolved_provider_context",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: Python exception-type mapping on bridge failure"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_aocr_routes_to_async_rust_when_enabled",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: async routing to a fake bridge"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_aocr_exception_type_uses_resolved_provider_context",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: async exception-type mapping on bridge failure"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_ocr_does_not_route_to_rust_when_disabled",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: Python control flow for the toggle-disabled branch, no Rust-owned behavior runs"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_ocr_falls_back_to_python_when_bridge_unavailable",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: Python-only fallback when the compiled Rust extension is absent, Rust cannot test its own absence"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_ocr_forwards_timeout_to_rust",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: asserts the Python call site forwards a timeout kwarg, Rust receives an already-constructed request"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_ocr_passes_default_request_timeout_to_rust",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: asserts the Python call site supplies a default timeout kwarg, no Rust equivalent"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_ocr_provider_configs_expose_api_key_env_vars",
-      "status": "unmapped",
+      "status": "unresolved_portable",
       "reason": "asserts per-provider get_api_key_env_var() strings; the closest Rust test (ocr_dispatch_supports_migrated_providers) asserts provider dispatch/param resolution instead, not API key env var names"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_pdf_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection is Python-only preprocessing before the bridge call"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: MIME detection is Python-only preprocessing before the bridge call"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_png_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: MIME detection"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_jpg_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: MIME detection"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_jpeg_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: MIME detection"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_gif_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: MIME detection"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_webp_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: MIME detection"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_tiff_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: MIME detection"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_tif_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: MIME detection"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_detect_bmp_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: MIME detection"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_be_case_insensitive",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection case handling"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: MIME detection case handling"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestGetMimeType::test_should_fallback_for_unknown_extension",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME detection fallback"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: MIME detection fallback"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_convert_pdf_pathlib_path_to_document_url",
-      "status": "unmapped",
-      "reason": "file-normalization: local-path-to-data-URI conversion happens in Python"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: local-path-to-data-URI conversion happens in Python"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_convert_image_pathlib_path_to_image_url",
-      "status": "unmapped",
-      "reason": "file-normalization: local-path-to-data-URI conversion"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: local-path-to-data-URI conversion"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_reject_bare_str_path",
-      "status": "unmapped",
-      "reason": "file-normalization: arbitrary-file-read guard on bare str paths"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: arbitrary-file-read guard on bare str paths"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_convert_pathlib_path",
-      "status": "unmapped",
-      "reason": "file-normalization: local-path-to-data-URI conversion"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: local-path-to-data-URI conversion"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_convert_raw_bytes",
-      "status": "unmapped",
-      "reason": "file-normalization: raw-bytes-to-data-URI conversion"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: raw-bytes-to-data-URI conversion"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_convert_raw_bytes_with_explicit_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: explicit MIME override on raw bytes"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: explicit MIME override on raw bytes"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_convert_raw_bytes_with_image_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: explicit MIME override on raw bytes"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: explicit MIME override on raw bytes"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_convert_file_like_object",
-      "status": "unmapped",
-      "reason": "file-normalization: file-like-object conversion"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: file-like-object conversion"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_convert_file_like_object_with_name",
-      "status": "unmapped",
-      "reason": "file-normalization: file-like-object name-based MIME detection"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: file-like-object name-based MIME detection"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_raise_error_for_missing_file_field",
-      "status": "unmapped",
-      "reason": "file-normalization: missing-field validation"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: missing-field validation"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_raise_error_for_nonexistent_pathlib_path",
-      "status": "unmapped",
-      "reason": "file-normalization: missing-file validation"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: missing-file validation"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_raise_error_for_empty_file",
-      "status": "unmapped",
-      "reason": "file-normalization: empty-file validation"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: empty-file validation"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_raise_error_for_unsupported_type",
-      "status": "unmapped",
-      "reason": "file-normalization: unsupported input type validation"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: unsupported input type validation"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_raise_error_for_invalid_mime_type",
-      "status": "unmapped",
-      "reason": "file-normalization: MIME-type injection validation"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: MIME-type injection validation"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestConvertFileDocumentToUrlDocument::test_should_override_mime_type_for_pathlib_path",
-      "status": "unmapped",
-      "reason": "file-normalization: explicit MIME override precedence"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: explicit MIME override precedence"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_build_document_url_for_pdf",
-      "status": "unmapped",
-      "reason": "file-normalization: multipart upload conversion"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: multipart upload conversion"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_build_image_url_for_png",
-      "status": "unmapped",
-      "reason": "file-normalization: multipart upload conversion"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: multipart upload conversion"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_build_image_url_for_jpeg",
-      "status": "unmapped",
-      "reason": "file-normalization: multipart upload conversion"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: multipart upload conversion"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_detect_mime_from_filename_when_content_type_is_octet_stream",
-      "status": "unmapped",
-      "reason": "file-normalization: filename-based MIME fallback"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: filename-based MIME fallback"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_detect_mime_from_filename_when_content_type_is_none",
-      "status": "unmapped",
-      "reason": "file-normalization: filename-based MIME fallback"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: filename-based MIME fallback"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_fallback_to_octet_stream_for_unknown",
-      "status": "unmapped",
-      "reason": "file-normalization: default MIME fallback"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: default MIME fallback"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_preserve_base64_content_correctly",
-      "status": "unmapped",
-      "reason": "file-normalization: binary round-trip through base64"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: binary round-trip through base64"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_strip_mime_parameters_from_content_type",
-      "status": "unmapped",
-      "reason": "file-normalization: content-type parameter stripping"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: content-type parameter stripping"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestBuildDocumentFromUpload::test_should_strip_mime_parameters_with_multiple_params",
-      "status": "unmapped",
-      "reason": "file-normalization: content-type parameter stripping"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; file-normalization: content-type parameter stripping"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestProxySecurityGuard::test_should_reject_file_type_document_in_json_body",
-      "status": "unmapped",
-      "reason": "proxy-layer JSON-body file-type guard, a different mechanism than Rust's URL-fetch SSRF guard"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; proxy-layer JSON-body file-type guard, a different mechanism than Rust's URL-fetch SSRF guard"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestProxySecurityGuard::test_should_accept_document_url_type_in_json_body",
-      "status": "unmapped",
-      "reason": "proxy-layer JSON-body parsing"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; proxy-layer JSON-body parsing"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestProxySecurityGuard::test_should_raise_on_invalid_json_body",
-      "status": "unmapped",
-      "reason": "proxy-layer JSON-body parsing error path"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; proxy-layer JSON-body parsing error path"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_file_input.py",
       "python_test": "TestProxySecurityGuard::test_should_ignore_document_form_field_injection",
-      "status": "unmapped",
-      "reason": "proxy-layer multipart form-field injection guard, a different mechanism than Rust's URL-fetch SSRF guard"
+      "status": "unresolved_portable",
+      "reason": "File-input normalization and body-guard port is pending in PR #39565; proxy-layer multipart form-field injection guard, a different mechanism than Rust's URL-fetch SSRF guard"
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_transformation.py",
@@ -727,205 +726,205 @@
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_cost.py",
       "python_test": "test_model_info_ocr4_price",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "cost-calc: pricing/model-info lookup is Python-only"
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_cost.py",
       "python_test": "test_ocr4_cost_scales_with_pages",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "cost-calc: per-page pricing math is Python-only"
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_cost.py",
       "python_test": "test_ocr3_pricing_entry",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "cost-calc: cost-map JSON entry validation is Python-only"
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_cost.py",
       "python_test": "test_ocr3_model_info_price",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "cost-calc: pricing/model-info lookup is Python-only"
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_cost.py",
       "python_test": "test_ocr3_cost_scales_with_pages",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "cost-calc: per-page pricing math is Python-only"
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_cost.py",
       "python_test": "test_ocr3_bills_ocr_and_annotation_pages_at_their_own_rates",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "cost-calc: mixed-rate billing math is Python-only"
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_cost.py",
       "python_test": "test_ocr3_bills_annotation_only_response",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "cost-calc: annotation-only billing math is Python-only"
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_cost.py",
       "python_test": "test_ocr3_bills_annotation_pages_when_pages_processed_missing",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "cost-calc: fallback billing math is Python-only"
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_cost.py",
       "python_test": "test_azure_doc_ai_annotation_pages_fall_back_to_ocr_rate",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "cost-calc: fallback billing math is Python-only"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_native_format.py",
       "python_test": "test_rust_ocr_serves_default_format",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "request-format gating decision is made in Python before the Rust bridge is ever invoked"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_native_format.py",
       "python_test": "test_rust_ocr_skipped_for_native_format",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "request-format gating decision is made in Python before the Rust bridge is ever invoked"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_native_format.py",
       "python_test": "test_native_format_rejected_for_provider_without_support_as_bad_request",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "provider-support validation for req_format happens in Python"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_ocr_native_format.py",
       "python_test": "test_unknown_format_rejected_for_provider_without_support_as_bad_request",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "req_format validation error path is Python-only"
     },
     {
       "python_file": "tests/test_litellm/llms/ocr/guardrail_translation/test_ocr_guardrail_handler.py",
       "python_test": "TestHandlerDiscovery::test_handler_discovered_for_ocr",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "guardrail-translation handler discovery is a Python proxy-layer concern"
     },
     {
       "python_file": "tests/test_litellm/llms/ocr/guardrail_translation/test_ocr_guardrail_handler.py",
       "python_test": "TestHandlerDiscovery::test_handler_discovered_for_aocr",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "guardrail-translation handler discovery is a Python proxy-layer concern"
     },
     {
       "python_file": "tests/test_litellm/llms/ocr/guardrail_translation/test_ocr_guardrail_handler.py",
       "python_test": "TestInputProcessing::test_process_document_url",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "scoped to the Python translation handler, not the Rust gateway's guardrail hook lifecycle"
     },
     {
       "python_file": "tests/test_litellm/llms/ocr/guardrail_translation/test_ocr_guardrail_handler.py",
       "python_test": "TestInputProcessing::test_process_image_url",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "scoped to the Python translation handler, not the Rust gateway's guardrail hook lifecycle"
     },
     {
       "python_file": "tests/test_litellm/llms/ocr/guardrail_translation/test_ocr_guardrail_handler.py",
       "python_test": "TestInputProcessing::test_process_no_document",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "scoped to the Python translation handler, not the Rust gateway's guardrail hook lifecycle"
     },
     {
       "python_file": "tests/test_litellm/llms/ocr/guardrail_translation/test_ocr_guardrail_handler.py",
       "python_test": "TestInputProcessing::test_process_invalid_document",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "scoped to the Python translation handler, not the Rust gateway's guardrail hook lifecycle"
     },
     {
       "python_file": "tests/test_litellm/llms/ocr/guardrail_translation/test_ocr_guardrail_handler.py",
       "python_test": "TestInputProcessing::test_input_blocking_guardrail",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "scoped to the Python translation handler, not the Rust gateway's guardrail hook lifecycle"
     },
     {
       "python_file": "tests/test_litellm/llms/ocr/guardrail_translation/test_ocr_guardrail_handler.py",
       "python_test": "TestOutputProcessing::test_process_single_page",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "scoped to the Python translation handler, not the Rust gateway's guardrail hook lifecycle"
     },
     {
       "python_file": "tests/test_litellm/llms/ocr/guardrail_translation/test_ocr_guardrail_handler.py",
       "python_test": "TestOutputProcessing::test_process_multiple_pages",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "scoped to the Python translation handler, not the Rust gateway's guardrail hook lifecycle"
     },
     {
       "python_file": "tests/test_litellm/llms/ocr/guardrail_translation/test_ocr_guardrail_handler.py",
       "python_test": "TestOutputProcessing::test_process_empty_pages",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "scoped to the Python translation handler, not the Rust gateway's guardrail hook lifecycle"
     },
     {
       "python_file": "tests/test_litellm/llms/ocr/guardrail_translation/test_ocr_guardrail_handler.py",
       "python_test": "TestOutputProcessing::test_process_page_with_empty_markdown",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "scoped to the Python translation handler, not the Rust gateway's guardrail hook lifecycle"
     },
     {
       "python_file": "tests/test_litellm/llms/ocr/guardrail_translation/test_ocr_guardrail_handler.py",
       "python_test": "TestOutputProcessing::test_process_preserves_page_metadata",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "scoped to the Python translation handler, not the Rust gateway's guardrail hook lifecycle"
     },
     {
       "python_file": "tests/test_litellm/llms/ocr/guardrail_translation/test_ocr_guardrail_handler.py",
       "python_test": "TestOutputProcessing::test_output_blocking_guardrail",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "scoped to the Python translation handler, not the Rust gateway's guardrail hook lifecycle"
     },
     {
       "python_file": "tests/test_litellm/llms/ocr/guardrail_translation/test_ocr_guardrail_handler.py",
       "python_test": "TestPIIMaskingScenario::test_pii_masking_in_ocr_pages",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "PII redaction in the translation handler has no Rust equivalent"
     },
     {
       "python_file": "tests/test_litellm/proxy/ocr_endpoints/test_endpoints.py",
       "python_test": "test_should_read_req_format_from_header",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "proxy-layer header parsing has no Rust equivalent"
     },
     {
       "python_file": "tests/test_litellm/proxy/ocr_endpoints/test_endpoints.py",
       "python_test": "test_should_prefer_body_req_format_over_header",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "proxy-layer body-vs-header precedence has no Rust equivalent"
     },
     {
       "python_file": "tests/test_litellm/proxy/ocr_endpoints/test_endpoints.py",
       "python_test": "test_should_omit_req_format_when_header_absent",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "proxy-layer parsing has no Rust equivalent"
     },
     {
       "python_file": "tests/test_litellm/proxy/ocr_endpoints/test_endpoints.py",
       "python_test": "test_should_reject_unknown_req_format",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "proxy-layer validation has no Rust equivalent"
     },
     {
       "python_file": "tests/test_litellm/proxy/ocr_endpoints/test_endpoints.py",
       "python_test": "test_should_return_native_payload_with_litellm_response_headers",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "proxy-layer response construction has no Rust equivalent"
     },
     {
       "python_file": "tests/test_litellm/proxy/ocr_endpoints/test_endpoints.py",
       "python_test": "test_should_return_normalized_response_when_no_native_payload",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "proxy-layer response construction has no Rust equivalent"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
       "python_test": "test_explicit_false_overrides_process_enable",
-      "status": "unmapped",
+      "status": "python_only",
       "reason": "bridge-plumbing: asserts the explicit-per-request rust:False override wins over the Python process flag, no Rust-owned behavior runs"
     }
   ],

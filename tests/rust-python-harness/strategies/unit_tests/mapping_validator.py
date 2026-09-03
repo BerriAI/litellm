@@ -2,17 +2,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
 
 from ...shared.parity.ledger import TestLedger, load_ledger
 from .python_runner import enumerate_python_tests
 from .rust_runner import enumerate_rust_tests
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-LEDGER_ROOT = Path(__file__).parent / "ledgers"
+REPO_ROOT: Final = Path(__file__).resolve().parents[4]
+LEDGER_DIRECTORY: Final = Path(
+    "tests/rust-python-harness/strategies/unit_tests/ledgers"
+)
 
 
-def ledger_path_for(sdk_function: str) -> Path:
-    return LEDGER_ROOT / sdk_function / f"{sdk_function}_test_ledger.json"
+def ledger_path_for(sdk_function: str, repo_root: Path = REPO_ROOT) -> Path:
+    return (
+        repo_root
+        / LEDGER_DIRECTORY
+        / sdk_function
+        / f"{sdk_function}_test_ledger.json"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,21 +89,37 @@ class FunctionReport:
     sdk_function: str
     ledger: TestLedger | None
     audit: AuditReport | None
+    error: str | None = None
 
     @property
     def has_ledger(self) -> bool:
         return self.ledger is not None
 
     @property
-    def is_clean(self) -> bool:
-        return self.audit is None or self.audit.is_clean
+    def passes_validation(self) -> bool:
+        return (
+            self.error is None
+            and self.ledger is not None
+            and self.audit is not None
+            and self.audit.is_clean
+            and self.ledger.unresolved_portable_count == 0
+        )
 
 
 def build_function_report(sdk_function: str, repo_root: Path = REPO_ROOT) -> FunctionReport:
-    path = ledger_path_for(sdk_function)
+    path: Final = ledger_path_for(sdk_function, repo_root)
     if not path.exists():
         return FunctionReport(sdk_function=sdk_function, ledger=None, audit=None)
-    ledger = load_ledger(path)
-    return FunctionReport(
-        sdk_function=sdk_function, ledger=ledger, audit=audit_ledger(ledger, repo_root)
-    )
+    try:
+        ledger: Final = load_ledger(path)
+        if ledger.sdk_function != sdk_function:
+            raise ValueError(f"{path}: sdk_function must be {sdk_function!r}")
+        return FunctionReport(
+            sdk_function=sdk_function,
+            ledger=ledger,
+            audit=audit_ledger(ledger, repo_root),
+        )
+    except (ValueError, OSError, SyntaxError) as exc:
+        return FunctionReport(
+            sdk_function=sdk_function, ledger=None, audit=None, error=str(exc)
+        )

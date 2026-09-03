@@ -1,39 +1,121 @@
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
+from itertools import groupby
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Final, Literal, TypeAlias
 
-@dataclass(frozen=True, slots=True)
-class LedgerEntry:
-    python_file: str
-    python_test: str
-    status: str
-    rust_file: str
-    rust_test: str
-    justification: str
-    reason: str
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from typing_extensions import Self
+
+NonEmptyString: TypeAlias = Annotated[
+    str, StringConstraints(min_length=1, pattern=r"\S")
+]
+LEDGER_CONFIG: Final = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
-@dataclass(frozen=True, slots=True)
-class RustOnlyEntry:
-    rust_file: str
-    rust_test: str
-    reason: str
+class MappedLedgerEntry(BaseModel):
+    model_config = LEDGER_CONFIG
+
+    python_file: NonEmptyString
+    python_test: NonEmptyString
+    status: Literal["mapped"]
+    rust_file: NonEmptyString
+    rust_test: NonEmptyString
+    justification: NonEmptyString
 
 
-@dataclass(frozen=True, slots=True)
-class TestLedger:
-    sdk_function: str
-    python_scope: tuple[str, ...]
-    rust_scope: tuple[str, ...]
+class UnmappedLedgerEntry(BaseModel):
+    model_config = LEDGER_CONFIG
+
+    python_file: NonEmptyString
+    python_test: NonEmptyString
+    status: Literal["python_only", "unresolved_portable"]
+    reason: NonEmptyString
+
+
+LedgerEntry: TypeAlias = Annotated[
+    MappedLedgerEntry | UnmappedLedgerEntry, Field(discriminator="status")
+]
+
+
+class RustOnlyEntry(BaseModel):
+    model_config = LEDGER_CONFIG
+
+    rust_file: NonEmptyString
+    rust_test: NonEmptyString
+    reason: NonEmptyString
+
+
+def _require_unique(targets: tuple[str, ...], field: str) -> None:
+    duplicates: Final = tuple(
+        target
+        for target, group in groupby(sorted(targets))
+        if sum(1 for _ in group) > 1
+    )
+    if duplicates:
+        raise ValueError(f"{field} contains duplicates: {', '.join(duplicates)}")
+
+
+class TestLedger(BaseModel):
+    model_config = LEDGER_CONFIG
+
+    schema_version: Literal[1]
+    sdk_function: NonEmptyString
+    python_scope: tuple[NonEmptyString, ...]
+    rust_scope: tuple[NonEmptyString, ...]
     entries: tuple[LedgerEntry, ...]
     rust_only_tests: tuple[RustOnlyEntry, ...]
+
+    @model_validator(mode="after")
+    def validate_mapping_structure(self) -> Self:
+        _require_unique(self.python_scope, "python_scope")
+        _require_unique(self.rust_scope, "rust_scope")
+        _require_unique(
+            tuple(f"{entry.python_file}::{entry.python_test}" for entry in self.entries),
+            "Python test identities",
+        )
+        mapped_targets: Final = tuple(
+            f"{entry.rust_file}::{entry.rust_test}" for entry in self.entries if entry.status == "mapped"
+        )
+        rust_only_targets: Final = tuple(f"{entry.rust_file}::{entry.rust_test}" for entry in self.rust_only_tests)
+        _require_unique(mapped_targets, "Rust mapping targets")
+        _require_unique(rust_only_targets, "Rust-only test identities")
+        overlap: Final = tuple(sorted(frozenset(mapped_targets) & frozenset(rust_only_targets)))
+        if overlap:
+            raise ValueError(f"Rust tests cannot be both mapped and rust-only: {', '.join(overlap)}")
+        unscoped_python: Final = tuple(
+            sorted(frozenset(entry.python_file for entry in self.entries) - frozenset(self.python_scope))
+        )
+        if unscoped_python:
+            raise ValueError(f"entries reference files outside python_scope: {', '.join(unscoped_python)}")
+        unscoped_rust: Final = tuple(
+            sorted(
+                (
+                    frozenset(entry.rust_file for entry in self.entries if entry.status == "mapped")
+                    | frozenset(entry.rust_file for entry in self.rust_only_tests)
+                )
+                - frozenset(self.rust_scope)
+            )
+        )
+        if unscoped_rust:
+            raise ValueError(f"entries reference files outside rust_scope: {', '.join(unscoped_rust)}")
+        return self
 
     @property
     def mapped_count(self) -> int:
         return sum(1 for entry in self.entries if entry.status == "mapped")
+
+    @property
+    def python_only_count(self) -> int:
+        return sum(1 for entry in self.entries if entry.status == "python_only")
+
+    @property
+    def unresolved_portable_count(self) -> int:
+        return sum(1 for entry in self.entries if entry.status == "unresolved_portable")
+
+    @property
+    def portable_count(self) -> int:
+        return self.mapped_count + self.unresolved_portable_count
 
     @property
     def total_count(self) -> int:
@@ -41,96 +123,10 @@ class TestLedger:
 
     @property
     def percentage(self) -> float:
-        if self.total_count == 0:
+        if self.portable_count == 0:
             return 0.0
-        return round(100.0 * self.mapped_count / self.total_count, 1)
-
-
-def _require_string(value: Any, field: str, source: Path) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{source}: {field} must be a non-empty string")
-    return value
-
-
-def _require_string_list(value: Any, field: str, source: Path) -> tuple[str, ...]:
-    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
-        raise ValueError(f"{source}: {field} must be a list of non-empty strings")
-    return tuple(value)
-
-
-def _load_entry(data: Any, index: int, source: Path) -> LedgerEntry:
-    if not isinstance(data, dict):
-        raise ValueError(f"{source}: entries[{index}] must be an object")
-    python_file = _require_string(data.get("python_file"), f"entries[{index}].python_file", source)
-    python_test = _require_string(data.get("python_test"), f"entries[{index}].python_test", source)
-    status = data.get("status")
-    if status not in ("mapped", "unmapped"):
-        raise ValueError(f"{source}: entries[{index}].status must be 'mapped' or 'unmapped'")
-
-    if status == "mapped":
-        rust_file = _require_string(data.get("rust_file"), f"entries[{index}].rust_file", source)
-        rust_test = _require_string(data.get("rust_test"), f"entries[{index}].rust_test", source)
-        justification = _require_string(
-            data.get("justification"), f"entries[{index}].justification", source
-        )
-        return LedgerEntry(
-            python_file=python_file,
-            python_test=python_test,
-            status=status,
-            rust_file=rust_file,
-            rust_test=rust_test,
-            justification=justification,
-            reason="",
-        )
-
-    reason = _require_string(data.get("reason"), f"entries[{index}].reason", source)
-    return LedgerEntry(
-        python_file=python_file,
-        python_test=python_test,
-        status=status,
-        rust_file="",
-        rust_test="",
-        justification="",
-        reason=reason,
-    )
-
-
-def _load_rust_only_entry(data: Any, index: int, source: Path) -> RustOnlyEntry:
-    if not isinstance(data, dict):
-        raise ValueError(f"{source}: rust_only_tests[{index}] must be an object")
-    return RustOnlyEntry(
-        rust_file=_require_string(data.get("rust_file"), f"rust_only_tests[{index}].rust_file", source),
-        rust_test=_require_string(data.get("rust_test"), f"rust_only_tests[{index}].rust_test", source),
-        reason=_require_string(data.get("reason"), f"rust_only_tests[{index}].reason", source),
-    )
+        return round(100.0 * self.mapped_count / self.portable_count, 1)
 
 
 def load_ledger(path: Path) -> TestLedger:
-    with path.open(encoding="utf-8") as stream:
-        data = json.load(stream)
-
-    sdk_function = _require_string(data.get("sdk_function"), "sdk_function", path)
-    python_scope = _require_string_list(data.get("python_scope"), "python_scope", path)
-    rust_scope = _require_string_list(data.get("rust_scope"), "rust_scope", path)
-
-    entries_data = data.get("entries")
-    if not isinstance(entries_data, list):
-        raise ValueError(f"{path}: entries must be a list")
-    entries = tuple(
-        _load_entry(entry, index, path) for index, entry in enumerate(entries_data)
-    )
-
-    rust_only_data = data.get("rust_only_tests")
-    if not isinstance(rust_only_data, list):
-        raise ValueError(f"{path}: rust_only_tests must be a list")
-    rust_only_tests = tuple(
-        _load_rust_only_entry(entry, index, path) for index, entry in enumerate(rust_only_data)
-    )
-
-    return TestLedger(
-        sdk_function=sdk_function,
-        python_scope=python_scope,
-        rust_scope=rust_scope,
-        entries=entries,
-        rust_only_tests=rust_only_tests,
-    )
+    return TestLedger.model_validate_json(path.read_text(encoding="utf-8"))

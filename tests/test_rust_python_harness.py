@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -261,10 +262,10 @@ def test_should_report_no_ledger_for_a_function_without_one() -> None:
     report = build_function_report("messages", repo_root=REPO_ROOT)
 
     assert report.has_ledger is False
-    assert report.is_clean is True
+    assert report.passes_validation is False
 
 
-def test_should_report_ocr_ledger_stats_and_a_clean_audit() -> None:
+def test_should_report_ocr_ledger_stats_and_unresolved_portable_contracts() -> None:
     ledger = load_ledger(ledger_path_for("ocr"))
 
     report = build_function_report("ocr", repo_root=REPO_ROOT)
@@ -272,7 +273,12 @@ def test_should_report_ocr_ledger_stats_and_a_clean_audit() -> None:
     assert report.has_ledger is True
     assert report.ledger.mapped_count == ledger.mapped_count
     assert report.ledger.total_count == ledger.total_count
-    assert report.is_clean is True
+    assert report.ledger.unresolved_portable_count == ledger.unresolved_portable_count
+    assert report.ledger.python_only_count == ledger.python_only_count
+    assert report.ledger.portable_count == (
+        ledger.mapped_count + ledger.unresolved_portable_count
+    )
+    assert report.passes_validation is False
 
 
 def test_should_scope_validate_ledger_to_the_requested_function(
@@ -281,7 +287,7 @@ def test_should_scope_validate_ledger_to_the_requested_function(
     exit_code = _validate_ledger({"messages"})
 
     captured = capsys.readouterr()
-    assert exit_code == 0
+    assert exit_code == 1
     assert "messages" in captured.out
     assert "no ledger yet" in captured.out
     assert "ocr" not in captured.out
@@ -299,3 +305,97 @@ def test_should_have_every_python_and_rust_ocr_test_accounted_for_in_the_ledger(
         f"Ledger references a Rust test that no longer exists: {list(report.missing_rust_tests)}\n"
         f"Rust test exists but is not tracked in the ledger: {list(report.stale_rust_tests)}\n"
     )
+
+
+def test_should_reject_duplicate_rust_mapping_targets(tmp_path: Path) -> None:
+    ledger_path: Final = tmp_path / "ledger.json"
+    ledger_path.write_text(
+        """{
+          "schema_version": 1,
+          "sdk_function": "ocr",
+          "python_scope": ["tests/python.py"],
+          "rust_scope": ["src/rust.rs"],
+          "entries": [
+            {
+              "python_file": "tests/python.py",
+              "python_test": "test_one",
+              "status": "mapped",
+              "rust_file": "src/rust.rs",
+              "rust_test": "same_target",
+              "justification": "Same observable behavior"
+            },
+            {
+              "python_file": "tests/python.py",
+              "python_test": "test_two",
+              "status": "mapped",
+              "rust_file": "src/rust.rs",
+              "rust_test": "same_target",
+              "justification": "Same observable behavior"
+            }
+          ],
+          "rust_only_tests": []
+        }""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Rust mapping targets contains duplicates"):
+        load_ledger(ledger_path)
+
+
+def test_should_reject_fields_from_another_entry_variant(tmp_path: Path) -> None:
+    ledger_path: Final = tmp_path / "ledger.json"
+    ledger_path.write_text(
+        """{
+          "schema_version": 1,
+          "sdk_function": "ocr",
+          "python_scope": ["tests/python.py"],
+          "rust_scope": [],
+          "entries": [{
+            "python_file": "tests/python.py",
+            "python_test": "test_one",
+            "status": "python_only",
+            "reason": "Owned by Python",
+            "rust_test": "silently_ignored_before"
+          }],
+          "rust_only_tests": []
+        }""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        load_ledger(ledger_path)
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_clean"),
+    [("python_only", True), ("unresolved_portable", False)],
+)
+def test_should_accept_exclusions_and_fail_unresolved_portable_contracts(
+    tmp_path: Path, status: str, expected_clean: bool
+) -> None:
+    python_file: Final = tmp_path / "tests" / "python.py"
+    python_file.parent.mkdir(parents=True)
+    python_file.write_text("def test_one(): pass\n", encoding="utf-8")
+    ledger_path: Final = ledger_path_for("ocr", tmp_path)
+    ledger_path.parent.mkdir(parents=True)
+    ledger_path.write_text(
+        f"""{{
+          "schema_version": 1,
+          "sdk_function": "ocr",
+          "python_scope": ["tests/python.py"],
+          "rust_scope": [],
+          "entries": [{{
+            "python_file": "tests/python.py",
+            "python_test": "test_one",
+            "status": "{status}",
+            "reason": "Classification rationale"
+          }}],
+          "rust_only_tests": []
+        }}""",
+        encoding="utf-8",
+    )
+
+    report: Final = build_function_report("ocr", tmp_path)
+
+    assert report.audit is not None and report.audit.is_clean
+    assert report.passes_validation is expected_clean

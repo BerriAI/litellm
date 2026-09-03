@@ -88,6 +88,13 @@ Treat these as separate signals instead of one ambiguous coverage percentage:
 | Rust port LOC | `cargo-llvm-cov` | The mapped Rust implementation ran |
 | Parity contracts | This harness matrix | Python and Rust had the same observable behavior |
 
+The unit-test ledger classifies each Python test as `mapped`, `python_only`, or
+`unresolved_portable`. A mapped entry names one dedicated Rust test, and that Rust
+target cannot satisfy another Python entry. `--validate-ledger` fails for duplicate
+mappings, untracked or stale tests, malformed entries, and unresolved portable
+contracts. Python-only and Rust-only tests require a reason and do not reduce the
+portable mapping percentage.
+
 `validate_sub_methods/` owns the future source-section inventory that maps a stable
 Python qualified symbol to its Rust symbol. That inventory is the denominator for
 per-function rollups; raw coverage for the entire LiteLLM repository would obscure

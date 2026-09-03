@@ -8,8 +8,8 @@ from pathlib import Path
 from .catalog import load_catalog
 from .models import SDK_FUNCTIONS, HarnessCase, Strategy
 from .runner import run_pytest
-from .ui import make_dashboard
 from .strategies.unit_tests.mapping_validator import FunctionReport, build_function_report
+from .ui import make_dashboard
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COVERAGE_ROOT = REPO_ROOT / "target" / "rust-python-harness"
@@ -48,8 +48,8 @@ def _parser() -> argparse.ArgumentParser:
         "--validate-ledger",
         action="store_true",
         help=(
-            "report Python<->Rust test-parity ledger gaps and drift instead of "
-            "running the dashboard; narrow with --function"
+            "require complete one-to-one Python/Rust test mappings and current "
+            "inventory; narrow with --function"
         ),
     )
     parser.add_argument(
@@ -142,18 +142,32 @@ def _print_catalog(strategies: Sequence[Strategy]) -> None:
 
 def _print_function_report(report: FunctionReport) -> None:
     print(f"\n{report.sdk_function}")
+    if report.error is not None:
+        print(f"  invalid ledger: {report.error}")
+        return
     if report.ledger is None or report.audit is None:
         print("  no ledger yet")
         return
     ledger, audit = report.ledger, report.audit
     print(
-        f"  {ledger.mapped_count}/{ledger.total_count} python tests mapped to rust "
+        f"  {ledger.mapped_count}/{ledger.portable_count} portable Python contracts "
+        "mapped to Rust "
         f"({ledger.percentage}%)"
     )
-    print(f"  {len(ledger.rust_only_tests)} rust-only tests with no python counterpart")
+    print(f"  {ledger.unresolved_portable_count} unresolved portable contracts")
+    print(
+        f"  {ledger.python_only_count} Python-only exclusions "
+        f"({ledger.total_count} Python tests inventoried)"
+    )
+    print(f"  {len(ledger.rust_only_tests)} Rust-only tests")
     if audit.is_clean:
         print("  ledger is in sync with the live test files")
-        return
+    for entry in ledger.entries:
+        if entry.status == "unresolved_portable":
+            print(
+                "  unresolved portable contract: "
+                f"{entry.python_file}::{entry.python_test}: {entry.reason}"
+            )
     for label, items in (
         ("ledger references a python test that no longer exists", audit.missing_python_tests),
         ("python test exists but is not tracked in the ledger", audit.stale_python_tests),
@@ -162,6 +176,8 @@ def _print_function_report(report: FunctionReport) -> None:
     ):
         for item in items:
             print(f"  {label}: {item}")
+    if report.passes_validation:
+        print("  one-to-one mapping validation passed")
 
 
 def _validate_ledger(sdk_functions: set[str]) -> int:
@@ -169,7 +185,7 @@ def _validate_ledger(sdk_functions: set[str]) -> int:
     reports = tuple(build_function_report(function) for function in sorted(functions))
     for report in reports:
         _print_function_report(report)
-    return 0 if all(report.is_clean for report in reports) else 1
+    return 0 if all(report.passes_validation for report in reports) else 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
