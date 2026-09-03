@@ -1,5 +1,8 @@
 import importlib
 import os
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
@@ -80,92 +83,116 @@ def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", mo
         return None
 
 
+_GUARDRAIL_TRANSLATION_PACKAGE: Final = "guardrail_translation"
+_MCP_GUARDRAIL_TRANSLATION_MODULE: Final = "litellm.proxy._experimental.mcp_server.guardrail_translation"
+
+
+@dataclass(frozen=True, slots=True)
+class GuardrailTranslationDiscovery:
+    """
+    The outcome of one scan for guardrail translation handlers.
+
+    unavailable_modules names the bundled packages that failed to import, which is what tells a complete
+    result apart from one that is missing handlers and therefore must not be cached.
+    """
+
+    mappings: Mapping[CallTypes, type["BaseTranslation"]]
+    unavailable_modules: tuple[str, ...]
+
+
+def _bundled_guardrail_translation_modules() -> Iterator[str]:
+    """Yield the import path of every guardrail_translation package shipped under litellm/llms."""
+    llms_dir: Final = os.path.dirname(__file__)
+    for root, dirs, files in os.walk(llms_dir):
+        dirs[:] = [d for d in dirs if not d.startswith("__") and d != "base_llm"]
+        if os.path.basename(root) == _GUARDRAIL_TRANSLATION_PACKAGE and "__init__.py" in files:
+            yield "litellm." + os.path.relpath(root, os.path.dirname(llms_dir)).replace(os.sep, ".")
+
+
+def _guardrail_translation_mappings_of(module_path: str) -> Mapping[CallTypes, type["BaseTranslation"]] | None:
+    """Import one guardrail_translation package, returning None when it could not be imported at all."""
+    try:
+        module: Final = importlib.import_module(module_path)
+    except Exception as e:
+        verbose_logger.error("Could not import guardrail translations from %s: %s", module_path, e)
+        return None
+    mappings: Final = getattr(module, "guardrail_translation_mappings", None)
+    if not isinstance(mappings, dict):
+        return {}
+    declared: Final[Mapping[CallTypes, type[BaseTranslation]]] = mappings
+    return declared
+
+
+def _optional_mcp_guardrail_translation_mappings() -> Mapping[CallTypes, type["BaseTranslation"]]:
+    """MCP call types live outside litellm/llms and are absent from installs without the MCP server."""
+    try:
+        from litellm.proxy._experimental.mcp_server.guardrail_translation import (
+            guardrail_translation_mappings as mcp_guardrail_translation_mappings,
+        )
+    except ImportError:
+        verbose_logger.debug("%s not available; skipping", _MCP_GUARDRAIL_TRANSLATION_MODULE)
+        return {}
+    return mcp_guardrail_translation_mappings
+
+
+def discover_guardrail_translations() -> GuardrailTranslationDiscovery:
+    """
+    Scan the llms tree, plus the optional MCP package, for guardrail translation handlers.
+
+    Returns:
+        GuardrailTranslationDiscovery: the handlers found, and the bundled packages that failed to import
+    """
+    bundled: Final = tuple(
+        (module_path, _guardrail_translation_mappings_of(module_path))
+        for module_path in _bundled_guardrail_translation_modules()
+    )
+    found: Final = (
+        *(mappings for _, mappings in bundled if mappings is not None),
+        _optional_mcp_guardrail_translation_mappings(),
+    )
+    return GuardrailTranslationDiscovery(
+        mappings=MappingProxyType(
+            {call_type: handler for mappings in found for call_type, handler in mappings.items()}
+        ),
+        unavailable_modules=tuple(module_path for module_path, mappings in bundled if mappings is None),
+    )
+
+
 def discover_guardrail_translation_mappings() -> dict[CallTypes, type["BaseTranslation"]]:
     """
     Discover guardrail translation mappings by scanning the llms directory structure.
 
-    Scans for modules with guardrail_translation_mappings dictionaries and aggregates them.
-
     Returns:
         Dict[CallTypes, Type[BaseTranslation]]: A dictionary mapping call types to their translation handler classes
     """
-    discovered_mappings: Final[dict[CallTypes, type[BaseTranslation]]] = {}
-
-    try:
-        # Get the path to the llms directory
-        current_dir: Final = os.path.dirname(__file__)
-        llms_dir: Final = current_dir
-
-        if not os.path.exists(llms_dir):
-            verbose_logger.debug("llms directory not found")
-            return discovered_mappings
-
-        # Recursively scan for guardrail_translation directories
-        for root, dirs, files in os.walk(llms_dir):
-            # Skip __pycache__ and base_llm directories
-            dirs[:] = [d for d in dirs if not d.startswith("__") and d != "base_llm"]
-
-            # Check if this is a guardrail_translation directory with __init__.py
-            if os.path.basename(root) == "guardrail_translation" and "__init__.py" in files:
-                # Build the module path relative to litellm
-                rel_path = os.path.relpath(root, os.path.dirname(llms_dir))
-                module_path = "litellm." + rel_path.replace(os.sep, ".")
-
-                try:
-                    # Import the module
-                    verbose_logger.debug("Discovering guardrail translations in: %s", module_path)
-
-                    module = importlib.import_module(module_path)
-
-                    # Check for guardrail_translation_mappings dictionary
-                    if hasattr(module, "guardrail_translation_mappings"):
-                        mappings = getattr(module, "guardrail_translation_mappings")
-                        if isinstance(mappings, dict):
-                            discovered_mappings.update(mappings)
-                            verbose_logger.debug(
-                                "Found guardrail_translation_mappings in %s: %s", module_path, list(mappings.keys())
-                            )
-
-                except ImportError as e:
-                    verbose_logger.error("Could not import %s: %s", module_path, e)
-                    continue
-                except Exception as e:
-                    verbose_logger.error("Error processing %s: %s", module_path, e)
-                    continue
-
-        try:
-            from litellm.proxy._experimental.mcp_server.guardrail_translation import (
-                guardrail_translation_mappings as mcp_guardrail_translation_mappings,
-            )
-
-            discovered_mappings.update(mcp_guardrail_translation_mappings)
-            verbose_logger.debug(
-                "Loaded MCP guardrail translation mappings: %s",
-                list(mcp_guardrail_translation_mappings.keys()),
-            )
-        except ImportError:
-            verbose_logger.debug("MCP guardrail translation mappings not available; skipping")
-
-        verbose_logger.debug(
-            "Discovered %s guardrail translation mappings: %s",
-            len(discovered_mappings),
-            list(discovered_mappings.keys()),
-        )
-
-    except Exception as e:
-        verbose_logger.error("Error discovering guardrail translation mappings: %s", e)
-
-    return discovered_mappings
+    return dict(discover_guardrail_translations().mappings)
 
 
-# Cache the discovered mappings
 endpoint_guardrail_translation_mappings: dict[CallTypes, type["BaseTranslation"]] | None = None
 
 
-def load_guardrail_translation_mappings():
+def load_guardrail_translation_mappings() -> dict[CallTypes, type["BaseTranslation"]]:
+    """
+    Return the guardrail translation handlers, caching only a discovery that imported every bundled package.
+
+    An incomplete scan is served but never cached: caching one would silently strip the missing call types
+    off every guardrail for the rest of the process, so the next call retries the packages that failed.
+    """
     global endpoint_guardrail_translation_mappings
-    if endpoint_guardrail_translation_mappings is None:
-        endpoint_guardrail_translation_mappings = discover_guardrail_translation_mappings()
+    if endpoint_guardrail_translation_mappings is not None:
+        return endpoint_guardrail_translation_mappings
+
+    discovery: Final = discover_guardrail_translations()
+    if discovery.unavailable_modules:
+        verbose_logger.error(
+            "Found only %s guardrail translation handlers because %s could not be imported. "
+            "Not caching this result: guardrails for the missing call types cannot run until the import succeeds.",
+            len(discovery.mappings),
+            ", ".join(discovery.unavailable_modules),
+        )
+        return dict(discovery.mappings)
+
+    endpoint_guardrail_translation_mappings = dict(discovery.mappings)
     return endpoint_guardrail_translation_mappings
 
 
@@ -182,18 +209,10 @@ def get_guardrail_translation_mapping(call_type: CallTypes) -> type["BaseTransla
     Raises:
         ValueError: If no translation mapping exists for the given call type
     """
-    global endpoint_guardrail_translation_mappings
-
-    # Lazy load the mappings on first access
-    if endpoint_guardrail_translation_mappings is None:
-        endpoint_guardrail_translation_mappings = discover_guardrail_translation_mappings()
-
-    # Get the translation handler class for the call type
-    if call_type not in endpoint_guardrail_translation_mappings:
+    mappings: Final = load_guardrail_translation_mappings()
+    if call_type not in mappings:
         raise ValueError(
             f"No guardrail translation mapping found for call_type: {call_type}. "
-            f"Available mappings: {list(endpoint_guardrail_translation_mappings.keys())}"
+            f"Available mappings: {list(mappings.keys())}"
         )
-
-    # Return the handler class directly
-    return endpoint_guardrail_translation_mappings[call_type]
+    return mappings[call_type]
