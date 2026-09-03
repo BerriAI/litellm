@@ -60,6 +60,14 @@ def is_valid_litellm_user_role(role_str: str) -> bool:
         return False
 
 
+def _role_from_claim_value(role_str: object) -> LitellmUserRoles | None:
+    if not isinstance(role_str, str):
+        return None
+    # Use _value2member_map_ for O(1) lookup, case-insensitive
+    result: Final = LitellmUserRoles._value2member_map_.get(role_str.lower())
+    return cast(LitellmUserRoles | None, result)
+
+
 def get_litellm_user_role(role_str: object) -> LitellmUserRoles | None:
     """
     Convert a string (or list of strings) to a LitellmUserRoles enum if valid (case-insensitive).
@@ -78,13 +86,9 @@ def get_litellm_user_role(role_str: object) -> LitellmUserRoles | None:
     if isinstance(role_str, (list, tuple)):
         entries: Final = cast(Sequence[object], role_str)  # cast-ok: isinstance narrows the claim, not its elements
         return highest_privilege_role(
-            role for role in (get_litellm_user_role(entry) for entry in entries) if role is not None
+            role for role in (_role_from_claim_value(entry) for entry in entries) if role is not None
         )
-    if not isinstance(role_str, str):
-        return None
-    # Use _value2member_map_ for O(1) lookup, case-insensitive
-    result: Final = LitellmUserRoles._value2member_map_.get(role_str.lower())
-    return cast(LitellmUserRoles | None, result)
+    return _role_from_claim_value(role_str)
 
 
 class CustomOpenID(OpenID):
