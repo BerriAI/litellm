@@ -2,7 +2,9 @@ use pyo3::Python;
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 
-use litellm_python_interop::{from_py, release_count, release_gil, to_py};
+use litellm_python_interop::{
+    acquisition_count, attach, from_py, release_count, release_gil, to_py,
+};
 
 struct InitializedPython;
 
@@ -41,4 +43,13 @@ fn release_gil_runs_work_and_records_it(#[from(initialized_python)] python: &Ini
 
     assert_eq!(result, 42);
     assert_eq!(release_count(), before + 1);
+}
+
+#[rstest]
+fn attach_runs_work_and_records_it(#[from(initialized_python)] python: &InitializedPython) {
+    let before = acquisition_count();
+    let result = python.attach(|_| attach(|_| 42));
+
+    assert_eq!(result, 42);
+    assert_eq!(acquisition_count(), before + 1);
 }
