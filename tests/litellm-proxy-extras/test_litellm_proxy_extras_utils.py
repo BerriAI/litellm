@@ -2,6 +2,7 @@ import glob
 import os
 import re
 import sys
+import types
 
 import pytest
 
@@ -14,8 +15,13 @@ sys.path.insert(
 
 from litellm_proxy_extras.utils import (
     PARTITIONED_SPEND_LOGS_PUSH_ERROR,
+    SKIP_INDEX_MIGRATIONS_ENV_VAR,
     ProxyExtrasDBManager,
+    _MigrationLedger,
     filter_partitioned_spend_logs_diff,
+    filter_skipped_index_creates,
+    index_names_created_by,
+    is_index_only_migration,
 )
 
 # Path to the migrations directory
@@ -870,3 +876,412 @@ class TestMigrateDeployAttemptAccounting:
             harness.run()
         assert len(harness.deploy_calls) == 1
         assert harness.resolved == []
+
+
+_INDEX_ONLY_MIGRATION = "20260823000000_add_spend_logs_api_key_starttime_index"
+_SKIPPED_INDEX_NAME = "LiteLLM_SpendLogs_api_key_startTime_idx"
+_INDEX_ONLY_MIGRATION_SQL = (
+    "-- CreateIndex\n"
+    f'CREATE INDEX IF NOT EXISTS "{_SKIPPED_INDEX_NAME}" ON "LiteLLM_SpendLogs"("api_key", "startTime");\n'
+)
+_OTHER_INDEX_ONLY_MIGRATION = "20260826000000_add_team_alias_index"
+_OTHER_INDEX_NAME = "LiteLLM_TeamTable_team_alias_idx"
+_OTHER_INDEX_ONLY_MIGRATION_SQL = f'CREATE INDEX IF NOT EXISTS "{_OTHER_INDEX_NAME}" ON "LiteLLM_TeamTable"("team_alias");\n'
+_COLUMN_MIGRATION = "20260824000000_add_budget_updated_by"
+_COLUMN_MIGRATION_SQL = '-- AlterTable\nALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN "updated_by" TEXT;\n'
+_MIXED_MIGRATION = "20260825000000_add_widget_table"
+_MIXED_MIGRATION_SQL = (
+    'CREATE TABLE IF NOT EXISTS "LiteLLM_Widget" ("id" TEXT NOT NULL);\n'
+    'CREATE INDEX IF NOT EXISTS "LiteLLM_Widget_id_idx" ON "LiteLLM_Widget"("id");\n'
+)
+_DRIFT_WITH_SKIPPED_INDEX_SQL = (
+    "-- AlterTable\n"
+    'ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN     "updated_by" TEXT;\n\n'
+    "-- CreateIndex\n"
+    f'CREATE INDEX "{_SKIPPED_INDEX_NAME}" ON "LiteLLM_SpendLogs"("api_key", "startTime");\n\n'
+    "-- CreateIndex\n"
+    'CREATE INDEX "LiteLLM_SpendLogs_session_id_idx" ON "LiteLLM_SpendLogs"("session_id");\n'
+)
+_ONLY_SKIPPED_INDEX_DRIFT_SQL = (
+    f'-- CreateIndex\nCREATE INDEX "{_SKIPPED_INDEX_NAME}" ON "LiteLLM_SpendLogs"("api_key", "startTime");\n'
+)
+_DRIFT_WITH_HISTORICAL_INDEX_SQL = (
+    "-- AlterTable\n"
+    'ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN     "updated_by" TEXT;\n\n'
+    "-- CreateIndex\n"
+    f'CREATE INDEX "{_OTHER_INDEX_NAME}" ON "LiteLLM_TeamTable"("team_alias");\n'
+)
+
+
+def _ship_migration(prisma_dir, name, sql):
+    migration_dir = prisma_dir / "migrations" / name
+    migration_dir.mkdir(parents=True)
+    (migration_dir / "migration.sql").write_text(sql)
+
+
+def _ship_release(prisma_dir):
+    _ship_migration(prisma_dir, _INDEX_ONLY_MIGRATION, _INDEX_ONLY_MIGRATION_SQL)
+    _ship_migration(prisma_dir, _OTHER_INDEX_ONLY_MIGRATION, _OTHER_INDEX_ONLY_MIGRATION_SQL)
+    _ship_migration(prisma_dir, _COLUMN_MIGRATION, _COLUMN_MIGRATION_SQL)
+    _ship_migration(prisma_dir, _MIXED_MIGRATION, _MIXED_MIGRATION_SQL)
+
+
+def _skip_index_migrations(monkeypatch, tmp_path):
+    _ship_release(tmp_path)
+    monkeypatch.setenv(SKIP_INDEX_MIGRATIONS_ENV_VAR, "true")
+
+
+def _ledger(exists=True, applied=()):
+    return _MigrationLedger(exists=exists, applied=frozenset(applied))
+
+
+class _CompletedWithStdout:
+    stderr = ""
+
+    def __init__(self, stdout):
+        self.stdout = stdout
+
+
+class TestIndexOnlyMigrationDetection:
+    def test_create_index_only_is_index_only(self):
+        assert is_index_only_migration(_INDEX_ONLY_MIGRATION_SQL) is True
+
+    def test_drop_and_create_index_is_index_only(self):
+        sql = (
+            'DROP INDEX IF EXISTS "LiteLLM_TagTable_name_key";\n'
+            'CREATE INDEX "LiteLLM_TagTable_name_idx" ON "LiteLLM_TagTable"("name");\n'
+        )
+        assert is_index_only_migration(sql) is True
+
+    def test_a_table_or_column_change_is_not(self):
+        assert is_index_only_migration(_MIXED_MIGRATION_SQL) is False
+        assert is_index_only_migration(_COLUMN_MIGRATION_SQL) is False
+
+    def test_an_empty_migration_is_not(self):
+        assert is_index_only_migration("-- nothing here\n") is False
+
+    def test_index_names_created_by_handles_every_create_index_form(self):
+        sql = (
+            'CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "a" ON "t"("x");\n'
+            "-- CreateIndex\n"
+            'create index "b" on "t"("y");\n'
+            'ALTER TABLE "t" ADD COLUMN "z" TEXT;\n'
+        )
+        assert index_names_created_by(sql) == frozenset({"a", "b"})
+
+
+class TestSkipIndexMigrationsEnv:
+    def test_unset_skips_nothing(self, monkeypatch, tmp_path):
+        monkeypatch.delenv(SKIP_INDEX_MIGRATIONS_ENV_VAR, raising=False)
+        _ship_release(tmp_path)
+        assert ProxyExtrasDBManager.skipped_migrations(str(tmp_path)) == ()
+        assert ProxyExtrasDBManager.skipped_index_names(str(tmp_path)) == frozenset()
+
+    def test_only_index_only_migrations_are_skipped(self, monkeypatch, tmp_path):
+        _skip_index_migrations(monkeypatch, tmp_path)
+        assert ProxyExtrasDBManager.skipped_migrations(str(tmp_path)) == (
+            _INDEX_ONLY_MIGRATION,
+            _OTHER_INDEX_ONLY_MIGRATION,
+        )
+        assert ProxyExtrasDBManager.skipped_index_names(str(tmp_path)) == frozenset(
+            {_SKIPPED_INDEX_NAME, _OTHER_INDEX_NAME}
+        )
+
+    def test_shipped_index_only_migrations_are_recognized_and_the_baseline_is_not(self, monkeypatch):
+        monkeypatch.setenv(SKIP_INDEX_MIGRATIONS_ENV_VAR, "true")
+        skipped = ProxyExtrasDBManager.skipped_migrations(os.path.dirname(_MIGRATIONS_DIR))
+        assert "20260228100000_add_spend_logs_composite_index" in skipped
+        assert "20250326162113_baseline" not in skipped
+
+
+class TestSkippedIndexDriftFilter:
+    def test_only_the_skipped_index_is_removed(self):
+        filtered = filter_skipped_index_creates(_DRIFT_WITH_SKIPPED_INDEX_SQL, frozenset({_SKIPPED_INDEX_NAME}))
+        assert _SKIPPED_INDEX_NAME not in filtered
+        assert 'CREATE INDEX "LiteLLM_SpendLogs_session_id_idx"' in filtered
+        assert 'ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN     "updated_by" TEXT;' in filtered
+
+    def test_nothing_to_skip_leaves_the_script_byte_identical(self):
+        assert filter_skipped_index_creates(_DRIFT_WITH_SKIPPED_INDEX_SQL, frozenset()) == _DRIFT_WITH_SKIPPED_INDEX_SQL
+
+    def test_a_script_that_is_only_the_skipped_index_becomes_empty(self):
+        assert (
+            filter_skipped_index_creates(_ONLY_SKIPPED_INDEX_DRIFT_SQL, frozenset({_SKIPPED_INDEX_NAME})).strip() == ""
+        )
+
+
+class TestResolveAllMigrationsHonorsSkippedIndexes:
+    def _run(self, monkeypatch, tmp_path, diff_sql, flag=True):
+        import litellm_proxy_extras.utils as utils_module
+
+        if flag:
+            _skip_index_migrations(monkeypatch, tmp_path)
+        else:
+            monkeypatch.delenv(SKIP_INDEX_MIGRATIONS_ENV_VAR, raising=False)
+            _ship_release(tmp_path)
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:5432/db")
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+        monkeypatch.setattr(ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: False))
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if "diff" in cmd:
+                kwargs["stdout"].write(diff_sql)
+            if "execute" in cmd:
+                calls.append(("executed_sql", open(cmd[cmd.index("--file") + 1]).read()))
+            return _FakeCompleted()
+
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fake_run)
+        ProxyExtrasDBManager._resolve_all_migrations(str(tmp_path), "schema.prisma")
+        return calls
+
+    def test_the_skipped_index_is_kept_out_of_the_executed_drift_script(self, monkeypatch, tmp_path):
+        calls = self._run(monkeypatch, tmp_path, _DRIFT_WITH_SKIPPED_INDEX_SQL)
+        executed = next(c[1] for c in calls if isinstance(c, tuple))
+        assert _SKIPPED_INDEX_NAME not in executed
+        assert 'CREATE INDEX "LiteLLM_SpendLogs_session_id_idx"' in executed
+        assert 'ADD COLUMN     "updated_by" TEXT' in executed
+
+    def test_a_drift_that_is_only_the_skipped_index_executes_nothing_and_still_marks_applied(
+        self, monkeypatch, tmp_path
+    ):
+        calls = self._run(monkeypatch, tmp_path, _ONLY_SKIPPED_INDEX_DRIFT_SQL)
+        assert not any(isinstance(c, tuple) for c in calls)
+        resolved = {c[-1] for c in calls if isinstance(c, list) and "resolve" in c}
+        assert resolved == {_INDEX_ONLY_MIGRATION, _OTHER_INDEX_ONLY_MIGRATION, _COLUMN_MIGRATION, _MIXED_MIGRATION}
+
+    def test_an_index_owned_by_a_migration_applied_long_ago_is_kept_out_while_the_flag_is_set(
+        self, monkeypatch, tmp_path
+    ):
+        calls = self._run(monkeypatch, tmp_path, _DRIFT_WITH_HISTORICAL_INDEX_SQL)
+        executed = next(c[1] for c in calls if isinstance(c, tuple))
+        assert _OTHER_INDEX_NAME not in executed
+        assert 'ADD COLUMN     "updated_by" TEXT' in executed
+
+    def test_without_the_flag_the_drift_script_rebuilds_that_index(self, monkeypatch, tmp_path):
+        calls = self._run(monkeypatch, tmp_path, _DRIFT_WITH_HISTORICAL_INDEX_SQL, flag=False)
+        executed = next(c[1] for c in calls if isinstance(c, tuple))
+        assert f'CREATE INDEX "{_OTHER_INDEX_NAME}"' in executed
+
+    def test_the_log_names_only_the_indexes_actually_removed(self, monkeypatch, tmp_path, caplog):
+        with caplog.at_level("INFO", logger="litellm_proxy_extras"):
+            self._run(monkeypatch, tmp_path, _DRIFT_WITH_SKIPPED_INDEX_SQL)
+        removed_lines = [r.message for r in caplog.records if "removed CREATE INDEX" in r.message]
+        assert removed_lines == [
+            f"{SKIP_INDEX_MIGRATIONS_ENV_VAR}: removed CREATE INDEX for {_SKIPPED_INDEX_NAME} from the drift script"
+        ]
+
+    def test_a_drift_without_a_guarded_index_logs_no_removal(self, monkeypatch, tmp_path, caplog):
+        with caplog.at_level("INFO", logger="litellm_proxy_extras"):
+            self._run(monkeypatch, tmp_path, _PARTITIONED_DRIFT_SQL)
+        assert not any("removed CREATE INDEX" in r.message for r in caplog.records)
+
+
+class _V2SkipHarness:
+    """Drives _setup_database_v2 with scripted `prisma migrate deploy` outcomes and
+    ledger reads, recording resolves and deploys in the order they happen."""
+
+    def __init__(self, monkeypatch, tmp_path, outcomes, ledgers):
+        import subprocess as subprocess_module
+
+        import litellm_proxy_extras.utils as utils_module
+
+        self.events = []
+        self.baselines = 0
+        self.resolve_error = None
+        self._outcomes = list(outcomes)
+        self._subprocess = subprocess_module
+        ledger_reads = iter(ledgers)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", staticmethod(lambda: str(tmp_path)))
+        monkeypatch.setattr(ProxyExtrasDBManager, "_read_migration_ledger", staticmethod(lambda: next(ledger_reads)))
+        monkeypatch.setattr(ProxyExtrasDBManager, "_create_baseline_migration", staticmethod(self._baseline))
+        monkeypatch.setattr(ProxyExtrasDBManager, "_roll_back_migration", staticmethod(lambda name: None))
+        monkeypatch.setattr(ProxyExtrasDBManager, "_resolve_specific_migration", staticmethod(self._resolve))
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", self._run_prisma)
+        monkeypatch.setattr(utils_module.time, "sleep", lambda seconds: None)
+
+    def _baseline(self, *args, **kwargs):
+        self.baselines += 1
+        return True
+
+    def _resolve(self, name):
+        self.events.append(("resolve", name))
+        if self.resolve_error is not None:
+            raise self.resolve_error
+
+    def _run_prisma(self, cmd, **kwargs):
+        assert cmd[1:] == ["migrate", "deploy"], cmd
+        self.events.append(("deploy",))
+        outcome = self._outcomes.pop(0)
+        if outcome == "ok":
+            return _FakeCompleted()
+        raise self._subprocess.CalledProcessError(1, cmd, stderr=outcome)
+
+    def run(self):
+        return ProxyExtrasDBManager._setup_database_v2(use_migrate=True)
+
+
+class TestV2RecordsSkippedIndexMigrationsBeforeDeploy:
+    def test_the_skip_is_recorded_before_the_first_deploy(self, monkeypatch, tmp_path):
+        _skip_index_migrations(monkeypatch, tmp_path)
+        harness = _V2SkipHarness(monkeypatch, tmp_path, ["ok"], [_ledger()])
+        assert harness.run() is True
+        assert harness.events == [
+            ("resolve", _INDEX_ONLY_MIGRATION),
+            ("resolve", _OTHER_INDEX_ONLY_MIGRATION),
+            ("deploy",),
+        ]
+
+    def test_unset_env_never_touches_the_ledger(self, monkeypatch, tmp_path):
+        monkeypatch.delenv(SKIP_INDEX_MIGRATIONS_ENV_VAR, raising=False)
+        _ship_release(tmp_path)
+        harness = _V2SkipHarness(monkeypatch, tmp_path, ["ok"], [])
+        assert harness.run() is True
+        assert harness.events == [("deploy",)]
+
+    def test_an_index_migration_the_ledger_already_has_is_left_alone(self, monkeypatch, tmp_path):
+        _skip_index_migrations(monkeypatch, tmp_path)
+        harness = _V2SkipHarness(monkeypatch, tmp_path, ["ok"], [_ledger(applied=[_INDEX_ONLY_MIGRATION])])
+        assert harness.run() is True
+        assert harness.events == [("resolve", _OTHER_INDEX_ONLY_MIGRATION), ("deploy",)]
+
+    def test_a_database_without_a_ledger_is_baselined_before_the_skip_is_recorded(self, monkeypatch, tmp_path):
+        _skip_index_migrations(monkeypatch, tmp_path)
+        harness = _V2SkipHarness(monkeypatch, tmp_path, [_P3005_STDERR, "ok"], [_ledger(exists=False), _ledger()])
+        assert harness.run() is True
+        assert harness.baselines == 1
+        assert harness.events == [
+            ("deploy",),
+            ("resolve", _INDEX_ONLY_MIGRATION),
+            ("resolve", _OTHER_INDEX_ONLY_MIGRATION),
+            ("deploy",),
+        ]
+
+    def test_an_already_recorded_skip_is_not_an_error(self, monkeypatch, tmp_path):
+        import subprocess as subprocess_module
+
+        _skip_index_migrations(monkeypatch, tmp_path)
+        harness = _V2SkipHarness(monkeypatch, tmp_path, ["ok"], [_ledger()])
+        harness.resolve_error = subprocess_module.CalledProcessError(
+            1,
+            ["prisma", "migrate", "resolve"],
+            stderr=f"Error: P3008\n\nThe migration `{_INDEX_ONLY_MIGRATION}` is already recorded as applied in the database.\n",
+        )
+        assert harness.run() is True
+        assert harness.events == [
+            ("resolve", _INDEX_ONLY_MIGRATION),
+            ("resolve", _OTHER_INDEX_ONLY_MIGRATION),
+            ("deploy",),
+        ]
+
+
+class TestV1RecordsSkippedIndexMigrationsBeforeDeploy:
+    def _prisma_commands(self, monkeypatch, tmp_path, env_set):
+        import litellm_proxy_extras.utils as utils_module
+
+        if env_set:
+            _skip_index_migrations(monkeypatch, tmp_path)
+        else:
+            monkeypatch.delenv(SKIP_INDEX_MIGRATIONS_ENV_VAR, raising=False)
+            _ship_release(tmp_path)
+        monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", staticmethod(lambda: str(tmp_path)))
+        monkeypatch.setattr(ProxyExtrasDBManager, "_read_migration_ledger", staticmethod(lambda: _ledger()))
+        monkeypatch.setattr(utils_module.time, "sleep", lambda seconds: None)
+        commands = []
+
+        def fake_run(cmd, **kwargs):
+            commands.append(cmd[1:])
+            return _CompletedWithStdout("No pending migrations to apply.")
+
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fake_run)
+        assert ProxyExtrasDBManager._run_migrations(use_migrate=True, use_v2_resolver=False) is True
+        return commands
+
+    def test_the_skip_is_recorded_before_deploy(self, monkeypatch, tmp_path):
+        assert self._prisma_commands(monkeypatch, tmp_path, env_set=True) == [
+            ["migrate", "resolve", "--applied", _INDEX_ONLY_MIGRATION],
+            ["migrate", "resolve", "--applied", _OTHER_INDEX_ONLY_MIGRATION],
+            ["migrate", "deploy"],
+        ]
+
+    def test_unset_env_only_deploys(self, monkeypatch, tmp_path):
+        assert self._prisma_commands(monkeypatch, tmp_path, env_set=False) == [["migrate", "deploy"]]
+
+
+class TestSkipUnderDbPush:
+    def test_v2_db_push_warns_that_the_skip_has_no_effect(self, monkeypatch, tmp_path, caplog):
+        import litellm_proxy_extras.utils as utils_module
+
+        _skip_index_migrations(monkeypatch, tmp_path)
+        monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", staticmethod(lambda: str(tmp_path)))
+        monkeypatch.setattr(ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: False))
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", lambda cmd, **kwargs: _FakeCompleted())
+        with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+            assert ProxyExtrasDBManager._setup_database_v2(use_migrate=False) is True
+        assert any("no effect under prisma db push" in r.message for r in caplog.records)
+
+
+class _FakeLedgerConn:
+    def __init__(self, rows, undefined_table):
+        self._rows = rows
+        self._undefined_table = undefined_table
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, query, params=None):
+        if self._undefined_table is not None:
+            raise self._undefined_table()
+        return self
+
+    def fetchall(self):
+        return self._rows
+
+
+def _fake_psycopg(rows=(), undefined_table=False, connect_error=False):
+    module = types.ModuleType("psycopg")
+
+    class UndefinedTable(Exception):
+        pass
+
+    class OperationalError(Exception):
+        pass
+
+    class DatabaseError(Exception):
+        pass
+
+    def connect(*args, **kwargs):
+        if connect_error:
+            raise OperationalError("unreachable")
+        return _FakeLedgerConn(list(rows), UndefinedTable if undefined_table else None)
+
+    module.errors = types.SimpleNamespace(UndefinedTable=UndefinedTable)
+    module.OperationalError = OperationalError
+    module.DatabaseError = DatabaseError
+    module.connect = connect
+    return module
+
+
+class TestReadMigrationLedger:
+    def _read(self, monkeypatch, psycopg_module):
+        monkeypatch.setitem(sys.modules, "psycopg", psycopg_module)
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:5432/db")
+        return ProxyExtrasDBManager._read_migration_ledger()
+
+    def test_applied_rows_are_read(self, monkeypatch):
+        ledger = self._read(monkeypatch, _fake_psycopg(rows=[("a",), ("b",)]))
+        assert ledger == _ledger(applied=["a", "b"])
+
+    def test_a_missing_ledger_table_reads_as_absent(self, monkeypatch):
+        assert self._read(monkeypatch, _fake_psycopg(undefined_table=True)) == _ledger(exists=False)
+
+    def test_no_psycopg_reads_as_an_existing_empty_ledger(self, monkeypatch):
+        assert self._read(monkeypatch, None) == _ledger()
+
+    def test_a_connection_failure_reads_as_an_existing_empty_ledger(self, monkeypatch):
+        assert self._read(monkeypatch, _fake_psycopg(connect_error=True)) == _ledger()
