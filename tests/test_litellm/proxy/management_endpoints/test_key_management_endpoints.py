@@ -31,6 +31,7 @@ from litellm.proxy.auth.auth_checks import _delete_cache_key_object, _project_ca
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.key_management_endpoints import (
+    _build_key_filter_conditions,
     _check_org_key_limits,
     _check_project_key_limits,
     _check_team_key_limits,
@@ -240,11 +241,14 @@ async def test_list_keys_include_created_by_keys():
         elif "created_by" in condition:
             created_by_condition_with_exclude = condition
 
-    # Verify exclude_team_id is applied to user condition
+    # Verify exclude_team_id produces an OR clause that preserves NULL team_id rows
     assert (
         user_condition_with_exclude is not None
     ), "User condition with exclude should be present"
-    assert user_condition_with_exclude["team_id"] == {"not": "excluded-team-123"}
+    assert user_condition_with_exclude["OR"] == [
+        {"team_id": None},
+        {"team_id": {"not": "excluded-team-123"}},
+    ]
 
     # Verify created_by condition still only has created_by filter
     assert (
@@ -252,6 +256,56 @@ async def test_list_keys_include_created_by_keys():
     ), "Created by condition with exclude should be present"
     assert created_by_condition_with_exclude["created_by"] == test_user_id
     assert len(created_by_condition_with_exclude) == 1
+
+
+def test_build_key_filter_conditions_exclude_team_id_preserves_null():
+    """Regression test for #37292: exclude_team_id must not drop keys where team_id IS NULL."""
+    cond = _build_key_filter_conditions(
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id="litellm-dashboard",
+        admin_team_ids=None,
+    )
+    assert "OR" in cond
+    assert {"team_id": None} in cond["OR"]
+    assert {"team_id": {"not": "litellm-dashboard"}} in cond["OR"]
+
+    # user_id alongside exclude_team_id
+    cond2 = _build_key_filter_conditions(
+        user_id="user-abc",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id="excluded-team",
+        admin_team_ids=None,
+    )
+    assert cond2.get("user_id") == "user-abc"
+    assert cond2.get("OR") == [
+        {"team_id": None},
+        {"team_id": {"not": "excluded-team"}},
+    ]
+
+    # no exclude_team_id — user_id is a direct key, no extra team OR injected
+    cond3 = _build_key_filter_conditions(
+        user_id="user-abc",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+    )
+    assert cond3.get("user_id") == "user-abc"
+    top_or = cond3.get("OR", [])
+    assert not any(
+        isinstance(c, dict) and c.get("team_id", {}) == {"not": "any-value"}
+        for c in top_or
+    )
+
 
 
 @pytest.mark.asyncio
