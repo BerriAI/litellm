@@ -2053,6 +2053,7 @@ interface UiSpendLogsParams {
   max_spend?: number;
   exclude_internal_health_checks?: boolean;
   group_by_session?: boolean;
+  session_cursor?: string;
 }
 
 interface UiSpendLogsCallOptions {
@@ -2381,20 +2382,22 @@ export type ModelGroupConnectionResult = { status: "success" } | { status: "erro
 export const buildModelGroupTestRequest = (
   modelGroup: string,
   mode: "chat" | "embedding",
+  requestParams: Record<string, unknown> = {},
 ): { path: string; body: Record<string, unknown> } =>
   mode === "embedding"
     ? { path: "/v1/embeddings", body: { model: modelGroup, input: "test from litellm" } }
     : {
         path: "/v1/chat/completions",
-        body: { model: modelGroup, messages: [{ role: "user", content: "test from litellm" }] },
+        body: { ...requestParams, model: modelGroup, messages: [{ role: "user", content: "test from litellm" }] },
       };
 
 export const testModelGroupConnection = async (
   accessToken: string,
   modelGroup: string,
   mode: "chat" | "embedding",
+  requestParams?: Record<string, unknown>,
 ): Promise<ModelGroupConnectionResult> => {
-  const { path, body } = buildModelGroupTestRequest(modelGroup, mode);
+  const { path, body } = buildModelGroupTestRequest(modelGroup, mode, requestParams);
   try {
     await apiClient.post(path, { accessToken, body });
     return { status: "success" };

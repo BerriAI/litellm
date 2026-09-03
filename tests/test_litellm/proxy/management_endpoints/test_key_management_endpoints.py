@@ -17505,16 +17505,21 @@ def test_generate_key_request_blank_team_id_is_personal():
     assert GenerateKeyRequest(team_id="team-1").team_id == "team-1"
 
 
-def test_generate_key_request_blank_organization_and_project_id_are_unset():
-    from litellm.proxy._types import RegenerateKeyRequest
-
+def test_generate_key_request_blank_project_id_is_unset():
     cleared = GenerateKeyRequest(organization_id="", project_id="")
-    assert cleared.organization_id is None
     assert cleared.project_id is None
-    assert "organization_id" not in cleared.model_dump(exclude_none=True)
+    assert "project_id" not in cleared.model_dump(exclude_none=True)
+    assert GenerateKeyRequest(project_id="proj-1").project_id == "proj-1"
+
+
+def test_key_request_blank_organization_id_is_unset():
+    from litellm.proxy._types import RegenerateKeyRequest, UpdateKeyRequest
+
+    assert GenerateKeyRequest(organization_id="").organization_id is None
     assert RegenerateKeyRequest(organization_id="").organization_id is None
-    assert GenerateKeyRequest(organization_id="org-1", project_id="proj-1").organization_id == "org-1"
-    assert GenerateKeyRequest(organization_id="org-1", project_id="proj-1").project_id == "proj-1"
+    assert UpdateKeyRequest(key="sk-1", organization_id="").organization_id is None
+    assert GenerateKeyRequest(organization_id="org-1").organization_id == "org-1"
+    assert UpdateKeyRequest(key="sk-1", organization_id="org-1").organization_id == "org-1"
 
 
 def test_key_generation_check_blank_team_id_uses_personal_permissions(monkeypatch):

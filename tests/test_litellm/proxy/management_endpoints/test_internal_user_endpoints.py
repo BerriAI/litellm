@@ -1449,6 +1449,11 @@ async def test_new_user_default_teams_flow(mocker):
         return 5  # Low user count, under limit
 
     mock_prisma_client.db.litellm_usertable.count = mock_count
+    persisted_user_row = mocker.MagicMock()
+    persisted_user_row.teams = ["96fed65b-0182-4ff4-8429-2721cd7d42af"]
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        return_value=persisted_user_row
+    )
 
     # Mock duplicate checks to pass
     async def mock_check_duplicate_user_email(*args, **kwargs):
@@ -1477,6 +1482,7 @@ async def test_new_user_default_teams_flow(mocker):
         "token": "sk-test-token-123",
         "expires": None,
         "max_budget": 100,
+        "teams": [],
     }
 
     # Mock _add_user_to_team
@@ -1551,6 +1557,7 @@ async def test_new_user_default_teams_flow(mocker):
         # Verify response structure
         assert response.user_id == "test-user-123"
         assert response.key == "sk-test-token-123"
+        assert response.teams == ["96fed65b-0182-4ff4-8429-2721cd7d42af"]
 
     finally:
         # Restore original default params (always assign, never delattr — the attribute
