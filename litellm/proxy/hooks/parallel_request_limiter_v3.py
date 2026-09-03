@@ -450,19 +450,14 @@ class RateLimitResponseWithDescriptors(TypedDict):
 
 class RateLimitDemotionPolicy(BaseModel):
     """
-    Soft rate limiting: tag requests that approach or exceed their rate
-    limits for downstream priority demotion instead of only rejecting them.
-
-    ``demotion_headers`` are merged into the request's ``extra_headers`` so
-    they reach the upstream inference server, e.g. llm-d's inference gateway
-    schedules a request carrying ``x-llm-d-inference-objective: best_effort``
-    at best-effort priority. ``demote_at`` is the saturation fraction
-    (used/limit, max across the caller's checked windows) at or above which
-    an admitted request is tagged preemptively. ``over_limit_action:
-    "demote"`` converts the 429 on an over-limit request into a demotion:
-    the request is forwarded carrying the headers, holds no parallel slot or
-    token reservation, and its actual usage is still charged to the windows
-    post-call.
+    Soft rate limiting: tag admitted requests that approach their rate
+    limits for downstream priority demotion. ``demote_at`` is the saturation
+    fraction (used/limit, max across the caller's checked windows) at or
+    above which ``demotion_headers`` are merged into the request's
+    ``extra_headers`` so they reach the upstream inference server, e.g.
+    llm-d's inference gateway schedules a request carrying
+    ``x-llm-d-inference-objective: best_effort`` at best-effort priority.
+    Over-limit requests are rejected with a 429 as usual.
 
     Configured globally under ``general_settings.rate_limit_demotion`` or
     per virtual key via ``metadata.rate_limit_demotion``; a key-level policy
@@ -471,9 +466,8 @@ class RateLimitDemotionPolicy(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    demote_at: float | None = Field(default=None, gt=0.0)
-    over_limit_action: Literal["reject", "demote"] = "reject"
-    demotion_headers: Mapping[str, str] = Field(default_factory=dict)
+    demote_at: float = Field(gt=0.0)
+    demotion_headers: Mapping[str, str]
 
 
 class _RateLimitDescriptorSink(Protocol):
@@ -625,7 +619,7 @@ def _resolve_demotion_policy(user_api_key_dict: UserAPIKeyAuth) -> RateLimitDemo
     try:
         return RateLimitDemotionPolicy.model_validate(raw)
     except ValidationError as e:
-        verbose_proxy_logger.warning("Ignoring invalid rate_limit_demotion config, keeping hard 429 behavior: %s", e)
+        verbose_proxy_logger.warning("Ignoring invalid rate_limit_demotion config, demotion disabled: %s", e)
         return None
 
 
@@ -3468,11 +3462,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Pre-call hook to check rate limits before making the API call.
         Supports dynamic rate limiting based on deployment health.
 
-        With a :class:`RateLimitDemotionPolicy` in effect, an over-limit
-        request is demoted (forwarded carrying the policy's headers) instead
-        of rejected when ``over_limit_action`` is ``"demote"``, and an
-        admitted request at or above ``demote_at`` saturation is tagged with
-        the same headers preemptively.
+        With a :class:`RateLimitDemotionPolicy` in effect, an admitted
+        request at or above ``demote_at`` saturation is tagged with the
+        policy's headers.
         """
         verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
 
@@ -3491,36 +3483,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 call_type=call_type,
             )
 
+        await self._enforce_pre_call_rate_limits(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            call_type=call_type,
+        )
+
         demotion_policy: Final = _resolve_demotion_policy(user_api_key_dict)
         if demotion_policy is None:
-            await self._enforce_pre_call_rate_limits(
-                user_api_key_dict=user_api_key_dict,
-                data=data,
-                call_type=call_type,
-            )
-            return None
-
-        try:
-            await self._enforce_pre_call_rate_limits(
-                user_api_key_dict=user_api_key_dict,
-                data=data,
-                call_type=call_type,
-            )
-        except ProxyRateLimitError:
-            if demotion_policy.over_limit_action != "demote":
-                raise
-            # Every raise site releases its own slots and refunds counters,
-            # but a combined-TPM reservation refunded by the project
-            # ITPM/OTPM path leaves stash.reserved_* populated, and the
-            # success-path reconciliation does not consult
-            # reservation_released for combined TPM. Zero them so the
-            # demoted request settles at exactly +actual usage.
-            stash.reserved_tokens = 0
-            stash.reserved_scopes = frozenset()
-            stash.reserved_model = None
-            return _apply_demotion_headers(data, demotion_policy)
-
-        if demotion_policy.demote_at is None:
             return None
         saturation: Final = _max_rate_limit_saturation(stash.rate_limit_response)
         if saturation is None or saturation < demotion_policy.demote_at:
