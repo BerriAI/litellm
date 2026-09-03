@@ -178,3 +178,51 @@ describe("MCPToolArgumentsForm", () => {
     await expect(submit(ref)).resolves.toEqual({});
   });
 });
+
+describe("MCPToolArgumentsForm nullable schema types", () => {
+  it("renders a number widget for nullable (type-array) schema properties instead of a plain text fallback", () => {
+    // Unlike ToolTestPanel, this component has a final "else" branch that falls back to a plain
+    // text Input, so the pre-fix bug here was a wrong widget (text instead of number), not a
+    // missing one; the field must also start empty, not a synthetic 0.
+    renderForm({
+      type: "object",
+      properties: {
+        parentSuiteId: { type: ["integer", "null"], description: "Optional parent suite id" },
+      },
+      required: [],
+    });
+
+    // Native type="number" input: jest-dom reports an empty one as null, not "".
+    const input = screen.getByLabelText("parentSuiteId");
+    expect(input).toHaveValue(null);
+  });
+
+  it("omits an untouched nullable numeric field from getSubmitValues instead of sending a synthetic 0", async () => {
+    const ref = renderForm({
+      type: "object",
+      properties: {
+        parentSuiteId: { type: ["integer", "null"], description: "Optional parent suite id" },
+      },
+      required: [],
+    });
+
+    await expect(submit(ref)).resolves.toEqual({});
+  });
+
+  it("coerces a nullable integer field to a number in getSubmitValues, not a string", async () => {
+    const user = userEvent.setup();
+    const ref = renderForm({
+      type: "object",
+      properties: {
+        parentSuiteId: { type: ["integer", "null"], description: "Optional parent suite id" },
+      },
+      required: [],
+    });
+
+    const input = screen.getByLabelText("parentSuiteId");
+    await user.clear(input);
+    await user.type(input, "42");
+
+    await expect(submit(ref)).resolves.toEqual(expect.objectContaining({ parentSuiteId: 42 }));
+  });
+});
