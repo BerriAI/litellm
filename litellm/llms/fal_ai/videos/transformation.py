@@ -15,7 +15,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.images.utils import ImageEditRequestUtils
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import async_safe_get, encode_url_path_segment, safe_get
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
@@ -76,7 +76,6 @@ _FAMILY_RULES: Final[Mapping[str, _FamilyRules]] = MappingProxyType(
 class _FalQueueResponse(TypedDict, total=False):
     request_id: ReadOnly[str]
     status: ReadOnly[str]
-    response_url: ReadOnly[str]
     error: ReadOnly[object]
     detail: ReadOnly[object]
 
@@ -103,6 +102,7 @@ class _Seekable(Protocol):
 class _PollTarget:
     model_path: str
     request_id: str
+    result_url: str
     headers: Mapping[str, str]
 
 
@@ -151,7 +151,7 @@ def _takes_duration(model_path: str) -> bool:
 def _seconds_or_default(model_path: str, seconds: object) -> int:
     try:
         return int(float(str(seconds)))
-    except ValueError:
+    except (ValueError, OverflowError):
         return _rules(model_path).default_seconds
 
 
@@ -405,23 +405,21 @@ class FalAIVideoConfig(BaseVideoConfig):
             return request_id
         return encode_video_id_with_provider(request_id, custom_llm_provider, model_path)
 
-    def _remember_poll_target(self, video_id: str, headers: Mapping[str, str]) -> _PollTarget:
+    def _remember_poll_target(self, video_id: str, api_base: str, headers: Mapping[str, str]) -> _PollTarget:
         decoded: Final = decode_video_id_with_provider(video_id)
         model_path: Final = decoded.get("model_id")
         if not model_path:
             raise ValueError(f"fal.ai video id '{video_id}' does not carry a model path, cannot build the queue URL")
+        request_id: Final = decoded.get("video_id") or video_id
+        encoded_request_id: Final = encode_url_path_segment(request_id, field_name="video_id")
         target: Final = _PollTarget(
             model_path=_model_path(model_path),
-            request_id=decoded.get("video_id") or video_id,
+            request_id=request_id,
+            result_url=f"{api_base}/{_root_app_id(_model_path(model_path))}/requests/{encoded_request_id}",
             headers=MappingProxyType(dict(headers)),  # mutable-ok: snapshot of the handler's header dict
         )
         self._poll_target = target
         return target
-
-    @staticmethod
-    def _request_url(api_base: str, target: _PollTarget) -> str:
-        encoded_request_id: Final = encode_url_path_segment(target.request_id, field_name="video_id")
-        return f"{api_base}/{_root_app_id(target.model_path)}/requests/{encoded_request_id}"
 
     def transform_video_status_retrieve_request(
         self,
@@ -430,8 +428,8 @@ class FalAIVideoConfig(BaseVideoConfig):
         litellm_params: GenericLiteLLMParams,
         headers: Mapping[str, str],
     ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseVideoConfig contract
-        target: Final = self._remember_poll_target(video_id, headers)
-        return f"{self._request_url(api_base, target)}/status", {}  # mutable-ok: BaseVideoConfig contract
+        target: Final = self._remember_poll_target(video_id, api_base, headers)
+        return f"{target.result_url}/status", {}  # mutable-ok: BaseVideoConfig contract
 
     def transform_video_status_retrieve_response(
         self,
@@ -442,7 +440,7 @@ class FalAIVideoConfig(BaseVideoConfig):
         response_data: Final[_FalQueueResponse] = raw_response.json()
         raw_status: Final = str(response_data.get("status", "")).upper()
         mapped_status: Final = _STATUS_MAP.get(raw_status, "failed")
-        failure: Final = self._completed_job_failure(response_data) if mapped_status == "completed" else None
+        failure: Final = self._completed_job_failure() if mapped_status == "completed" else None
         status: Final = "failed" if failure is not None else mapped_status
         target: Final = self._poll_target
         request_id: Final = response_data.get("request_id") or (target.request_id if target else "")
@@ -466,19 +464,18 @@ class FalAIVideoConfig(BaseVideoConfig):
             "message": failure or (str(detail) if detail else "fal.ai video job failed"),
         }
 
-    def _completed_job_failure(self, response_data: _FalQueueResponse) -> str | None:
+    def _completed_job_failure(self) -> str | None:
         """
         fal reports COMPLETED for failed jobs too. Only the result payload tells a
         finished video from a failure, so peek at it and downgrade the status
         instead of handing the caller an opaque error on the content fetch.
         """
-        result_url: Final = response_data.get("response_url")
         target: Final = self._poll_target
-        if not result_url or target is None:
+        if target is None:
             return None
         try:
             result: Final = (self._result_client or litellm.module_level_client).get(
-                result_url,
+                target.result_url,
                 headers=dict(target.headers),  # mutable-ok: httpx headers are a dict
             )
         except Exception as exc:
@@ -500,8 +497,8 @@ class FalAIVideoConfig(BaseVideoConfig):
         headers: Mapping[str, str],
         variant: str | None = None,
     ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseVideoConfig contract
-        target: Final = self._remember_poll_target(video_id, headers)
-        return self._request_url(api_base, target), {}  # mutable-ok: BaseVideoConfig contract
+        target: Final = self._remember_poll_target(video_id, api_base, headers)
+        return target.result_url, {}  # mutable-ok: BaseVideoConfig contract
 
     @staticmethod
     def _ready_video_url(raw_response: httpx.Response) -> str:
@@ -519,7 +516,7 @@ class FalAIVideoConfig(BaseVideoConfig):
         logging_obj: "LiteLLMLoggingObj",
     ) -> bytes:
         video_url: Final = self._ready_video_url(raw_response)
-        video_response: Final = litellm.module_level_client.get(video_url)
+        video_response: Final = safe_get(litellm.module_level_client, video_url)
         video_response.raise_for_status()
         return video_response.content
 
@@ -530,7 +527,7 @@ class FalAIVideoConfig(BaseVideoConfig):
     ) -> bytes:
         video_url: Final = self._ready_video_url(raw_response)
         async_client: Final[AsyncHTTPHandler] = get_async_httpx_client(llm_provider=litellm.LlmProviders.FAL_AI)
-        video_response: Final = await async_client.get(video_url)
+        video_response: Final = await async_safe_get(async_client, video_url)
         video_response.raise_for_status()
         return video_response.content
 

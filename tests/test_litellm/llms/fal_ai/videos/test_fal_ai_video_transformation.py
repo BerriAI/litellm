@@ -12,6 +12,7 @@ import pytest
 
 import litellm
 from litellm.cost_calculator import default_video_cost_calculator
+from litellm.litellm_core_utils.url_utils import SSRFError
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.fal_ai.videos.transformation import FAL_QUEUE_API_BASE, FalAIVideoConfig, FalAIVideoError
@@ -122,9 +123,10 @@ class TestMapOpenAIParams:
         mapped = config.map_openai_params({"seconds": "8"}, model=model, drop_params=False)
         assert "duration" not in mapped
 
-    def test_unparseable_seconds_falls_back_to_family_default(self, config):
+    @pytest.mark.parametrize("seconds", ["auto", "inf", "-inf", "nan"])
+    def test_unparseable_seconds_fall_back_to_family_default(self, config, seconds):
         mapped = config.map_openai_params(
-            {"seconds": "auto"}, model="xai/grok-imagine-video/text-to-video", drop_params=False
+            {"seconds": seconds}, model="xai/grok-imagine-video/text-to-video", drop_params=False
         )
         assert mapped == {"duration": 6}
 
@@ -444,7 +446,7 @@ class TestCompletedResultPeek:
             headers={"Authorization": "Key k"},
         )
         return config.transform_video_status_retrieve_response(
-            raw_response=make_response({"request_id": "req-abc-123", "response_url": RESULT_URL, **payload}),
+            raw_response=make_response({"request_id": "req-abc-123", **payload}),
             logging_obj=None,
             custom_llm_provider="fal_ai",
         )
@@ -466,6 +468,14 @@ class TestCompletedResultPeek:
         video = self.poll(FalAIVideoConfig(result_client=client), {"status": "COMPLETED"})
         assert video.status == "failed"
         assert video.error == {"code": "COMPLETED", "message": "fal.ai video generation failed: invalid image_url"}
+
+    def test_peek_ignores_the_response_url_fal_returns(self):
+        client = _RecordingClient(response=make_response({"video": {"url": "https://fal.media/out.mp4"}}))
+        self.poll(
+            FalAIVideoConfig(result_client=client),
+            {"status": "COMPLETED", "response_url": "http://169.254.169.254/latest/meta-data"},
+        )
+        assert client.url == RESULT_URL
 
     def test_result_with_video_stays_completed(self):
         client = _RecordingClient(response=make_response({"video": {"url": "https://fal.media/out.mp4"}}))
@@ -511,6 +521,20 @@ class TestContent:
     )
     def test_video_url_shapes(self, config, payload, expected):
         assert config._ready_video_url(make_response(payload)) == expected
+
+    @pytest.mark.parametrize("url", ["http://169.254.169.254/latest/meta-data", "http://127.0.0.1:8080/secret"])
+    def test_private_video_url_is_refused(self, config, url):
+        with pytest.raises(SSRFError):
+            config.transform_video_content_response(
+                raw_response=make_response({"video": {"url": url}}), logging_obj=None
+            )
+
+    @pytest.mark.parametrize("url", ["http://169.254.169.254/latest/meta-data", "http://127.0.0.1:8080/secret"])
+    async def test_private_video_url_is_refused_async(self, config, url):
+        with pytest.raises(SSRFError):
+            await config.async_transform_video_content_response(
+                raw_response=make_response({"video": {"url": url}}), logging_obj=None
+            )
 
     def test_still_processing_result_raises(self, config):
         with pytest.raises(ValueError, match="still processing"):
