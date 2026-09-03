@@ -514,12 +514,26 @@ async def update_guardrail(
         guardrail_name: Final = result.get("guardrail_name", "Unknown")
 
         try:
-            IN_MEMORY_GUARDRAIL_HANDLER.update_in_memory_guardrail(
-                guardrail_id=guardrail_id, guardrail=cast(Guardrail, result)
-            )
+            IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(guardrail=cast(Guardrail, result))
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
+        except (ValueError, TypeError) as update_error:
+            # The new config is invalid (a raising guardrail __init__):
+            # reinitialize_guardrail already restored the previous live instance, but
+            # update_guardrail_in_db above already persisted the rejected config to
+            # the DB. Roll that back too, so the DB and the live guardrail never
+            # disagree about what's actually enforcing, and surface the rejection to
+            # the caller instead of a misleading 200.
+            await GUARDRAIL_REGISTRY.update_guardrail_in_db(
+                guardrail_id=guardrail_id,
+                guardrail=existing_guardrail,
+                prisma_client=prisma_client,
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid guardrail configuration, update rejected: {update_error}",
+            ) from update_error
         except Exception as update_error:
             verbose_proxy_logger.warning(
                 "Immediate sync: Failed to update '%s' (ID: %s) in memory: %s",
