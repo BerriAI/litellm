@@ -95,6 +95,7 @@ class TestProxyInitializationHelpers:
         assert args["app"] == "litellm.proxy.proxy_server:app"
         assert args["host"] == "localhost"
         assert args["port"] == 8000
+        assert args["server_header"] is False
 
         # Test with log_config
         args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
@@ -2622,3 +2623,49 @@ class TestTokenAuthCliFlags:
         assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
         assert "ENTRA_TOKEN" not in (database_url or "")
         assert toggle is None
+
+
+class TestLibpqSslParamTranslation:
+    """Prisma ignores ``sslrootcert`` and treats ``sslmode=verify-full`` as
+    ``prefer``, so the URL handed to it must carry Prisma's own strict dialect."""
+
+    @staticmethod
+    def _config(tmp_path, general_settings):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+        return str(config_path)
+
+    def test_libpq_url_is_translated_on_every_prisma_url(self, tmp_path):
+        libpq = "?sslmode=verify-full&sslrootcert=/certs/rds-bundle.pem"
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {}),
+            database_url=f"postgresql://t:t@localhost:5432/t{libpq}",
+            direct_url=f"postgresql://t:t@direct:5432/t{libpq}",
+            read_replica_url=f"postgresql://t:t@reader:5432/t{libpq}",
+        )
+
+        for env_var in ("DATABASE_URL", "DIRECT_URL", "DATABASE_URL_READ_REPLICA"):
+            query = urlparse.parse_qs(urlparse.urlparse(captured[env_var]).query)
+            assert "sslrootcert" not in query, env_var
+            assert query["sslmode"] == ["require"], env_var
+            assert query["sslcert"] == ["/certs/rds-bundle.pem"], env_var
+            assert query["sslaccept"] == ["strict"], env_var
+
+    def test_libpq_params_from_extra_connection_params_are_translated(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(
+                tmp_path,
+                {
+                    "database_extra_connection_params": {
+                        "sslmode": "verify-full",
+                        "sslrootcert": "/certs/rds-bundle.pem",
+                    }
+                },
+            ),
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert "sslrootcert" not in query
+        assert query["sslmode"] == ["require"]
+        assert query["sslcert"] == ["/certs/rds-bundle.pem"]
+        assert query["sslaccept"] == ["strict"]

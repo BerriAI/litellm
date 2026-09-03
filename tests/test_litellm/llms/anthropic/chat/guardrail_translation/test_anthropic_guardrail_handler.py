@@ -13,6 +13,7 @@ import pytest
 
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
 )
@@ -1991,3 +1992,56 @@ class TestStructuredWriteBackKeepsToolResults:
         }
         later_blocks = [b for m in messages[tool_use_index + 1 :] for b in self._blocks(m)]
         assert {"type": "text", "text": "Now fetch the page."} in later_blocks
+
+
+class TestAnthropicMessagesHandlerStreamingScanKey:
+    """get_streaming_scan_key mirrors what process_output_streaming_response would scan"""
+
+    @staticmethod
+    def _sse(event_type, data):
+        return f"event: {event_type}\ndata: {json.dumps(data)}\n\n".encode()
+
+    def _text_delta(self, text):
+        return self._sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        )
+
+    def test_key_is_empty_before_any_text_arrives(self):
+        head = self._sse("message_start", {"type": "message_start", "message": {"stop_reason": None}})
+        key = AnthropicMessagesHandler().get_streaming_scan_key([head])
+        assert key == StreamingScanKey(texts=("",))
+
+    def test_key_accumulates_text_deltas(self):
+        key = AnthropicMessagesHandler().get_streaming_scan_key([self._text_delta("hello "), self._text_delta("world")])
+        assert key.texts == ("hello world",)
+        assert key.stream_ended is False
+
+    def _stop(self, stop_reason):
+        return self._sse(
+            "message_delta",
+            {"type": "message_delta", "delta": {"stop_reason": stop_reason, "stop_sequence": None}, "usage": {}},
+        )
+
+    def test_stop_without_tool_use_scans_the_same_payload(self):
+        handler = AnthropicMessagesHandler()
+        open_key = handler.get_streaming_scan_key([self._text_delta("hi")])
+        ended_key = handler.get_streaming_scan_key([self._text_delta("hi"), self._stop("end_turn")])
+        assert ended_key.stream_ended is True
+        assert ended_key == open_key
+
+    def test_tool_use_blocks_enter_the_key_once_the_stream_has_ended(self):
+        handler = AnthropicMessagesHandler()
+        tool_use = self._sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {}},
+            },
+        )
+        open_key = handler.get_streaming_scan_key([self._text_delta("hi"), tool_use])
+        ended_key = handler.get_streaming_scan_key([self._text_delta("hi"), tool_use, self._stop("tool_use")])
+        assert open_key == StreamingScanKey(texts=("hi",))
+        assert len(ended_key.tool_calls) == 1 and "get_weather" in ended_key.tool_calls[0]
+        assert ended_key != open_key

@@ -1540,8 +1540,8 @@ class TestCommonRequestProcessingHelpers:
         expected_error_data = {
             "error": {
                 "message": "Error processing stream start",
-                "type": "None",
-                "param": "None",
+                "type": "internal_server_error",
+                "param": None,
                 "code": str(status.HTTP_500_INTERNAL_SERVER_ERROR),
             }
         }
@@ -1569,8 +1569,8 @@ class TestCommonRequestProcessingHelpers:
         expected_error_data = {
             "error": {
                 "message": "Content blocked by guardrail",
-                "type": "None",
-                "param": "None",
+                "type": "invalid_request_error",
+                "param": None,
                 "code": "400",
             }
         }
@@ -1932,6 +1932,104 @@ class TestCommonRequestProcessingHelpers:
             # Since JSONResponse is returned instead of StreamingResponse, streaming tracing should not be triggered
             # tracer.trace should not be called
             assert mock_tracer.trace.call_count == 0
+
+
+def _stringified_none_paths(node: object, path: str = "error") -> tuple[str, ...]:
+    if isinstance(node, dict):
+        return tuple(
+            found
+            for key, value in node.items()
+            for found in _stringified_none_paths(value, f"{path}.{key}")
+        )
+    if isinstance(node, (list, tuple)):
+        return tuple(
+            found
+            for index, value in enumerate(node)
+            for found in _stringified_none_paths(value, f"{path}[{index}]")
+        )
+    return (path,) if node == "None" else ()
+
+
+def _blocked_guardrail_exception() -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail={
+            "error": "Violated guardrail policy",
+            "bedrock_guardrail_response": {"action": "GUARDRAIL_INTERVENED"},
+            "guardrailIdentifier": "gf3sc1mzinjw",
+            "guardrailVersion": "DRAFT",
+        },
+    )
+
+
+class TestGuardrailBlockErrorPayloadNeverStringifiesNone:
+    """Regression for LIT-6808: a blocked-guardrail error body carried the literal string
+    "None" for type and param instead of a real error type and JSON null."""
+
+    def test_non_streaming_block_payload_carries_a_real_type_and_null_param(self):
+        from litellm.proxy.common_request_processing import (
+            proxy_exception_from_http_exception,
+        )
+
+        payload = json.loads(
+            json.dumps(proxy_exception_from_http_exception(_blocked_guardrail_exception(), {}).to_dict())
+        )
+
+        assert _stringified_none_paths(payload) == ()
+        assert payload["type"] == "invalid_request_error"
+        assert payload["param"] is None
+        assert payload["code"] == "400"
+        assert payload["message"] == "Violated guardrail policy"
+
+    def test_streaming_block_frame_carries_a_real_type_and_null_param(self):
+        from litellm.proxy.common_request_processing import sse_error_payload
+
+        error_status, error_obj = sse_error_payload(_blocked_guardrail_exception())
+        frame = json.loads(json.dumps({"error": dict(error_obj)}))
+
+        assert error_status == 400
+        assert _stringified_none_paths(frame["error"]) == ()
+        assert frame["error"]["type"] == "invalid_request_error"
+        assert frame["error"]["param"] is None
+        assert frame["error"]["code"] == "400"
+
+    @pytest.mark.parametrize(
+        "status_code, expected_type",
+        [
+            (400, "invalid_request_error"),
+            (401, "authentication_error"),
+            (403, "permission_error"),
+            (404, "invalid_request_error"),
+            (429, "rate_limit_error"),
+            (500, "internal_server_error"),
+            (503, "internal_server_error"),
+        ],
+    )
+    def test_status_code_decides_the_type_when_the_exception_carries_none(self, status_code, expected_type):
+        from litellm.proxy.common_request_processing import (
+            proxy_exception_from_http_exception,
+        )
+
+        payload = proxy_exception_from_http_exception(
+            HTTPException(status_code=status_code, detail="blocked"), {}
+        ).to_dict()
+
+        assert payload["type"] == expected_type
+        assert payload["param"] is None
+
+    def test_a_type_and_param_the_exception_carries_win_over_the_fallback(self):
+        from litellm.proxy.common_request_processing import (
+            proxy_exception_from_http_exception,
+        )
+
+        exc = HTTPException(status_code=400, detail="unknown model")
+        exc.type = "authentication_error"
+        exc.param = "model"
+
+        payload = proxy_exception_from_http_exception(exc, {}).to_dict()
+
+        assert payload["type"] == "authentication_error"
+        assert payload["param"] == "model"
 
 
 class TestExtractErrorFromSSEChunk:
@@ -2999,6 +3097,25 @@ class TestHandleLLMApiExceptionDictDetail:
         assert proxy_exc.message == "Content blocked by guardrail"
         assert proxy_exc.provider_specific_fields is None
 
+    async def test_blocked_guardrail_error_body_never_carries_the_string_none(self):
+        """Regression for LIT-6808: the error body a blocked request returns must carry a real
+        error type and JSON null rather than the literal string "None"."""
+        proxy_exc = await self._invoke(_blocked_guardrail_exception())
+        payload = json.loads(json.dumps(proxy_exc.to_dict()))
+
+        assert _stringified_none_paths(payload) == ()
+        assert payload["type"] == "invalid_request_error"
+        assert payload["param"] is None
+
+    async def test_unclassified_exception_error_body_never_carries_the_string_none(self):
+        """The same holds on the generic fallback, where nothing carries a type at all."""
+        proxy_exc = await self._invoke(ValueError("Something broke"))
+        payload = json.loads(json.dumps(proxy_exc.to_dict()))
+
+        assert _stringified_none_paths(payload) == ()
+        assert payload["type"] == "internal_server_error"
+        assert payload["param"] is None
+
     async def test_not_found_error_preserves_404(self):
         """NotFoundError with status_code=404 should map to ProxyException code=404."""
         from litellm.exceptions import NotFoundError
@@ -3013,7 +3130,7 @@ class TestHandleLLMApiExceptionDictDetail:
         assert "NotFoundError" in proxy_exc.message
 
     async def test_exception_with_status_code_propagates(self):
-        """Exception with a statically-set status_code should propagate it."""
+        """Exception with a statically-set status_code should propagate it and its message."""
         from litellm.llms.vertex_ai.common_utils import VertexAIError
 
         exc = VertexAIError(
@@ -3022,12 +3139,30 @@ class TestHandleLLMApiExceptionDictDetail:
         )
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.code == "429"
+        assert proxy_exc.message == "Rate limit exceeded"
 
     async def test_exception_without_status_code_defaults_to_500(self):
-        """Exception with no status_code attribute defaults to 500."""
+        """Exception with no status_code attribute defaults to 500; a message with nothing
+        to redact still reaches the client, since routes raise plain exceptions as validation text."""
         exc = ValueError("Something broke")
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.code == "500"
+        assert proxy_exc.message == "Something broke"
+
+    async def test_unclassified_exception_redacts_internal_details_from_client_message(self):
+        """Regression for LIT-6747: an unclassified exception's credential, path, and host
+        must not reach the client."""
+        exc = RuntimeError(
+            "Failed to connect to postgresql://litellm_internal:S3cr3tPGPass@10.20.30.40:5432/litellm_prod "
+            "(config file /etc/litellm/secrets/db.yaml)"
+        )
+        proxy_exc = await self._invoke(exc)
+        assert proxy_exc.code == "500"
+        assert "S3cr3tPGPass" not in proxy_exc.message
+        assert "litellm_internal" not in proxy_exc.message
+        assert "10.20.30.40" not in proxy_exc.message
+        assert "/etc/litellm/secrets/db.yaml" not in proxy_exc.message
+        assert "REDACTED" in proxy_exc.message
 
     async def test_already_normalized_proxy_exception_is_honored(self):
         """A ProxyException raised mid-request (e.g. a guardrail block) is already
@@ -3243,6 +3378,42 @@ class TestStreamCloseOnDisconnect:
         await gen.aclose()
 
         assert upstream.aclosed
+
+    async def test_async_streaming_data_generator_redacts_internal_details_on_error(
+        self,
+    ):
+        """Regression for LIT-6747: a mid-stream exception must not hand its raw text or a
+        traceback to serialize_error."""
+
+        class FailingUpstream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise RuntimeError(
+                    "Failed to connect to postgresql://litellm_internal:S3cr3tPGPass@10.20.30.40:5432/litellm_prod "
+                    "(config file /etc/litellm/secrets/db.yaml)"
+                )
+
+        ProxyLogging._callback_capabilities_cache.clear()
+        captured: list = []
+        gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=FailingUpstream(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            request_data={"model": "mock-model"},
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
+            serialize_chunk=lambda c: "data: x\n\n",
+            serialize_error=lambda e: captured.append(e) or "data: error\n\n",
+        )
+
+        await gen.__anext__()
+
+        assert len(captured) == 1
+        message = captured[0].message
+        assert "S3cr3tPGPass" not in message
+        assert "10.20.30.40" not in message
+        assert "/etc/litellm/secrets/db.yaml" not in message
+        assert "Traceback (most recent call last)" not in message
 
     @staticmethod
     def _request_that_disconnects() -> Request:

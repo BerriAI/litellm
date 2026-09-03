@@ -78,9 +78,17 @@ class _AsyncRedisCommands(Protocol):
     def pipeline(self, transaction: bool = True) -> "Pipeline[bytes]": ...
 
 
+_BREAKER_GUARD_FRAME_NAMES: Final = frozenset(
+    {"<lambda>", "wrapper", "_run_under_circuit_breaker", "_run_under_circuit_breaker_sync"}
+)
+
+
 def _get_call_stack_info(num_frames: int = 2) -> str:
     """
     Get the function names from the previous 1-2 functions in the call stack.
+
+    Frames belonging to this module's circuit-breaker guards are skipped so the
+    reported callers stay the real ones even on guarded methods.
 
     Args:
         num_frames: Number of previous frames to include (default: 2)
@@ -102,11 +110,11 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
             return "unknown"
         function_names: Final = []
 
-        for _ in range(num_frames):
-            if frame is None:
-                break
-            func_name = frame.f_code.co_name
-            function_names.append(func_name)
+        while frame is not None and len(function_names) < num_frames:
+            if frame.f_code.co_name in _BREAKER_GUARD_FRAME_NAMES and frame.f_globals.get("__name__") == __name__:
+                frame = frame.f_back
+                continue
+            function_names.append(frame.f_code.co_name)
             frame = frame.f_back
 
         if not function_names:
@@ -241,6 +249,23 @@ def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseExcep
     _swallowed_redis_failures.set(_swallowed_redis_failures.get() + 1)
 
 
+def _enter_circuit_breaker(breaker: RedisCircuitBreaker, name: str) -> int:
+    """Reject the call if the breaker is open, else return the swallowed-failure count to compare against."""
+    if breaker.is_open():
+        raise Exception(f"Redis circuit breaker is open — skipping {name}")
+    return _swallowed_redis_failures.get()
+
+
+def _exit_circuit_breaker(breaker: RedisCircuitBreaker, swallowed_before: int) -> None:
+    """Record success only when nothing failed while the call ran.
+
+    Several Redis methods catch their own connection errors and return a default, so a
+    method that returned is not on its own proof of a healthy Redis.
+    """
+    if _swallowed_redis_failures.get() == swallowed_before:
+        breaker.record_success()
+
+
 async def _run_under_circuit_breaker(
     breaker: RedisCircuitBreaker,
     name: str,
@@ -249,20 +274,33 @@ async def _run_under_circuit_breaker(
     """Run one Redis coroutine under a circuit breaker.
 
     Shared by the method decorator and the Lua script executor so both feed the same
-    health signal. Success is recorded only when nothing failed while ``call`` ran,
-    because several Redis methods catch their own connection errors and return a default.
+    health signal.
     """
-    if breaker.is_open():
-        raise Exception(f"Redis circuit breaker is open — skipping {name}")
-    swallowed_before: Final = _swallowed_redis_failures.get()
+    swallowed_before: Final = _enter_circuit_breaker(breaker, name)
     try:
         result: Final = await call()
     except Exception as e:
         if _is_redis_health_failure(e):
             breaker.record_failure()
         raise
-    if _swallowed_redis_failures.get() == swallowed_before:
-        breaker.record_success()
+    _exit_circuit_breaker(breaker, swallowed_before)
+    return result
+
+
+def _run_under_circuit_breaker_sync(
+    breaker: RedisCircuitBreaker,
+    name: str,
+    call: Callable[[], _RedisCallResult],
+) -> _RedisCallResult:
+    """Run one blocking Redis call under a circuit breaker, feeding the same health signal as the async path."""
+    swallowed_before: Final = _enter_circuit_breaker(breaker, name)
+    try:
+        result: Final = call()
+    except Exception as e:
+        if _is_redis_health_failure(e):
+            breaker.record_failure()
+        raise
+    _exit_circuit_breaker(breaker, swallowed_before)
     return result
 
 
@@ -286,6 +324,14 @@ def _redis_circuit_breaker_guard(method):
         )
 
     return wrapper
+
+
+def _redis_circuit_breaker_guard_sync(method: Callable[..., _RedisCallResult]) -> Callable[..., _RedisCallResult]:
+    return functools.wraps(method)(
+        lambda self, *args, **kwargs: _run_under_circuit_breaker_sync(
+            self._circuit_breaker, method.__name__, lambda: method(self, *args, **kwargs)
+        )
+    )
 
 
 class RedisCache(BaseCache):
@@ -1146,14 +1192,13 @@ class RedisCache(BaseCache):
         """
         key_value_dict = {}
         _key_list: Final = [key for key in key_list if key is not None]
+        start_time: Final = time.time()
 
         try:
-            _keys: Final = []
-            for cache_key in _key_list:
-                cache_key = self.check_and_fix_namespace(key=cache_key or "")
-                _keys.append(cache_key)
-            start_time: Final = time.time()
+            swallowed_before: Final = _enter_circuit_breaker(self._circuit_breaker, "batch_get_cache")
+            _keys: Final = [self.check_and_fix_namespace(key=cache_key or "") for cache_key in _key_list]
             results: Final = self._run_redis_mget_operation(keys=_keys)
+            _exit_circuit_breaker(self._circuit_breaker, swallowed_before)
             end_time: Final = time.time()
             _duration: Final = end_time - start_time
             self.service_logger_obj.service_success_hook(
@@ -1178,7 +1223,18 @@ class RedisCache(BaseCache):
 
             return decoded_results
         except Exception as e:
+            failed_at: Final = time.time()
+            self.service_logger_obj.service_failure_hook(
+                service=ServiceTypes.REDIS,
+                duration=failed_at - start_time,
+                error=e,
+                call_type=f"batch_get_cache <- {_get_call_stack_info()}",
+                start_time=start_time,
+                end_time=failed_at,
+                parent_otel_span=parent_otel_span,
+            )
             verbose_logger.error("Error occurred in batch get cache - %s", e)
+            _record_swallowed_redis_failure(self._circuit_breaker, e)
             return key_value_dict
 
     @_redis_circuit_breaker_guard

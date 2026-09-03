@@ -426,6 +426,7 @@ async def test_token_rejects_expired_code_and_missing_configuration():
     [
         ("no_active_key", 400, "invalid_grant"),
         ("unavailable", 503, "temporarily_unavailable"),
+        ("faulted", 503, "temporarily_unavailable"),
         ("unresolvable", 500, "server_error"),
     ],
 )
@@ -458,6 +459,25 @@ async def test_token_gates_on_live_user_revalidation(failure, expected_status, e
     )
     assert response.status_code == expected_status
     assert json.loads(response.body)["error"] == expected_error
+
+
+def test_permanent_db_fault_503_does_not_promise_a_retry_will_help():
+    """Both DB failures are 503 temporarily_unavailable (the only OAuth error a client reads as a
+    server-side outage), so the description is the one place the two are told apart: a transient outage
+    says retry, a fault that never heals must say retrying will not help and point at the deployment."""
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
+        _consent_lookup_failure_response,
+        _mint_failure_response,
+        _reload_failure_response,
+    )
+
+    for render in (_reload_failure_response, _consent_lookup_failure_response, _mint_failure_response):
+        transient = json.loads(render("unavailable").body)["error_description"]
+        faulted = json.loads(render("faulted").body)["error_description"]
+        assert transient == "the gateway database is unavailable; retry"
+        assert "retry" not in faulted.replace("retrying will not help", "")
+        assert "not a transient outage" in faulted
+        assert "retrying will not help" in faulted
 
 
 @pytest.mark.asyncio
@@ -1250,6 +1270,7 @@ async def test_native_authorize_refuses_a_hosted_redirect_for_the_proxy_api():
     "failure, status, error",
     [
         ("unavailable", 503, "temporarily_unavailable"),
+        ("faulted", 503, "temporarily_unavailable"),
         ("unresolvable", 500, "server_error"),
         ("no_active_key", 403, "access_denied"),
     ],
@@ -1424,6 +1445,7 @@ async def test_native_code_without_a_minter_is_refused_server_side():
         ("team_required", 400, "invalid_grant"),
         ("no_active_key", 400, "invalid_grant"),
         ("unavailable", 503, "temporarily_unavailable"),
+        ("faulted", 503, "temporarily_unavailable"),
         ("unresolvable", 500, "server_error"),
     ],
 )
@@ -1804,6 +1826,13 @@ async def test_introspect_fails_closed_on_dead_user_and_503s_on_outage():
 
     status, body = await _introspect(minted.token.get_secret_value(), reload_user=_reload_user_outage)
     assert (status, body["error"]) == (503, "temporarily_unavailable")
+
+    async def _reload_user_faulted(user_id: str):
+        return "faulted"
+
+    status, body = await _introspect(minted.token.get_secret_value(), reload_user=_reload_user_faulted)
+    assert (status, body["error"]) == (503, "temporarily_unavailable")
+    assert "not a transient outage" in body["error_description"]
 
     status, body = await _introspect(minted.token.get_secret_value(), master_key=None)
     assert (status, body["error"]) == (500, "server_error")

@@ -12,12 +12,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-
 import litellm
 from litellm import Router
+from litellm.router_utils.auto_router_model_naming import count_heuristic_v2_routers
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.router_strategy.complexity_router.complexity_router import (
     _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
     _CLASSIFICATION_WITH_CONVERSATION,
@@ -34,16 +34,30 @@ from litellm.router_strategy.complexity_router.config import (
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     DEFAULT_COMPLEXITY_CONFIG,
     DEFAULT_TECHNICAL_KEYWORDS,
+    ClassificationRubric,
     ClassifierLLMConfig,
     ComplexityRouterConfig,
     ComplexityTier,
-    ClassificationRubric,
+)
+from litellm.router_strategy.complexity_router.tier_predictor import (
+    TierGlobalStatistic,
+    TrainedTierArtifact,
 )
 from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
     TaggedPreRoutingStrategy,
 )
+
+
+def _heuristic_v2_artifact() -> TrainedTierArtifact:
+    return TrainedTierArtifact(
+        global_statistics=tuple(
+            TierGlobalStatistic(tier=tier, successes=successes, observations=100)
+            for tier, successes in enumerate((10, 20, 90, 99), start=1)
+        ),
+        routing_threshold=0.8,
+    )
 
 
 @pytest.fixture
@@ -1072,6 +1086,165 @@ class TestRouterComplexityDeploymentMethods:
         router.init_complexity_router_deployment(deployment)
         assert "auto_router/complexity_router/test-router" in router.complexity_routers
 
+    @staticmethod
+    def _router_row(model_name: str, model_id: str, classifier_type: str) -> dict[str, object]:
+        return {
+            "model_name": model_name,
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "classifier_type": classifier_type,
+                    "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+                },
+            },
+            "model_info": {"id": model_id},
+        }
+
+    _POOL: dict[str, object] = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "k"},
+    }
+
+    def test_heuristic_v2_ceiling_keeps_the_first_router_and_drops_the_rest(self) -> None:
+        """The proxy runs with ignore_invalid_deployments, so the second heuristic_v2 router is dropped
+        at registration while a heuristic (v1) sibling and the first v2 router stay routable."""
+        router = Router(
+            model_list=[
+                self._POOL,
+                self._router_row("v2-a", "id-a", "heuristic_v2"),
+                self._router_row("v2-b", "id-b", "heuristic_v2"),
+                self._router_row("v1-c", "id-c", "heuristic"),
+            ],
+            heuristic_v2_router_limit=lambda: 1,
+            ignore_invalid_deployments=True,
+        )
+
+        assert sorted(router.complexity_routers) == ["v1-c", "v2-a"]
+        assert router.get_deployment(model_id="id-b") is None
+
+    def test_heuristic_v2_ceiling_raises_without_ignore_invalid_deployments(self) -> None:
+        with pytest.raises(ValueError, match="At most 1 auto-router"):
+            Router(
+                model_list=[
+                    self._POOL,
+                    self._router_row("v2-a", "id-a", "heuristic_v2"),
+                    self._router_row("v2-b", "id-b", "heuristic_v2"),
+                ],
+                heuristic_v2_router_limit=lambda: 1,
+            )
+
+    def test_heuristic_v2_limit_is_resolved_on_every_registration(self) -> None:
+        """The Router never caches the limit: when the resolver's answer moves (the proxy re-verified
+        its license), the next registration and the next limit query see the new value."""
+        limits = {"value": None}
+        router = Router(
+            model_list=[
+                self._POOL,
+                self._router_row("v2-a", "id-a", "heuristic_v2"),
+                self._router_row("v2-b", "id-b", "heuristic_v2"),
+            ],
+            heuristic_v2_router_limit=lambda: limits["value"],
+            ignore_invalid_deployments=True,
+        )
+        assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
+        assert router.heuristic_v2_router_limit_violation() is None
+
+        limits["value"] = 1
+        assert router.heuristic_v2_router_limit_violation() is not None
+        assert router.upsert_deployment(Deployment(**self._router_row("v2-c", "id-c", "heuristic_v2"))) is None
+        assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
+
+    def test_heuristic_v2_ceiling_tightening_refuses_the_edit_and_keeps_the_live_router(self) -> None:
+        """Two heuristic_v2 routers registered under an unlimited ceiling, then the ceiling drops to one:
+        an edit to either must be refused before its live row is popped, or the failed re-add and
+        the failed restore would drop a serving router while the write reports success."""
+        limits = {"value": None}
+        router = Router(
+            model_list=[
+                self._POOL,
+                self._router_row("v2-a", "id-a", "heuristic_v2"),
+                self._router_row("v2-b", "id-b", "heuristic_v2"),
+            ],
+            heuristic_v2_router_limit=lambda: limits["value"],
+            ignore_invalid_deployments=True,
+        )
+        limits["value"] = 1
+
+        assert router.upsert_deployment(Deployment(**self._router_row("v2-a-renamed", "id-a", "heuristic_v2"))) is None
+        assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
+        assert router.get_deployment(model_id="id-a") is not None
+
+        assert router.upsert_deployment(Deployment(**self._router_row("v1-a", "id-a", "heuristic"))) is not None
+        assert sorted(router.complexity_routers) == ["v1-a", "v2-b"]
+
+    def test_config_deployments_excludes_db_rows(self) -> None:
+        """The proxy counts config.yaml routers from here and DB rows from the database, so a DB-loaded
+        row (``model_info.db_model``) must not show up twice."""
+        router = Router(model_list=[self._POOL, self._router_row("v2-a", "id-a", "heuristic_v2")])
+        db_row = self._router_row("v2-db", "id-db", "heuristic_v2")
+        db_row["model_info"] = {"id": "id-db", "db_model": True}
+        assert router.upsert_deployment(Deployment(**db_row)) is not None
+
+        assert sorted(str(row["model_name"]) for row in router.config_deployments()) == ["gpt-4o-mini", "v2-a"]
+        assert count_heuristic_v2_routers(router.config_deployments()) == 1
+
+    def test_failed_edit_of_a_live_v2_router_rolls_back_without_the_ceiling(self) -> None:
+        """A rollback after a failed upsert re-admits state that was already serving, so it must not be
+        judged by a ceiling that tightened since: converting one of two live heuristic_v2 routers to a
+        config whose registration fails must leave it serving its previous v2 configuration."""
+        limits = {"value": None}
+        router = Router(
+            model_list=[
+                self._POOL,
+                self._router_row("v2-a", "id-a", "heuristic_v2"),
+                self._router_row("v2-b", "id-b", "heuristic_v2"),
+            ],
+            heuristic_v2_router_limit=lambda: limits["value"],
+            ignore_invalid_deployments=True,
+        )
+        limits["value"] = 1
+
+        broken = self._router_row("v1-a", "id-a", "heuristic")
+        broken["litellm_params"]["complexity_router_config"]["tiers"] = {}
+        assert router.upsert_deployment(Deployment(**broken)) is None
+
+        assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
+        live = router.get_deployment(model_id="id-a")
+        assert live is not None and live.litellm_params.complexity_router_config["classifier_type"] == "heuristic_v2"
+        assert router.heuristic_v2_router_limit_violation() is not None
+
+    def test_heuristic_v2_routers_are_unlimited_by_default(self) -> None:
+        router = Router(
+            model_list=[
+                self._POOL,
+                self._router_row("v2-a", "id-a", "heuristic_v2"),
+                self._router_row("v2-b", "id-b", "heuristic_v2"),
+            ]
+        )
+
+        assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
+        assert router.heuristic_v2_router_limit_violation() is None
+
+    def test_heuristic_v2_router_limit_violation_frees_the_slot_of_the_router_being_edited(self) -> None:
+        """A DB reload upserts the existing heuristic_v2 router again; that edit must keep its own slot
+        while a different deployment switching to heuristic_v2 is refused."""
+        router = Router(
+            model_list=[self._POOL, self._router_row("v2-a", "id-a", "heuristic_v2")],
+            heuristic_v2_router_limit=lambda: 1,
+            ignore_invalid_deployments=True,
+        )
+
+        assert router.heuristic_v2_router_limit_violation() is not None
+
+        edited = self._router_row("v2-a-renamed", "id-a", "heuristic_v2")
+        assert router.upsert_deployment(Deployment(**edited)) is not None
+        assert sorted(router.complexity_routers) == ["v2-a-renamed"]
+
+        assert router.upsert_deployment(Deployment(**self._router_row("v2-b", "id-b", "heuristic_v2"))) is None
+        assert sorted(router.complexity_routers) == ["v2-a-renamed"]
+        assert router.upsert_deployment(Deployment(**self._router_row("v1-c", "id-c", "heuristic"))) is not None
+        assert sorted(router.complexity_routers) == ["v1-c", "v2-a-renamed"]
+
     def test_hybrid_initialization_waits_for_later_pool_deployments(self):
         router = Router(
             model_list=[
@@ -1545,6 +1718,14 @@ class TestLLMClassifierConfig:
         assert config.classifier_type == "heuristic"
         assert config.classifier_llm_config is None
 
+    @pytest.mark.parametrize("reasoning_effort", ["", "ultra"])
+    def test_classifier_reasoning_effort_rejects_unsupported_values(self, reasoning_effort):
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(
+                classifier_type="llm",
+                classifier_llm_config={"model": "haiku-classifier", "reasoning_effort": reasoning_effort},
+            )
+
 
 CUSTOM_TIER_LABELS: Dict[str, str] = {
     "SIMPLE": "Cheap",
@@ -1697,6 +1878,59 @@ class TestLLMClassifier:
         assert outcome.score is not None
 
     @pytest.mark.asyncio
+    async def test_heuristic_v2_routes_directly_to_predicted_builtin_tier(self, mock_router_instance):
+        router = ComplexityRouter(
+            model_name="tier-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "classifier_type": "heuristic_v2",
+                "heuristic_v2_artifact": _heuristic_v2_artifact(),
+                "tiers": {
+                    "SIMPLE": "simple-model",
+                    "MEDIUM": "medium-model",
+                    "COMPLEX": "complex-model",
+                    "REASONING": "reasoning-model",
+                },
+            },
+        )
+
+        response = await router.async_pre_routing_hook(
+            model="tier-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Handle this new request"}],
+        )
+
+        assert response is not None
+        assert response.model == "complex-model"
+        assert response.routing_decision["tier"] == "COMPLEX"
+        assert response.routing_decision["cause"] == "heuristic_v2"
+        assert response.routing_decision["signals"] == [
+            "request-type:general",
+            "tier-probability:simple=0.107843",
+            "tier-probability:medium=0.205882",
+            "tier-probability:complex=0.892157",
+            "tier-probability:reasoning=0.980392",
+        ]
+
+    def test_heuristic_v2_needs_no_classifier_model(self):
+        config = ComplexityRouterConfig(classifier_type="heuristic_v2")
+
+        assert config.classifier_llm_config is None
+        assert config.heuristic_v2_artifact == "ultrafeedback"
+
+    def test_heuristic_v2_rejects_custom_tier_definitions(self):
+        with pytest.raises(ValidationError, match="as does heuristic_v2"):
+            ComplexityRouterConfig(
+                classifier_type="heuristic_v2",
+                tier_definitions=(
+                    {"name": "low", "description": "easy work"},
+                    {"name": "high", "description": "hard work"},
+                ),
+                tiers={"low": "cheap", "high": "expensive"},
+                fallback_tier="high",
+            )
+
+    @pytest.mark.asyncio
     async def test_aclassify_llm_success_routes_by_llm_verdict(self, llm_complexity_router, mock_router_instance):
         """A well-formed structured LLM response should decide the tier directly.
 
@@ -1806,6 +2040,19 @@ class TestLLMClassifier:
         assert call_kwargs["metadata"] == {**request_metadata, "internal_call_origin": "autorouter_classifier"}
 
     @pytest.mark.asyncio
+    async def test_aclassify_stamps_internal_origin_without_caller_metadata(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """Fallback handling must still recognize the classifier when an SDK caller supplied no metadata."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+
+        await llm_complexity_router.aclassify("hi")
+
+        assert mock_router_instance.acompletion.call_args.kwargs["metadata"] == {
+            "internal_call_origin": "autorouter_classifier"
+        }
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "request_kwargs",
         [
@@ -1881,6 +2128,33 @@ class TestLLMClassifier:
             "COMPLEX",
             "REASONING",
         ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reasoning_effort", [None, "none", "low"], ids=["omitted", "none", "low"])
+    async def test_classifier_reasoning_effort_reaches_only_classifier_call(
+        self, mock_router_instance, llm_classifier_config, reasoning_effort
+    ):
+        classifier_llm_config = {
+            **llm_classifier_config["classifier_llm_config"],
+            **({"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}),
+        }
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**llm_classifier_config, "classifier_llm_config": classifier_llm_config},
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+
+        await router.aclassify("explain quantum tunneling in depth")
+
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        body = call_kwargs["proxy_server_request"]["body"]
+        if reasoning_effort is None:
+            assert "reasoning_effort" not in call_kwargs
+            assert "reasoning_effort" not in body
+        else:
+            assert call_kwargs["reasoning_effort"] == reasoning_effort
+            assert body["reasoning_effort"] == reasoning_effort
 
     @pytest.mark.asyncio
     async def test_aclassify_propagates_top_level_turn_off_message_logging(
@@ -4199,6 +4473,26 @@ class TestSessionAffinity:
             complexity_router_config=basic_config,
         )
         request_kwargs = self._request_kwargs("session-1")
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        second = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert first.model == "o1-preview"
+        assert second.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_proxy_generated_session_id_never_pins(self, mock_router_instance, session_affinity_config):
+        """A session id the proxy generated for a request that had none is per request, so
+        it must not create a pin even with session_affinity enabled."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = {"metadata": {"session_id": "generated-1", SESSION_ID_GENERATED_METADATA_KEY: True}}
         first = await router.async_pre_routing_hook(
             model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
         )
@@ -8649,9 +8943,10 @@ class TestClassificationRubrics:
         [
             {"model": "haiku-classifier", "system_prompt": "Grade the data sensitivity of the request."},
             {"model": "haiku-classifier", "classification_rubric": "chat"},
+            {"model": "haiku-classifier", "reasoning_effort": "low"},
             {"model": "haiku-classifier"},
         ],
-        ids=["custom-prompt", "chat-preset", "neither"],
+        ids=["custom-prompt", "chat-preset", "reasoning-effort", "neither"],
     )
     def test_config_survives_a_dump_and_rebuild(self, classifier_llm_config):
         """/auto_router/test_routing dumps this config and hands the dict straight back to
@@ -10023,6 +10318,207 @@ class TestHeuristicFirst:
         assert outcome.cause == "default_model_fallback"
 
 
+# Scores 0.175 with one signal, so it sits 0.025 from simple_medium: the pair of tiers either side of
+# that boundary are different model pools, and a hair's difference in score picks the other one.
+NEAR_BOUNDARY_PROMPT = (
+    "design a distributed cache with consistent hashing, then explain the failure modes step by step"
+)
+
+# Scores 0.075 with signals, the far side of any margin under 0.075: the scorer is decided here.
+CLEAR_OF_BOUNDARY_PROMPT = "explain step by step how consistent hashing rebalances keys"
+
+
+def _hybrid_router(mock_router_instance, **config_overrides):
+    config = {
+        "tiers": dict(HEURISTIC_FIRST_TIERS),
+        "tier_boundaries": dict(HEURISTIC_FIRST_BOUNDARIES),
+        "classifier_type": "hybrid",
+        "hybrid_boundary_margin": 0.03,
+        "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+        **config_overrides,
+    }
+    return ComplexityRouter(
+        model_name="test-complexity-router",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config=config,
+    )
+
+
+class TestHybridConfig:
+    """Config validation for classifier_type='hybrid'."""
+
+    @pytest.mark.parametrize(
+        "overrides, expected",
+        [
+            ({"classifier_llm_config": None}, "classifier_llm_config is required"),
+            ({"hybrid_boundary_margin": None}, "hybrid_boundary_margin is required"),
+            ({"hybrid_boundary_margin": -0.01}, "greater than or equal to 0"),
+            ({"hybrid_boundary_margin": 1.01}, "less than or equal to 1"),
+        ],
+    )
+    def test_rejects_incoherent_config(self, overrides, expected):
+        config = {
+            "tiers": dict(HEURISTIC_FIRST_TIERS),
+            "classifier_type": "hybrid",
+            "hybrid_boundary_margin": 0.03,
+            "classifier_llm_config": {"model": "haiku-classifier"},
+            **overrides,
+        }
+        with pytest.raises(ValidationError, match=expected):
+            ComplexityRouterConfig(**config)
+
+    @pytest.mark.parametrize("classifier_type", ["heuristic", "llm", "custom", "heuristic_first"])
+    def test_margin_rejected_on_every_other_classifier_type(self, classifier_type):
+        """A margin on a router that never compares a score to a boundary is a silent no-op, so it is
+        refused rather than accepted and ignored. heuristic_first is in this list on purpose: its
+        ceiling is a different question from proximity, and accepting both on one router would make
+        two modes out of one classifier_type."""
+        config: dict[str, object] = {
+            "tiers": dict(HEURISTIC_FIRST_TIERS),
+            "classifier_type": classifier_type,
+            "hybrid_boundary_margin": 0.03,
+        }
+        if classifier_type in ("llm", "heuristic_first"):
+            config["classifier_llm_config"] = {"model": "haiku-classifier"}
+        if classifier_type == "heuristic_first":
+            config["heuristic_first_max_tier"] = "SIMPLE"
+        if classifier_type == "custom":
+            config["classifier_plugin"] = _FixedTierClassifier("SIMPLE")
+        with pytest.raises(ValidationError, match="hybrid_boundary_margin is set but classifier_type"):
+            ComplexityRouterConfig(**config)
+
+    def test_the_cheap_tier_ceiling_is_rejected_here(self):
+        """The two modes are told apart by which knob they take, so the ceiling is refused on hybrid
+        exactly as the margin is refused on heuristic_first."""
+        with pytest.raises(ValidationError, match="heuristic_first_max_tier is set but classifier_type"):
+            ComplexityRouterConfig(
+                tiers=dict(HEURISTIC_FIRST_TIERS),
+                classifier_type="hybrid",
+                hybrid_boundary_margin=0.03,
+                heuristic_first_max_tier="SIMPLE",
+                classifier_llm_config={"model": "haiku-classifier"},
+            )
+
+    def test_custom_tier_set_is_rejected(self):
+        """The scorer only emits the four built-in tiers, so it cannot judge proximity on a replaced set."""
+        with pytest.raises(ValidationError, match="tier_definitions requires classifier_type"):
+            ComplexityRouterConfig(
+                classifier_type="hybrid",
+                hybrid_boundary_margin=0.03,
+                classifier_llm_config={"model": "haiku-classifier"},
+                tier_definitions=[{"name": "lo", "description": "x"}, {"name": "hi", "description": "y"}],
+                tiers={"lo": "gpt-4o-mini", "hi": "gpt-4o"},
+            )
+
+    def test_classifier_model_is_a_dependency(self):
+        config = ComplexityRouterConfig(
+            tiers=dict(HEURISTIC_FIRST_TIERS),
+            classifier_type="hybrid",
+            hybrid_boundary_margin=0.03,
+            classifier_llm_config={"model": "haiku-classifier"},
+        )
+        assert config.uses_llm_classifier is True
+
+
+class TestHybrid:
+    """Behavior of the hybrid chain: the scorer keeps its tier unless the score is near a boundary."""
+
+    @pytest.mark.asyncio
+    async def test_near_boundary_prompt_escalates(self, mock_router_instance):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+        router = _hybrid_router(mock_router_instance)
+
+        _tier, score, signals, _cause = router._score_and_classify(NEAR_BOUNDARY_PROMPT)
+        assert signals and abs(score - HEURISTIC_FIRST_BOUNDARIES["simple_medium"]) < 0.03
+
+        outcome = await router.aclassify(NEAR_BOUNDARY_PROMPT)
+        mock_router_instance.acompletion.assert_awaited_once()
+        assert outcome.tier == ComplexityTier.COMPLEX
+        assert outcome.cause == "llm_classifier"
+
+    @pytest.mark.asyncio
+    async def test_score_clear_of_every_boundary_keeps_the_heuristic_tier(self, mock_router_instance):
+        mock_router_instance.acompletion = AsyncMock()
+        router = _hybrid_router(mock_router_instance)
+        outcome = await router.aclassify(CLEAR_OF_BOUNDARY_PROMPT)
+        mock_router_instance.acompletion.assert_not_called()
+        assert outcome.tier == ComplexityTier.SIMPLE
+        assert outcome.cause == "hybrid_short_circuit"
+
+    @pytest.mark.asyncio
+    async def test_an_expensive_tier_short_circuits_too(self, mock_router_instance):
+        """This is the whole difference from heuristic_first, which would have escalated this by tier
+        alone. Hybrid asks whether the score is DECIDED, not whether the tier is cheap."""
+        mock_router_instance.acompletion = AsyncMock()
+        router = _hybrid_router(
+            mock_router_instance,
+            tier_boundaries={"simple_medium": -0.9, "medium_complex": -0.8, "complex_reasoning": -0.7},
+        )
+
+        tier, _score, signals, _cause = router._score_and_classify(CLEAR_OF_BOUNDARY_PROMPT)
+        assert (tier, bool(signals)) == (ComplexityTier.REASONING, True)
+
+        outcome = await router.aclassify(CLEAR_OF_BOUNDARY_PROMPT)
+        mock_router_instance.acompletion.assert_not_called()
+        assert outcome.tier == ComplexityTier.REASONING
+        assert outcome.cause == "hybrid_short_circuit"
+
+    @pytest.mark.asyncio
+    async def test_widening_the_margin_escalates_what_a_narrow_one_kept(self, mock_router_instance):
+        """The margin is the knob: the same prompt short-circuits at 0.03 and escalates at 0.08."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "MEDIUM"}'))
+        router = _hybrid_router(mock_router_instance, hybrid_boundary_margin=0.08)
+        outcome = await router.aclassify(CLEAR_OF_BOUNDARY_PROMPT)
+        mock_router_instance.acompletion.assert_awaited_once()
+        assert outcome.cause == "llm_classifier"
+
+    @pytest.mark.asyncio
+    async def test_a_zero_margin_escalates_only_an_exact_boundary_score(self, mock_router_instance):
+        """0 is a real margin, not an off switch: a score sitting exactly on the line still escalates.
+
+        The boundary is spelled as the scorer's own accumulated float rather than the 0.075 it prints
+        as, because the comparison is on raw floats: a boundary written 0.075 sits 1.4e-17 away from
+        this score and a zero margin correctly declines to call that exact."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "MEDIUM"}'))
+        on_the_line = 0.07499999999999998
+        router = _hybrid_router(
+            mock_router_instance,
+            tier_boundaries={"simple_medium": on_the_line, "medium_complex": 0.35, "complex_reasoning": 0.60},
+            hybrid_boundary_margin=0,
+        )
+
+        _tier, score, _signals, _cause = router._score_and_classify(CLEAR_OF_BOUNDARY_PROMPT)
+        assert score == on_the_line
+
+        outcome = await router.aclassify(CLEAR_OF_BOUNDARY_PROMPT)
+        mock_router_instance.acompletion.assert_awaited_once()
+        assert outcome.cause == "llm_classifier"
+
+    @pytest.mark.asyncio
+    async def test_no_signal_prompt_escalates_however_far_from_a_boundary(self, mock_router_instance):
+        """The scorer with no opinion has no tier to be confident about, so proximity cannot save it."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+        router = _hybrid_router(mock_router_instance)
+
+        tier, score, signals, _cause = router._score_and_classify(NO_SIGNAL_PROMPT)
+        assert (tier, score, signals) == (ComplexityTier.SIMPLE, 0.0, ())
+
+        outcome = await router.aclassify(NO_SIGNAL_PROMPT)
+        mock_router_instance.acompletion.assert_awaited_once()
+        assert outcome.cause == "llm_classifier"
+
+    @pytest.mark.asyncio
+    async def test_classifier_failure_falls_back_to_the_scorer(self, mock_router_instance):
+        mock_router_instance.acompletion = AsyncMock(side_effect=RuntimeError("classifier exploded"))
+        router = _hybrid_router(mock_router_instance)
+        expected_tier, expected_score, expected_signals, _cause = router._score_and_classify(NEAR_BOUNDARY_PROMPT)
+
+        outcome = await router.aclassify(NEAR_BOUNDARY_PROMPT)
+
+        assert (outcome.tier, outcome.score, outcome.signals) == (expected_tier, expected_score, expected_signals)
+        assert outcome.cause == "heuristic_scorer"
+
+
 def _windowed_router(*deployments: tuple) -> Router:
     """Real Router; each deployment is (group, provider_model, declared window or None).
     None means no declared override on a model the cost map does not know: unresolvable."""
@@ -10268,7 +10764,8 @@ class TestContextWindowEscalation:
             litellm_router_instance=_windowed_router(_SMALL, _BIG),
             complexity_router_config=_tier_config(session_affinity=True),
         )
-        session_kwargs = lambda: {"metadata": {"session_id": "s-1", "user_api_key_hash": "k-1"}}  # noqa: E731
+        def session_kwargs() -> dict[str, object]:
+            return {"metadata": {"session_id": "s-1", "user_api_key_hash": "k-1"}}
 
         first = await router.async_pre_routing_hook(
             model="test-router", request_kwargs=session_kwargs(), messages=_OVERSIZED_TURNS
@@ -10291,7 +10788,8 @@ class TestContextWindowEscalation:
             litellm_router_instance=_windowed_router(_SMALL, _BIG),
             complexity_router_config=_tier_config(session_affinity=True),
         )
-        session_kwargs = lambda: {"metadata": {"session_id": "s-2", "user_api_key_hash": "k-2"}}  # noqa: E731
+        def session_kwargs() -> dict[str, object]:
+            return {"metadata": {"session_id": "s-2", "user_api_key_hash": "k-2"}}
 
         pinned = await router.async_pre_routing_hook(
             model="test-router", request_kwargs=session_kwargs(), messages=[{"role": "user", "content": "ok continue"}]
@@ -10508,6 +11006,9 @@ class TestModalityRouting:
             ("custom_tiers_walk", "premium-model", "modality_escalation"),
             ("pin_kept_bypasses", "text-cheap", "session_affinity_pin"),
             ("pin_replacement_gated", "vision-big", "modality_escalation"),
+            ("pin_override_escalates", "vision-mid", "modality_pin_override"),
+            ("pin_override_same_tier", "vision-cheap", "modality_pin_override"),
+            ("pin_override_inert_without_modality_routing", "text-cheap", "session_affinity_pin"),
             ("adaptive_pick_rewritten", "vision-mid", "modality_escalation"),
         ],
     )
@@ -10558,7 +11059,7 @@ class TestModalityRouting:
             messages = [
                 {"role": "user", "content": [{"type": "text", "text": "quick lookup: what is this?"}, IMG_PART]}
             ]
-        elif path in ("pin_kept_bypasses", "pin_replacement_gated"):
+        elif path.startswith(("pin_kept", "pin_replacement", "pin_override")):
             cache = AsyncMock()
             cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
             mock_router_instance.cache = cache
@@ -10570,6 +11071,13 @@ class TestModalityRouting:
                 messages = [
                     {"role": "user", "content": [{"type": "text", "text": "LITELLM ESCALATE describe this"}, IMG_PART]}
                 ]
+            elif path == "pin_override_same_tier":
+                config["modality_pin_override"] = True
+                config["tiers"]["SIMPLE"] = ["text-cheap", "vision-cheap"]
+                vision["vision-cheap"] = True
+            elif path == "pin_override_inert_without_modality_routing":
+                config["modality_routing"] = False
+            config["modality_pin_override"] = path.startswith("pin_override")
         elif path == "adaptive_pick_rewritten":
             config["adaptive"] = True
             mock_router_instance.model_list = []
@@ -10736,4 +11244,60 @@ class TestModalityRouting:
         from litellm.router_strategy.complexity_router.complexity_router import _decision_is_pinnable
 
         assert _decision_is_pinnable({"cause": "modality_escalation"}) is False
+        assert _decision_is_pinnable({"cause": "modality_pin_override"}) is False
         assert _decision_is_pinnable({"cause": "heuristic_scorer"}) is True
+
+    @pytest.mark.asyncio
+    async def test_pin_override_serves_the_image_turn_without_repinning(self, mock_router_instance):
+        """The override is for one request: the session keeps the model it was pinned to."""
+        cache = AsyncMock()
+        cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
+        mock_router_instance.cache = cache
+        router = self._router(
+            mock_router_instance,
+            {
+                "tiers": dict(self.BASE_TIERS),
+                "modality_routing": True,
+                "modality_pin_override": True,
+                "session_affinity": True,
+            },
+            dict(self.BASE_VISION),
+        )
+        request_kwargs = {"metadata": {"session_id": "s1"}}
+
+        image_turn = await router.async_pre_routing_hook(
+            model="m", request_kwargs=request_kwargs, messages=self.IMAGE_MESSAGE
+        )
+        assert image_turn.model == "vision-mid"
+        assert image_turn.routing_decision["cause"] == "modality_pin_override"
+        assert "modality_escalated_from:SIMPLE" in image_turn.routing_decision["signals"]
+
+        assert cache.async_set_cache.await_args.kwargs["value"] == {"model": "text-cheap", "tier": "SIMPLE"}
+
+        text_turn = await router.async_pre_routing_hook(
+            model="m", request_kwargs={"metadata": {"session_id": "s1"}}, messages=[{"role": "user", "content": "hi"}]
+        )
+        assert text_turn.model == "text-cheap"
+        assert text_turn.routing_decision["cause"] == "session_affinity_pin"
+
+    @pytest.mark.asyncio
+    async def test_pin_override_with_no_capable_model_rejects_and_keeps_the_pin(self, mock_router_instance):
+        """The clear 400 replaces the provider's, and a rejected turn must not cost the session its pin."""
+        cache = AsyncMock()
+        cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
+        mock_router_instance.cache = cache
+        router = self._router(
+            mock_router_instance,
+            {
+                "tiers": {"SIMPLE": "text-cheap", "COMPLEX": "text-big"},
+                "modality_routing": True,
+                "modality_pin_override": True,
+                "session_affinity": True,
+            },
+            {"text-cheap": False, "text-big": False},
+        )
+        with pytest.raises(litellm.BadRequestError, match="no model"):
+            await router.async_pre_routing_hook(
+                model="m", request_kwargs={"metadata": {"session_id": "s1"}}, messages=self.IMAGE_MESSAGE
+            )
+        assert cache.async_set_cache.await_args.kwargs["value"] == {"model": "text-cheap", "tier": "SIMPLE"}
