@@ -237,7 +237,6 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_creation_input_token_cost: float | None
     cache_creation_input_token_cost_above_200k_tokens: float | None
-    cache_creation_input_token_cost_above_256k_tokens: ReadOnly[float | None]
     cache_creation_input_token_cost_above_272k_tokens: float | None
     cache_creation_input_token_cost_above_272k_tokens_priority: float | None
     cache_creation_input_token_cost_above_272k_tokens_flex: float | None
@@ -251,7 +250,6 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost_above_200k_tokens: float | None
     cache_read_input_token_cost_above_200k_tokens_priority: float | None
-    cache_read_input_token_cost_above_256k_tokens: ReadOnly[float | None]
     cache_read_input_token_cost_above_272k_tokens: float | None
     cache_read_input_token_cost_above_272k_tokens_priority: float | None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None
@@ -265,7 +263,6 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
     input_cost_per_token_above_200k_tokens: float | None  # only for vertex ai gemini-2.5-pro models
     input_cost_per_token_above_200k_tokens_priority: float | None
-    input_cost_per_token_above_256k_tokens: ReadOnly[float | None]
     input_cost_per_token_above_272k_tokens: float | None  # GPT-5.4/5.4-pro: prompts >272K priced at 2x input
     input_cost_per_token_above_272k_tokens_priority: float | None
     input_cost_per_token_above_272k_tokens_flex: float | None
@@ -298,7 +295,6 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
     output_cost_per_token_above_200k_tokens: float | None  # only for vertex ai gemini-2.5-pro models
     output_cost_per_token_above_200k_tokens_priority: float | None
-    output_cost_per_token_above_256k_tokens: ReadOnly[float | None]
     output_cost_per_token_above_272k_tokens: float | None  # GPT-5.4/5.4-pro: prompts >272K priced at 1.5x output
     output_cost_per_token_above_272k_tokens_priority: float | None
     output_cost_per_token_above_272k_tokens_flex: float | None
