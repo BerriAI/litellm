@@ -9,11 +9,19 @@ import { getSubmitBlockedReason } from "./add_auto_router_tab";
 import { buildModelAvailability } from "@/lib/autorouter_presets";
 import { testAutoRouterRouting } from "../networking";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
-import { getAllPresets, getPresetByKey, getRequiredModelsInPreset } from "@/lib/autorouter_presets";
+import { AutoRouterPreset, getRequiredModelsInPreset } from "@/lib/autorouter_presets";
+import { BUNDLED_PRESETS, LOADED_PRESETS_QUERY, useAutoRouterPresets } from "../../../tests/mocks/autoRouterPresets";
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
 );
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useAutoRouterPresets",
+  async () => await import("../../../tests/mocks/autoRouterPresets"),
+);
+
+const getAllPresets = (): AutoRouterPreset[] => BUNDLED_PRESETS;
+const getPresetByKey = (key: string): AutoRouterPreset | undefined => BUNDLED_PRESETS.find((p) => p.key === key);
 
 const ANTHROPIC_PRESET = getPresetByKey("anthropic_family")!;
 const ANTHROPIC_TIERS = ANTHROPIC_PRESET.complexity_router_config.tiers;
@@ -582,6 +590,44 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
+  it("writes both modality flags as false into the create payload when the panel stays untouched", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "modality-router" } });
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      modality_routing: false,
+      modality_pin_override: false,
+    });
+  });
+
+  it("carries the pin override through to the create payload once image routing unlocks it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "modality-router" } });
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Modality Routing"));
+    await user.click(await screen.findByRole("switch", { name: "Route image requests to vision-capable models" }));
+    await user.click(await screen.findByRole("switch", { name: "Override session pin for image requests" }));
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      modality_routing: true,
+      modality_pin_override: true,
+    });
+  });
+
   // Custom is the escape hatch, not the headline choice, so it's listed after every bundled preset
   // rather than first.
   it("lists Custom Configuration after the bundled presets", () => {
@@ -1140,5 +1186,54 @@ describe("getSubmitBlockedReason", () => {
     expect(getSubmitBlockedReason({ tiers, classifier_type: "heuristic" }, rules, referenced, availability)).toContain(
       "no longer has",
     );
+  });
+});
+
+describe("preset catalog fetch states", () => {
+  afterEach(() => vi.mocked(useAutoRouterPresets).mockReturnValue(LOADED_PRESETS_QUERY));
+
+  it("keeps showing cached presets without the error banner when only a refetch fails", () => {
+    vi.mocked(useAutoRouterPresets).mockReturnValue({
+      ...LOADED_PRESETS_QUERY,
+      isError: true,
+    } as never);
+    renderWithProviders(<Harness />);
+
+    expect(screen.queryByText(/Could not load templates/)).not.toBeInTheDocument();
+
+    openTemplateDropdown();
+    expect(screen.queryAllByRole("option").length).toBeGreaterThan(1);
+  });
+
+  it("shows a loading hint while the catalog fetch is pending", () => {
+    vi.mocked(useAutoRouterPresets).mockReturnValue({
+      ...LOADED_PRESETS_QUERY,
+      data: undefined,
+      isPending: true,
+    } as never);
+    renderWithProviders(<Harness />);
+
+    expect(screen.getByText("Loading templates...")).toBeInTheDocument();
+  });
+
+  it("degrades to Custom Configuration with a retry hint that refetches the catalog", async () => {
+    const refetch = vi.fn();
+    vi.mocked(useAutoRouterPresets).mockReturnValue({
+      ...LOADED_PRESETS_QUERY,
+      data: undefined,
+      isError: true,
+      refetch,
+    } as never);
+    renderWithProviders(<Harness />);
+
+    expect(await screen.findByText(/Could not load templates/)).toBeInTheDocument();
+
+    openTemplateDropdown();
+    const options = screen.queryAllByRole("option");
+    expect(options).toHaveLength(1);
+    expect(options[0]).toHaveTextContent("Custom Configuration");
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refetch).toHaveBeenCalled();
   });
 });

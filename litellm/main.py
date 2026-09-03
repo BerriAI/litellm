@@ -141,7 +141,6 @@ from litellm.utils import (
     convert_to_model_response_object,
     create_pretrained_tokenizer,
     create_tokenizer,
-    get_api_key,
     get_llm_provider,
     get_model_info,
     get_non_default_completion_params,
@@ -8637,6 +8636,16 @@ def _set_stream_builder_response_cost(response: ModelResponse, logging_obj: Opti
     hidden_params["response_cost"] = response_cost
 
 
+def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
+    if logging_obj is None:
+        return
+    if isinstance(getattr(usage, "cost", None), (int, float)):
+        return
+    computed_cost: Final = logging_obj._response_cost_calculator(result=response)
+    if isinstance(computed_cost, (int, float)) and computed_cost > 0:
+        setattr(usage, "cost", computed_cost)
+
+
 def stream_chunk_builder(
     chunks: list,
     messages: list | None = None,
@@ -8731,12 +8740,7 @@ def stream_chunk_builder(
                     )
                     break
 
-            if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-                setattr(
-                    usage,
-                    "cost",
-                    logging_obj._response_cost_calculator(result=response),
-                )
+            _stamp_streaming_usage_cost(usage, response, logging_obj)
             _set_stream_builder_response_cost(response, logging_obj)
 
             processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
@@ -8915,10 +8919,7 @@ def stream_chunk_builder(
                 )
                 break
 
-        # Add cost to usage object if include_cost_in_streaming_usage is True
-        if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-            setattr(usage, "cost", logging_obj._response_cost_calculator(result=response))
-
+        _stamp_streaming_usage_cost(usage, response, logging_obj)
         _set_stream_builder_response_cost(response, logging_obj)
 
         processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)

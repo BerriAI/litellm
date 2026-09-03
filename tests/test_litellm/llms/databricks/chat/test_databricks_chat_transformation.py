@@ -422,6 +422,27 @@ def test_databricks_config_probes_capabilities_under_databricks_namespace():
     assert DatabricksConfig().custom_llm_provider == "databricks"
 
 
+@pytest.mark.parametrize(
+    "model, expected_thinking, expected_output_config",
+    [
+        ("databricks-claude-opus-4-8", {"type": "adaptive"}, {"effort": "high"}),
+        ("databricks-claude-opus-4-6", {"type": "enabled", "budget_tokens": 4096}, None),
+    ],
+    ids=["adaptive_only_upgrades_to_adaptive", "legacy_capable_forwards_verbatim"],
+)
+def test_map_openai_params_upgrades_legacy_thinking_on_adaptive_only_claude(
+    model, expected_thinking, expected_output_config
+):
+    mapped = DatabricksConfig().map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 4096}},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert mapped["thinking"] == expected_thinking
+    assert mapped.get("output_config") == expected_output_config
+
+
 def _streaming_chunk(usage=None, choices=None):
     base = {
         "id": "chatcmpl-test",

@@ -86,6 +86,7 @@ class LLMMetrics(TypedDict, total=False):
     cache_read_input_tokens: ReadOnly[float]
     cache_write_input_tokens: ReadOnly[float]
     non_cached_input_tokens: ReadOnly[float]
+    reasoning_output_tokens: ReadOnly[float]
 
 
 class LLMObsPayload(TypedDict, total=False):
