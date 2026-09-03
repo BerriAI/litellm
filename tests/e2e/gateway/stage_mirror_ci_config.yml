@@ -1,4 +1,5 @@
 general_settings:
+  proxy_config_reload_interval_seconds: 7
   store_prompts_in_spend_logs: true
   database_connection_pool_limit: 10
   forward_client_headers_to_llm_api: false
