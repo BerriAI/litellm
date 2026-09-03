@@ -5865,9 +5865,7 @@ def _get_status_fields(
         "guardrail_failed_to_respond",
         "guardrail_intervened",
     )
-    entries: Final[Sequence[object]] = (
-        guardrail_information if isinstance(guardrail_information, list) else ()
-    )
+    entries: Final[Sequence[object]] = guardrail_information if isinstance(guardrail_information, list) else ()
     guardrail_status: Final[GuardrailStatus] = max(
         (
             GUARDRAIL_STATUS_MAP.get(entry.get("guardrail_status", "not_run"), "not_run")
