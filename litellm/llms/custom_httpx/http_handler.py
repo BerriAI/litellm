@@ -16,7 +16,7 @@ import certifi
 import httpx
 from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
-from httpx._types import RequestFiles
+from httpx._types import CertTypes, RequestFiles
 from httpx._utils import get_environment_proxies
 
 import litellm
@@ -625,7 +625,7 @@ class AsyncHTTPHandler:
 
         return httpx.AsyncClient(
             transport=transport,
-            mounts=AsyncHTTPHandler._create_httpx_proxy_mounts(transport),
+            mounts=AsyncHTTPHandler._create_httpx_proxy_mounts(transport, verify=ssl_config, cert=cert),
             event_hooks=event_hooks,
             timeout=timeout,
             verify=ssl_config,
@@ -1217,10 +1217,14 @@ class AsyncHTTPHandler:
     @staticmethod
     def _create_httpx_proxy_mounts(
         transport: LiteLLMAiohttpTransport | AsyncHTTPTransport | None,
+        verify: VerifyTypes,
+        cert: CertTypes | None,
     ) -> Mapping[str, AsyncHTTPTransport | None] | None:
         if not isinstance(transport, AsyncHTTPTransport):
             return None
-        return _environment_proxy_mounts(lambda proxy_url: AsyncHTTPTransport(proxy=proxy_url))
+        return _environment_proxy_mounts(
+            lambda proxy_url: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert)
+        )
 
 
 class HTTPHandler:
@@ -1254,7 +1258,7 @@ class HTTPHandler:
         # Create a client with a connection pool
         return httpx.Client(
             transport=self._create_sync_transport(),
-            mounts=self._create_sync_proxy_mounts(),
+            mounts=self._create_sync_proxy_mounts(verify=ssl_config, cert=cert),
             timeout=self.timeout if self.timeout is not None else _DEFAULT_TIMEOUT,
             verify=ssl_config,
             cert=cert,
@@ -1540,10 +1544,13 @@ class HTTPHandler:
             return getattr(litellm, "sync_transport", None)
 
     @staticmethod
-    def _create_sync_proxy_mounts() -> Mapping[str, HTTPTransport | None] | None:
+    def _create_sync_proxy_mounts(
+        verify: VerifyTypes,
+        cert: CertTypes | None,
+    ) -> Mapping[str, HTTPTransport | None] | None:
         if not litellm.force_ipv4:
             return None
-        return _environment_proxy_mounts(lambda proxy_url: HTTPTransport(proxy=proxy_url))
+        return _environment_proxy_mounts(lambda proxy_url: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert))
 
 
 def get_async_httpx_client(

@@ -1411,3 +1411,139 @@ async def test_force_ipv4_httpx_transport_honours_no_proxy(keepalive_server, mon
         await handler.close()
 
     assert response.text == "ok"
+
+
+@pytest.fixture
+def private_ca_tls_upstream(tmp_path: pathlib.Path):
+    """HTTPS server behind a CONNECT proxy, both on localhost; the server's cert is signed by a test-only CA."""
+    import datetime
+    import select
+    import socket
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from socketserver import ThreadingMixIn
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "upstream.invalid")])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=1))
+        .not_valid_after(now + datetime.timedelta(hours=1))
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName("upstream.invalid")]), critical=False)
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    ca_pem = tmp_path / "ca.pem"
+    ca_pem.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_pem = tmp_path / "key.pem"
+    key_pem.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
+    )
+
+    class OkTlsHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "6")
+            self.end_headers()
+            self.wfile.write(b"ok-tls")
+
+        def log_message(self, format, *args):
+            pass
+
+    class ThreadedServer(ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+
+    tls_server = ThreadedServer(("127.0.0.1", 0), OkTlsHandler)
+    server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_ctx.load_cert_chain(str(ca_pem), str(key_pem))
+    tls_server.socket = server_ctx.wrap_socket(tls_server.socket, server_side=True)
+    tls_port = tls_server.server_port
+
+    class ConnectProxyHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_CONNECT(self):
+            upstream = socket.create_connection(("127.0.0.1", tls_port))
+            self.send_response(200, "Connection established")
+            self.end_headers()
+            sockets = [self.connection, upstream]
+            while True:
+                readable, _, _ = select.select(sockets, [], [], 5)
+                if not readable:
+                    break
+                for src in readable:
+                    data = src.recv(65536)
+                    if not data:
+                        upstream.close()
+                        return
+                    (upstream if src is self.connection else self.connection).sendall(data)
+
+        def log_message(self, format, *args):
+            pass
+
+    proxy_server = ThreadedServer(("127.0.0.1", 0), ConnectProxyHandler)
+    threads = [
+        threading.Thread(target=tls_server.serve_forever, daemon=True),
+        threading.Thread(target=proxy_server.serve_forever, daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+    try:
+        yield f"http://127.0.0.1:{proxy_server.server_port}", str(ca_pem)
+    finally:
+        for server in (proxy_server, tls_server):
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_force_ipv4_https_proxy_mount_uses_handler_ca_bundle(
+    private_ca_tls_upstream, monkeypatch: pytest.MonkeyPatch
+):
+    proxy_url, ca_pem = private_ca_tls_upstream
+    monkeypatch.setenv("HTTPS_PROXY", proxy_url)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "force_ipv4", True)
+
+    handler = AsyncHTTPHandler(ssl_verify=ca_pem)
+    try:
+        response = await handler.get("https://upstream.invalid/v1/models")
+    finally:
+        await handler.close()
+
+    assert response.text == "ok-tls"
+
+
+def test_sync_force_ipv4_https_proxy_mount_uses_handler_ca_bundle(
+    private_ca_tls_upstream, monkeypatch: pytest.MonkeyPatch
+):
+    proxy_url, ca_pem = private_ca_tls_upstream
+    monkeypatch.setenv("HTTPS_PROXY", proxy_url)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.setattr(litellm, "force_ipv4", True)
+
+    handler = HTTPHandler(ssl_verify=ca_pem)
+    try:
+        response = handler.get("https://upstream.invalid/v1/models")
+    finally:
+        handler.close()
+
+    assert response.text == "ok-tls"

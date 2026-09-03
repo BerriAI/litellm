@@ -314,7 +314,7 @@ class BaseOpenAILLM:
         return httpx.AsyncClient(
             verify=ssl_config,
             transport=transport,
-            mounts=AsyncHTTPHandler._create_httpx_proxy_mounts(transport),
+            mounts=AsyncHTTPHandler._create_httpx_proxy_mounts(transport, verify=ssl_config, cert=None),
             follow_redirects=True,
         )
 
