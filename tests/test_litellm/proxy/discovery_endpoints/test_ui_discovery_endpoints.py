@@ -406,11 +406,10 @@ def test_ui_discovery_endpoints_hide_sso_login_notice_default_false():
     app.include_router(router)
     client = TestClient(app)
 
-    with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
-        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
-        patch("litellm.proxy.auth.auth_utils.has_user_setup_sso", return_value=True),
-        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
+    with patch.dict(
+        os.environ,
+        {"DISABLE_ADMIN_UI": "false", "GOOGLE_CLIENT_ID": "test-client-id"},
+        clear=False,
     ):
         os.environ.pop("LITELLM_HIDE_SSO_LOGIN_NOTICE", None)
 
@@ -428,18 +427,14 @@ def test_ui_discovery_endpoints_hide_sso_login_notice_via_env_var():
     app.include_router(router)
     client = TestClient(app)
 
-    with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
-        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
-        patch("litellm.proxy.auth.auth_utils.has_user_setup_sso", return_value=True),
-        patch.dict(
-            os.environ,
-            {
-                "LITELLM_HIDE_SSO_LOGIN_NOTICE": "true",
-                "DISABLE_ADMIN_UI": "false",
-            },
-            clear=False,
-        ),
+    with patch.dict(
+        os.environ,
+        {
+            "LITELLM_HIDE_SSO_LOGIN_NOTICE": "true",
+            "DISABLE_ADMIN_UI": "false",
+            "GOOGLE_CLIENT_ID": "test-client-id",
+        },
+        clear=False,
     ):
 
         response = client.get("/.well-known/litellm-ui-config")
@@ -456,14 +451,15 @@ def test_ui_discovery_endpoints_hide_sso_login_notice_via_general_settings():
     client = TestClient(app)
 
     with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
-        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
-        patch("litellm.proxy.auth.auth_utils.has_user_setup_sso", return_value=True),
-        patch(
+        patch(  # test-quality-ok: general_settings is a plain module dict with no injection seam, same precedent as the hide_default_credentials_hint test above
             "litellm.proxy.proxy_server.general_settings",
             {"hide_sso_login_notice": True},
         ),
-        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
+        patch.dict(
+            os.environ,
+            {"DISABLE_ADMIN_UI": "false", "GOOGLE_CLIENT_ID": "test-client-id"},
+            clear=False,
+        ),
     ):
         os.environ.pop("LITELLM_HIDE_SSO_LOGIN_NOTICE", None)
 
