@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import ssl
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -29,6 +28,7 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     SUBTITLE_RESPONSE_FORMATS,
     synthesize_subtitle_document,
 )
+from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.realtime_errors import realtime_error_event, websocket_close_reason
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
@@ -69,7 +69,9 @@ from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseDirectVectorStoreConfig,
+    BaseQueryEmbeddingVectorStoreConfig,
     BaseVectorStoreConfig,
+    VectorStoreEmbeddingExecutor,
 )
 from litellm.llms.base_llm.vector_store_files.transformation import (
     BaseVectorStoreFilesConfig,
@@ -159,7 +161,11 @@ def _rust_responses_websocket_enabled(
     custom_llm_provider: str | None,
     litellm_params: GenericLiteLLMParams,
 ) -> bool:
-    return custom_llm_provider == "openai" and litellm_params.get("rust") is True
+    from litellm.rust_bridge.configuration import rust_enabled
+
+    raw_request_override: Final = litellm_params.get("rust")
+    request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
+    return custom_llm_provider == "openai" and rust_enabled(request_override=request_override)
 
 
 from .http_handler import get_shared_realtime_ssl_context
@@ -178,6 +184,7 @@ if TYPE_CHECKING:
         AnthropicMessagesStreamingResponse,
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.router import Router
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,
         CancelRunResponse,
@@ -268,6 +275,16 @@ def _has_pre_call_deployment_hook(logging_obj: LiteLLMLoggingObj) -> bool:
         if getattr(cb_func, "__func__", cb_func) is not getattr(base_func, "__func__", base_func):
             return True
     return False
+
+
+def _aws_signing_overrides(optional_params: Mapping[str, Any], litellm_params: Mapping[str, Any]) -> Mapping[str, Any]:
+    return MappingProxyType(
+        {
+            key: litellm_params[key]
+            for key in AWS_CREDENTIAL_KWARGS_KEYS
+            if optional_params.get(key) is None and litellm_params.get(key) is not None
+        }
+    )
 
 
 def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
@@ -534,7 +551,10 @@ class BaseLLMHTTPHandler:
 
         headers, signed_json_body = provider_config.sign_request(
             headers=headers,
-            optional_params=optional_params,
+            optional_params={
+                **optional_params,
+                **_aws_signing_overrides(optional_params, litellm_params),
+            },
             request_data=data,
             api_base=api_base,
             api_key=api_key,
@@ -2364,10 +2384,6 @@ class BaseLLMHTTPHandler:
         )
 
     @staticmethod
-    def _rust_env_enabled() -> bool:
-        return os.getenv("LITELLM_RUST", "").strip().lower() in {"1", "true", "yes", "on"}
-
-    @staticmethod
     async def _maybe_rust_anthropic_messages(
         *,
         custom_llm_provider: str,
@@ -2382,7 +2398,11 @@ class BaseLLMHTTPHandler:
     ) -> AnthropicMessagesResponse | None:
         if custom_llm_provider not in ("azure_ai", "anthropic"):
             return None
-        if litellm_params.get("rust") is not True and not BaseLLMHTTPHandler._rust_env_enabled():
+        from litellm.rust_bridge.configuration import rust_enabled
+
+        raw_request_override: Final = litellm_params.get("rust")
+        request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
+        if not rust_enabled(request_override=request_override):
             return None
         if has_agentic_hook:
             return None
@@ -2923,7 +2943,7 @@ class BaseLLMHTTPHandler:
         final_response: Final = await self._call_agentic_completion_hooks(
             response=initial_response,
             model=model,
-            messages=(input if isinstance(input, list) else [{"role": "user", "content": input}]),
+            messages=(input if isinstance(input, list) else [{"role": "user", "content": input}]),  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; the hook accepts response input items at runtime
             anthropic_messages_provider_config=responses_api_provider_config,
             anthropic_messages_optional_request_params=response_api_optional_request_params,
             logging_obj=logging_obj,
@@ -5415,7 +5435,7 @@ class BaseLLMHTTPHandler:
         try:
             response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
                 model=patch.model or model,
-                input=patch.messages,
+                input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
                 **optional_params,
                 **kwargs_for_followup,
             )
@@ -9683,11 +9703,13 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
         extra_headers: dict[str, object] | None = None,
         extra_body: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
+        router: "Router | None" = None,
     ) -> VectorStoreSearchResponse:
         if isinstance(vector_store_provider_config, BaseDirectVectorStoreConfig):
             self._pre_call_direct_vector_store_search(
@@ -9702,6 +9724,7 @@ class BaseLLMHTTPHandler:
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                embedding_executor=embedding_executor,
                 timeout=timeout,
             )
 
@@ -9725,8 +9748,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        # Check if provider has async transform method
-        if hasattr(vector_store_provider_config, "atransform_search_vector_store_request"):
+        if isinstance(vector_store_provider_config, BaseQueryEmbeddingVectorStoreConfig):
             (
                 url,
                 request_body,
@@ -9738,12 +9760,14 @@ class BaseLLMHTTPHandler:
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),
                 extra_body=extra_body,
+                router=router,
+                embedding_executor=embedding_executor,
             )
         else:
             (
                 url,
                 request_body,
-            ) = vector_store_provider_config.transform_search_vector_store_request(
+            ) = await vector_store_provider_config.atransform_search_vector_store_request(
                 vector_store_id=vector_store_id,
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
@@ -9751,6 +9775,7 @@ class BaseLLMHTTPHandler:
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),
                 extra_body=extra_body,
+                router=router,
             )
         all_optional_params: Final[dict[str, object]] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
@@ -9797,11 +9822,13 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
         extra_headers: dict[str, object] | None = None,
         extra_body: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
+        router: "Router | None" = None,
     ) -> VectorStoreSearchResponse | Coroutine[object, object, VectorStoreSearchResponse]:
         if _is_async:
             return self.async_vector_store_search_handler(
@@ -9812,10 +9839,12 @@ class BaseLLMHTTPHandler:
                 litellm_params=litellm_params,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
+                embedding_executor=embedding_executor,
                 extra_headers=extra_headers,
                 extra_body=extra_body,
                 timeout=timeout,
                 client=client,
+                router=router,
             )
 
         if isinstance(vector_store_provider_config, BaseDirectVectorStoreConfig):
@@ -9831,6 +9860,7 @@ class BaseLLMHTTPHandler:
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                embedding_executor=embedding_executor,
                 timeout=timeout,
             )
 
@@ -9851,18 +9881,35 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        (
-            url,
-            request_body,
-        ) = vector_store_provider_config.transform_search_vector_store_request(
-            vector_store_id=vector_store_id,
-            query=query,
-            vector_store_search_optional_params=vector_store_search_optional_params,
-            api_base=api_base,
-            litellm_logging_obj=logging_obj,
-            litellm_params=dict(litellm_params),
-            extra_body=extra_body,
-        )
+        if isinstance(vector_store_provider_config, BaseQueryEmbeddingVectorStoreConfig):
+            (
+                url,
+                request_body,
+            ) = vector_store_provider_config.transform_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                api_base=api_base,
+                litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),
+                extra_body=extra_body,
+                router=router,
+                embedding_executor=embedding_executor,
+            )
+        else:
+            (
+                url,
+                request_body,
+            ) = vector_store_provider_config.transform_search_vector_store_request(
+                vector_store_id=vector_store_id,
+                query=query,
+                vector_store_search_optional_params=vector_store_search_optional_params,
+                api_base=api_base,
+                litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),
+                extra_body=extra_body,
+                router=router,
+            )
 
         all_optional_params: Final[dict[str, object]] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
