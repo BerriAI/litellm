@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnFiltersState, OnChangeFn, PaginationState, SortingState, Updater } from "@tanstack/react-table";
 import { KeyRound } from "lucide-react";
-import { parseAsInteger, parseAsString, parseAsStringLiteral, useQueryState, useQueryStates } from "nuqs";
+import { createParser, parseAsInteger, parseAsString, parseAsStringLiteral, useQueryState, useQueryStates } from "nuqs";
 import React, { useCallback, useMemo, useState } from "react";
 
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
@@ -41,17 +41,30 @@ const FILTER_LABELS: Record<FilterColumn, string> = {
 const DEFAULT_SORT_BY = "created_at";
 const DEFAULT_SORT_ORDER = "desc";
 const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 100;
+const MAX_PAGE = 100_000;
 
+const boundedInteger = (min: number, max: number, fallback: number) =>
+  createParser({
+    parse: (value: string) => {
+      const parsed = parseAsInteger.parse(value);
+      return parsed === null ? null : Math.min(Math.max(parsed, min), max);
+    },
+    serialize: String,
+  }).withDefault(fallback);
+
+// The filters carry a prefix because /api-keys also takes team_id, key_alias and key_type
+// as create-key prefills; an unprefixed filter would hijack those deep links.
 const TABLE_STATE = {
   key_search: parseAsString.withDefault(""),
   sort_by: parseAsString.withDefault(DEFAULT_SORT_BY),
   sort_order: parseAsStringLiteral(["asc", "desc"] as const).withDefault(DEFAULT_SORT_ORDER),
-  page: parseAsInteger.withDefault(1),
-  page_size: parseAsInteger.withDefault(DEFAULT_PAGE_SIZE),
-  team_id: parseAsString.withDefault(""),
-  org_id: parseAsString.withDefault(""),
-  user_id: parseAsString.withDefault(""),
-  key_hash: parseAsString.withDefault(""),
+  page: boundedInteger(1, MAX_PAGE, 1),
+  page_size: boundedInteger(1, MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE),
+  filter_team: parseAsString.withDefault(""),
+  filter_org: parseAsString.withDefault(""),
+  filter_user: parseAsString.withDefault(""),
+  filter_key_id: parseAsString.withDefault(""),
 };
 
 const resolveUpdater = <T,>(updater: Updater<T>, current: T): T =>
@@ -87,18 +100,31 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     () => ({ pageIndex: tableState.page - 1, pageSize: tableState.page_size }),
     [tableState.page, tableState.page_size],
   );
-  const { team_id, org_id, user_id, key_hash } = tableState;
-  const columnFilters = useMemo<ColumnFiltersState>(() => {
-    const applied = { team_id, org_id, user_id, key_hash };
-    return FILTER_COLUMNS.filter((column) => applied[column]).map((column) => ({ id: column, value: applied[column] }));
-  }, [team_id, org_id, user_id, key_hash]);
+  const { filter_team, filter_org, filter_user, filter_key_id } = tableState;
+  const appliedFilters = useMemo(
+    () => ({
+      team_id: filter_team.trim(),
+      org_id: filter_org.trim(),
+      user_id: filter_user.trim(),
+      key_hash: filter_key_id.trim(),
+    }),
+    [filter_team, filter_org, filter_user, filter_key_id],
+  );
+  const columnFilters = useMemo<ColumnFiltersState>(
+    () =>
+      FILTER_COLUMNS.filter((column) => appliedFilters[column]).map((column) => ({
+        id: column,
+        value: appliedFilters[column],
+      })),
+    [appliedFilters],
+  );
 
   const keyListOptions = {
-    teamID: team_id || undefined,
-    organizationID: org_id || undefined,
+    teamID: appliedFilters.team_id || undefined,
+    organizationID: appliedFilters.org_id || undefined,
     selectedKeyAlias: searchQuery.trim() || undefined,
-    userID: user_id || undefined,
-    keyHash: key_hash || undefined,
+    userID: appliedFilters.user_id || undefined,
+    keyHash: appliedFilters.key_hash || undefined,
     sortBy: tableState.sort_by || undefined,
     sortOrder: tableState.sort_by ? tableState.sort_order : undefined,
     expand: "user",
@@ -132,14 +158,14 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>(
     (updaterOrValue) => {
       const next = resolveUpdater(updaterOrValue, columnFilters);
-      const appliedFilters = {
-        team_id: filterValue(next, "team_id"),
-        org_id: filterValue(next, "org_id"),
-        user_id: filterValue(next, "user_id"),
-        key_hash: filterValue(next, "key_hash"),
+      const nextFilters = {
+        filter_team: filterValue(next, "team_id"),
+        filter_org: filterValue(next, "org_id"),
+        filter_user: filterValue(next, "user_id"),
+        filter_key_id: filterValue(next, "key_hash"),
         page: null,
       };
-      void setTableState(appliedFilters);
+      void setTableState(nextFilters);
     },
     [columnFilters, setTableState],
   );

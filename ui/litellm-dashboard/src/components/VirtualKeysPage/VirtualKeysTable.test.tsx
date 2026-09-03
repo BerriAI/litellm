@@ -526,7 +526,7 @@ describe("server-side filtering – the LIT-4080 regression guard", () => {
     // Let the filter reach the URL first: NuqsTestingAdapter replays a throttled
     // write over a same-tick follow-up, which no real click sequence can hit.
     await waitFor(() => {
-      expect(lastSearchParam(onUrlUpdate, "user_id")).toBe("user-42");
+      expect(lastSearchParam(onUrlUpdate, "filter_user")).toBe("user-42");
     });
 
     fireEvent.click(screen.getByTestId("datatable-clear-filters"));
@@ -664,7 +664,7 @@ describe("table state lives in the URL so it survives leaving and returning to t
   });
 
   it("restores the drawer filters from the URL on mount", async () => {
-    renderWithProviders(<VirtualKeysTable />, { searchParams: { team_id: "team-1", user_id: "user-42" } });
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { filter_team: "team-1", filter_user: "user-42" } });
 
     await waitFor(() => {
       expect(mockUseKeys).toHaveBeenLastCalledWith(
@@ -708,13 +708,13 @@ describe("table state lives in the URL so it survives leaving and returning to t
     fireEvent.click(screen.getByTestId("filter-drawer-apply"));
 
     await waitFor(() => {
-      expect(lastSearchParam(onUrlUpdate, "user_id")).toBe("user-42");
+      expect(lastSearchParam(onUrlUpdate, "filter_user")).toBe("user-42");
     });
 
     fireEvent.click(screen.getByTestId("datatable-clear-filters"));
 
     await waitFor(() => {
-      expect(lastSearchParam(onUrlUpdate, "user_id")).toBeNull();
+      expect(lastSearchParam(onUrlUpdate, "filter_user")).toBeNull();
     });
     expect(screen.queryByTestId("filter-chip-user_id")).not.toBeInTheDocument();
   });
@@ -734,6 +734,45 @@ describe("table state lives in the URL so it survives leaving and returning to t
     });
     await waitFor(() => {
       expect(lastSearchParam(onUrlUpdate, "page")).toBeNull();
+    });
+  });
+
+  it("leaves the create-key deep link's team_id alone instead of filtering the list with it", async () => {
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { create: "true", team_id: "team-1" } });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ teamID: undefined }));
+    });
+    expect(screen.queryByTestId("filter-chip-team_id")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["0", 1],
+    ["-3", 1],
+  ])("clamps a hand-edited page of %s up to the first page", async (page, expected) => {
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { page } });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(expected, 50, expect.anything());
+    });
+  });
+
+  it.each([
+    ["0", 1],
+    ["1000", 100],
+  ])("clamps a hand-edited page_size of %s into the range /key/list accepts", async (pageSize, expected) => {
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { page_size: pageSize } });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, expected, expect.anything());
+    });
+  });
+
+  it("trims whitespace off a filter that arrived from the URL", async () => {
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { filter_user: "  user-42  " } });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: "user-42" }));
     });
   });
 
