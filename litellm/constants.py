@@ -1450,6 +1450,7 @@ RETURN_RAW_MODEL_NAME_METADATA_KEY: Final = "_complexity_router_return_raw_model
 SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY: Final = "_session_deployment_affinity_ttl"
 CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
+SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 LITELLM_TRUNCATED_PAYLOAD_FIELD: Final = "litellm_truncated"
 LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE: Final = (
     "Truncation is a DB storage safeguard. "

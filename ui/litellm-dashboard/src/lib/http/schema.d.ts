@@ -12129,6 +12129,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/autorouter_presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Public Autorouter Presets
+         * @description Return the auto-router preset catalog the dashboard's template picker renders.
+         *
+         *     Resolved once per process, like the model cost map: fetched from ``litellm.autorouter_presets_url``
+         *     (override with ``LITELLM_AUTOROUTER_PRESETS_URL``) on the first request, falling back to the
+         *     catalog bundled with the package on any failure. Set ``LITELLM_LOCAL_AUTOROUTER_PRESETS=True``
+         *     to serve the bundled catalog only. A restart picks up a newly published catalog.
+         */
+        get: operations["get_public_autorouter_presets_public_autorouter_presets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/public/complexity_router/scorer_defaults": {
         parameters: {
             query?: never;
@@ -23392,6 +23417,49 @@ export interface components {
             tier_definitions: components["schemas"]["TierDefinition"][];
         };
         /**
+         * AutoRouterPresetConfig
+         * @description The complexity_router_config a preset prefills.
+         *
+         *     Only tiers is validated, because every dashboard consumer dereferences it; everything else
+         *     passes through verbatim with unknown fields kept (extra="allow"), so a catalog published after
+         *     this proxy shipped still serves its new fields intact.
+         */
+        AutoRouterPresetConfig: {
+            tiers: components["schemas"]["AutoRouterPresetTiers"];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * AutoRouterPresetRecord
+         * @description One auto-router preset as served to the dashboard's template picker.
+         */
+        AutoRouterPresetRecord: {
+            complexity_router_config: components["schemas"]["AutoRouterPresetConfig"];
+            /** Description */
+            description: string;
+            /** Label */
+            label: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * AutoRouterPresetTiers
+         * @description Exactly the four built-in tiers the dashboard's preset prefill can apply.
+         *
+         *     extra="forbid" on purpose: a tier name this dashboard cannot apply would grey out or crash the
+         *     picker, so such a catalog is rejected wholesale and the bundled one serves instead.
+         */
+        AutoRouterPresetTiers: {
+            /** Complex */
+            COMPLEX: string[];
+            /** Medium */
+            MEDIUM: string[];
+            /** Reasoning */
+            REASONING: string[];
+            /** Simple */
+            SIMPLE: string[];
+        };
+        /**
          * AutoRouterRoutingTestRequest
          * @description A single request to classify against a complexity-router config that need not be saved yet.
          *
@@ -25704,6 +25772,11 @@ export interface components {
              * @description Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.
              */
             mcp_xff_num_trusted_hops?: number | null;
+            /**
+             * Missing Session Id
+             * @description What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.
+             */
+            missing_session_id?: ("generate" | "reject") | null;
             /**
              * Model List Healthy Only
              * @description When true, `/models`, `/v1/models/{id}` and `/model/info` hide models whose backing deployments are all unhealthy, for every caller, without needing `healthy_only=true` per request. Requires `background_health_checks: true`, and keeps deployment health state cached without turning on `enable_health_check_routing`, so routing is unaffected. With no health state nothing is hidden. Hiding is presentation-only, a hidden model can still be called.
@@ -54675,6 +54748,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentCreateInfo"][];
+                };
+            };
+        };
+    };
+    get_public_autorouter_presets_public_autorouter_presets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: components["schemas"]["AutoRouterPresetRecord"];
+                    };
                 };
             };
         };
