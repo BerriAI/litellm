@@ -1,0 +1,14 @@
+{
+  "order": 40,
+  "id": "existing_e2e_test_sdk",
+  "label": "Existing e2e SDK tests",
+  "description": "Wire already-existing live-API SDK tests into the matrix instead of writing new parity tests.",
+  "functions": {
+    "ocr": {"coverage": "partial", "selectors": ["tests/ocr_tests/"], "note": "Existing live OCR provider tests; not yet a frozen Rust/Python oracle comparison."},
+    "messages": {"coverage": "planned", "selectors": []},
+    "responses": {"coverage": "planned", "selectors": []},
+    "count_tokens": {"coverage": "planned", "selectors": []},
+    "chat_completions": {"coverage": "partial", "selectors": ["tests/llm_translation/test_anthropic_completion.py", "tests/llm_translation/test_bedrock_completion.py"], "note": "Existing live chat completion tests for providers with confirmed Rust bridge regressions."},
+    "transcription": {"coverage": "partial", "selectors": ["tests/audio_tests/test_whisper.py"], "note": "Existing live Whisper transcription test."}
+  }
+}
