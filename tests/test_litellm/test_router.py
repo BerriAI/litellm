@@ -7362,14 +7362,14 @@ def test_get_configured_mode_reads_deployment_model_info():
     router = litellm.Router(
         model_list=[
             {
-                "model_name": "chat-model",
-                "litellm_params": {"model": "openai/some-unmapped-model"},
-                "model_info": {"mode": "chat"},
+                "model_name": "tts-model",
+                "litellm_params": {"model": "openai/some-unmapped-tts-model"},
+                "model_info": {"mode": "audio_speech"},
             }
         ]
     )
 
-    assert router.get_configured_mode("chat-model") == "chat"
+    assert router.get_configured_mode("tts-model") == "audio_speech"
 
 
 def test_get_configured_mode_returns_none_for_unset_or_unknown():
@@ -12701,33 +12701,3 @@ async def test_prompt_management_factory_marks_injection_for_every_deployment(mo
     bucket = captured.get("litellm_metadata") or captured["metadata"]
     assert captured["model_info"]["id"] == "provisional-dep"
     assert bucket["litellm_gateway_injected_cache"] == ""
-
-
-def test_get_configured_mode_reads_deployment_model_info():
-    router = Router(
-        model_list=[
-            {
-                "model_name": "my-tts",
-                "litellm_params": {"model": "openai/some-unmapped-mode-model"},
-                "model_info": {"mode": "audio_speech"},
-            }
-        ]
-    )
-
-    assert router.get_configured_mode("my-tts") == "audio_speech"
-
-
-@pytest.mark.parametrize("model_info", [{}, {"mode": ""}, {"mode": "   "}, {"mode": 123}])
-def test_get_configured_mode_returns_none_for_unset_blank_or_unknown(model_info):
-    router = Router(
-        model_list=[
-            {
-                "model_name": "plain-model",
-                "litellm_params": {"model": "openai/some-unmapped-mode-model"},
-                "model_info": model_info,
-            }
-        ]
-    )
-
-    assert router.get_configured_mode("plain-model") is None
-    assert router.get_configured_mode("unknown-model") is None
