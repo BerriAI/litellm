@@ -575,6 +575,7 @@ CallTypesLiteral = Literal[
     "search",
     "asearch",
     "_arealtime",
+    "_aresponses_websocket",
     "create_batch",
     "acreate_batch",
     "create_file",
