@@ -182,6 +182,8 @@ const lastSearchParam = (onUrlUpdate: Mock<OnUrlUpdateFunction>, name: string) =
 
 const lastKeyParam = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => lastSearchParam(onUrlUpdate, "key");
 
+const lastHistoryMode = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => onUrlUpdate.mock.calls.at(-1)?.[0].options.history;
+
 beforeEach(() => {
   vi.clearAllMocks();
 
@@ -377,6 +379,7 @@ it("clicking the key cell deep-links via ?key=", async () => {
   await waitFor(() => {
     expect(lastKeyParam(onUrlUpdate)).toBe(mockKey.token);
   });
+  expect(lastHistoryMode(onUrlUpdate)).toBe("push");
 });
 
 it("renders KeyInfoView when the URL has ?key= for a key on the current page, without refetching it", async () => {
@@ -417,6 +420,7 @@ it("repoints ?key= to the rotated hash once the regenerate dialog is dismissed",
   await waitFor(() => {
     expect(lastKeyParam(onUrlUpdate)).toBe("rotated-hash-456");
   });
+  expect(lastHistoryMode(onUrlUpdate)).toBe("replace");
 });
 
 it("fetches the key by id when the URL has ?key= for a key not in the loaded page", async () => {
