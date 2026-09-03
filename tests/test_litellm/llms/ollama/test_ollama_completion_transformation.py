@@ -1,10 +1,10 @@
 import json
-from litellm._uuid import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-
+from litellm._uuid import uuid
+from litellm.litellm_core_utils.prompt_templates.factory import function_call_prompt
 from litellm.llms.ollama.completion.transformation import (
     OllamaConfig,
     OllamaTextCompletionResponseIterator,
@@ -507,9 +507,9 @@ class TestOllamaTextCompletionResponseIterator:
 class TestOllamaTextCompletionStreamingToolCalls:
     """Regression tests for https://github.com/BerriAI/litellm/issues/35711"""
 
-    def _stream(self, responses, json_mode=True):
+    def _stream(self, responses, function_call_prompted=True):
         iterator = OllamaTextCompletionResponseIterator(
-            streaming_response=iter([]), sync_stream=True, json_mode=json_mode
+            streaming_response=iter([]), sync_stream=True, function_call_prompted=function_call_prompted
         )
         chunks = [
             iterator.chunk_parser({"model": "qwen3", "created_at": "t", "done": False, "response": r})
@@ -599,10 +599,10 @@ class TestOllamaTextCompletionStreamingToolCalls:
         "arguments_fragment",
         [' "arguments": {"location": "Paris"}}', ' "arguments": "{\\"location\\": \\"Paris\\"}"}'],
     )
-    def test_no_tool_call_reconstruction_when_json_was_not_requested(self, arguments_fragment):
-        """A caller that sent no tools and no response_format must never get a synthesized tool call,
-        and must never lose the content it did ask for."""
-        chunks, done = self._stream(['{"name": "get_weather",', arguments_fragment], json_mode=False)
+    def test_no_tool_call_reconstruction_when_no_tools_were_sent(self, arguments_fragment):
+        """A caller that sent no tools must never get a synthesized tool call, and must never lose the
+        content it did ask for, even when it requested JSON output."""
+        chunks, done = self._stream(['{"name": "get_weather",', arguments_fragment], function_call_prompted=False)
 
         streamed = "".join(c.choices[0].delta.content or "" for c in chunks)
         assert streamed == '{"name": "get_weather",' + arguments_fragment
@@ -612,24 +612,45 @@ class TestOllamaTextCompletionStreamingToolCalls:
 
 
 class TestOllamaStreamGating:
-    """`utils.py` sets format=json for ollama whenever tools are passed, and the prompted function call
-    only makes sense for those requests. The iterator learns about it from the request transform."""
+    """`utils.py` sets format=json and injects `function_call_prompt` into the messages whenever tools are
+    passed to `ollama/`. Only those requests may have their streamed JSON reconstructed into a tool call;
+    the iterator learns about it from the request transform."""
 
-    def _iterator_for(self, optional_params):
+    _tool = {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}
+
+    def _iterator_for(self, optional_params, messages=None, sync_stream=True):
         config = OllamaConfig()
         config.transform_request(
             model="qwen3",
-            messages=[{"role": "user", "content": "hi"}],
+            messages=messages if messages is not None else [{"role": "user", "content": "hi"}],
             optional_params=optional_params,
             litellm_params={},
             headers={},
         )
-        return config.get_model_response_iterator(streaming_response=iter([]), sync_stream=True, json_mode=False)
+        return config.get_model_response_iterator(streaming_response=iter([]), sync_stream=sync_stream)
 
-    def test_json_format_request_buffers_a_possible_function_call(self):
-        iterator = self._iterator_for({"format": "json"})
+    def test_tools_request_buffers_a_possible_function_call(self):
+        messages = function_call_prompt([{"role": "user", "content": "weather in Paris?"}], [self._tool])
+
+        iterator = self._iterator_for({"format": "json"}, messages=messages)
 
         assert iterator.function_call_buffering_enabled is True
+
+    def test_tools_request_with_existing_system_message_buffers(self):
+        messages = function_call_prompt(
+            [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "weather?"}], [self._tool]
+        )
+
+        iterator = self._iterator_for({"format": "json"}, messages=messages)
+
+        assert iterator.function_call_buffering_enabled is True
+
+    def test_json_output_without_tools_never_buffers(self):
+        """response_format=json_object alone must not turn `{"name": ..., "arguments": ...}` content into
+        a tool call."""
+        iterator = self._iterator_for({"format": "json"})
+
+        assert iterator.function_call_buffering_enabled is False
 
     def test_plain_request_never_buffers(self):
         iterator = self._iterator_for({"temperature": 0.5})
@@ -640,14 +661,26 @@ class TestOllamaStreamGating:
     def test_gate_survives_both_sync_and_async_streaming(self, sync_stream):
         """The async handler builds the iterator without forwarding json_mode, so the flag has to ride
         on the config rather than on that argument."""
-        config = OllamaConfig()
-        config.transform_request(
-            model="qwen3",
-            messages=[{"role": "user", "content": "hi"}],
-            optional_params={"format": "json"},
-            litellm_params={},
-            headers={},
-        )
-        iterator = config.get_model_response_iterator(streaming_response=iter([]), sync_stream=sync_stream)
+        messages = function_call_prompt([{"role": "user", "content": "hi"}], [self._tool])
+
+        iterator = self._iterator_for({"format": "json"}, messages=messages, sync_stream=sync_stream)
 
         assert iterator.function_call_buffering_enabled is True
+
+    def test_json_output_without_tools_streams_name_arguments_object_as_content(self):
+        """End to end through the config: a tool-free JSON request whose schema happens to use top-level
+        `name` and `arguments` keys keeps its content and gets no tool call."""
+        iterator = self._iterator_for({"format": "json"})
+        fragments = ['{"name": "Alice",', ' "arguments": ["x"]}']
+
+        chunks = [
+            iterator.chunk_parser({"model": "qwen3", "created_at": "t", "done": False, "response": r})
+            for r in fragments
+        ]
+        done = iterator.chunk_parser(
+            {"model": "qwen3", "created_at": "t", "done": True, "done_reason": "stop", "response": ""}
+        )
+
+        assert "".join(c.choices[0].delta.content or "" for c in chunks) == "".join(fragments)
+        assert all(c.choices[0].delta.tool_calls is None for c in chunks)
+        assert done["finish_reason"] == "stop"

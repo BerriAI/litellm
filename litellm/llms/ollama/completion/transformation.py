@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    FUNCTION_CALL_PROMPT_PREFIX,
     convert_to_ollama_image,
     custom_prompt,
     ollama_pt,
@@ -103,7 +104,7 @@ class OllamaConfig(BaseConfig):
     top_p: float | None = None
     system: str | None = None
     template: str | None = None
-    json_output_requested: bool = False
+    function_call_prompted: bool = False
 
     def __init__(
         self,
@@ -381,7 +382,7 @@ class OllamaConfig(BaseConfig):
                 ollama_prompt = modified_prompt
         stream: Final = optional_params.pop("stream", False)
         format: Final = optional_params.pop("format", None)
-        self.json_output_requested = format == "json"
+        self.function_call_prompted = format == "json" and FUNCTION_CALL_PROMPT_PREFIX in ollama_prompt
         images = optional_params.pop("images", None)
         think: Final = optional_params.pop("think", None)
         data: Final = {
@@ -446,17 +447,24 @@ class OllamaConfig(BaseConfig):
         return OllamaTextCompletionResponseIterator(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
-            json_mode=json_mode or self.json_output_requested,
+            json_mode=json_mode,
+            function_call_prompted=self.function_call_prompted,
         )
 
 
 class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
-    def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
+    def __init__(
+        self,
+        streaming_response,
+        sync_stream: bool,
+        json_mode: bool | None = False,
+        function_call_prompted: bool = False,
+    ):
         super().__init__(streaming_response, sync_stream, json_mode)
         self.started_reasoning_content: bool = False
         self.finished_reasoning_content: bool = False
         self.buffered_json_content: str | None = None
-        self.function_call_buffering_enabled: bool = bool(json_mode)
+        self.function_call_buffering_enabled: bool = function_call_prompted
 
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
         return self.chunk_parser(json.loads(str_line))
