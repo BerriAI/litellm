@@ -6,12 +6,13 @@ from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import HTTPException, status
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PTU_SENTINEL_API_KEY
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
+    attach_user_emails,
     recover_double_hashed_key_metadata,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
@@ -116,6 +117,8 @@ class DailySpendRecord(Protocol):
 class _KeyMetadataDict(TypedDict, total=False):
     key_alias: str | None
     team_id: str | None
+    user_id: ReadOnly[str | None]
+    user_email: ReadOnly[str | None]
 
 
 _WhereValue = str | dict[str, object]
@@ -456,7 +459,12 @@ async def get_api_key_metadata(
         where={"token": {"in": list(api_keys)}}
     )
     result: Final[dict[str, _KeyMetadataDict]] = {
-        k.token: {"key_alias": k.key_alias, "team_id": k.team_id} for k in key_records
+        k.token: {
+            "key_alias": k.key_alias,
+            "team_id": k.team_id,
+            "user_id": getattr(k, "user_id", None),
+        }
+        for k in key_records
     }
 
     # For any keys not found in the active table, check the deleted keys table
@@ -475,6 +483,7 @@ async def get_api_key_metadata(
                     result[k.token] = {
                         "key_alias": k.key_alias,
                         "team_id": k.team_id,
+                        "user_id": getattr(k, "user_id", None),
                     }
         except Exception as e:
             verbose_proxy_logger.warning(
@@ -484,10 +493,12 @@ async def get_api_key_metadata(
             )
 
     still_missing: Final = api_keys - frozenset(result)
-    if not still_missing:
-        return result
-    recovered: Final = await recover_double_hashed_key_metadata(prisma_client, still_missing)
-    return MappingProxyType({**result, **recovered})
+    combined: Final = (
+        result
+        if not still_missing
+        else MappingProxyType({**result, **(await recover_double_hashed_key_metadata(prisma_client, still_missing))})
+    )
+    return await attach_user_emails(prisma_client, combined)
 
 
 def _adjust_dates_for_timezone(
@@ -961,7 +972,11 @@ def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
 
 def _key_metadata(api_key_metadata: Mapping[str, _KeyMetadataDict], api_key: str) -> KeyMetadata:
     meta: Final = api_key_metadata.get(api_key, {})
-    return KeyMetadata(key_alias=meta.get("key_alias"), team_id=meta.get("team_id"))
+    return KeyMetadata(
+        key_alias=meta.get("key_alias"),
+        team_id=meta.get("team_id"),
+        user_email=meta.get("user_email"),
+    )
 
 
 def _aggregate_grouping_sets_records_sync(

@@ -433,7 +433,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
 
 // Helper function to format key label
 export const formatKeyLabel = (modelData: KeyMetricWithMetadata, model: string, teams: Team[]): string => {
-  const keyAlias = modelData.metadata.key_alias || `key-hash-${model}`;
+  const keyAlias = modelData.metadata.key_alias || modelData.metadata.user_email || `key-hash-${model}`;
   const teamId = modelData.metadata.team_id;
   if (teamId) {
     const teamAlias = resolveTeamAliasFromTeamID(teamId, teams);

@@ -209,7 +209,7 @@ def _meta_with_email(meta: KeyMetadataDict, emails: Mapping[str, str]) -> KeyMet
     return updated
 
 
-async def _with_user_emails(
+async def attach_user_emails(
     prisma_client: PrismaClient,
     recovered: Mapping[str, KeyMetadataDict],
 ) -> Mapping[str, KeyMetadataDict]:
@@ -249,7 +249,7 @@ async def recover_double_hashed_key_metadata(
         if not still_missing
         else MappingProxyType({**from_tokens, **(await _spend_logs_key_metadata(prisma_client, still_missing))})
     )
-    return await _with_user_emails(prisma_client, recovered)
+    return await attach_user_emails(prisma_client, recovered)
 
 
 def _row_with_recovered_fields(
