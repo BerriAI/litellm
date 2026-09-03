@@ -1731,7 +1731,7 @@ def get_vertex_ai_allowed_incoming_headers(request: Request) -> dict:
 
 
 def get_vertex_pass_through_handler(
-    call_type: Literal["discovery", "aiplatform"],  # noqa: UP037
+    call_type: Literal["discovery", "aiplatform"],  # noqa: UP037  # ruff reports quoted Literal values here
 ) -> BaseVertexAIPassThroughHandler:
     if call_type == "discovery":
         return VertexAIDiscoveryPassThroughHandler()
@@ -2961,7 +2961,6 @@ async def handle_gigachat_passthrough_router_model(
     """
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
-    # Detect streaming based on request body
     is_streaming: Final = request_body.get("stream", False)  # pyright: ignore[reportUnknownVariableType]  # request_body is dict[Unknown, Unknown]
 
     data: dict[str, Any] = await _read_request_body(
@@ -2997,7 +2996,6 @@ async def handle_gigachat_passthrough_router_model(
     data["json"] = request_body
     data["custom_llm_provider"] = "gigachat"
 
-    # Remove sensitive keys from data
     keys: Final = [  # mutable-ok: list of keys to remove from data
         "gigachat_auth_url",
         "gigachat_access_token",

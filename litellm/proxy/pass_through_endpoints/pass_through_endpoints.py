@@ -812,6 +812,8 @@ def _resolve_team_callback_wiring(
         else {  # mutable-ok: Logging arg
             **callback_vars,
             TRUSTED_CALLBACK_VARS_FIELD: callback_vars,
+            "metadata": {},  # mutable-ok: Logging arg
+            "model_info": {},  # mutable-ok: Logging arg
         }
     )
     return _TeamCallbackWiring(
