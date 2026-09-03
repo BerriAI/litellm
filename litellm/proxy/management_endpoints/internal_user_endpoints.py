@@ -27,7 +27,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
-from litellm.proxy.auth.password_policy import validate_password_policy
+from litellm.proxy.auth.password_policy import validate_password_not_breached, validate_password_policy
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import (
     object_permission_cache_key,
@@ -155,10 +155,11 @@ def _team_membership_table(
     return team_membership_table
 
 
-def _hash_password_in_dict(data: dict, general_settings: Mapping[str, object]) -> None:
+async def _hash_password_in_dict(data: dict, general_settings: Mapping[str, object]) -> None:
     """Validate and hash password field in-place if present."""
     if "password" in data and data["password"] is not None:
         validate_password_policy(data["password"], general_settings)
+        await validate_password_not_breached(data["password"], general_settings)
         data["password"] = hash_password(data["password"])
 
 
@@ -550,7 +551,7 @@ async def new_user(
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
         # the caller sent would be dropped on the floor.
         data_json = await _set_object_permission(data_json=data_json, prisma_client=prisma_client)
-        _hash_password_in_dict(data_json, general_settings)
+        data_json.pop("password", None)  # always None: NewUserRequest.password_not_supported rejects any other value
         teams = data.teams
         if teams is None:
             teams = check_if_default_team_set()
@@ -1422,7 +1423,7 @@ async def _update_single_user_helper(
 
     data_json: Final[dict] = user_request.model_dump(exclude_unset=True)
     non_default_values = _update_internal_user_params(data_json=data_json, data=user_request)
-    _hash_password_in_dict(non_default_values, general_settings)
+    await _hash_password_in_dict(non_default_values, general_settings)
 
     existing_user_row: BaseModel | None = None
     if user_request.user_id:
