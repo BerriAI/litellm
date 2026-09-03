@@ -1149,13 +1149,64 @@ def _estimate_request_model_max_cost(
     # Reserve the worst case: the initial outer call, every panel call, the
     # analyst, and the outer-model continuation. If Fusion is skipped,
     # normal reconciliation releases the unused panel/analyst headroom.
-    child_estimates: Final = (initial_outer_estimate, *panel_estimates, analyst_estimate, final_outer_estimate)
+    search_estimate: Final = _estimate_fusion_search_cost(
+        llm_router=llm_router,
+        search_tool_name=fusion_router.config.search_tool_name,
+        maximum_searches=fusion_router.config.max_tool_calls * (len(fusion_router.config.panel_models) + 1),
+    )
+    child_estimates: Final = (
+        initial_outer_estimate,
+        *panel_estimates,
+        analyst_estimate,
+        final_outer_estimate,
+        search_estimate,
+    )
     if any(estimate is None for estimate in child_estimates):
         # Additive orchestration cannot safely reserve a partial total. This
         # matches the normal unknown-price behavior instead of presenting an
         # under-estimate as a valid worst case.
         return None
     return sum(estimate for estimate in child_estimates if estimate is not None)
+
+
+def _estimate_fusion_search_cost(
+    llm_router: Router | None,
+    search_tool_name: str | None,
+    maximum_searches: int,
+) -> float | None:
+    if search_tool_name is None:
+        return 0.0
+    if llm_router is None:
+        return None
+
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    matching_tools: Final = tuple(
+        tool for tool in llm_router.search_tools if tool.get("search_tool_name") == search_tool_name
+    )
+    if not matching_tools:
+        return None
+
+    estimates: list[float] = []
+    try:
+        for tool in matching_tools:
+            optional_params = tool.get("litellm_params", {})
+            search_provider = optional_params.get("search_provider")
+            if not search_provider:
+                return None
+            input_cost, output_cost = search_provider_cost_per_query(
+                model=f"{search_provider}/search",
+                custom_llm_provider=search_provider,
+                optional_params=optional_params,
+            )
+            estimates.append(maximum_searches * (input_cost + output_cost))
+    except Exception:
+        verbose_proxy_logger.debug(
+            "Unable to load Fusion search cost info for budget reservation",
+            exc_info=True,
+        )
+        return None
+    return max(estimates)
 
 
 def estimate_request_input_cost(

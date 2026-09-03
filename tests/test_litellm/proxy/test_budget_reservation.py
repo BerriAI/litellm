@@ -1225,7 +1225,13 @@ def test_fusion_reservation_expands_private_search_loops_and_context() -> None:
                     },
                 },
             },
-        ]
+        ],
+        search_tools=[
+            {
+                "search_tool_name": "web-search",
+                "litellm_params": {"search_provider": "tavily", "api_key": "fake"},
+            }
+        ],
     )
     observed: list[tuple[str, int | None]] = []
 
@@ -1233,9 +1239,15 @@ def test_fusion_reservation_expands_private_search_loops_and_context() -> None:
         observed.append((model, input_tokens))
         return 1.0
 
-    with patch(  # test-quality-ok: isolates pricing to verify multiplicity and conservative context ceilings
-        "litellm.proxy.spend_tracking.budget_reservation._estimate_request_max_cost_for_model",
-        side_effect=child_estimate,
+    with (
+        patch(  # test-quality-ok: isolates pricing to verify multiplicity and conservative context ceilings
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_request_max_cost_for_model",
+            side_effect=child_estimate,
+        ),
+        patch(
+            "litellm.search.cost_calculator.search_provider_cost_per_query",
+            return_value=(0.25, 0.0),
+        ) as search_cost,
     ):
         estimated = estimate_request_max_cost(
             request_body={
@@ -1247,11 +1259,92 @@ def test_fusion_reservation_expands_private_search_loops_and_context() -> None:
             llm_router=router,
         )
 
-    assert estimated == pytest.approx(8.0)
+    assert estimated == pytest.approx(9.0)
     assert [tokens for model, tokens in observed if model == "panel"] == [5024, 14048, 23072]
     assert [tokens for model, tokens in observed if model == "analyst"] == [10048, 19072, 28096]
     final_outer_tokens = [tokens for model, tokens in observed if model == "outer"][-1]
     assert final_outer_tokens is not None and final_outer_tokens >= 26048
+    search_cost.assert_called_once_with(
+        model="tavily/search",
+        custom_llm_provider="tavily",
+        optional_params={"search_provider": "tavily", "api_key": "fake"},
+    )
+
+
+def test_fusion_reservation_uses_most_expensive_search_deployment() -> None:
+    router = Router(
+        model_list=[
+            {"model_name": "panel", "litellm_params": {"model": "openai/panel", "api_key": "fake"}},
+            {"model_name": "outer", "litellm_params": {"model": "openai/outer", "api_key": "fake"}},
+            {
+                "model_name": "fusion/test",
+                "litellm_params": {
+                    "model": "fusion_router",
+                    "fusion_router_config": {
+                        "outer_model": "outer",
+                        "panel_models": ["panel"],
+                        "search_tool_name": "web-search",
+                        "max_tool_calls": 3,
+                    },
+                },
+            },
+        ],
+        search_tools=[
+            {"search_tool_name": "web-search", "litellm_params": {"search_provider": "tavily"}},
+            {"search_tool_name": "web-search", "litellm_params": {"search_provider": "exa_ai"}},
+        ],
+    )
+
+    def search_cost(*, custom_llm_provider: str, **_: object) -> tuple[float, float]:
+        return ({"tavily": 0.01, "exa_ai": 0.04}[custom_llm_provider], 0.0)
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_request_max_cost_for_model",
+            return_value=1.0,
+        ),
+        patch("litellm.search.cost_calculator.search_provider_cost_per_query", side_effect=search_cost),
+    ):
+        estimated = estimate_request_max_cost(
+            request_body={"model": "fusion/test", "messages": [{"role": "user", "content": "hello"}]},
+            route="/chat/completions",
+            llm_router=router,
+        )
+
+    # Ten possible model calls plus 6 searches at the more expensive deployment.
+    assert estimated == pytest.approx(10.24)
+
+
+def test_fusion_reservation_is_unknown_when_search_tool_is_missing() -> None:
+    router = Router(
+        model_list=[
+            {"model_name": "panel", "litellm_params": {"model": "openai/panel", "api_key": "fake"}},
+            {"model_name": "outer", "litellm_params": {"model": "openai/outer", "api_key": "fake"}},
+            {
+                "model_name": "fusion/test",
+                "litellm_params": {
+                    "model": "fusion_router",
+                    "fusion_router_config": {
+                        "outer_model": "outer",
+                        "panel_models": ["panel"],
+                        "search_tool_name": "missing-search",
+                    },
+                },
+            },
+        ]
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._estimate_request_max_cost_for_model",
+        return_value=1.0,
+    ):
+        estimated = estimate_request_max_cost(
+            request_body={"model": "fusion/test", "messages": [{"role": "user", "content": "hello"}]},
+            route="/chat/completions",
+            llm_router=router,
+        )
+
+    assert estimated is None
 
 
 def test_tiered_reservation_is_all_or_nothing_with_output_tier_from_input_length():
