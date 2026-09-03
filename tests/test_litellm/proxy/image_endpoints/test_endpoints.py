@@ -5,10 +5,13 @@ from typing import Any, Dict
 
 import orjson
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.responses import Response
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.image_endpoints import endpoints
 
 
@@ -115,3 +118,75 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
     assert captured_route_request_data["prompt"] == "sanitized prompt"
     assert "messages" not in captured_route_request_data
     assert response.headers.get("x-callback-test") == "value"
+
+
+def _image_edit_client(monkeypatch, captured: Dict[str, Any]) -> TestClient:
+    class CaptureProcessing:
+        def __init__(self, data: Dict[str, Any]) -> None:
+            captured.update(data)
+
+        async def base_process_llm_request(self, **_: Any) -> Dict[str, Any]:
+            return {"data": [{"b64_json": "aGk="}]}
+
+    monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", CaptureProcessing)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+
+    app = FastAPI()
+    app.include_router(endpoints.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+    return TestClient(app)
+
+
+def test_image_edit_image_array_alias_is_not_forwarded(monkeypatch):
+    """The documented `image[]` alias must reach the provider only as `image`."""
+    captured: Dict[str, Any] = {}
+
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        files={"image[]": ("tree.png", b"\x89PNG\r\n\x1a\ntree", "image/png")},
+        data={"model": "gpt-image-1", "prompt": "add a hat"},
+    )
+
+    assert response.status_code == 200
+    assert "image[]" not in captured
+    assert [buffer.getvalue() for buffer in captured["image"]] == [b"\x89PNG\r\n\x1a\ntree"]
+    assert [buffer.name for buffer in captured["image"]] == ["tree.png"]
+
+
+def test_image_edit_mask_array_alias_is_not_forwarded(monkeypatch):
+    """`mask[]` has the same shape as `image[]` and must be dropped the same way."""
+    captured: Dict[str, Any] = {}
+
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        files={
+            "image": ("tree.png", b"\x89PNG\r\n\x1a\ntree", "image/png"),
+            "mask[]": ("mask.png", b"\x89PNG\r\n\x1a\nmask", "image/png"),
+        },
+        data={"model": "gpt-image-1", "prompt": "add a hat"},
+    )
+
+    assert response.status_code == 200
+    assert "mask[]" not in captured
+    assert [buffer.getvalue() for buffer in captured["mask"]] == [b"\x89PNG\r\n\x1a\nmask"]
+    assert [buffer.getvalue() for buffer in captured["image"]] == [b"\x89PNG\r\n\x1a\ntree"]
+
+
+def test_image_edit_canonical_file_fields_still_reach_the_provider(monkeypatch):
+    """Dropping the bracketed aliases must not touch the canonical fields."""
+    captured: Dict[str, Any] = {}
+
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        files={
+            "image": ("tree.png", b"\x89PNG\r\n\x1a\ntree", "image/png"),
+            "mask": ("mask.png", b"\x89PNG\r\n\x1a\nmask", "image/png"),
+        },
+        data={"model": "gpt-image-1", "prompt": "add a hat"},
+    )
+
+    assert response.status_code == 200
+    assert [buffer.getvalue() for buffer in captured["image"]] == [b"\x89PNG\r\n\x1a\ntree"]
+    assert [buffer.getvalue() for buffer in captured["mask"]] == [b"\x89PNG\r\n\x1a\nmask"]
+    assert captured["prompt"] == "add a hat"
