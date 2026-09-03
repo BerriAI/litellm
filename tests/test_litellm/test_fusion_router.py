@@ -655,6 +655,7 @@ def _router_model_list() -> list[dict[str, object]]:
 @pytest.mark.asyncio
 async def test_router_registers_and_executes_fusion_deployment() -> None:
     router = Router(model_list=_router_model_list())
+    assert router.get_configured_mode("fusion/test") is None
     response = await router.acompletion(model="fusion/test", messages=[{"role": "user", "content": "Answer"}])
     assert isinstance(response, ModelResponse)
     assert response.choices[0].message.content == "Final"
@@ -765,10 +766,10 @@ async def test_fusion_search_fails_closed_when_proxy_auth_context_is_missing(mon
 @pytest.mark.asyncio
 async def test_router_responses_and_anthropic_adapters_use_same_fusion_model() -> None:
     router = Router(model_list=_router_model_list())
-    responses_result = await router.aresponses(model="fusion/test", input="Answer")
+    responses_result = await router._fusion_aware_aresponses(model="fusion/test", input="Answer")
     assert responses_result.output[0].content[0].text == "Final"
     assert inspect.iscoroutinefunction(router.aanthropic_messages)
-    anthropic_result = await router.aanthropic_messages(
+    anthropic_result = await router._fusion_aware_aanthropic_messages(
         model="fusion/test", messages=[{"role": "user", "content": "Answer"}], max_tokens=256
     )
     assert anthropic_result["content"][0]["text"] == "Final"
@@ -798,5 +799,5 @@ def test_sync_router_and_responses_support_nonstreaming_fusion() -> None:
     response = router.completion(model="fusion/test", messages=[{"role": "user", "content": "Answer"}])
     assert isinstance(response, ModelResponse)
     assert response.choices[0].message.content == "Final"
-    responses_result = router.responses(model="fusion/test", input="Answer")
+    responses_result = router._fusion_aware_responses(model="fusion/test", input="Answer")
     assert responses_result.output[0].content[0].text == "Final"

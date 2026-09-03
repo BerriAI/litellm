@@ -367,8 +367,7 @@ class _ProxyDBLogger(CustomLogger):
                         kwargs=kwargs,
                     )
                 budget_counter_response_cost: Final = (
-                    float(response_cost)
-                    + float(budget_reservation.get(FUSION_BUDGET_ACCUMULATED_COST_KEY) or 0.0)
+                    float(response_cost) + float(budget_reservation.get(FUSION_BUDGET_ACCUMULATED_COST_KEY) or 0.0)
                     if budget_reservation is not None
                     and budget_reservation.get(FUSION_BUDGET_ACTIVE_KEY) is True
                     and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == "fusion_continuation"
@@ -727,9 +726,7 @@ async def _update_database_and_spend_counters(
             token=user_api_key,
             team_id=team_id,
             user_id=user_id,
-            response_cost=(
-                budget_counter_response_cost if budget_counter_response_cost is not None else response_cost
-            ),
+            response_cost=(budget_counter_response_cost if budget_counter_response_cost is not None else response_cost),
             org_id=org_id,
             budget_reservation=budget_reservation,
             end_user_id=end_user_id,
