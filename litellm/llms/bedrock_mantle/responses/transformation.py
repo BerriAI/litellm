@@ -16,7 +16,7 @@ BaseAWSLLM._sign_request after the request body is finalized.
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 from typing_extensions import ReadOnly, TypedDict
@@ -48,7 +48,18 @@ _BASE_SUFFIXES_TO_STRIP: Final = (
 )
 
 # Per Bedrock Mantle Responses API validation errors.
-_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES = frozenset({"function", "mcp", "custom", "namespace", "tool_search"})
+_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
+    {"function", "mcp", "custom", "namespace", "tool_search"}
+)
+
+# Enabled per model, not per provider: models AWS has not enabled reject the whole request
+# with "Tool type 'web_search' is not supported for model `<id>`", so the cost map's
+# supports_web_search flag decides rather than a provider-wide allowlist entry.
+_BEDROCK_MANTLE_WEB_SEARCH_TOOL_TYPE: Final = "web_search"
+
+_BEDROCK_MANTLE_RESPONSE_TOOL_TYPES_WITH_WEB_SEARCH: Final = _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES | frozenset(
+    (_BEDROCK_MANTLE_WEB_SEARCH_TOOL_TYPE,)
+)
 
 _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS: Final = frozenset({"auto", "default"})
 
@@ -131,9 +142,20 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     def supports_native_websocket(self) -> bool:
         return False
 
-    @staticmethod
-    def _filter_unsupported_tools(tools: list[Any]) -> list[Any]:
-        """Keep only tool types Mantle's Responses API accepts."""
+    def _supported_response_tool_types(self, tools: "Sequence[Any]", model: str) -> frozenset[str]:
+        """The tool types `tools` may keep: the provider-wide set, widened by `web_search`
+        only when this request asks for it and the model is one AWS enabled it for."""
+        if not any(
+            isinstance(tool, dict) and tool.get("type") == _BEDROCK_MANTLE_WEB_SEARCH_TOOL_TYPE for tool in tools
+        ):
+            return _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES
+        if litellm.supports_web_search(model=model, custom_llm_provider=self.custom_llm_provider.value):
+            return _BEDROCK_MANTLE_RESPONSE_TOOL_TYPES_WITH_WEB_SEARCH
+        return _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES
+
+    def _filter_unsupported_tools(self, tools: "Sequence[Any]", model: str) -> list[Any]:
+        """Keep only tool types Mantle's Responses API accepts for this model."""
+        supported_tool_types: Final = self._supported_response_tool_types(tools=tools, model=model)
         kept: Final[list[Any]] = []
         dropped_types: Final[list[str]] = []
         for tool in tools:
@@ -141,16 +163,17 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
                 kept.append(tool)
                 continue
             tool_type = tool.get("type")
-            if tool_type in _BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES:
+            if tool_type in supported_tool_types:
                 kept.append(tool)
             else:
                 dropped_types.append(str(tool_type))
 
         if dropped_types:
             verbose_logger.warning(
-                "Bedrock Mantle Responses API: dropping unsupported tool type(s) %s (supported: %s).",
+                "Bedrock Mantle Responses API: dropping unsupported tool type(s) %s for model %s (supported: %s).",
                 sorted(set(dropped_types)),
-                sorted(_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES),
+                model,
+                sorted(supported_tool_types),
             )
 
         return kept
@@ -185,7 +208,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
-        remaining_input, hoisted_tools = self._hoist_codex_additional_tools(input)
+        remaining_input, hoisted_tools = self._hoist_codex_additional_tools(input=input, model=model)
         normalized_input: Final = self._normalize_codex_input_items(remaining_input)
         request_params: Final = (
             {
@@ -215,10 +238,10 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         tools: Final = item.get("tools")
         return tools if isinstance(tools, list) else []
 
-    @classmethod
     def _hoist_codex_additional_tools(
-        cls,
+        self,
         input: "str | ResponseInputParam",
+        model: str,
     ) -> "tuple[str | ResponseInputParam, list[Any]]":
         """Codex's "responses lite" wire mode ships tool definitions inside
         `input` as {"type": "additional_tools", "role": "developer",
@@ -229,18 +252,18 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         """
         if not isinstance(input, list):
             return input, []
-        additional_tools_items: Final = [item for item in input if cls._is_codex_additional_tools_item(item)]
+        additional_tools_items: Final = [item for item in input if self._is_codex_additional_tools_item(item)]
         if not additional_tools_items:
             return input, []
-        remaining_input: Final = [item for item in input if not cls._is_codex_additional_tools_item(item)]
-        hoisted_tools = [tool for item in additional_tools_items for tool in cls._tools_of_additional_tools_item(item)]
+        remaining_input: Final = [item for item in input if not self._is_codex_additional_tools_item(item)]
+        hoisted_tools = [tool for item in additional_tools_items for tool in self._tools_of_additional_tools_item(item)]
         verbose_logger.debug(
             "Bedrock Mantle Responses API: hoisting %d tool(s) out of %d 'additional_tools' input item(s) "
             "into the top-level tools param (Mantle rejects that input item type).",
             len(hoisted_tools),
             len(additional_tools_items),
         )
-        return remaining_input, cls._filter_unsupported_tools(hoisted_tools)
+        return remaining_input, self._filter_unsupported_tools(tools=hoisted_tools, model=model)
 
     @staticmethod
     def _agent_message_text(item: "Mapping[str, object]") -> str:
@@ -347,7 +370,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             return params
 
         tools_list: Final = tools if isinstance(tools, list) else [tools]
-        filtered: Final = self._filter_unsupported_tools(tools_list)
+        filtered: Final = self._filter_unsupported_tools(tools=tools_list, model=model)
         if filtered:
             params["tools"] = filtered
         else:

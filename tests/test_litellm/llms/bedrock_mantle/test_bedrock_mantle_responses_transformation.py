@@ -11,6 +11,7 @@ import copy
 import json
 import logging
 from pathlib import Path
+from typing import Final
 
 import pytest
 from botocore.exceptions import (
@@ -332,7 +333,7 @@ class TestBedrockMantleResponsesTools:
         params = cfg.map_openai_params(
             response_api_optional_params={
                 "tools": [
-                    {"type": "web_search"},
+                    {"type": "file_search"},
                     {"type": "function", "name": "exec_command"},
                 ]
             },
@@ -344,7 +345,7 @@ class TestBedrockMantleResponsesTools:
     def test_map_openai_params_removes_tools_when_all_unsupported(self):
         cfg = BedrockMantleResponsesAPIConfig()
         params = cfg.map_openai_params(
-            response_api_optional_params={"tools": [{"type": "web_search"}]},
+            response_api_optional_params={"tools": [{"type": "file_search"}]},
             model="openai.gpt-5.5",
             drop_params=False,
         )
@@ -358,12 +359,167 @@ class TestBedrockMantleResponsesTools:
             "litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning"
         ) as mock_warning:
             cfg.map_openai_params(
-                response_api_optional_params={"tools": [{"type": "web_search"}]},
+                response_api_optional_params={"tools": [{"type": "file_search"}]},
                 model="openai.gpt-5.5",
                 drop_params=False,
             )
         assert mock_warning.call_count == 1
-        assert "web_search" in str(mock_warning.call_args)
+        assert "file_search" in str(mock_warning.call_args)
+
+
+def _web_search_tool(external_web_access: bool = False) -> dict[str, object]:
+    return {"type": "web_search", "external_web_access": external_web_access}
+
+
+def _function_tool() -> dict[str, object]:
+    return {"type": "function", "name": "exec_command"}
+
+
+def _codex_additional_tools_input(tools: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {"type": "additional_tools", "role": "developer", "tools": tools},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
+
+
+_WEB_SEARCH_CAPABLE_MODELS: Final = (
+    "openai.gpt-5.6-sol",
+    "openai.gpt-5.6-terra",
+    "openai.gpt-5.6-luna",
+    "openai.gpt-5.5",
+    "openai.gpt-5.4",
+)
+
+
+class TestBedrockMantleResponsesNativeWebSearch:
+    """Verified against bedrock-mantle.us-east-1.api.aws: every id in
+    _WEB_SEARCH_CAPABLE_MODELS returns `web_search_call` items and `url_citation`
+    annotations, while google.gemma-4-31b answers "Tool type 'web_search' is not
+    supported for model `google.gemma-4-31b`"."""
+
+    @pytest.mark.parametrize("model", [*_WEB_SEARCH_CAPABLE_MODELS, "bedrock_mantle/openai.gpt-5.6-terra"])
+    def test_web_search_survives_for_capable_models(self, model, local_model_cost_map):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"tools": [_web_search_tool(), _function_tool()]},
+            model=model,
+            drop_params=False,
+        )
+        assert params["tools"] == [_web_search_tool(), _function_tool()]
+
+    def test_external_web_access_true_is_forwarded_verbatim(self, local_model_cost_map):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"tools": [_web_search_tool(external_web_access=True)]},
+            model="openai.gpt-5.6-terra",
+            drop_params=False,
+        )
+        assert params["tools"] == [_web_search_tool(external_web_access=True)]
+
+    @pytest.mark.parametrize("model", ["google.gemma-4-31b", "openai.gpt-oss-120b"])
+    def test_web_search_still_dropped_for_models_without_the_capability(self, model, local_model_cost_map):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"tools": [_web_search_tool(), _function_tool()]},
+            model=model,
+            drop_params=False,
+        )
+        assert params["tools"] == [_function_tool()]
+
+    def test_web_search_is_not_advertised_unless_the_request_asks_for_it(self, local_model_cost_map):
+        """The tool type set widens only for requests that carry a Web Search tool, so a capable
+        model's other requests keep the provider-wide set and never reach the cost map."""
+        cfg = BedrockMantleResponsesAPIConfig()
+        supported = cfg._supported_response_tool_types(tools=[_function_tool()], model="openai.gpt-5.6-terra")
+        assert "web_search" not in supported, "a request carrying no web_search tool must not widen the set"
+        assert "function" in supported
+
+    def test_web_search_hoisted_out_of_codex_additional_tools(self, local_model_cost_map):
+        cfg = BedrockMantleResponsesAPIConfig()
+        body = cfg.transform_responses_api_request(
+            model="openai.gpt-5.6-terra",
+            input=_codex_additional_tools_input([_web_search_tool()]),
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["tools"] == [_web_search_tool()]
+
+    def test_web_search_hoisted_from_codex_is_dropped_for_incapable_model(self, local_model_cost_map):
+        cfg = BedrockMantleResponsesAPIConfig()
+        body = cfg.transform_responses_api_request(
+            model="google.gemma-4-31b",
+            input=_codex_additional_tools_input([_web_search_tool()]),
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert "tools" not in body
+
+    def test_cost_map_advertises_web_search(self, local_model_cost_map):
+        assert all(
+            litellm.supports_web_search(model=f"bedrock_mantle/{model}", custom_llm_provider="bedrock_mantle")
+            for model in _WEB_SEARCH_CAPABLE_MODELS
+        )
+
+    def test_search_results_and_citations_survive_the_response_transform(self):
+        """Mantle returns Web Search results in the OpenAI Responses shape, so the config adds no
+        response-side handling. Lock that: a `web_search_call` item and the `url_citation`
+        annotations that make the answer attributable must both reach the caller intact."""
+        import httpx
+
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+        citation: Final = {
+            "type": "url_citation",
+            "title": "Web Search - Amazon Bedrock",
+            "url": "https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html",
+            "start_index": 0,
+            "end_index": 12,
+        }
+        upstream: Final = {
+            "id": "resp_1",
+            "created_at": 0,
+            "model": "openai.gpt-5.6-terra",
+            "object": "response",
+            "output": [
+                {
+                    "id": "ws_1",
+                    "type": "web_search_call",
+                    "status": "completed",
+                    "action": {"type": "search", "queries": ["bedrock web search regions"]},
+                },
+                {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "Three Regions", "annotations": [citation]}],
+                },
+            ],
+            "parallel_tool_calls": False,
+            "tool_choice": "auto",
+            "tools": [],
+        }
+
+        cfg = BedrockMantleResponsesAPIConfig()
+        out = cfg.transform_response_api_response(
+            model="openai.gpt-5.6-terra",
+            raw_response=httpx.Response(200, json=upstream),
+            logging_obj=LiteLLMLoggingObj(
+                model="openai.gpt-5.6-terra",
+                messages=[],
+                stream=False,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="1",
+                function_id="1",
+            ),
+        )
+
+        dumped = out.model_dump()
+        assert [item["type"] for item in dumped["output"]] == ["web_search_call", "message"]
+        assert dumped["output"][1]["content"][0]["annotations"] == [citation]
 
 
 def _codex_exec_tool():
@@ -551,7 +707,7 @@ class TestBedrockMantleCodexAdditionalTools:
                     "type": "additional_tools",
                     "role": "developer",
                     "tools": [
-                        {"type": "web_search"},
+                        {"type": "file_search"},
                         {"type": "function", "name": "wait"},
                     ],
                 },
@@ -563,7 +719,7 @@ class TestBedrockMantleCodexAdditionalTools:
     def test_item_stripped_even_when_no_hoisted_tool_survives(self):
         body = self._transform(
             input=[
-                {"type": "additional_tools", "role": "developer", "tools": [{"type": "web_search"}]},
+                {"type": "additional_tools", "role": "developer", "tools": [{"type": "file_search"}]},
                 self._USER_MESSAGE,
             ]
         )

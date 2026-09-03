@@ -262,18 +262,45 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         return data
 
+    @staticmethod
+    def _request_tool_name(tool: object) -> str | None:
+        """The name a Responses request tool acts under: ``name`` for function and custom,
+        ``server_label`` for mcp, and the bare ``type`` for built-in server-side tools
+        (web_search, code_interpreter, ...) that carry no name of their own. Those bill and
+        reach the internet, so allowlist checks must see them under some name."""
+        if not isinstance(tool, dict):
+            return None
+        tool_type: Final = tool.get("type")
+        if tool_type in ("function", "custom"):
+            name: Final = tool.get("name")
+            return str(name) if name else None
+        if tool_type == "mcp":
+            server_label: Final = tool.get("server_label")
+            return str(server_label) if server_label else None
+        return str(tool_type) if tool_type else None
+
+    @staticmethod
+    def _tools_nested_in_input_item(item: object) -> tuple[object, ...]:
+        """Tools declared inside an ``additional_tools`` input item. Codex's responses-lite wire
+        mode ships tool definitions there instead of in top-level ``tools``, and providers hoist
+        them back out before dispatch, so reading only ``tools`` would miss them."""
+        if not isinstance(item, dict) or item.get("type") != "additional_tools":
+            return ()
+        tools: Final = item.get("tools")
+        return tuple(tools) if isinstance(tools, list) else ()
+
     def extract_request_tool_names(self, data: dict) -> list[str]:
-        """Extract tool names from Responses API request (tools[].name for function
-        and custom, tools[].server_label for mcp)."""
-        names: Final[list[str]] = []
-        for tool in data.get("tools") or []:
-            if not isinstance(tool, dict):
-                continue
-            if tool.get("type") in ("function", "custom") and tool.get("name"):
-                names.append(str(tool["name"]))
-            elif tool.get("type") == "mcp" and tool.get("server_label"):
-                names.append(str(tool["server_label"]))
-        return names
+        input_items: Final = data.get("input")
+        nested: Final = (
+            tuple(tool for item in input_items for tool in self._tools_nested_in_input_item(item))
+            if isinstance(input_items, list)
+            else ()
+        )
+        return [
+            name
+            for tool in (*(data.get("tools") or []), *nested)
+            if (name := self._request_tool_name(tool)) is not None
+        ]
 
     def _apply_guardrailed_tools_to_data(
         self,

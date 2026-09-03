@@ -1328,6 +1328,26 @@ One of: completed, failed, in_progress, cancelled, queued, or incomplete.
 """
 
 
+class WebSearchToolUsage(BaseModel):
+    num_requests: int
+
+    model_config = ConfigDict(extra="allow")
+
+
+class ResponsesToolUsage(BaseModel):
+    """A Responses payload's own `tool_usage`, used to bill server-side tools off the provider's
+    count rather than off the returned items. Bedrock populates `web_search.num_requests`.
+
+    Deliberately not a declared field on ``ResponsesAPIResponse``: it arrives as an extra and is
+    validated only where the cost path reads it, so a payload reporting a tool we do not model, or
+    a shape we do not expect, still parses instead of failing the whole response.
+    """
+
+    web_search: WebSearchToolUsage
+
+    model_config = ConfigDict(extra="allow")
+
+
 class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     id: str
     created_at: int

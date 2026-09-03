@@ -709,6 +709,185 @@ def _openai_responses_with_web_search_calls(model, num_calls):
     )
 
 
+def _responses_with_reported_web_search(model, search_items, fetch_items, tool_usage):
+    """A Bedrock-shaped Responses payload: `web_search_call` items for both operations, plus the
+    raw `tool_usage` block, which Bedrock populates with the count it charges for."""
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    output = [
+        {
+            "id": f"ws_s{i}",
+            "type": "web_search_call",
+            "status": "completed",
+            "action": {"type": "search", "queries": ["a", "b", "c"]},
+        }
+        for i in range(search_items)
+    ] + [
+        {
+            "id": f"ws_f{i}",
+            "type": "web_search_call",
+            "status": "completed",
+            "action": {"type": "open_page", "url": "https://example.invalid/page"},
+        }
+        for i in range(fetch_items)
+    ]
+    return ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        model=model,
+        object="response",
+        output=output,
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+        tool_usage=tool_usage,
+    )
+
+
+def test_bedrock_mantle_web_search_bills_the_count_bedrock_reports(local_model_cost_map):
+    """Bedrock reports its billable search count as ``tool_usage.web_search.num_requests`` and it
+    excludes cached-page fetches, which arrive as ``web_search_call`` items indistinguishable from
+    searches by item type. Measured against bedrock-mantle.us-east-1.api.aws: a response with five
+    search items and one ``open_page`` item reports 5, and one with one search and one
+    ``open_page`` reports 1. Counting items would bill 6 and 2, overcharging every request that
+    opened a page. Three queries inside a single search item still count as one request."""
+    from litellm.types.utils import Usage
+
+    model = "bedrock_mantle/openai.gpt-5.6-terra"
+    per_query = litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_medium"]
+    usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+    cases = (
+        {"searches": 5, "fetches": 1, "reported": 5},
+        {"searches": 1, "fetches": 1, "reported": 1},
+        {"searches": 2, "fetches": 1, "reported": 2},
+        # A follow-up turn can fetch a cached page without searching, and Bedrock then charges
+        # nothing. The item path floors at one search; a reported count must not be floored.
+        {"searches": 0, "fetches": 2, "reported": 0},
+    )
+    for case in cases:
+        response = _responses_with_reported_web_search(
+            model,
+            search_items=case["searches"],
+            fetch_items=case["fetches"],
+            tool_usage={"web_search": {"num_requests": case["reported"]}},
+        )
+        cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+            model=model,
+            response_object=response,
+            usage=usage,
+            custom_llm_provider="bedrock_mantle",
+            standard_built_in_tools_params=None,
+        )
+        assert cost == pytest.approx(case["reported"] * per_query), (
+            f"{case['searches'] + case['fetches']} items reporting {case['reported']} requests must "
+            f"bill {case['reported']} x ${per_query}, got ${cost}"
+        )
+
+
+def test_web_search_falls_back_to_counting_items_when_no_count_is_reported(local_model_cost_map):
+    """Providers that report nothing must keep the item-count behaviour, so adding the Bedrock path
+    cannot change what OpenAI and Azure bill."""
+    model = "gpt-5-nano"
+    response = _openai_responses_with_web_search_calls(model, num_calls=3)
+    assert not hasattr(response, "tool_usage")
+    assert StandardBuiltInToolCostTracking._count_web_search_calls(response) == 3
+
+
+def test_streamed_web_search_bills_the_reported_count(local_model_cost_map):
+    """On the streaming path the cost calculator is handed the response unwrapped out of the
+    terminal `ResponseCompletedEvent`, not the event. Pin that: the reported count has to survive
+    the unwrap, because the event itself carries no output items and would floor the bill at one
+    search instead of charging what Bedrock reported."""
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.llms.openai import ResponseCompletedEvent
+    from litellm.types.utils import Usage
+
+    model = "bedrock_mantle/openai.gpt-5.6-terra"
+    per_query = litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_medium"]
+    response = _responses_with_reported_web_search(
+        model, search_items=2, fetch_items=3, tool_usage={"web_search": {"num_requests": 2}}
+    )
+
+    logging_obj = LiteLLMLoggingObj(
+        model=model, messages=[], stream=True, call_type="aresponses",
+        start_time=0, litellm_call_id="1", function_id="1",
+    )
+    now = datetime.datetime.now()
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=ResponseCompletedEvent(type="response.completed", response=response),
+        start_time=now, end_time=now, is_async=True, streaming_chunks=[],
+    )
+    assert assembled is response, "the completed event must be unwrapped to the response itself"
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=assembled,
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        custom_llm_provider="bedrock_mantle",
+        standard_built_in_tools_params=None,
+    )
+    assert cost == pytest.approx(2 * per_query), (
+        f"5 items reporting 2 requests must bill 2 x ${per_query} after the stream is assembled, got ${cost}"
+    )
+
+
+@pytest.mark.parametrize(
+    "tool_usage",
+    [
+        {"web_search": {"num_requests": "not-a-number"}},
+        {"unexpected_shape": True},
+        "not-an-object",
+        None,
+    ],
+)
+def test_unreadable_reported_web_search_count_falls_back_to_items(tool_usage, local_model_cost_map):
+    """A tool_usage block we cannot read must neither raise nor bill zero: fall back to the items.
+    Reading it defensively here, rather than declaring it on the response model, is what keeps a
+    payload that reports an unmodelled tool from failing the whole response."""
+    response = _responses_with_reported_web_search(
+        "bedrock_mantle/openai.gpt-5.6-terra", search_items=2, fetch_items=1, tool_usage=tool_usage
+    )
+    assert StandardBuiltInToolCostTracking._count_web_search_calls(response) == 3
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock_mantle/openai.gpt-5.6-sol",
+        "bedrock_mantle/openai.gpt-5.6-terra",
+        "bedrock_mantle/openai.gpt-5.6-luna",
+        "bedrock_mantle/openai.gpt-5.5",
+        "bedrock_mantle/openai.gpt-5.4",
+    ],
+)
+def test_bedrock_mantle_native_web_search_priced_per_query(model, local_model_cost_map):
+    """Bedrock's server-side Web Search bills $12.00 per 1,000 queries, the same in every Region
+    that offers it (AWS Pricing API usage type ``Bedrock-Websearch-Queries``, effective
+    2026-08-01). Bedrock counts each search rather than each request, so a Responses output
+    carrying three ``web_search_call`` items must bill three queries. Without
+    ``search_context_cost_per_query`` the default fallback silently returns $0."""
+    from litellm.types.utils import Usage
+
+    per_query = litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_medium"]
+    assert per_query == 0.012
+
+    for num_calls in (1, 3):
+        response = _openai_responses_with_web_search_calls(model, num_calls=num_calls)
+        cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+            model=model,
+            response_object=response,
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+            custom_llm_provider="bedrock_mantle",
+            standard_built_in_tools_params=None,
+        )
+        assert cost == pytest.approx(num_calls * per_query), (
+            f"{model} must bill {num_calls} x ${per_query} for {num_calls} web search(es), got ${cost}"
+        )
+
+
 def test_openai_responses_web_search_priced_per_call(local_model_cost_map):
     """
     Regression for LIT-5013 bug 1: OpenAI reasoning models (gpt-5 family, o-series, deep-research)
