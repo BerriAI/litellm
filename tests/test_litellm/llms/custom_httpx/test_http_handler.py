@@ -1314,3 +1314,100 @@ async def test_finalizer_on_live_loop_disposes_foreign_loop_session_without_sche
 
     assert AsyncHTTPHandler._finalizer_close_tasks == baseline_tasks
     assert session.closed
+
+
+@pytest.fixture
+def forward_proxy_server():
+    """Plain HTTP forward proxy that records the absolute URIs it is asked to fetch."""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from socketserver import ThreadingMixIn
+
+    seen_uris: list[str] = []
+
+    class RecordingProxyHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):
+            seen_uris.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Length", "9")
+            self.end_headers()
+            self.wfile.write(b"via-proxy")
+
+        def log_message(self, format, *args):
+            pass
+
+    class ThreadedServer(ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+
+    server = ThreadedServer(("127.0.0.1", 0), RecordingProxyHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", seen_uris
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+# `.invalid` never resolves (RFC 6761), so the only way this request can succeed is through the proxy
+_PROXY_ONLY_UPSTREAM_URL = "http://upstream.invalid/v1/models"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_aiohttp_transport", [True, False])
+@pytest.mark.parametrize("force_ipv4", [True, False])
+async def test_async_handler_honours_proxy_env_for_every_transport(
+    forward_proxy_server, monkeypatch: pytest.MonkeyPatch, disable_aiohttp_transport: bool, force_ipv4: bool
+):
+    proxy_url, seen_uris = forward_proxy_server
+    monkeypatch.setenv("HTTP_PROXY", proxy_url)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", disable_aiohttp_transport)
+    monkeypatch.setattr(litellm, "force_ipv4", force_ipv4)
+
+    handler = AsyncHTTPHandler()
+    try:
+        response = await handler.get(_PROXY_ONLY_UPSTREAM_URL)
+    finally:
+        await handler.close()
+
+    assert response.text == "via-proxy"
+    assert seen_uris == [_PROXY_ONLY_UPSTREAM_URL]
+
+
+@pytest.mark.parametrize("force_ipv4", [True, False])
+def test_sync_handler_honours_proxy_env(forward_proxy_server, monkeypatch: pytest.MonkeyPatch, force_ipv4: bool):
+    proxy_url, seen_uris = forward_proxy_server
+    monkeypatch.setenv("HTTP_PROXY", proxy_url)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.setattr(litellm, "force_ipv4", force_ipv4)
+
+    handler = HTTPHandler()
+    try:
+        response = handler.get(_PROXY_ONLY_UPSTREAM_URL)
+    finally:
+        handler.close()
+
+    assert response.text == "via-proxy"
+    assert seen_uris == [_PROXY_ONLY_UPSTREAM_URL]
+
+
+@pytest.mark.asyncio
+async def test_force_ipv4_httpx_transport_honours_no_proxy(keepalive_server, monkeypatch: pytest.MonkeyPatch):
+    """NO_PROXY hosts must still go direct when the proxy mounts are supplied by litellm instead of httpx."""
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "force_ipv4", True)
+
+    handler = AsyncHTTPHandler()
+    try:
+        response = await handler.get(keepalive_server)
+    finally:
+        await handler.close()
+
+    assert response.text == "ok"
