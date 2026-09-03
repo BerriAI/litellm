@@ -318,5 +318,5 @@ class TestGitHubCopilotAuthenticator:
              patch("litellm.llms.github_copilot.authenticator._get_httpx_client", return_value=mock_client), \
              patch.object(authenticator, "get_access_token", return_value="access-tok"):
             authenticator._refresh_api_key()
-
             assert mock_client.get.call_args[0][0] == custom_url
+
