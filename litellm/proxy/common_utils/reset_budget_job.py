@@ -288,7 +288,11 @@ def _count_advanced(reset_ats: Iterable[object], cutoff: datetime) -> int:
     would re-read the same chunk until the per-run cap on every tick.
     """
     utc_cutoff: Final = _as_utc(cutoff)
-    return sum(1 for reset_at in reset_ats if isinstance(reset_at, datetime) and _as_utc(reset_at) > utc_cutoff)
+    return sum(
+        1
+        for reset_at in reset_ats
+        if reset_at is None or (isinstance(reset_at, datetime) and _as_utc(reset_at) > utc_cutoff)
+    )
 
 
 def _phase_is_drained(outcome: _ChunkOutcome) -> bool:
@@ -844,11 +848,14 @@ class ResetBudgetJob:
             for k in updated_keys:
                 if k.token is None:
                     continue
-                uow.keys.queue_spend_reset(
-                    token=k.token,
-                    budget_reset_at=k.budget_reset_at,
-                    spend_decrement=k.max_budget if (k.spend or 0.0) > 0.0 else None,
-                )
+                if getattr(k, "budget_duration", None) is None:
+                    uow.keys.queue_clear_budget_reset_at(token=k.token)
+                else:
+                    uow.keys.queue_spend_reset(
+                        token=k.token,
+                        budget_reset_at=k.budget_reset_at,
+                        spend_decrement=k.max_budget if (k.spend or 0.0) > 0.0 else None,
+                    )
 
     async def _write_user_reset_updates(self, updated_users: list[LiteLLM_UserTable]) -> None:
         """
@@ -866,11 +873,14 @@ class ResetBudgetJob:
     async def _write_user_reset_updates_once(self, updated_users: list[LiteLLM_UserTable]) -> None:
         async with spend_reset_unit_of_work(self.prisma_client.db.batch_) as uow:
             for u in updated_users:
-                uow.users.queue_spend_reset(
-                    user_id=u.user_id,
-                    budget_reset_at=u.budget_reset_at,
-                    spend_decrement=u.max_budget if (u.spend or 0.0) > 0.0 else None,
-                )
+                if getattr(u, "budget_duration", None) is None:
+                    uow.users.queue_clear_budget_reset_at(user_id=u.user_id)
+                else:
+                    uow.users.queue_spend_reset(
+                        user_id=u.user_id,
+                        budget_reset_at=u.budget_reset_at,
+                        spend_decrement=u.max_budget if (u.spend or 0.0) > 0.0 else None,
+                    )
 
     async def _write_team_reset_updates(self, updated_teams: list[LiteLLM_TeamTable]) -> None:
         """
@@ -888,11 +898,14 @@ class ResetBudgetJob:
     async def _write_team_reset_updates_once(self, updated_teams: list[LiteLLM_TeamTable]) -> None:
         async with spend_reset_unit_of_work(self.prisma_client.db.batch_) as uow:
             for t in updated_teams:
-                uow.teams.queue_spend_reset(
-                    team_id=t.team_id,
-                    budget_reset_at=t.budget_reset_at,
-                    spend_decrement=t.max_budget if (t.spend or 0.0) > 0.0 else None,
-                )
+                if getattr(t, "budget_duration", None) is None:
+                    uow.teams.queue_clear_budget_reset_at(team_id=t.team_id)
+                else:
+                    uow.teams.queue_spend_reset(
+                        team_id=t.team_id,
+                        budget_reset_at=t.budget_reset_at,
+                        spend_decrement=t.max_budget if (t.spend or 0.0) > 0.0 else None,
+                    )
 
     def _emit_phase_failure(
         self,
@@ -967,7 +980,7 @@ class ResetBudgetJob:
                     await self._write_key_reset_updates(updated_keys=updated_keys)
                     for k in updated_keys:
                         token = getattr(k, "token", None)
-                        if token:
+                        if token and getattr(k, "budget_duration", None) is not None:
                             await self._invalidate_spend_counter(f"spend:key:{token}", new_spend=k.spend or 0.0)
 
             end_time = time.time()
@@ -1072,9 +1085,9 @@ class ResetBudgetJob:
                     await self._write_user_reset_updates(updated_users=updated_users)
                     for u in updated_users:
                         user_id = getattr(u, "user_id", None)
-                        if user_id:
+                        if user_id and getattr(u, "budget_duration", None) is not None:
                             await self._invalidate_spend_counter(f"spend:user:{user_id}", new_spend=u.spend or 0.0)
-                        if user_id == LITELLM_PROXY_BUDGET_NAME:
+                        if user_id == LITELLM_PROXY_BUDGET_NAME and getattr(u, "budget_duration", None) is not None:
                             await self._invalidate_global_proxy_spend_cache()
 
             end_time = time.time()
@@ -1181,7 +1194,7 @@ class ResetBudgetJob:
                     await self._write_team_reset_updates(updated_teams=updated_teams)
                     for t in updated_teams:
                         team_id = getattr(t, "team_id", None)
-                        if team_id:
+                        if team_id and getattr(t, "budget_duration", None) is not None:
                             await self._invalidate_spend_counter(f"spend:team:{team_id}", new_spend=t.spend or 0.0)
 
             end_time = time.time()
@@ -1443,11 +1456,15 @@ class ResetBudgetJob:
         still holds the pre-reset value, admitting requests past the cap.
         """
         try:
-            item.spend = _carried_spend(item.spend, _rollover_cap(item.max_budget)) if _rollover_enabled() else 0.0
             if hasattr(item, "budget_duration") and item.budget_duration is not None:
+                item.spend = _carried_spend(item.spend, _rollover_cap(item.max_budget)) if _rollover_enabled() else 0.0
                 item.budget_reset_at = compute_budget_reset_at(
                     budget_duration=item.budget_duration, settings=reset_settings
                 )
+            else:
+                # Self-heal: row has no budget_duration configured (or it was removed),
+                # so clear any stale budget_reset_at without wiping spend.
+                item.budget_reset_at = None
             return item
         except Exception as e:
             verbose_proxy_logger.exception("Error resetting budget for %s: %s. Item: %s", item_type, e, item)
