@@ -1473,11 +1473,6 @@ class BaseAWSLLM:
             except ImportError:
                 raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
             if credentials is None:
-                raise ValueError(
-                    "AWS credentials are required when Bedrock bearer token authentication is not configured."
-                )
-
-            if credentials is None:
                 raise NoCredentialsError()
 
             # Filter headers for AWS signature calculation
