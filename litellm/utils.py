@@ -83,6 +83,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
 )
+from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 
 _CachingHandlerResponse = None
 _LLMCachingHandler = None
@@ -7459,7 +7460,8 @@ def print_args_passed_to_litellm(original_function, args, kwargs):
             return
 
         args_str: Final = ", ".join(map(repr, args))
-        kwargs_str: Final = ", ".join(f"{key}={value!r}" for key, value in kwargs.items())
+        redacted_kwargs: Final = redact_credentials_in_payload(kwargs)
+        kwargs_str: Final = ", ".join(f"{key}={value!r}" for key, value in redacted_kwargs.items())
         print_verbose(
             "\n",
         )  # new line before

@@ -5805,3 +5805,53 @@ class TestIsVisionExplicitlyDisabled:
             is_vision_explicitly_disabled("fireworks_ai/accounts/fireworks/models/deepseek-v4-flash-0731") is True
         )
         assert is_vision_explicitly_disabled("anthropic/claude-sonnet-4-5") is False
+
+
+class TestVerboseRequestLineRedaction:
+    """`litellm.set_verbose = True` echoes the caller's kwargs to stdout, so a credential
+    kwarg lands in whatever collects stdout: a terminal, a container log drain, a CI job
+    log. Credential-named kwargs must not survive that echo, while ordinary params still
+    must, or the line stops telling the developer what they called."""
+
+    FAKE_API_KEY: Final = "sk-fake-lit6823-0000000000000000"
+
+    def _verbose_stdout(self, capsys, monkeypatch, **kwargs) -> str:
+        monkeypatch.setattr(litellm, "set_verbose", True)
+        monkeypatch.setattr("litellm._logging.set_verbose", True)
+        capsys.readouterr()
+        litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hello"}],
+            mock_response="hi",
+            **kwargs,
+        )
+        captured: Final = capsys.readouterr()
+        return captured.out + captured.err
+
+    def test_api_key_never_reaches_stdout(self, capsys, monkeypatch):
+        printed: Final = self._verbose_stdout(capsys, monkeypatch, api_key=self.FAKE_API_KEY)
+
+        assert "Request to litellm:" in printed
+        assert self.FAKE_API_KEY not in printed
+        assert "api_key='REDACTED'" in printed
+
+    def test_credential_headers_never_reach_stdout(self, capsys, monkeypatch):
+        printed: Final = self._verbose_stdout(
+            capsys,
+            monkeypatch,
+            api_key=self.FAKE_API_KEY,
+            extra_headers={"Authorization": "Bearer fake-lit6823-header", "x-request-id": "abc123"},
+        )
+
+        assert "fake-lit6823-header" not in printed
+        assert "'Authorization': 'REDACTED'" in printed
+        assert "'x-request-id': 'abc123'" in printed
+
+    def test_ordinary_params_still_printed(self, capsys, monkeypatch):
+        printed: Final = self._verbose_stdout(
+            capsys, monkeypatch, api_key=self.FAKE_API_KEY, max_tokens=17, temperature=0.25
+        )
+
+        assert "model='gpt-3.5-turbo'" in printed
+        assert "max_tokens=17" in printed
+        assert "temperature=0.25" in printed
