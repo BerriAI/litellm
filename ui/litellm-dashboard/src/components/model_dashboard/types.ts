@@ -33,6 +33,7 @@ export interface ModelData {
   litellm_params: LiteLLMParams;
   cleanedLitellmParams: Record<string, any>;
   accessToken?: string;
+  tags: string[] | null;
 }
 
 export interface ModelDashboardProps {
