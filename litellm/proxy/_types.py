@@ -1116,6 +1116,12 @@ from litellm.types.object_permission import (  # noqa: E402
 )
 
 
+def normalize_empty_budget_duration(value: Optional[str]) -> Optional[str]:
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    return value
+
+
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
     """
     Overlapping schema between key and user generate/update requests
@@ -1160,6 +1166,11 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
         if v == "":
             return None
         return v
+
+    @field_validator("budget_duration", mode="before")
+    @classmethod
+    def check_budget_duration(cls, v):
+        return normalize_empty_budget_duration(v)
 
 
 class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
@@ -1811,6 +1822,11 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
         description="Datetime when the budget is reset",
     )
 
+    @field_validator("budget_duration", mode="before")
+    @classmethod
+    def check_budget_duration(cls, v):
+        return normalize_empty_budget_duration(v)
+
 
 class BudgetRequest(LiteLLMPydanticObjectBase):
     budgets: list[str]
@@ -2010,6 +2026,11 @@ class PatchTeamRequest(UpdateTeamRequest):
     """
 
     team_id: str | None = None
+
+    @field_validator("budget_duration", mode="before")
+    @classmethod
+    def check_budget_duration(cls, v):
+        return normalize_empty_budget_duration(v)
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
