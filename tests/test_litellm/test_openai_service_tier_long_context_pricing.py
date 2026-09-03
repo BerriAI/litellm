@@ -131,6 +131,7 @@ def test_cost_per_token_bills_long_context_at_the_tier_rate(
     """A prompt over 272K on flex or priority must bill at that tier's long-context rate."""
     input_cost, output_cost = litellm.cost_per_token(
         model=model,
+        custom_llm_provider="openai",
         prompt_tokens=LONG_CONTEXT_PROMPT_TOKENS,
         completion_tokens=COMPLETION_TOKENS,
         service_tier=tier,
@@ -148,6 +149,7 @@ def test_cost_per_token_tier_differs_from_the_standard_long_context_cost(
     standard = sum(
         litellm.cost_per_token(
             model=model,
+            custom_llm_provider="openai",
             prompt_tokens=LONG_CONTEXT_PROMPT_TOKENS,
             completion_tokens=COMPLETION_TOKENS,
         )
@@ -155,6 +157,7 @@ def test_cost_per_token_tier_differs_from_the_standard_long_context_cost(
     tiered = sum(
         litellm.cost_per_token(
             model=model,
+            custom_llm_provider="openai",
             prompt_tokens=LONG_CONTEXT_PROMPT_TOKENS,
             completion_tokens=COMPLETION_TOKENS,
             service_tier=tier,
