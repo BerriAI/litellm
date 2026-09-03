@@ -4615,13 +4615,11 @@ def get_optional_params(
             drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
         )
     elif custom_llm_provider == "opper":
-        optional_params = (
-            litellm.OpperConfig().map_openai_params(  # rebind-ok: provider chain assigns optional_params per branch
-                non_default_params=non_default_params,
-                optional_params=optional_params,
-                model=model,
-                drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
-            )
+        optional_params = litellm.OpperConfig().map_openai_params(  # rebind-ok: set per provider branch
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
         )
     elif custom_llm_provider == "watsonx":
         optional_params = litellm.IBMWatsonXChatConfig().map_openai_params(

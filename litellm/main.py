@@ -3455,7 +3455,7 @@ def _complete_opper(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
         litellm_params=litellm_params,
         shared_session=shared_session,
         custom_llm_provider="opper",
-        timeout=timeout,
+        timeout=timeout,  # pyright: ignore[reportArgumentType]  # ctx types timeout wider than the handler
         headers=headers,
         encoding=_get_encoding(),
         api_key=api_key,

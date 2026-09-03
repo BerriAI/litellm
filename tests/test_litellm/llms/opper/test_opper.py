@@ -303,14 +303,19 @@ def test_opper_preserves_cache_control_in_content():
 
 
 def test_opper_connection_error_reports_opper_endpoint():
-    """Status-less failures carry Opper request metadata, not the OpenAI default."""
+    """Status-less failures carry the Opper request they came from, not the OpenAI default."""
+    import httpx
+
     import litellm
     from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+
+    transport_failure = Exception("connection reset")
+    transport_failure.request = httpx.Request("POST", f"{OPPER_API_BASE}/chat/completions")
 
     with pytest.raises(litellm.APIConnectionError) as excinfo:
         exception_type(
             model="anthropic/claude-haiku-4-5",
-            original_exception=Exception("connection reset"),
+            original_exception=transport_failure,
             custom_llm_provider="opper",
         )
 

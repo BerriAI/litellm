@@ -692,11 +692,9 @@ def _get_openai_compatible_provider_info(
 
         dynamic_api_key = api_key or get_secret_str("TENCENT_API_KEY")
     elif custom_llm_provider == "opper":
-        # rebind-ok: provider chain assigns api_base per branch
-        api_base = api_base or get_secret("OPPER_API_BASE") or OPPER_API_BASE
+        api_base = api_base or get_secret("OPPER_API_BASE") or OPPER_API_BASE  # rebind-ok: set per provider branch
 
-        # rebind-ok: provider chain assigns dynamic_api_key per branch
-        dynamic_api_key = api_key or get_secret_str("OPPER_API_KEY")
+        dynamic_api_key = api_key or get_secret_str("OPPER_API_KEY")  # rebind-ok: set per provider branch
     elif custom_llm_provider == "fireworks_ai":
         # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.fireworks.ai/inference/v1
         (
