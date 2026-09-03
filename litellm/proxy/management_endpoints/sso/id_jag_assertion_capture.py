@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import os
 from enum import Enum
-from typing import assert_never
+
+from typing_extensions import assert_never
 
 from litellm.proxy.management_endpoints.sso.saml_sso import SAMLAuthHandler
 
