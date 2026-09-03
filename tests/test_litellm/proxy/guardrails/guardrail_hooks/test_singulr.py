@@ -4,11 +4,13 @@ import httpx
 import pytest
 
 from litellm.exceptions import GuardrailRaisedException
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.singulr.singulr import SingulrGuardrail
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
     SingulrGuardrailConfigModel,
 )
+from litellm.types.utils import ModelResponse
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +57,31 @@ class TestSingulrConfiguration:
         assert guardrail.singulr_guardrail_id == "id123"
         assert guardrail.singulr_application_id == "entity123"
 
+    def test_api_base_strips_surrounding_whitespace(self):
+        """Regression: a UI-saved api_base with a trailing space
+        (e.g. "https://custom.api.local ") broke urlparse's port parsing and
+        made every guardrail call fail with a connection error, even though
+        the configured host was reachable."""
+        guardrail = SingulrGuardrail(
+            singulr_api_key="test_key",
+            singulr_api_base=" https://custom.api.local ",
+        )
+        assert guardrail.singulr_api_base == "https://custom.api.local"
+
+    def test_api_base_strips_trailing_slash(self):
+        guardrail = SingulrGuardrail(singulr_api_key="test_key", singulr_api_base="https://custom.api.local/")
+        assert guardrail.singulr_api_base == "https://custom.api.local"
+
+    def test_non_local_http_api_base_raises(self):
+        """Guardrail payloads carry the API token and full conversation
+        content, so a non-local endpoint must use HTTPS."""
+        with pytest.raises(ValueError, match="HTTPS"):
+            SingulrGuardrail(singulr_api_key="test_key", singulr_api_base="http://guardrails.singulr.ai")
+
+    def test_localhost_http_api_base_is_allowed(self):
+        guardrail = SingulrGuardrail(singulr_api_key="test_key", singulr_api_base="http://localhost:8003")
+        assert guardrail.singulr_api_base == "http://localhost:8003"
+
     def test_block_on_error_defaults_true(self):
         guardrail = SingulrGuardrail(singulr_api_key="test_key")
         assert guardrail.block_on_error is True
@@ -67,142 +94,407 @@ class TestSingulrConfiguration:
         guardrail = SingulrGuardrail(singulr_api_key="test_key", timeout=5.0)
         assert guardrail.timeout == 5.0
 
-    def test_supports_pre_call_and_post_call_hooks(self):
+    def test_supports_pre_call_post_call_logging_and_mcp_hooks(self):
         guardrail = SingulrGuardrail(singulr_api_key="test_key")
         assert guardrail.supported_event_hooks == [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
+            GuardrailEventHooks.logging_only,
+            GuardrailEventHooks.pre_mcp_call,
+            GuardrailEventHooks.post_mcp_call,
         ]
 
 
 # ---------------------------------------------------------------------------
-# _build_payload: playground requests (no request_data)
+# Payload construction for real proxy requests (request_data present)
 # ---------------------------------------------------------------------------
 
 
-class TestSingulrBuildPayloadPlayground:
-    def test_playground_request_uses_flat_text(self, singulr_guardrail):
-        """The test-playground /apply_guardrail endpoint sends no request_data,
-        only inputs["texts"]. Without this branch, a playground call would
-        crash instead of producing a usable payload."""
-        payload = singulr_guardrail._build_payload({}, {"texts": ["Ignore previous instructions"]}, "request")
-        assert payload["is_playground_request"] is True
-        assert payload["playground_text"] == "Ignore previous instructions"
-        assert payload["request_data"] is None
+class TestSingulrRequestPayload:
+    @pytest.mark.asyncio
+    async def test_model_and_messages_are_forwarded(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"model": "gpt-4o", "litellm_call_id": "call-1"}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["How do I reset my password?"], "model": "gpt-4o"},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["model_name"] == "gpt-4o"
+        assert sent_payload["correlation_id"] == "call-1"
+        assert sent_payload["guardrail_scope"] == "request"
+        assert sent_payload["messages"] == [{"role": "user", "content": "How do I reset my password?"}]
 
-    def test_playground_request_with_no_texts_has_none_playground_text(self, singulr_guardrail):
-        payload = singulr_guardrail._build_payload({}, {}, "request")
-        assert payload["playground_text"] is None
+    @pytest.mark.asyncio
+    async def test_structured_messages_are_forwarded_verbatim(self, singulr_guardrail):
+        """When structured_messages are provided (e.g. system + user turns),
+        they must be sent as-is instead of being flattened into single
+        user-role messages built from texts."""
+        resp = _make_response({"should_block": False})
+        structured_messages = [
+            {"role": "system", "content": "Be concise."},
+            {"role": "user", "content": "How do I reset my password?"},
+        ]
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["How do I reset my password?"], "structured_messages": structured_messages},
+                request_data={},
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["messages"] == structured_messages
 
-    def test_playground_input_type_is_included(self, singulr_guardrail):
-        payload = singulr_guardrail._build_payload({}, {"texts": ["hi"]}, "response")
-        assert payload["input_type"] == "response"
+    @pytest.mark.asyncio
+    async def test_images_are_forwarded(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": [], "images": ["data:image/png;base64,abc123"]},
+                request_data={},
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["images"] == ["data:image/png;base64,abc123"]
 
+    @pytest.mark.asyncio
+    async def test_no_messages_or_images_skips_the_api_call(self, singulr_guardrail):
+        with patch.object(singulr_guardrail.async_handler, "post") as mock_post:
+            result = await singulr_guardrail.apply_guardrail(
+                inputs={"texts": []},
+                request_data={},
+                input_type="request",
+            )
+        mock_post.assert_not_called()
+        assert result == {"texts": []}
 
-# ---------------------------------------------------------------------------
-# _build_payload: real proxy requests (request_data present)
-# ---------------------------------------------------------------------------
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "extra_inputs",
+        [
+            {"tools": [{"type": "function", "function": {"name": "delete_file", "description": "", "parameters": {}}}]},
+            {"images": ["data:image/png;base64,abc123"]},
+        ],
+        ids=["tools_alone", "images_alone"],
+    )
+    async def test_tools_or_images_alone_still_trigger_the_api_call(self, singulr_guardrail, extra_inputs):
+        """Regression: a request with only tool definitions or only images and
+        no text must still be checked, not skipped for lack of a message."""
+        resp = _make_response({"should_block": False})
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": [], **extra_inputs},
+                request_data={},
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        for key, value in extra_inputs.items():
+            assert sent_payload[key] == value
 
+    @pytest.mark.asyncio
+    async def test_tools_are_forwarded(self, singulr_guardrail):
+        """Regression: tool/function definitions are client-controlled and can
+        carry prompt-injection content, so they must reach Singulr for
+        inspection instead of only messages and images."""
+        resp = _make_response({"should_block": False})
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": "search_docs", "description": "Search internal docs", "parameters": {}},
+            }
+        ]
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["How do I reset my password?"], "tools": tools},
+                request_data={},
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["tools"] == tools
 
-class TestSingulrBuildPayloadRequestData:
-    def test_model_messages_and_tools_are_forwarded(self, singulr_guardrail):
+    @pytest.mark.asyncio
+    async def test_responses_api_mcp_tools_are_forwarded(self, singulr_guardrail):
+        """Regression: Responses API tools (e.g. {"type": "mcp", "server_label": ...})
+        have no "function" key, unlike Chat Completions tools. SingulrGuardrailPayload
+        rejected them with a pydantic ValidationError, turning every Responses API
+        request carrying an MCP tool into a 500."""
+        resp = _make_response({"should_block": False})
+        tools = [
+            {
+                "type": "mcp",
+                "server_label": "docs-server",
+                "server_url": "https://mcp.example.com",
+                "allowed_tools": ["search_docs"],
+            }
+        ]
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["How do I reset my password?"], "tools": tools},
+                request_data={},
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["tools"] == tools
+
+    @pytest.mark.asyncio
+    async def test_user_api_key_alias_is_forwarded_in_metadata(self, singulr_guardrail):
+        """Regression: the alias must be sent as {"user_api_key_alias": <alias>},
+        not as a dict whose key is the alias value itself."""
+        resp = _make_response({"should_block": False})
+        request_data = {"litellm_metadata": {"user_api_key_alias": "my-key-alias"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_alias": "my-key-alias"}
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_regular_metadata_for_key_alias(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"metadata": {"user_api_key_alias": "fallback-alias"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_alias": "fallback-alias"}
+
+    @pytest.mark.asyncio
+    async def test_user_api_key_user_id_is_forwarded_in_metadata(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"litellm_metadata": {"user_api_key_user_id": "my-user-id"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_user_id": "my-user-id"}
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_regular_metadata_for_user_id(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"metadata": {"user_api_key_user_id": "fallback-user-id"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_user_id": "fallback-user-id"}
+
+    @pytest.mark.asyncio
+    async def test_user_api_key_user_email_is_forwarded_in_metadata(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"litellm_metadata": {"user_api_key_user_email": "user@example.com"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_user_email": "user@example.com"}
+
+    @pytest.mark.asyncio
+    async def test_user_api_key_organization_alias_is_forwarded_in_metadata(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"litellm_metadata": {"user_api_key_org_alias": "Acme Org"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_org_alias": "Acme Org"}
+
+    @pytest.mark.asyncio
+    async def test_user_api_key_team_alias_is_forwarded_in_metadata(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"litellm_metadata": {"user_api_key_team_alias": "AI Content Security Team"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_team_alias": "AI Content Security Team"}
+
+    @pytest.mark.asyncio
+    async def test_user_api_key_org_id_is_forwarded_in_metadata(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"litellm_metadata": {"user_api_key_org_id": "org-123"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_org_id": "org-123"}
+
+    @pytest.mark.asyncio
+    async def test_user_api_key_team_id_is_forwarded_in_metadata(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"litellm_metadata": {"user_api_key_team_id": "team-456"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_team_id": "team-456"}
+
+    @pytest.mark.asyncio
+    async def test_user_api_key_user_role_is_forwarded_in_metadata(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+        request_data = {"litellm_metadata": {"user_api_key_auth": auth}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_user_role": LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value}
+
+    @pytest.mark.asyncio
+    async def test_no_user_role_available_omits_role_from_metadata(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {"litellm_metadata": {"user_api_key_alias": "my-key-alias"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert "user_api_key_user_role" not in sent_payload["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_all_user_metadata_fields_forwarded_together(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
         request_data = {
-            "model": "gpt-4o",
-            "messages": [{"role": "user", "content": "How do I reset my password?"}],
-            "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+            "litellm_metadata": {
+                "user_api_key_alias": "my-key-alias",
+                "user_api_key_user_id": "my-user-id",
+                "user_api_key_user_email": "user@example.com",
+                "user_api_key_org_id": "org-123",
+                "user_api_key_org_alias": "Acme Org",
+                "user_api_key_team_id": "team-456",
+                "user_api_key_team_alias": "AI Content Security Team",
+                "user_api_key_auth": auth,
+            }
         }
-        payload = singulr_guardrail._build_payload(request_data, {"texts": []}, "request")
-        assert payload["request_data"]["model"] == "gpt-4o"
-        assert payload["request_data"]["messages"] == request_data["messages"]
-        assert payload["request_data"]["tools"] == request_data["tools"]
-        assert payload["is_playground_request"] is None
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {
+            "user_api_key_alias": "my-key-alias",
+            "user_api_key_user_id": "my-user-id",
+            "user_api_key_user_email": "user@example.com",
+            "user_api_key_org_id": "org-123",
+            "user_api_key_org_alias": "Acme Org",
+            "user_api_key_team_id": "team-456",
+            "user_api_key_team_alias": "AI Content Security Team",
+            "user_api_key_user_role": LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+        }
 
-    def test_model_response_absent_on_request_side(self, singulr_guardrail):
-        """The response hasn't happened yet at request time, so model_response
-        must not be forwarded even if request_data carries a stale response
-        object from a previous call."""
-        from litellm.types.utils import ModelResponse
+    @pytest.mark.asyncio
+    async def test_no_key_alias_available_sends_no_metadata(self, singulr_guardrail):
+        """Regression: with no alias found, metadata must be omitted (None),
+        not a {None: None} dict that fails payload validation."""
+        resp = _make_response({"should_block": False})
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data={},
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] is None
 
-        request_data = {"model": "gpt-4o", "response": ModelResponse()}
-        payload = singulr_guardrail._build_payload(request_data, {"texts": []}, "request")
-        assert payload["request_data"]["model_response"] is None
 
-    def test_model_response_is_forwarded_and_json_serializable(self, singulr_guardrail):
-        """Regression: request_data["response"] is a ModelResponse (pydantic)
-        object containing nested non-JSON-safe values (e.g. a `created`
-        unix timestamp is fine, but nested pydantic submodels are not plain
-        dicts). Without mode="json" on both the inner and outer dumps, this
-        payload cannot be sent via httpx's json= kwarg."""
-        import json as _json
+# ---------------------------------------------------------------------------
+# Payload construction for responses
+# ---------------------------------------------------------------------------
 
-        from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
-        response = ModelResponse(
-            choices=[Choices(message=Message(role="assistant", content="Go to settings."))],
-            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
-        )
-        request_data = {"model": "gpt-4o", "response": response}
-        payload = singulr_guardrail._build_payload(request_data, {"texts": ["Go to settings."]}, "response")
-
-        # Must not raise - this is what httpx's json= kwarg effectively does.
-        serialized = _json.dumps(payload)
-        assert "Go to settings." in serialized
-        assert payload["request_data"]["model_response"]["choices"][0]["message"]["content"] == "Go to settings."
-
-    def test_model_requested_tool_calls_are_forwarded_in_model_response(self, singulr_guardrail):
-        """Tool calls the model requests arrive inside response.choices[].message.tool_calls.
-        They must survive the dump so Singulr can inspect what tools the
-        model is trying to invoke."""
-        from litellm.types.utils import Choices, Message, ModelResponse
-
-        response = ModelResponse(
-            choices=[
-                Choices(
-                    message=Message(
-                        role="assistant",
-                        content=None,
-                        tool_calls=[
-                            {
-                                "id": "call_1",
-                                "type": "function",
-                                "function": {"name": "get_current_time", "arguments": "{}"},
-                            }
-                        ],
-                    )
-                )
+class TestSingulrResponsePayload:
+    @pytest.mark.asyncio
+    async def test_assistant_text_and_tool_calls_are_forwarded(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        inputs = {
+            "texts": ["Go to settings."],
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_current_time", "arguments": "{}"},
+                }
             ],
-        )
-        request_data = {"model": "gpt-4o", "response": response}
-        payload = singulr_guardrail._build_payload(request_data, {"texts": []}, "response")
-
-        tool_calls = payload["request_data"]["model_response"]["choices"][0]["message"]["tool_calls"]
-        assert tool_calls[0]["function"]["name"] == "get_current_time"
-
-    def test_litellm_metadata_is_forwarded(self, singulr_guardrail):
-        request_data = {"model": "gpt-4o", "litellm_metadata": {"user_api_key_hash": "abc123"}}
-        payload = singulr_guardrail._build_payload(request_data, {"texts": []}, "request")
-        assert payload["request_data"]["litellm_metadata"] == {"user_api_key_hash": "abc123"}
-
-    def test_internal_logging_object_is_not_forwarded(self, singulr_guardrail):
-        """Regression: request_data can carry internal proxy objects (e.g. the
-        Logging instance) that aren't JSON-serializable at all. _build_payload
-        must only pull known request/response fields out of request_data,
-        not dump it wholesale, or this crashes on every real proxy call."""
-        import json as _json
-
-        class _NotSerializable:
-            pass
-
-        request_data = {
-            "model": "gpt-4o",
-            "messages": [{"role": "user", "content": "hi"}],
-            "litellm_logging_obj": _NotSerializable(),
         }
-        payload = singulr_guardrail._build_payload(request_data, {"texts": ["hi"]}, "request")
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="response",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["guardrail_scope"] == "response"
+        assert sent_payload["response"]["content"] == "Go to settings."
+        assert sent_payload["response"]["tool_calls"][0]["function"]["name"] == "get_current_time"
 
-        # Must not raise.
-        _json.dumps(payload)
-        assert "litellm_logging_obj" not in payload["request_data"]
+    @pytest.mark.asyncio
+    async def test_response_images_are_forwarded(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        inputs = {"texts": ["ok"], "images": ["data:image/png;base64,xyz"]}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="response",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["images"] == ["data:image/png;base64,xyz"]
+
+    @pytest.mark.asyncio
+    async def test_incomplete_tool_calls_are_dropped(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        inputs = {
+            "texts": [],
+            "tool_calls": [
+                {"id": None, "type": "function", "function": {"name": "f", "arguments": "{}"}},
+                {"id": "call_2", "type": "function", "function": None},
+                {"id": "call_3", "type": "function", "function": {"name": None, "arguments": "{}"}},
+                {"id": "call_4", "type": "function", "function": {"name": "f", "arguments": None}},
+            ],
+        }
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="response",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["response"]["tool_calls"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -212,8 +504,15 @@ class TestSingulrBuildPayloadRequestData:
 
 class TestSingulrAllowAction:
     @pytest.mark.asyncio
-    async def test_allow_returns_inputs_unchanged(self, singulr_guardrail):
-        resp = _make_response({"should_block": False})
+    @pytest.mark.parametrize(
+        "guard_response",
+        [{"should_block": False}, {}],
+        ids=["should_block_false", "should_block_omitted"],
+    )
+    async def test_should_block_falsy_returns_inputs_unchanged_on_request(self, singulr_guardrail, guard_response):
+        """should_block is optional on the wire; a response that omits it
+        entirely must be treated as allow, not block."""
+        resp = _make_response(guard_response)
         inputs = {"texts": ["How do I reset my password?"]}
         with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
             result = await singulr_guardrail.apply_guardrail(
@@ -223,18 +522,42 @@ class TestSingulrAllowAction:
             )
             assert result is inputs
 
+    @pytest.mark.asyncio
+    async def test_should_block_false_returns_inputs_unchanged_on_response(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        inputs = {"texts": ["Here is your answer."]}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
+            result = await singulr_guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="response",
+            )
+            assert result is inputs
+
+    @pytest.mark.asyncio
+    async def test_response_returns_inputs_unchanged_when_api_unreachable_and_block_on_error_false(self):
+        guardrail = SingulrGuardrail(
+            singulr_api_base="https://api.test.singulr.ai",
+            singulr_api_key="test_token_1234",
+            guardrail_name="test-singulr",
+            block_on_error=False,
+        )
+        inputs = {"texts": ["Here is your answer."]}
+        with patch.object(
+            guardrail.async_handler, "post", side_effect=httpx.TransportError("unreachable")
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="response",
+            )
+            assert result is inputs
+
 
 class TestSingulrBlockAction:
     @pytest.mark.asyncio
-    async def test_block_raises_guardrail_exception(self, singulr_guardrail):
-        """Regression: a should_block=True response must stop the request
-        instead of silently letting it through."""
-        resp = _make_response(
-            {
-                "should_block": True,
-                "blocking_due_to": "PII Information detected",
-            }
-        )
+    async def test_should_block_true_raises_on_request(self, singulr_guardrail):
+        resp = _make_response({"should_block": True, "blocking_due_to": "PII Information detected"})
         with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
             with pytest.raises(GuardrailRaisedException) as exc_info:
                 await singulr_guardrail.apply_guardrail(
@@ -243,6 +566,25 @@ class TestSingulrBlockAction:
                     input_type="request",
                 )
             assert "PII Information detected" in str(exc_info.value)
+            assert exc_info.value.blocked_content is True
+
+    @pytest.mark.asyncio
+    async def test_should_block_true_raises_on_response(self, singulr_guardrail):
+        """Regression: apply_guardrail's response path compared
+        should_block (a bool) against the string "block", which is always
+        False, so a should_block=True response never blocked the assistant's
+        reply. It must raise on any truthy should_block, matching the
+        request path."""
+        resp = _make_response({"should_block": True, "blocking_due_to": "Toxic content detected"})
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
+            with pytest.raises(GuardrailRaisedException) as exc_info:
+                await singulr_guardrail.apply_guardrail(
+                    inputs={"texts": ["Here is something toxic."]},
+                    request_data={},
+                    input_type="response",
+                )
+            assert "Toxic content detected" in str(exc_info.value)
+            assert exc_info.value.blocked_content is True
 
     @pytest.mark.asyncio
     async def test_block_without_reason_uses_unknown_placeholder(self, singulr_guardrail):
@@ -257,13 +599,410 @@ class TestSingulrBlockAction:
 
 
 # ---------------------------------------------------------------------------
+# MCP tool call guardrail (pre_mcp_call / post_mcp_call)
+# ---------------------------------------------------------------------------
+
+
+class TestSingulrMcpRequest:
+    @pytest.mark.asyncio
+    async def test_mcp_tool_name_routes_to_mcp_request_payload(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {
+            "mcp_tool_name": "search_docs",
+            "mcp_arguments": {"query": "reset password"},
+            "mcp_server_name": "docs-server",
+        }
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            result = await singulr_guardrail.apply_guardrail(
+                inputs={"texts": []},
+                request_data=request_data,
+                input_type="request",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["guardrail_scope"] == "mcp_request"
+        assert sent_payload["tool_name"] == "search_docs"
+        assert sent_payload["tool_arguments"] == {"query": "reset password"}
+        assert sent_payload["mcp_server_name"] == "docs-server"
+        assert result == {"texts": []}
+
+    @pytest.mark.asyncio
+    async def test_mcp_request_should_block_true_raises(self, singulr_guardrail):
+        resp = _make_response({"should_block": True, "blocking_due_to": "Disallowed tool"})
+        request_data = {"mcp_tool_name": "delete_file", "mcp_arguments": {"path": "/etc/passwd"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
+            with pytest.raises(GuardrailRaisedException, match="Disallowed tool") as exc_info:
+                await singulr_guardrail.apply_guardrail(
+                    inputs={"texts": []},
+                    request_data=request_data,
+                    input_type="request",
+                )
+            assert exc_info.value.blocked_content is True
+
+    @pytest.mark.asyncio
+    async def test_mcp_request_is_a_noop_when_api_unreachable_and_block_on_error_false(self):
+        guardrail = SingulrGuardrail(
+            singulr_api_base="https://api.test.singulr.ai",
+            singulr_api_key="test_token_1234",
+            guardrail_name="test-singulr",
+            block_on_error=False,
+        )
+        request_data = {"mcp_tool_name": "search_docs", "mcp_arguments": {"query": "reset password"}}
+        with patch.object(
+            guardrail.async_handler, "post", side_effect=httpx.TransportError("unreachable")
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": []},
+                request_data=request_data,
+                input_type="request",
+            )
+        assert result == {"texts": []}
+
+
+class TestSingulrMcpResponse:
+    @pytest.mark.asyncio
+    async def test_call_mcp_tool_response_routes_to_mcp_response_payload(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {
+            "call_type": "call_mcp_tool",
+            "mcp_tool_name": "search_docs",
+            "mcp_server_name": "docs-server",
+            "model": "MCP: docs-server",
+        }
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["Result: password reset link sent."]},
+                request_data=request_data,
+                input_type="response",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["guardrail_scope"] == "mcp_response"
+        assert sent_payload["model_name"] == "MCP: docs-server"
+        assert sent_payload["tool_result"] == ["Result: password reset link sent."]
+
+    @pytest.mark.asyncio
+    async def test_mcp_response_with_no_texts_skips_the_api_call(self, singulr_guardrail):
+        request_data = {"call_type": "call_mcp_tool", "mcp_tool_name": "search_docs"}
+        with patch.object(singulr_guardrail.async_handler, "post") as mock_post:
+            result = await singulr_guardrail.apply_guardrail(
+                inputs={"texts": []},
+                request_data=request_data,
+                input_type="response",
+            )
+        mock_post.assert_not_called()
+        assert result == {"texts": []}
+
+    @pytest.mark.asyncio
+    async def test_mcp_response_should_block_true_raises(self, singulr_guardrail):
+        resp = _make_response({"should_block": True, "blocking_due_to": "Sensitive tool output"})
+        request_data = {"call_type": "call_mcp_tool", "mcp_tool_name": "search_docs"}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
+            with pytest.raises(GuardrailRaisedException, match="Sensitive tool output") as exc_info:
+                await singulr_guardrail.apply_guardrail(
+                    inputs={"texts": ["leaked secret"]},
+                    request_data=request_data,
+                    input_type="response",
+                )
+            assert exc_info.value.blocked_content is True
+
+    @pytest.mark.asyncio
+    async def test_mcp_response_resolves_metadata_from_nested_litellm_params(self, singulr_guardrail):
+        """post_mcp_call hands apply_guardrail litellm_logging_obj.model_call_details,
+        which nests metadata under litellm_params instead of at the top level."""
+        resp = _make_response({"should_block": False})
+        auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+        request_data = {
+            "call_type": "call_mcp_tool",
+            "mcp_tool_name": "search_docs",
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_alias": "my-key-alias",
+                    "user_api_key_user_id": "my-user-id",
+                    "user_api_key_user_email": "user@example.com",
+                    "user_api_key_org_id": "org-123",
+                    "user_api_key_org_alias": "Acme Org",
+                    "user_api_key_team_id": "team-456",
+                    "user_api_key_team_alias": "AI Content Security Team",
+                    "user_api_key_auth": auth,
+                }
+            },
+        }
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["Result: password reset link sent."]},
+                request_data=request_data,
+                input_type="response",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {
+            "user_api_key_alias": "my-key-alias",
+            "user_api_key_user_id": "my-user-id",
+            "user_api_key_user_email": "user@example.com",
+            "user_api_key_org_id": "org-123",
+            "user_api_key_org_alias": "Acme Org",
+            "user_api_key_team_id": "team-456",
+            "user_api_key_team_alias": "AI Content Security Team",
+            "user_api_key_user_role": LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+        }
+
+    @pytest.mark.asyncio
+    async def test_mcp_response_prefers_top_level_metadata_over_nested_litellm_params(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        request_data = {
+            "call_type": "call_mcp_tool",
+            "mcp_tool_name": "search_docs",
+            "litellm_metadata": {"user_api_key_alias": "top-level-alias"},
+            "litellm_params": {"metadata": {"user_api_key_alias": "nested-alias"}},
+        }
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="response",
+            )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        assert sent_payload["metadata"] == {"user_api_key_alias": "top-level-alias"}
+
+    @pytest.mark.asyncio
+    async def test_mcp_response_returns_inputs_unchanged_when_api_unreachable_and_block_on_error_false(self):
+        guardrail = SingulrGuardrail(
+            singulr_api_base="https://api.test.singulr.ai",
+            singulr_api_key="test_token_1234",
+            guardrail_name="test-singulr",
+            block_on_error=False,
+        )
+        request_data = {"call_type": "call_mcp_tool", "mcp_tool_name": "search_docs"}
+        inputs = {"texts": ["leaked secret"]}
+        with patch.object(
+            guardrail.async_handler, "post", side_effect=httpx.TransportError("unreachable")
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="response",
+            )
+        assert result is inputs
+
+
+# ---------------------------------------------------------------------------
+# apply_guardrail dispatch (request vs response vs unknown input_type)
+# ---------------------------------------------------------------------------
+
+
+class TestSingulrApplyGuardrailDispatch:
+    @pytest.mark.asyncio
+    async def test_unknown_input_type_returns_inputs_unchanged(self, singulr_guardrail):
+        with patch.object(singulr_guardrail.async_handler, "post") as mock_post:
+            inputs = {"texts": ["hi"]}
+            result = await singulr_guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="unsupported",
+            )
+        mock_post.assert_not_called()
+        assert result is inputs
+
+
+# ---------------------------------------------------------------------------
+# logging_only hook
+# ---------------------------------------------------------------------------
+
+
+class TestSingulrLoggingHook:
+    @pytest.mark.asyncio
+    async def test_forwards_request_messages_and_response_text(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        kwargs = {"messages": [{"role": "user", "content": "hi"}], "model": "gpt-4o", "litellm_call_id": "call-1"}
+        result = {"choices": [{"finish_reason": "stop", "message": {"content": "hello there"}}]}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.async_logging_hook(kwargs=kwargs, result=result, call_type="acompletion")
+
+        request_payload = mock_post.call_args_list[0].kwargs["json"]
+        response_payload = mock_post.call_args_list[1].kwargs["json"]
+        assert request_payload["guardrail_scope"] == "request"
+        assert request_payload["messages"] == kwargs["messages"]
+        assert response_payload["guardrail_scope"] == "response"
+        assert response_payload["response"] == result
+
+    @pytest.mark.asyncio
+    async def test_forwards_user_metadata_in_both_request_and_response_payloads(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        kwargs = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "gpt-4o",
+            "litellm_call_id": "call-1",
+            "litellm_metadata": {"user_api_key_alias": "my-key-alias", "user_api_key_org_id": "org-123"},
+        }
+        result = {"choices": [{"finish_reason": "stop", "message": {"content": "hello there"}}]}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.async_logging_hook(kwargs=kwargs, result=result, call_type="acompletion")
+
+        request_payload = mock_post.call_args_list[0].kwargs["json"]
+        response_payload = mock_post.call_args_list[1].kwargs["json"]
+        expected_metadata = {"user_api_key_alias": "my-key-alias", "user_api_key_org_id": "org-123"}
+        assert request_payload["metadata"] == expected_metadata
+        assert response_payload["metadata"] == expected_metadata
+
+    @pytest.mark.asyncio
+    async def test_forwards_a_real_model_response_without_swallowing_it(self, singulr_guardrail):
+        """Regression: a normal completion callback passes a ModelResponse, not a
+        dict. The response payload must carry its actual serialized content instead
+        of silently dropping it because ModelResponse isn't a Mapping."""
+        resp = _make_response({"should_block": False})
+        result = ModelResponse(
+            choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "hello there"}}]
+        )
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.async_logging_hook(kwargs={}, result=result, call_type="acompletion")
+
+        response_payload = mock_post.call_args.kwargs["json"]
+        assert response_payload["guardrail_scope"] == "response"
+        assert response_payload["response"]["choices"][0]["message"]["content"] == "hello there"
+
+    @pytest.mark.asyncio
+    async def test_non_serializable_result_falls_back_to_string_report(self, singulr_guardrail):
+        """A result that pydantic can't serialize to JSON must still get reported,
+        as a stringified fallback, instead of raising out of the logging_only hook."""
+        resp = _make_response({"should_block": False})
+
+        class Unserializable:
+            def __repr__(self) -> str:
+                return "<Unserializable>"
+
+        kwargs = {"litellm_metadata": {"user_api_key_alias": "my-key-alias"}}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.async_logging_hook(kwargs=kwargs, result=Unserializable(), call_type="acompletion")
+
+        response_payload = mock_post.call_args.kwargs["json"]
+        assert response_payload["response"] == "<Unserializable>"
+        assert response_payload["metadata"] == {"user_api_key_alias": "my-key-alias"}
+
+    @pytest.mark.asyncio
+    async def test_no_messages_and_no_result_skips_both_api_calls(self, singulr_guardrail):
+        with patch.object(singulr_guardrail.async_handler, "post") as mock_post:
+            returned_kwargs, returned_result = await singulr_guardrail.async_logging_hook(
+                kwargs={}, result=None, call_type="acompletion"
+            )
+        mock_post.assert_not_called()
+        assert returned_result is None
+        guardrail_information = returned_kwargs["standard_logging_object"]["guardrail_information"]
+        assert guardrail_information[0]["guardrail_status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_records_standard_logging_guardrail_information(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        kwargs = {"messages": [{"role": "user", "content": "hi"}]}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
+            updated_kwargs, _ = await singulr_guardrail.async_logging_hook(
+                kwargs=kwargs, result=None, call_type="acompletion"
+            )
+        guardrail_information = updated_kwargs["standard_logging_object"]["guardrail_information"]
+        assert len(guardrail_information) == 1
+        assert guardrail_information[0]["guardrail_name"] == "test-singulr"
+        assert guardrail_information[0]["guardrail_status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_api_error_marks_guardrail_status_intervened(self, singulr_guardrail):
+        """With block_on_error=True (the default), a transport failure while
+        reporting to Singulr raises internally; async_logging_hook must catch
+        it, mark the status accordingly, and still return (kwargs, result)
+        instead of propagating -- logging_only must never block the call."""
+        kwargs = {"messages": [{"role": "user", "content": "hi"}]}
+        with patch.object(
+            singulr_guardrail.async_handler,
+            "post",
+            side_effect=httpx.TransportError("connection refused"),
+        ):
+            updated_kwargs, result = await singulr_guardrail.async_logging_hook(
+                kwargs=kwargs, result=None, call_type="acompletion"
+            )
+        assert result is None
+        guardrail_information = updated_kwargs["standard_logging_object"]["guardrail_information"]
+        assert guardrail_information[0]["guardrail_status"] == "guardrail_intervened"
+
+    @pytest.mark.asyncio
+    async def test_unexpected_exception_is_swallowed_without_recording_guardrail_information(self, singulr_guardrail):
+        """A non-guardrail exception (e.g. a bug in a downstream integration)
+        must not propagate out of the logging_only hook, and must not record
+        standard_logging_guardrail_information since no verdict was reached."""
+        kwargs = {"messages": [{"role": "user", "content": "hi"}]}
+        with patch.object(singulr_guardrail.async_handler, "post", side_effect=RuntimeError("boom")):
+            updated_kwargs, result = await singulr_guardrail.async_logging_hook(
+                kwargs=kwargs, result=None, call_type="acompletion"
+            )
+        assert result is None
+        assert "standard_logging_object" not in updated_kwargs
+
+    @pytest.mark.asyncio
+    async def test_appends_to_existing_guardrail_information_list(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        existing_entry = {"guardrail_name": "other-guardrail"}
+        kwargs = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "standard_logging_object": {"guardrail_information": [existing_entry]},
+        }
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
+            updated_kwargs, _ = await singulr_guardrail.async_logging_hook(
+                kwargs=kwargs, result=None, call_type="acompletion"
+            )
+        guardrail_information = updated_kwargs["standard_logging_object"]["guardrail_information"]
+        assert guardrail_information[0] is existing_entry
+        assert guardrail_information[1]["guardrail_name"] == "test-singulr"
+
+    def test_sync_logging_hook_returns_kwargs_and_result_unchanged_when_loop_running(self, singulr_guardrail):
+        """logging_hook is the sync entrypoint used outside an event loop;
+        inside a running loop it must no-op rather than deadlock or raise."""
+        import asyncio
+
+        async def _drive():
+            kwargs = {"messages": [{"role": "user", "content": "hi"}]}
+            return singulr_guardrail.logging_hook(kwargs=kwargs, result=None, call_type="acompletion")
+
+        returned_kwargs, returned_result = asyncio.run(_drive())
+        assert returned_result is None
+        assert returned_kwargs == {"messages": [{"role": "user", "content": "hi"}]}
+
+    def test_sync_logging_hook_creates_a_new_event_loop_when_none_is_set(self, singulr_guardrail):
+        """A thread with no current event loop must get a fresh one instead
+        of raising RuntimeError out of the sync entrypoint."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        resp = _make_response({"should_block": False})
+
+        def _run():
+            kwargs = {"messages": [{"role": "user", "content": "hi"}]}
+            with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
+                return singulr_guardrail.logging_hook(kwargs=kwargs, result=None, call_type="acompletion")
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            returned_kwargs, returned_result = pool.submit(_run).result()
+        assert returned_result is None
+        guardrail_information = returned_kwargs["standard_logging_object"]["guardrail_information"]
+        assert guardrail_information[0]["guardrail_status"] == "success"
+
+    def test_sync_logging_hook_swallows_unexpected_exception(self, singulr_guardrail):
+        """A bug surfacing from async_logging_hook itself, not just the
+        Singulr API call, must not propagate out of the sync entrypoint."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _run():
+            kwargs = {"messages": [{"role": "user", "content": "hi"}]}
+            with patch.object(singulr_guardrail, "async_logging_hook", side_effect=RuntimeError("boom")):
+                return singulr_guardrail.logging_hook(kwargs=kwargs, result=None, call_type="acompletion")
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            returned_kwargs, returned_result = pool.submit(_run).result()
+        assert returned_result is None
+        assert returned_kwargs == {"messages": [{"role": "user", "content": "hi"}]}
+
+
+# ---------------------------------------------------------------------------
 # HTTP call wiring (endpoint, timeout, headers)
 # ---------------------------------------------------------------------------
 
 
 class TestSingulrRequestWiring:
     @pytest.mark.asyncio
-    async def test_sends_configured_timeout(self):
+    async def test_sends_configured_timeout_and_calls_the_guard_endpoint(self):
         """litellm_params.timeout must reach the httpx call so operators can
         tighten or loosen the latency budget instead of being stuck with a
         hardcoded 30s regardless of configuration."""
@@ -279,7 +1018,9 @@ class TestSingulrRequestWiring:
                 request_data={},
                 input_type="request",
             )
-            assert mock_post.call_args.kwargs["timeout"] == 5.0
+        call_kwargs = mock_post.call_args.kwargs
+        assert call_kwargs["timeout"] == 5.0
+        assert call_kwargs["url"] == "https://api.test.singulr.ai/api/v1/ai-gateway/litellm"
 
 
 class TestSingulrBuildHeaders:
@@ -350,17 +1091,19 @@ class TestSingulrInvalidResponse:
     @pytest.mark.asyncio
     async def test_response_missing_expected_fields_block_on_error_true_raises(self):
         """Regression: a response body that fails SingulrGuardrailResponse
-        validation (e.g. should_block is a string, not a bool) must raise
-        GuardrailRaisedException instead of letting pydantic.ValidationError
-        propagate unhandled."""
+        validation must raise GuardrailRaisedException instead of letting
+        pydantic.ValidationError propagate unhandled."""
         guardrail = SingulrGuardrail(
             singulr_api_base="https://api.test.singulr.ai",
             singulr_api_key="test_token_1234",
             guardrail_name="test-singulr",
             block_on_error=True,
         )
-        resp = _make_response({"should_block": "not-a-bool"})
-        with patch.object(guardrail.async_handler, "post", return_value=resp):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.side_effect = ValueError("not valid json")
+
+        with patch.object(guardrail.async_handler, "post", return_value=mock_resp):
             with pytest.raises(GuardrailRaisedException):
                 await guardrail.apply_guardrail(
                     inputs={"texts": ["test"]},
@@ -480,6 +1223,9 @@ class TestSingulrHttpStatusError:
 class TestSingulrConfigModel:
     def test_ui_friendly_name(self):
         assert SingulrGuardrailConfigModel.ui_friendly_name() == "Singulr"
+
+    def test_get_config_model_returns_singulr_config_model(self):
+        assert SingulrGuardrail.get_config_model() is SingulrGuardrailConfigModel
 
 
 # ---------------------------------------------------------------------------
