@@ -249,16 +249,20 @@ async def test_a2a_model_resolves_before_router_branches(router_kwargs, extra_da
 
     mock_acompletion = AsyncMock(return_value={"id": "test-response"})
 
-    with patch("litellm.acompletion", mock_acompletion), patch(
-        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
-        mock_registry,
-    ):
-        await route_request(
-            data=data,
-            llm_router=_router_without_a2a_deployment(**router_kwargs),
-            user_model=None,
-            route_type="acompletion",
-        )
+    # The bug is that the request never leaves the router, so there is no HTTP boundary to
+    # fake: which collaborator gets called *is* the behaviour under test. The registry is
+    # Prisma-backed and has no injection seam available to a unit test.
+    with patch("litellm.acompletion", mock_acompletion):  # test-quality-ok: the dispatch target is the assertion
+        with patch(  # test-quality-ok: Prisma-backed registry has no unit-test injection seam
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            mock_registry,
+        ):
+            await route_request(
+                data=data,
+                llm_router=_router_without_a2a_deployment(**router_kwargs),
+                user_model=None,
+                route_type="acompletion",
+            )
 
     mock_acompletion.assert_called_once()
     call_kwargs = mock_acompletion.call_args.kwargs
