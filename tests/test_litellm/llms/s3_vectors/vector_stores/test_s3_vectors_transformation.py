@@ -21,8 +21,6 @@ def _embedding_response(vector):
 
 
 class _RecordingExecutor:
-    """Executor double recording every (model, query, configuration) it was asked to embed."""
-
     def __init__(self, vector=QUERY_VECTOR):
         self.vector = vector
         self.calls = []
@@ -94,7 +92,6 @@ class TestS3VectorsVectorStoreConfig:
             config.get_complete_url(None, {"aws_region_name": "Bad_Region!"})
 
     def test_transform_search_request(self):
-        """Full request-body transformation with the query embedded through the injected executor"""
         config = S3VectorsVectorStoreConfig()
         logging_obj = _logging_obj()
         executor = _RecordingExecutor()
@@ -137,7 +134,6 @@ class TestS3VectorsVectorStoreConfig:
 
     @pytest.mark.asyncio
     async def test_atransform_search_embeds_alias_and_store_config_through_executor(self):
-        """The store's embedding_model alias and litellm_embedding_config reach the executor unchanged"""
         config = S3VectorsVectorStoreConfig()
         executor = _RecordingExecutor(vector=[0.4, 0.5])
 
@@ -178,8 +174,33 @@ class TestS3VectorsVectorStoreConfig:
         assert request_body["queryVector"]["float32"] == QUERY_VECTOR
 
     @pytest.mark.asyncio
+    async def test_atransform_search_default_model_falls_back_to_the_sdk(self):
+        """Regression (LIT-6750): a store that never named an embedding model keeps working on a proxy
+        whose model list has no text-embedding-3-small, embedding through the SDK instead of erroring."""
+        config = S3VectorsVectorStoreConfig()
+        router = MagicMock()
+        router.get_model_list.return_value = [
+            {"model_name": "team-embeddings", "litellm_params": {"model": "openai/text-embedding-3-small"}}
+        ]
+        router.resolved_litellm_models.return_value = []
+        router.aembedding = AsyncMock(side_effect=AssertionError("unserved model must not reach the Router"))
+        request_metadata = {"user_api_key_team_id": "team-a"}
+
+        mock_bare = AsyncMock(return_value=_embedding_response(QUERY_VECTOR))
+        with patch("litellm.aembedding", new=mock_bare):  # test-quality-ok: stubs the bare-embedding fallback whose call the test asserts on
+            _, request_body = await config.atransform_search_vector_store_request(
+                **_search_kwargs(
+                    embedding_executor=RouterVectorStoreEmbeddingExecutor(router=router, metadata=request_metadata)
+                )
+            )
+
+        mock_bare.assert_awaited_once_with(
+            model="text-embedding-3-small", input=["test query"], metadata=request_metadata
+        )
+        assert request_body["queryVector"]["float32"] == QUERY_VECTOR
+
+    @pytest.mark.asyncio
     async def test_atransform_search_without_executor_uses_bare_embedding(self):
-        """Backward compat: SDK callers without an executor keep embedding through litellm.aembedding"""
         config = S3VectorsVectorStoreConfig()
 
         mock_bare = AsyncMock(return_value=_embedding_response([0.6, 0.7]))
@@ -190,7 +211,6 @@ class TestS3VectorsVectorStoreConfig:
         assert request_body["queryVector"]["float32"] == [0.6, 0.7]
 
     def test_transform_search_without_executor_uses_bare_embedding_sync(self):
-        """Sync twin: no executor -> bare litellm.embedding as before"""
         config = S3VectorsVectorStoreConfig()
 
         mock_bare = MagicMock(return_value=_embedding_response([0.8, 0.9]))
@@ -203,7 +223,6 @@ class TestS3VectorsVectorStoreConfig:
         assert request_body["queryVector"]["float32"] == [0.8, 0.9]
 
     def test_transform_search_request_invalid_vector_store_id(self):
-        """An unparseable vector_store_id raises before any embedding is generated"""
         config = S3VectorsVectorStoreConfig()
         executor = _RecordingExecutor()
 
