@@ -9,7 +9,7 @@ from .catalog import load_catalog
 from .models import HarnessCase, Strategy
 from .runner import run_pytest
 from .ui import make_dashboard
-from .validate_ledger import FunctionReport, build_function_report
+from .strategies.unit_tests.mapping_validator import FunctionReport, build_function_report
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COVERAGE_ROOT = REPO_ROOT / "target" / "rust-python-harness"
