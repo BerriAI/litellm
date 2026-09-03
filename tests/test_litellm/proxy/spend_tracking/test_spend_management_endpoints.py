@@ -3758,6 +3758,93 @@ async def test_view_spend_logs_summarize_groups_by_day_in_sql(client, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_view_spend_logs_summarize_empty_rows(client, monkeypatch):
+    class MockDB:
+        async def query_raw(self, sql_query, *params):
+            return []
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get(
+            "/spend/logs",
+            params={"start_date": "2024-01-01", "end_date": "2024-01-01"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == []
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_summarize_unhashed_api_key_without_padding(client, monkeypatch):
+    mock_rows = [
+        {
+            "day": "2024-01-01",
+            "api_key": "plain-key",
+            "user": "u1",
+            "model": "gpt-4",
+            "spend": 0.4,
+        }
+    ]
+
+    class MockDB:
+        def __init__(self):
+            self.captured_params = None
+
+        async def query_raw(self, sql_query, *params):
+            self.captured_params = params
+            return mock_rows
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+    mock_prisma_client = MockPrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": "2024-01-01",
+                "end_date": "2024-01-01",
+                "api_key": "plain-key",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert mock_prisma_client.db.captured_params == (
+            "2024-01-01T00:00:00+00:00",
+            "2024-01-01T00:00:00+00:00",
+            "plain-key",
+        )
+        assert data == [
+            {
+                "startTime": "2024-01-01",
+                "spend": pytest.approx(0.4),
+                "plain-key": pytest.approx(0.4),
+                "users": {"u1": pytest.approx(0.4)},
+                "models": {"gpt-4": pytest.approx(0.4)},
+            }
+        ]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_error_code(client):
     """Test filtering spend logs by error code"""
     mock_spend_logs = [
