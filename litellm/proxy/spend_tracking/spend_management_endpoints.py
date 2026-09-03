@@ -2493,7 +2493,9 @@ async def ui_view_spend_logs(
                 request_id=request_id,
             )
         user_scope_applies: Final = (
-            not is_admin_view and team_id is None and _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
+            not is_admin_view
+            and team_id is None
+            and (is_request_id_lookup or _can_user_view_spend_log(user_api_key_dict=user_api_key_dict))
         )
         permitted_team_ids: Final = (
             await _get_permitted_team_ids_for_spend_logs_or_empty(
