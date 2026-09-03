@@ -57,9 +57,11 @@ def get_azure_ad_token_provider(
     from azure import identity
     from azure.identity import (
         CertificateCredential,
+        ChainedTokenCredential,
         ClientSecretCredential,
         DefaultAzureCredential,
         ManagedIdentityCredential,
+        WorkloadIdentityCredential,
         get_bearer_token_provider,
     )
 
@@ -102,18 +104,26 @@ def get_azure_ad_token_provider(
         # It automatically discovers credentials from the environment (managed identity, CLI, etc.)
         credential = DefaultAzureCredential()
     elif cred == AzureCredentialType.DeploymentIdentityCredential:
-        # The two False values are load bearing: they beat AZURE_TOKEN_CREDENTIALS, which would
-        # otherwise empty the chain and make DefaultAzureCredential raise
-        credential = DefaultAzureCredential(
-            exclude_environment_credential=True,
-            exclude_shared_token_cache_credential=True,
-            exclude_visual_studio_code_credential=True,
-            exclude_cli_credential=True,
-            exclude_developer_cli_credential=True,
-            exclude_powershell_credential=True,
-            exclude_broker_credential=True,
-            exclude_workload_identity_credential=False,
-            exclude_managed_identity_credential=False,
+        # DefaultAzureCredential cannot express this: excluding its developer credentials still
+        # leaves one managed identity link, which AZURE_CLIENT_ID pins to a user assigned identity,
+        # so a host running as a system assigned identity never gets asked
+        workload_client_id: Final = os.environ.get("AZURE_CLIENT_ID")
+        workload_tenant_id: Final = os.environ.get("AZURE_TENANT_ID")
+        workload_token_file: Final = os.environ.get("AZURE_FEDERATED_TOKEN_FILE")
+        credential = ChainedTokenCredential(
+            *(
+                (
+                    WorkloadIdentityCredential(
+                        client_id=workload_client_id,
+                        tenant_id=workload_tenant_id,
+                        token_file_path=workload_token_file,
+                    ),
+                )
+                if workload_client_id and workload_tenant_id and workload_token_file
+                else ()
+            ),
+            *((ManagedIdentityCredential(client_id=workload_client_id),) if workload_client_id else ()),
+            ManagedIdentityCredential(),
         )
     else:
         cred_cls: Final = getattr(identity, cred)

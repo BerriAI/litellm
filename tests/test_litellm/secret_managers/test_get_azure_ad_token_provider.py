@@ -29,6 +29,20 @@ class TestDeploymentIdentityCredential:
         with bearer.call_args.args[0] as chain:
             return {type(link).__name__ for link in chain.credentials}
 
+    @staticmethod
+    def _managed_identity_client_ids(credential_type):
+        with patch("azure.identity.get_bearer_token_provider", return_value=lambda: "token") as bearer:
+            get_azure_ad_token_provider(
+                azure_scope="https://storage.azure.com/.default",
+                azure_credential=credential_type,
+            )
+        with bearer.call_args.args[0] as chain:
+            return [
+                (link._credential._settings or {}).get("client_id")
+                for link in chain.credentials
+                if type(link).__name__ == "ManagedIdentityCredential"
+            ]
+
     @patch.dict(
         os.environ,
         {
@@ -102,10 +116,42 @@ class TestDeploymentIdentityCredential:
         with pytest.raises(ClientAuthenticationError) as refusal:
             provider()
 
-        assert "WorkloadIdentityCredential" in str(refusal.value)
         assert "ManagedIdentityCredential" in str(refusal.value)
         assert "EnvironmentCredential" not in str(refusal.value)
         assert "AzureCliCredential" not in str(refusal.value)
+        assert "azure-openai-client-secret" not in str(refusal.value)
+
+    @patch.dict(
+        os.environ,
+        {
+            "AZURE_CLIENT_ID": "azure-openai-client-id",
+            "AZURE_CLIENT_SECRET": "azure-openai-client-secret",
+            "AZURE_TENANT_ID": "azure-openai-tenant-id",
+        },
+        clear=True,
+    )
+    def test_deployment_identity_still_reaches_a_system_assigned_managed_identity(self):
+        """AZURE_CLIENT_ID names one identity for the whole proxy, and pointing it at Azure OpenAI
+        must not hide the system assigned identity the host runs as"""
+        client_ids = self._managed_identity_client_ids(AzureCredentialType.DeploymentIdentityCredential)
+
+        assert "azure-openai-client-id" in client_ids
+        assert None in client_ids
+
+    @patch.dict(
+        os.environ,
+        {
+            "AZURE_CLIENT_ID": "user-assigned-identity-client-id",
+            "AZURE_TOKEN_CREDENTIALS": "dev",
+        },
+        clear=True,
+    )
+    def test_deployment_identity_keeps_the_user_assigned_identity_under_a_dev_only_setting(self):
+        """AZURE_TOKEN_CREDENTIALS=dev asks the SDK for developer credentials only, and the
+        identity a host actually runs as has to survive that"""
+        assert "user-assigned-identity-client-id" in self._managed_identity_client_ids(
+            AzureCredentialType.DeploymentIdentityCredential
+        )
 
 
 class TestGetAzureAdTokenProvider:
