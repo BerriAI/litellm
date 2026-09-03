@@ -28,6 +28,9 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 
+[build-dependencies]
+pyo3-build-config = "0.29.2"
+
 [dev-dependencies]
 criterion = "0.8.2"
 tokio-tungstenite.workspace = true
