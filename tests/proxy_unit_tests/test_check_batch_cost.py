@@ -2601,6 +2601,23 @@ class TestBatchCostAttribution:
         assert metadata["user_api_key_org_id"] == "org-team"
 
     @pytest.mark.asyncio
+    async def test_key_lookup_failure_still_bills_the_team_org(self):
+        """A key-table error while resolving a legacy row's org must not drop the team's
+        organization: the two lookups fail independently, so org spend still lands."""
+        from types import SimpleNamespace
+
+        instance = self._instance(
+            team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
+        )
+        instance.prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+            side_effect=Exception("db down")
+        )
+
+        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+
+        assert metadata["user_api_key_org_id"] == "org-team"
+
+    @pytest.mark.asyncio
     async def test_no_org_leaves_the_key_unset(self):
         """Without any org the key is absent entirely, so the spend writer's org update
         stays skipped instead of matching an empty-string organization."""
