@@ -1216,7 +1216,7 @@ class GenerateKeyRequest(KeyRequestBase):
     organization_id: str | None = None
     project_id: str | None = None
 
-    @field_validator("team_id", "organization_id", mode="before")
+    @field_validator("team_id", "organization_id", "project_id", mode="before")
     @classmethod
     def treat_cleared_id_as_unset(cls, v: object) -> object:
         if v == "":
@@ -2608,9 +2608,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.",
     )
-    missing_session_id: Literal["generate", "reject"] | None = Field(
+    missing_session_id: Literal["generate", "reject", "omit"] | None = Field(
         None,
-        description="What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.",
+        description="What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400; 'omit' leaves SpendLogs.session_id null, matching callbacks such as Langfuse that only record a client-established metadata.session_id. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.",
     )
     enable_public_model_hub: bool = Field(
         default=False,
