@@ -35,6 +35,7 @@ import {
   heuristicScoringRole,
   usesLlmClassifier,
   DEFAULT_HEURISTIC_FIRST_MAX_TIER,
+  DEFAULT_HYBRID_BOUNDARY_MARGIN,
   HEURISTIC_FIRST_MAX_TIER_KEYS,
   effectiveClassifierType,
 } from "./ComplexityRouterConfig";
@@ -50,6 +51,7 @@ const HEURISTIC_V2_EXPLANATION =
 const CLASSIFIER_TIMEOUT_ID = "classifier-timeout-ms";
 const CLASSIFIER_CONTEXT_WINDOW_SIZE_ID = "classifier-context-window-size";
 const CLASSIFIER_CONTEXT_BUDGET_CHARS_ID = "classifier-context-budget-chars";
+const HYBRID_BOUNDARY_MARGIN_ID = "hybrid-boundary-margin";
 
 const CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK =
   "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
@@ -213,6 +215,18 @@ const ClassifierTypeRadios: React.FC<{
             </span>
           </Label>
         </SimpleTooltip>
+        <SimpleTooltip content={scorerLockedReason}>
+          <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
+            <RadioGroupItem value="hybrid" className="mt-0.5" disabled={scorerLocked} />
+            <span>
+              <strong className="font-semibold">Hybrid</strong>{" "}
+              <span className="text-muted-foreground">
+                keeps the local score at any tier, and only pays for the classifier when that score lands near a tier
+                boundary
+              </span>
+            </span>
+          </Label>
+        </SimpleTooltip>
       </div>
     </RadioGroup>
   );
@@ -263,12 +277,21 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         classifierType === "heuristic_first"
           ? value.heuristic_first_max_tier ?? DEFAULT_HEURISTIC_FIRST_MAX_TIER
           : undefined,
+      hybrid_boundary_margin:
+        classifierType === "hybrid" ? value.hybrid_boundary_margin ?? DEFAULT_HYBRID_BOUNDARY_MARGIN : undefined,
     };
     onChange(nextValue);
   };
 
   const handleHeuristicFirstMaxTierChange = (tier: string) => {
     onChange({ ...value, heuristic_first_max_tier: tier });
+  };
+
+  const handleHybridBoundaryMarginChange = (raw: string) => {
+    setDraft({ id: HYBRID_BOUNDARY_MARGIN_ID, raw });
+    const parsed = Number(raw);
+    if (raw.trim() === "" || !Number.isFinite(parsed)) return;
+    onChange({ ...value, hybrid_boundary_margin: Math.min(1, Math.max(0, parsed)) });
   };
 
   const handleClassificationPromptChange = (classificationPrompt: string | undefined) => {
@@ -387,6 +410,30 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           <p className="text-sm text-muted-foreground">
             A request the scorer places at or below this tier routes there without a classifier call. Anything the
             scorer places higher, and anything it found no signal for at all, goes to the classifier instead
+          </p>
+        </div>
+      )}
+
+      {classifierType === "hybrid" && (
+        <div className="mt-4 space-y-2">
+          <strong className="block font-semibold">Boundary margin</strong>
+          <Input
+            id={HYBRID_BOUNDARY_MARGIN_ID}
+            type="text"
+            inputMode="decimal"
+            value={
+              draft?.id === HYBRID_BOUNDARY_MARGIN_ID
+                ? draft.raw
+                : String(value.hybrid_boundary_margin ?? DEFAULT_HYBRID_BOUNDARY_MARGIN)
+            }
+            onChange={(event) => handleHybridBoundaryMarginChange(event.target.value)}
+            onBlur={() => setDraft(null)}
+            className="w-full"
+          />
+          <p className="text-sm text-muted-foreground">
+            A score further than this from every tier boundary routes on the scorer&apos;s own tier, however expensive
+            that tier is. A score closer than this, and anything the scorer found no signal for at all, goes to the
+            classifier to break the tie
           </p>
         </div>
       )}
