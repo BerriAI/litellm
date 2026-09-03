@@ -483,6 +483,7 @@ ignored_keys = [
     "metadata.user_api_key_project_alias",
     "metadata.user_api_key_org_id",
     "metadata.user_api_key_user_id",
+    "metadata.user_api_key_user_email",
     "metadata.user_api_key_team_alias",
     "metadata.spend_logs_metadata",
     "metadata.requester_ip_address",

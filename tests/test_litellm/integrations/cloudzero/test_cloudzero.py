@@ -74,6 +74,8 @@ class TestCloudZeroHourlyExport:
             fake_db = MagicMock()
 
             async def query_raw_mock(query: str, *params):
+                if "LiteLLM_SpendLogs" in query:
+                    return []
                 start_time_utc = params[0] if len(params) > 0 else None
                 end_time_utc = params[1] if len(params) > 1 else None
                 limit = params[2] if len(params) > 2 else None
@@ -146,6 +148,9 @@ class TestCloudZeroHourlyExport:
                 return joined
 
             fake_db.query_raw = AsyncMock(side_effect=query_raw_mock)
+            fake_db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+            fake_db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+            fake_db.litellm_usertable.find_many = AsyncMock(return_value=[])
             fake_client.db = fake_db
             mock_prisma_client_getter.return_value = fake_client
 
