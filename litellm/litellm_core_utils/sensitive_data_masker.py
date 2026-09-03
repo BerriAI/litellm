@@ -226,30 +226,30 @@ def redact_credentials_in_payload(data: Mapping[str, object]) -> Mapping[str, ob
     and non-string secrets are covered too, which is what a payload rendered
     straight to stdout needs. ``None`` is preserved so an unset credential still
     reads as unset, and lists and tuples are rebuilt element by element so a
-    credential nested inside one is caught as well.
+    credential nested inside one is caught as well. A container sitting at the
+    recursion limit is replaced wholesale rather than passed through, so nesting a
+    payload deeper than the limit hides it instead of exposing it.
     """
     return _redact_mapping(data, 0)
 
 
 def _redact_mapping(data: Mapping[str, object], depth: int) -> Mapping[str, object]:
-    if depth >= DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER:
-        return data
     return {key: _redact_entry(key, value, depth) for key, value in data.items()}
 
 
 def _redact_entry(key: str, value: object, depth: int) -> object:
     if value is not None and _default_masker.is_sensitive_key(key):
         return REDACTED
+    if not isinstance(value, (Mapping, list, tuple)):
+        return value
+    if depth >= DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER:
+        return REDACTED
     if isinstance(value, Mapping):
         return _redact_mapping(value, depth + 1)
-    if isinstance(value, (list, tuple)):
-        return _redact_sequence(value, depth + 1)
-    return value
+    return _redact_sequence(value, depth + 1)
 
 
 def _redact_sequence(values: Sequence[object], depth: int) -> Sequence[object]:
-    if depth >= DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER:
-        return values
     redacted: Final = tuple(_redact_entry("", item, depth) for item in values)
     return redacted if isinstance(values, tuple) else list(redacted)
 
