@@ -520,16 +520,21 @@ describe("managed keys survive an untouched open-and-save", () => {
   };
 
   // tier_definitions, fallback_tier and classification_prompt cannot sit beside heuristic_first, which
-  // this fixture uses, so no single stored config can hold every managed key. They get their own round
-  // trip below.
-  const CUSTOM_TIER_ONLY_KEYS = new Set(["tier_definitions", "fallback_tier", "classification_prompt"]);
+  // this fixture uses, and hybrid_boundary_margin belongs to the sibling hybrid type, so no single
+  // stored config can hold every managed key. Each gets its own round trip below.
+  const KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS = new Set([
+    "tier_definitions",
+    "fallback_tier",
+    "classification_prompt",
+    "hybrid_boundary_margin",
+  ]);
 
   it("carries every managed key a built-in router can hold through hydrate then save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
     const saved = buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, hydrated);
 
     const dropped = [...MANAGED_COMPLEXITY_ROUTER_KEYS]
-      .filter((key) => !CUSTOM_TIER_ONLY_KEYS.has(key))
+      .filter((key) => !KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS.has(key))
       .filter((key) => saved[key] === undefined);
     expect(dropped).toEqual([]);
   });
@@ -581,6 +586,18 @@ describe("managed keys survive an untouched open-and-save", () => {
     expect(buildUpdatedComplexityRouterConfig(storedCustom, hydrated).classification_prompt).toBe(
       storedCustom.classification_prompt,
     );
+  });
+
+  it("round-trips a hybrid router's margin, which save requires and the backend rejects without", () => {
+    const storedHybrid: Record<string, unknown> = {
+      ...STORED_ALL_MANAGED,
+      classifier_type: "hybrid",
+      hybrid_boundary_margin: 0.05,
+    };
+    delete storedHybrid.heuristic_first_max_tier;
+    const hydrated = hydrateComplexityRouterConfig(storedHybrid, undefined);
+    expect(hydrated.hybrid_boundary_margin).toBe(0.05);
+    expect(buildUpdatedComplexityRouterConfig(storedHybrid, hydrated).hybrid_boundary_margin).toBe(0.05);
   });
 
   it("round-trips the heuristic_first threshold, which save requires and the backend rejects without", () => {
