@@ -19,6 +19,8 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
     _to_response,
+    _token_hash_for_create,
+    _token_hash_for_update,
     create_jwt_key_mapping,
     delete_jwt_key_mapping,
     info_jwt_key_mapping,
@@ -1333,3 +1335,129 @@ def test_jwt_client_id_field_does_not_raise_on_duplicate():
         virtual_key_claim_field="new_field",
     )
     assert auth.virtual_key_claim_field == "new_field"
+
+
+# ──────────────────────────────────────────────
+# Tests: identifying the mapped key by hash instead of plaintext
+# ──────────────────────────────────────────────
+
+_TOKEN_HASH = "1923314ae0efc8b2523c7d421bac5a7cf88df291273b139948b526d396974a41"
+
+
+def test_create_stores_a_supplied_token_hash_verbatim():
+    """A caller that holds only the hash gets it stored as given, not hashed again."""
+    from litellm.proxy._types import CreateJWTKeyMappingRequest
+
+    data = CreateJWTKeyMappingRequest(
+        jwt_claim_name="email", jwt_claim_value="user@example.com", token=_TOKEN_HASH
+    )
+
+    assert _token_hash_for_create(data) == _TOKEN_HASH
+
+
+def test_create_hashes_a_supplied_plaintext_key():
+    """Supplying `key` keeps the original behaviour, so existing configs are unaffected."""
+    from litellm.proxy._types import CreateJWTKeyMappingRequest, hash_token
+
+    data = CreateJWTKeyMappingRequest(
+        jwt_claim_name="email", jwt_claim_value="user@example.com", key="sk-test-key"
+    )
+
+    assert _token_hash_for_create(data) == hash_token("sk-test-key")
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({}, id="neither"),
+        pytest.param({"key": "sk-test-key", "token": _TOKEN_HASH}, id="both"),
+    ],
+)
+def test_create_requires_exactly_one_identifier(kwargs):
+    """Neither or both is a 400, so a mapping can never be created ambiguously."""
+    from litellm.proxy._types import CreateJWTKeyMappingRequest
+
+    data = CreateJWTKeyMappingRequest(
+        jwt_claim_name="email", jwt_claim_value="user@example.com", **kwargs
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _token_hash_for_create(data)
+
+    assert exc_info.value.status_code == 400
+    assert "exactly one" in exc_info.value.detail.lower()
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        pytest.param("sk-not-a-hash", id="plaintext-key"),
+        pytest.param("abc123", id="too-short"),
+        pytest.param(_TOKEN_HASH.upper(), id="uppercase"),
+        pytest.param(_TOKEN_HASH + "0", id="too-long"),
+        pytest.param(_TOKEN_HASH[:-1] + "g", id="non-hex-character"),
+    ],
+)
+def test_create_rejects_a_token_that_is_not_a_sha256_hash(token):
+    """hash_token hashes unconditionally, so a bad `token` would be stored as a hash
+    of a hash and then silently match nothing at auth time."""
+    from litellm.proxy._types import CreateJWTKeyMappingRequest
+
+    data = CreateJWTKeyMappingRequest(
+        jwt_claim_name="email", jwt_claim_value="user@example.com", token=token
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _token_hash_for_create(data)
+
+    assert exc_info.value.status_code == 400
+    assert "SHA-256" in exc_info.value.detail
+
+
+def test_update_leaves_the_mapped_key_alone_when_neither_is_given():
+    """Updating only the description must not blank out the mapped key."""
+    from litellm.proxy._types import UpdateJWTKeyMappingRequest
+
+    data = UpdateJWTKeyMappingRequest(id="mapping-1", description="new text")
+
+    assert _token_hash_for_update(data) is None
+
+
+def test_update_stores_a_supplied_token_hash_verbatim():
+    from litellm.proxy._types import UpdateJWTKeyMappingRequest
+
+    data = UpdateJWTKeyMappingRequest(id="mapping-1", token=_TOKEN_HASH)
+
+    assert _token_hash_for_update(data) == _TOKEN_HASH
+
+
+def test_update_hashes_a_supplied_plaintext_key():
+    from litellm.proxy._types import UpdateJWTKeyMappingRequest, hash_token
+
+    data = UpdateJWTKeyMappingRequest(id="mapping-1", key="sk-rotated")
+
+    assert _token_hash_for_update(data) == hash_token("sk-rotated")
+
+
+def test_update_rejects_both_identifiers():
+    from litellm.proxy._types import UpdateJWTKeyMappingRequest
+
+    data = UpdateJWTKeyMappingRequest(id="mapping-1", key="sk-abc", token=_TOKEN_HASH)
+
+    with pytest.raises(HTTPException) as exc_info:
+        _token_hash_for_update(data)
+
+    assert exc_info.value.status_code == 400
+    assert "at most one" in exc_info.value.detail.lower()
+
+
+def test_update_rejects_a_token_that_is_not_a_sha256_hash():
+    from litellm.proxy._types import UpdateJWTKeyMappingRequest
+
+    data = UpdateJWTKeyMappingRequest(id="mapping-1", token="sk-not-a-hash")
+
+    with pytest.raises(HTTPException) as exc_info:
+        _token_hash_for_update(data)
+
+    assert exc_info.value.status_code == 400
+    assert "SHA-256" in exc_info.value.detail

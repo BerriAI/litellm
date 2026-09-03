@@ -1,3 +1,4 @@
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Final, Protocol
@@ -18,6 +19,51 @@ from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.repositories.table_repositories import JWTKeyMappingRepository
 
 router: Final = APIRouter()
+
+_TOKEN_HASH_PATTERN: Final = re.compile(r"[0-9a-f]{64}")
+
+
+def _validated_token_hash(token: str) -> str:
+    """Guards a plaintext key from being stored as a hash of a hash, which would never match."""
+    if _TOKEN_HASH_PATTERN.fullmatch(token) is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "`token` must be the SHA-256 hash of a virtual key "
+                "(64 lowercase hex characters). Pass the plaintext as `key` instead."
+            ),
+        )
+    return token
+
+
+_EXACTLY_ONE_IDENTIFIER: Final = (
+    "Provide exactly one of `key` (the plaintext virtual key) or `token` (its SHA-256 hash)."
+)
+_AT_MOST_ONE_IDENTIFIER: Final = (
+    "Provide at most one of `key` (the plaintext virtual key) or `token` (its SHA-256 hash)."
+)
+
+
+def _token_hash_for_create(data: CreateJWTKeyMappingRequest) -> str:
+    """Resolve the token hash to store, from either the plaintext key or its hash."""
+    if data.key is not None and data.token is not None:
+        raise HTTPException(status_code=400, detail=_EXACTLY_ONE_IDENTIFIER)
+    if data.token is not None:
+        return _validated_token_hash(data.token)
+    if data.key is not None:
+        return hash_token(data.key)
+    raise HTTPException(status_code=400, detail=_EXACTLY_ONE_IDENTIFIER)
+
+
+def _token_hash_for_update(data: UpdateJWTKeyMappingRequest) -> str | None:
+    """Resolve the token hash to store, or None to leave the mapped key alone."""
+    if data.key is not None and data.token is not None:
+        raise HTTPException(status_code=400, detail=_AT_MOST_ONE_IDENTIFIER)
+    if data.token is not None:
+        return _validated_token_hash(data.token)
+    if data.key is not None:
+        return hash_token(data.key)
+    return None
 
 
 class _JWTKeyMappingRecord(Protocol):
@@ -105,7 +151,7 @@ async def create_jwt_key_mapping(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        hashed_key: Final = hash_token(data.key)
+        hashed_key: Final = _token_hash_for_create(data)
         create_data: Final = {
             "jwt_claim_name": data.jwt_claim_name,
             "jwt_claim_value": data.jwt_claim_value,
@@ -157,9 +203,10 @@ async def update_jwt_key_mapping(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
 
-    update_data: Final = data.model_dump(exclude_unset=True, exclude={"id", "key"})
-    if data.key is not None:
-        update_data["token"] = hash_token(data.key)
+    update_data: Final = data.model_dump(exclude_unset=True, exclude={"id", "key", "token"})
+    token_hash: Final = _token_hash_for_update(data)
+    if token_hash is not None:
+        update_data["token"] = token_hash
     update_data["updated_by"] = user_api_key_dict.user_id
 
     try:
