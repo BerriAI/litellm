@@ -9,7 +9,7 @@
     "limit": 319
   },
   "reportAttributeAccessIssue": {
-    "limit": 480
+    "limit": 479
   },
   "reportCallIssue": {
     "limit": 112
@@ -111,7 +111,7 @@
     "limit": 19624
   },
   "reportUnknownVariableType": {
-    "limit": 29861
+    "limit": 29858
   },
   "reportUnnecessaryCast": {
     "limit": 111
