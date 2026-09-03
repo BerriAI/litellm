@@ -33,6 +33,16 @@ locals {
   public_subnet_ids  = local.create_vpc ? aws_subnet.public[*].id : var.public_subnet_ids
   private_subnet_ids = local.create_vpc ? aws_subnet.private[*].id : var.private_subnet_ids
 
+  # Without a NAT gateway the tasks need a public IP of their own to reach
+  # GHCR, Secrets Manager, and the LLM providers. Ingress is unchanged either
+  # way: aws_security_group.tasks admits the ALB group and nothing else, though
+  # entries in var.additional_task_security_group_ids are unioned on top.
+  # Inert on a caller-supplied VPC, which brings its own routing and where the
+  # module creates no NAT gateway to save in the first place.
+  public_tasks    = local.create_vpc && var.tasks_in_public_subnets
+  task_subnet_ids = local.public_tasks ? local.public_subnet_ids : local.private_subnet_ids
+  nat_enabled     = local.create_vpc && !local.public_tasks
+
   task_security_group_ids = concat([aws_security_group.tasks.id], var.additional_task_security_group_ids)
 
   # `byo_*` is the existing-store branch, `database_enabled` is either branch.
@@ -54,6 +64,8 @@ locals {
   # Every uvicorn worker in every gateway task counts its own rate limits when
   # there is no Redis to share them through, so the ceiling is tasks x workers.
   max_gateway_processes = (var.gateway_autoscaling_enabled ? var.gateway_max_capacity : var.gateway_desired_count) * var.gateway_num_workers
+
+  bedrock_policy_enabled = length(var.bedrock_model_arns) > 0 || var.enable_bedrock_mantle
 
   gateway_path_prefixes = [
     "/v1/chat/*", "/chat/*",

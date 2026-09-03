@@ -45,5 +45,12 @@ resource "aws_ecs_task_definition" "migrations" {
     }
   }])
 
+  lifecycle {
+    precondition {
+      condition     = !local.public_tasks
+      error_message = "tasks_in_public_subnets cannot be combined with a database in a module-created VPC: the schema migration and the Aurora bootstrap both run through `ecs run-task` pinned to the private subnets with assignPublicIp=DISABLED, so with no NAT gateway they hang and fail pulling their image. Either keep `tasks_in_public_subnets = false`, or supply your own `vpc_id` whose private subnets already have egress."
+    }
+  }
+
   tags = local.tags
 }

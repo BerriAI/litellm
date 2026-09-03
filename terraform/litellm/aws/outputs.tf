@@ -43,6 +43,11 @@ output "s3_bucket" {
   value       = aws_s3_bucket.this.bucket
 }
 
+output "bedrock_model_import_role_arn" {
+  description = "Service role Bedrock assumes to read model weights from `models/` in the S3 bucket. Pass as `--role-arn` to `aws bedrock create-model-import-job`. Null when `enable_bedrock_custom_model_import = false`."
+  value       = one(aws_iam_role.bedrock_model_import[*].arn)
+}
+
 output "master_key_secret_arn" {
   description = "Secrets Manager ARN holding LITELLM_MASTER_KEY. Fetch with `aws secretsmanager get-secret-value --secret-id <arn>`."
   value       = aws_secretsmanager_secret.master_key.arn

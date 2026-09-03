@@ -90,9 +90,9 @@ resource "aws_iam_role_policy_attachment" "task_s3_access" {
 # /tmp/litellm-config.yaml before exec'ing uvicorn. The task role already
 # has s3:GetObject on this bucket via aws_iam_policy.s3_access.
 #
-# etag flows into the task definition (see locals.proxy_config_env in
-# ecs.tf) so a config edit produces a new task-def revision and ECS rolls
-# both services automatically.
+# A sha256 of this same content flows into the task definition (see
+# locals.proxy_config_env in ecs.tf) so a config edit produces a new task-def
+# revision and ECS rolls both services automatically.
 resource "aws_s3_object" "proxy_config" {
   count = length(keys(var.proxy_config)) > 0 ? 1 : 0
 

@@ -158,3 +158,30 @@ variable "backend_extra_secrets" {
   type        = map(string)
   default     = {}
 }
+
+# Bedrock models authenticate with the task role, so they need no API key.
+# Non-empty grants InvokeModel + InvokeModelWithResponseStream on exactly
+# these ARNs.
+variable "bedrock_model_arns" {
+  description = "Bedrock inference-profile and foundation-model ARNs the proxy may invoke. Empty disables Bedrock access."
+  type        = list(string)
+  default     = []
+}
+
+variable "enable_bedrock_mantle" {
+  description = "Grant bedrock-mantle:CreateInference, required by bedrock_mantle/... models."
+  type        = bool
+  default     = false
+}
+
+variable "enable_bedrock_custom_model_import" {
+  description = "Create the service role Bedrock assumes to read model weights from the stack bucket."
+  type        = bool
+  default     = false
+}
+
+variable "tasks_in_public_subnets" {
+  description = "Run tasks in the public subnets with a public IP and no NAT gateway, trading ~$33/month for a directly addressable but ALB-firewalled task ENI."
+  type        = bool
+  default     = false
+}

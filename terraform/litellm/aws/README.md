@@ -2,7 +2,7 @@
 
 Deploys the componentized LiteLLM proxy on AWS:
 
-- **VPC** with public + private subnets across the AZs you pass in, one NAT gateway (skipped when you pass an existing `vpc_id`)
+- **VPC** with public + private subnets across the AZs you pass in, one NAT gateway (skipped when you pass an existing `vpc_id`, or when `tasks_in_public_subnets = true`)
 - **Aurora Postgres** cluster — one writer instance + one reader instance, **IAM database authentication enabled** (skipped when `create_database = false`)
 - **ElastiCache Redis** (private, replication group with multi-AZ failover and at-rest + in-transit encryption) for caching + rate limiting (skipped when `create_redis = false`)
 - **S3 bucket** (private, versioned, SSE-S3) — exposed to gateway + backend as `S3_BUCKET_NAME` / `S3_REGION_NAME` for cache backend, request log archival, and `/v1/files` storage
@@ -39,6 +39,15 @@ vpc_id             = "vpc-0123456789abcdef0"
 public_subnet_ids  = ["subnet-aaa", "subnet-bbb"]
 private_subnet_ids = ["subnet-ccc", "subnet-ddd"]
 ```
+
+**Skipping the NAT gateway.** When the module owns the networking,
+`tasks_in_public_subnets = true` puts the ECS tasks in the public subnets with a
+public IP and creates no NAT gateway, which is about $33/month back. Ingress
+does not change: the tasks security group admits the ALB's group and nothing
+else, so all the public IP buys is egress for image pulls, Secrets Manager,
+CloudWatch Logs, and the LLM providers. It rules out a database, since the
+schema migration and the Aurora bootstrap both `ecs run-task` into the private
+subnets, and it is a single-user or dev trade rather than an HA one
 
 **Database and Redis.** `create_database` and `create_redis` default to `true`
 (today's behavior). Set one to `false` and pass a connection string to use
@@ -99,9 +108,9 @@ Mirrors the helm chart's `gateway.config.proxy_config`. The map is YAML-encoded
 and uploaded to S3 (`config/litellm-config.yaml` in the stack's bucket); the
 gateway and backend container entrypoints download it to
 `/tmp/litellm-config.yaml` at task start via boto3 and set `CONFIG_FILE_PATH`
-to match. The S3 object's etag is wired into the task definition, so editing
-`proxy_config` produces a new task-def revision and a rolling redeploy of both
-services.
+to match. A hash of `proxy_config` is wired into the task definition, so editing
+it produces a new task-def revision and a rolling redeploy of both services in
+the same apply that uploads the new object.
 
 ```hcl
 proxy_config = {
@@ -173,6 +182,60 @@ aws secretsmanager create-secret \
   --name openai-api-key \
   --secret-string "sk-proj-..."
 ```
+
+### Bedrock (no API key)
+
+Bedrock is the one provider that needs no secret. List the model ARNs the proxy
+may invoke in `bedrock_model_arns` and the module attaches a policy to the ECS
+task role granting `bedrock:InvokeModel` and
+`bedrock:InvokeModelWithResponseStream` on exactly those resources. boto3 inside
+the proxy picks the task role up from the container credential provider, so the
+`proxy_config` entry carries no `api_key` field at all. The region comes from the
+`AWS_REGION` / `AWS_REGION_NAME` vars the module already injects into every task
+(see `ecs.tf`), so it follows `var.region`. To reach a model in another region,
+set `aws_region_name` on the individual `proxy_config` entry rather than trying
+to override the task-wide vars through `gateway_extra_env`, which appends a
+duplicate entry instead of replacing them
+
+```hcl
+bedrock_model_arns = [
+  "arn:aws:bedrock:*:111122223333:inference-profile/us.anthropic.*",
+  "arn:aws:bedrock:*::foundation-model/anthropic.*",
+]
+
+proxy_config = {
+  model_list = [
+    {
+      model_name = "claude-sonnet-5"
+      litellm_params = {
+        model = "bedrock/us.anthropic.claude-sonnet-5"
+      }
+    },
+  ]
+}
+```
+
+A cross-region inference profile (the `us.` prefix) forwards the request to a
+foundation model in whichever region has capacity, so it needs both ARNs above:
+the profile itself, and the foundation model wildcarded across every region the
+profile can route to
+
+Every entry must be a Bedrock ARN. A bare `"*"` is rejected at plan time, since
+it would let the proxy's task role invoke every Bedrock resource in the account,
+including other teams' provisioned throughput and private imported models
+
+Two adjacent flags cover the rest of the Bedrock surface. `enable_bedrock_mantle`
+grants `bedrock-mantle:CreateInference`, which the `bedrock_mantle/...` models
+(OpenAI models hosted on Bedrock) authorize against instead of
+`bedrock:InvokeModel`; its resource is a wildcard because that surface exposes no
+per-model ARN, so it is scoped by an `aws:RequestedRegion` condition and the
+module fails the plan if the provider's region disagrees with `var.region`.
+`enable_bedrock_custom_model_import` creates a service role Bedrock assumes to
+read model weights out of `models/` in the stack's S3 bucket, exported as the
+`bedrock_model_import_role_arn` output. The import itself is a one-off
+`aws bedrock create-model-import-job` call rather than a Terraform resource,
+and imported models serve behind an OpenAI-compatible runtime, so reference one
+as `bedrock/openai/<imported-model-arn>` in `proxy_config`
 
 ### Observability (OpenTelemetry v2)
 
@@ -420,12 +483,13 @@ losing the contents.
 | `examples/default/` | Thin root: `aws` provider (with an optional `default_tags` slot for org-wide tags) + a call to the module. The one-command deploy path. |
 | `variables.tf`    | All input variables                                                   |
 | `locals.tf`       | Path-prefix lists for ALB routing (mirror of `helm/.../ingress.yaml`) |
-| `network.tf`      | VPC, subnets, IGW, NAT, route tables (all optional), security groups   |
+| `network.tf`      | VPC, subnets, IGW, NAT (also skipped by `tasks_in_public_subnets`), route tables (all optional), security groups |
 | `secrets.tf`      | Secrets Manager entries + random passwords                            |
 | `rds.tf`          | Aurora Postgres cluster + writer / reader instances                   |
 | `redis.tf`        | ElastiCache Redis                                                     |
 | `s3.tf`           | S3 bucket + task-role policy scoped to it                             |
 | `iam.tf`          | Task execution + task roles, including `rds-db:connect`               |
+| `bedrock.tf`      | Task-role Bedrock policies (`bedrock_model_arns`, `enable_bedrock_mantle`) and the import role (`enable_bedrock_custom_model_import`) |
 | `ecs.tf`          | ECS cluster, task definitions, services for the three components     |
 | `alb.tf`          | ALB, listener, target groups, path-routing rules                      |
 | `migrations.tf`   | One-off migration task definition                                     |

@@ -78,8 +78,10 @@ variable "ui_password" {
 # Two modes:
 #
 #   1. Module-owned (default, `vpc_id = ""`): the stack creates a VPC, public
-#      and private subnets per AZ, an internet gateway, a NAT gateway, and
-#      the route tables wiring them together. `vpc_cidr` + `azs` drive it.
+#      and private subnets per AZ, an internet gateway, and the route tables
+#      wiring them together, plus a NAT gateway unless
+#      `tasks_in_public_subnets` moves the tasks into the public subnets.
+#      `vpc_cidr` + `azs` drive it.
 #   2. Bring-your-own (`vpc_id` set): the stack creates no networking and
 #      places the ALB in `public_subnet_ids` and every task, plus the Aurora
 #      and ElastiCache subnet groups, in `private_subnet_ids`. `vpc_cidr` and
@@ -88,7 +90,8 @@ variable "ui_password" {
 variable "vpc_id" {
   description = <<-EOT
     Existing VPC to deploy into. Leave empty ("") to have the module create
-    its own VPC, subnets, NAT gateway, and route tables. When set,
+    its own VPC, subnets, route tables, and, unless
+    `tasks_in_public_subnets` is set, a NAT gateway. When set,
     `public_subnet_ids` and `private_subnet_ids` are required and no
     networking is created: the private subnets must already have egress
     (NAT gateway or equivalent) so tasks can reach LLM providers, ECR/GHCR,
@@ -108,6 +111,21 @@ variable "private_subnet_ids" {
   description = "Existing private subnets for the ECS tasks, Aurora, and ElastiCache. Required when `vpc_id` is set, ignored otherwise."
   type        = list(string)
   default     = []
+}
+
+variable "tasks_in_public_subnets" {
+  description = <<-EOT
+    Run the ECS tasks in the public subnets with a public IP and create no NAT
+    gateway. The public IP buys egress only: the tasks security group admits
+    inbound from the ALB's security group and nothing else, so the proxy stays
+    reachable through the load balancer alone. This trades the NAT gateway's
+    ~$33/month for a task ENI that is directly addressable but firewalled,
+    which suits a single-user or dev stack rather than an HA one. Ignored when
+    `vpc_id` is set, since a caller-supplied VPC brings its own routing and the
+    module creates no NAT gateway there to save.
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "additional_task_security_group_ids" {
@@ -519,9 +537,9 @@ variable "proxy_config" {
     chart's `gateway.config.proxy_config` value. Uploaded to S3 under
     `config/litellm-config.yaml` in the stack's bucket; gateway and backend
     container entrypoints download it to /tmp/litellm-config.yaml at task
-    start (CONFIG_FILE_PATH is set automatically). The S3 object's etag is
-    wired into the task definition, so editing this value produces a new
-    task-def revision and a rolling redeploy.
+    start (CONFIG_FILE_PATH is set automatically). A hash of this value is
+    wired into the task definition, so editing it produces a new task-def
+    revision and a rolling redeploy.
 
     Example:
       proxy_config = {
@@ -553,6 +571,59 @@ variable "log_retention_days" {
   description = "CloudWatch log retention for the three services."
   type        = number
   default     = 30
+}
+
+# ---------- Bedrock ----------
+
+variable "bedrock_model_arns" {
+  description = <<-EOT
+    Bedrock inference-profile and foundation-model ARNs the proxy may invoke.
+    Non-empty attaches a policy to the task role granting
+    `bedrock:InvokeModel` + `bedrock:InvokeModelWithResponseStream` on exactly
+    these resources, so Bedrock entries in `proxy_config` authenticate with the
+    task role and need no API key in `gateway_extra_secrets`. Wildcards within
+    the resource segment are fine; wildcards in the account or resource-type
+    segment are not. Invoking a cross-region inference profile
+    (`us.anthropic.…`) requires both the profile ARN and the underlying
+    foundation-model ARN in every region the profile can route to.
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for a in var.bedrock_model_arns : can(regex("^arn:aws[a-z-]*:bedrock:[^:]*:[^:]*:[a-z-]+/", a))])
+    error_message = "Every bedrock_model_arns entry must be a Bedrock ARN with a real resource type, e.g. arn:aws:bedrock:*::foundation-model/anthropic.*. Bare wildcards on the account or resource-type segment (\"*\", \"arn:aws:bedrock:*\", \"arn:aws:bedrock:*:*:*\") are rejected, because they would let the task role invoke every Bedrock resource in the account, including other teams' provisioned throughput and private imported models."
+  }
+}
+
+variable "enable_bedrock_mantle" {
+  description = <<-EOT
+    Grant the task role `bedrock-mantle:CreateInference`, required by
+    `bedrock_mantle/...` models (OpenAI models hosted on Bedrock), which
+    authorize against the mantle action rather than `bedrock:InvokeModel`.
+    The grant is scoped to `project/*` under this account in `var.region`,
+    matching AWS's own `AmazonBedrockMantleInferenceAccess`.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "enable_bedrock_custom_model_import" {
+  description = <<-EOT
+    Create a service role Bedrock assumes to read Hugging Face model weights
+    out of `models/` in the stack's S3 bucket during a `CreateModelImportJob`.
+    The import job itself is a one-off API call, not a Terraform resource, so
+    this only provisions the role; pass its ARN as `--role-arn` and add the
+    resulting imported-model ARN to `bedrock_model_arns` to let the proxy
+    invoke it.
+
+    Reference the imported model from `proxy_config` as
+    `bedrock/openai/<imported-model-arn>`. Imported models serve behind an
+    OpenAI-compatible runtime, and while Converse accepts the ARN it returns
+    token counts with empty content, so the invoke path is the working one.
+  EOT
+  type        = bool
+  default     = false
 }
 
 # ---------- OpenTelemetry v2 ----------
