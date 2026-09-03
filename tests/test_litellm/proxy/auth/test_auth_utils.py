@@ -508,6 +508,16 @@ def test_get_model_from_request_bedrock_count_tokens_uses_body_model():
     )
 
 
+def test_get_model_from_request_bedrock_uppercase_count_tokens_segment_is_not_count_tokens():
+    assert (
+        get_model_from_request(
+            request_data={"model": "us.anthropic.claude-haiku-4-5-20251001-v1:0"},
+            route="/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke/COUNT_TOKENS",
+        )
+        == "us.anthropic.claude-sonnet-4-6"
+    )
+
+
 def test_get_model_from_request_bedrock_unparseable_endpoint_keeps_body_model():
     assert (
         get_model_from_request(

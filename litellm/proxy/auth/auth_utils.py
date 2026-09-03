@@ -1989,13 +1989,14 @@ def get_model_from_request(
 
 
 def _model_from_bedrock_route(route: str) -> str | None:
-    bedrock_endpoint: Final = re.sub(r"^/bedrock/", "", route, flags=re.IGNORECASE)
-    if "count_tokens" in bedrock_endpoint.lower() or "count-tokens" in bedrock_endpoint.lower():
-        return None
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         _extract_model_from_bedrock_endpoint,
+        is_bedrock_count_tokens_endpoint,
     )
 
+    bedrock_endpoint: Final = re.sub(r"^/bedrock/", "", route, flags=re.IGNORECASE)
+    if is_bedrock_count_tokens_endpoint(bedrock_endpoint):
+        return None
     try:
         return _extract_model_from_bedrock_endpoint(bedrock_endpoint)
     except ValueError:
