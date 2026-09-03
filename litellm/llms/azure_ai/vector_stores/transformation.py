@@ -1,10 +1,15 @@
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
-import litellm
 from litellm.llms.azure.common_utils import BaseAzureLLM
-from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.llms.base_llm.vector_store.transformation import (
+    BaseQueryEmbeddingVectorStoreConfig,
+    VectorStoreEmbeddingExecutor,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
     BaseVectorStoreAuthCredentials,
@@ -26,7 +31,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
+class AzureAIVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAzureLLM):
     """
     Configuration for Azure AI Search Vector Store
 
@@ -110,82 +115,72 @@ class AzureAIVectorStoreConfig(BaseVectorStoreConfig, BaseAzureLLM):
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: str | list[str],
+        query: str | Sequence[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
-        extra_body: dict[str, Any] | None = None,
-        router: "Router | None" = None,
-    ) -> tuple[str, dict[str, Any]]:
-        """
-        Transform search request for Azure AI Search API
+        litellm_params: Mapping[str, object],
+        extra_body: Mapping[str, object] | None = None,
+        router: Router | None = None,
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
+    ) -> tuple[str, dict[str, object]]:
+        query_text: Final = self.query_text(query)
+        query_vector: Final = self.embed_query(query_text, litellm_params, embedding_executor, router)
+        return self._search_request(
+            vector_store_id,
+            query_text,
+            query_vector,
+            vector_store_search_optional_params,
+            api_base,
+            litellm_logging_obj,
+            litellm_params,
+        )
 
-        Generates embeddings using litellm.embeddings and constructs Azure AI Search request
-        """
-        # Convert query to string if it's a list
-        if isinstance(query, list):
-            query = " ".join(query)
+    async def atransform_search_vector_store_request(
+        self,
+        vector_store_id: str,
+        query: str | Sequence[str],
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        api_base: str,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_params: Mapping[str, object],
+        extra_body: Mapping[str, object] | None = None,
+        router: Router | None = None,
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
+    ) -> tuple[str, dict[str, object]]:
+        query_text: Final = self.query_text(query)
+        query_vector: Final = await self.aembed_query(query_text, litellm_params, embedding_executor, router)
+        return self._search_request(
+            vector_store_id,
+            query_text,
+            query_vector,
+            vector_store_search_optional_params,
+            api_base,
+            litellm_logging_obj,
+            litellm_params,
+        )
 
-        # Get embedding model from litellm_params (required)
-        embedding_model: Final = litellm_params.get("litellm_embedding_model")
-        if not embedding_model:
-            raise ValueError(
-                "embedding_model is required in litellm_params for Azure AI Search. "
-                "Example: litellm_params['embedding_model'] = 'azure/text-embedding-3-large'"
-            )
-
-        embedding_config: Final = litellm_params.get("litellm_embedding_config", {})
-        if not embedding_config:
-            raise ValueError(
-                "embedding_config is required in litellm_params for Azure AI Search. "
-                "Example: litellm_params['embedding_config'] = {'api_base': 'https://krris-mh44uf7y-eastus2.cognitiveservices.azure.com/', 'api_key': 'os.environ/AZURE_API_KEY', 'api_version': '2025-09-01'}"
-            )
-
-        # Get vector field name (defaults to contentVector)
+    @staticmethod
+    def _search_request(
+        vector_store_id: str,
+        query_text: str,
+        query_vector: Sequence[float],
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        api_base: str,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
         vector_field: Final = litellm_params.get("azure_search_vector_field", "contentVector")
-
-        # Get top_k (number of results to return)
         top_k: Final = vector_store_search_optional_params.get("top_k", 10)
-
-        # Generate embedding for the query using litellm.embeddings
-        try:
-            embedding_response: Final = litellm.embedding(
-                model=embedding_model,
-                input=[query],
-                **embedding_config,
-            )
-            query_vector: Final = embedding_response.data[0]["embedding"]
-        except Exception as e:
-            raise Exception(f"Failed to generate embedding for query: {e}")
-
-        # Azure AI Search endpoint for search
-        index_name: Final = vector_store_id  # vector_store_id is the index name
-        url: Final = f"{api_base}/indexes/{index_name}/docs/search?api-version=2024-07-01"
-
-        # Build the request body for Azure AI Search with vector search
-        request_body: Final = {
-            "search": "*",  # Get all documents (filtered by vector similarity)
-            "vectorQueries": [
-                {
-                    "vector": query_vector,
-                    "fields": vector_field,
-                    "kind": "vector",
-                    "k": top_k,  # Number of nearest neighbors to return
-                }
-            ],
-            "select": "id,content",  # Fields to return (customize based on schema)
+        litellm_logging_obj.model_call_details["input"] = query_text
+        litellm_logging_obj.model_call_details["embedding_model"] = litellm_params.get("litellm_embedding_model")
+        litellm_logging_obj.model_call_details["top_k"] = top_k
+        return f"{api_base}/indexes/{vector_store_id}/docs/search?api-version=2024-07-01", {
+            "search": "*",
+            "vectorQueries": [{"vector": query_vector, "fields": vector_field, "kind": "vector", "k": top_k}],
+            "select": "id,content",
             "top": top_k,
         }
-
-        #########################################################
-        # Update logging object with details of the request
-        #########################################################
-        litellm_logging_obj.model_call_details["input"] = query
-        litellm_logging_obj.model_call_details["embedding_model"] = embedding_model
-        litellm_logging_obj.model_call_details["top_k"] = top_k
-
-        return url, request_body
 
     def transform_search_vector_store_response(
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
