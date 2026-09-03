@@ -15,6 +15,8 @@ UpdateCallback = Callable[[HarnessRun], None]
 def selector_matches_node(selector: str, nodeid: str) -> bool:
     normalized_selector = selector.replace("\\", "/")
     normalized_nodeid = nodeid.replace("\\", "/")
+    if normalized_selector.endswith("/"):
+        return normalized_nodeid.startswith(normalized_selector)
     if "::" in normalized_selector:
         return normalized_nodeid == normalized_selector or normalized_nodeid.startswith(
             f"{normalized_selector}["
