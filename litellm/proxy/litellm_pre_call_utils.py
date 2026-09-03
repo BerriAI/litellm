@@ -997,6 +997,12 @@ def resolve_tenant_otel_destinations(
     backend to two accounts. Returns empty when OTEL V2 is off, when neither level
     named a destination-capable backend, or when the config is incomplete, and the
     request then keeps the operator's own exporters.
+
+    A ``failure``-only entry is skipped: a destination is resolved during auth, before
+    the request has an outcome, so honouring the filter would mean holding every span
+    back until the call finishes. Those entries keep today's behaviour instead, where
+    the tenant's credentials reach the backend through per-request tracer routing and
+    the operator's exporter is left alone.
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.integrations.otel.presets.destinations import destination_for
@@ -1012,6 +1018,7 @@ def resolve_tenant_otel_destinations(
         destination
         for item in entries
         if (callback := _get_validated_callback_metadata(item=item, source="otel-destination")) is not None
+        if callback.callback_type != "failure"
         if (destination := destination_for(callback.callback_name, _tenant_otel_params(callback.callback_vars)))
         is not None
     )

@@ -20,6 +20,7 @@ Admins can opt out via two ``litellm`` globals (wired from proxy config):
 """
 
 import socket
+from functools import lru_cache
 from ipaddress import ip_address, ip_network
 from typing import Any, Final, Protocol
 from urllib.parse import quote, urlparse, urlunparse
@@ -361,6 +362,54 @@ def validate_url(url: str) -> tuple[str, str]:
     rewritten: Final = urlunparse((parsed.scheme, new_netloc, parsed.path, parsed.params, parsed.query, ""))
 
     return rewritten, host_header
+
+
+def assert_public_url(url: str) -> None:
+    """Raise ``SSRFError`` unless ``url``'s host resolves only to public addresses.
+
+    The validation half of :func:`validate_url`, for callers that must keep the
+    original hostname on the wire (TLS SNI, vendor-side Host routing) and so cannot
+    use its IP-rewriting form. It honours the same ``litellm.user_url_validation``
+    master switch and ``litellm.user_url_allowed_hosts`` allowlist. Because the
+    caller still connects by name, this rejects a host that resolves somewhere
+    private; it does not close a DNS rebind between the check and the connection.
+    """
+    if not getattr(litellm, "user_url_validation", True):
+        return
+    rejection: Final = _public_host_rejection(url, tuple(getattr(litellm, "user_url_allowed_hosts", None) or ()))
+    if rejection is not None:
+        raise SSRFError(rejection)
+
+
+@lru_cache(maxsize=512)
+def _public_host_rejection(url: str, allowed_hosts: tuple[str, ...]) -> str | None:
+    """Why ``url`` is not safe to reach, or ``None``.
+
+    A verdict rather than an exception so both outcomes are cached: callers check
+    the same handful of destinations on every request and ``getaddrinfo`` blocks.
+    ``allowed_hosts`` is part of the key so a config reload takes effect.
+    """
+    parsed: Final = urlparse(url)
+    if parsed.scheme not in _ALLOWED_SCHEMES:
+        return f"URL scheme '{parsed.scheme}' is not allowed"
+
+    hostname: Final = parsed.hostname
+    if not hostname:
+        return "URL has no hostname"
+
+    effective_port: Final = parsed.port if parsed.port is not None else _default_port_for_scheme(parsed.scheme)
+    if _is_host_allowlisted(hostname, effective_port):
+        return None
+
+    try:
+        addrinfo: Final = socket.getaddrinfo(hostname, effective_port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as e:
+        return f"DNS resolution failed for '{hostname}': {e}"
+
+    blocked: Final = tuple(
+        address for address in (_sockaddr_host(info[4]) for info in addrinfo) if _is_blocked_ip(address)
+    )
+    return f"'{hostname}' resolves to a non-public address ({blocked[0]})" if blocked else None
 
 
 def assert_same_origin(candidate_url: str, expected_url: str) -> None:
