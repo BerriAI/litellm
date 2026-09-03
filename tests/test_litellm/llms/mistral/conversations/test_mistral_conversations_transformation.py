@@ -313,6 +313,29 @@ def test_transform_response_chunked_content_and_citations():
     assert mr.id == "conv_abc"
 
 
+def test_transform_response_untitled_source_is_cited_without_a_title_key():
+    """A tool_reference with a URL but no title must still surface as a citation,
+    and must not carry a null title: OpenAI clients read url_citation.title as a
+    string when present."""
+    mr = _transform(
+        {
+            "conversation_id": "conv_1",
+            "outputs": [
+                {
+                    "type": "message.output",
+                    "content": [
+                        {"type": "text", "text": "See the source."},
+                        {"type": "tool_reference", "tool": "web_search", "url": "https://example.org/untitled"},
+                    ],
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+    annotations = mr.choices[0].message.annotations
+    assert annotations == [{"type": "url_citation", "url_citation": {"url": "https://example.org/untitled"}}]
+
+
 def _finish_reason_for(request_data: dict) -> str:
     # CONVERSATIONS_RESPONSE reports completion_tokens == 8
     mr = MistralConversationsConfig().transform_response(
