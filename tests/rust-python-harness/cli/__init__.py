@@ -4,26 +4,31 @@ import argparse
 import importlib.util
 import sys
 from collections.abc import Sequence
-from typing import Final
+from typing import Annotated, Final, TypeAlias
 
 import pytest
+from pydantic import Field, TypeAdapter, ValidationError
 
-from ..shared.reporting.models import SDK_FUNCTIONS
+from ..shared.reporting.models import SDK_FUNCTIONS, SdkFunction, Strategy
 from .catalog import load_catalog
-from .commands import check_command, list_command, run_command
+from .commands import CheckArgs, ListArgs, RunArgs, check_command, list_command, run_command
 from .selection import interactive_filters, select
 
 __all__ = ["load_catalog", "main"]
 
 
-def _selection_parent() -> argparse.ArgumentParser:
+ParsedArgs: TypeAlias = Annotated[RunArgs | ListArgs | CheckArgs, Field(discriminator="verb")]
+_ARGS_ADAPTER: Final[TypeAdapter[ParsedArgs]] = TypeAdapter(ParsedArgs)
+
+
+def _selection_parent(strategy_ids: Sequence[str]) -> argparse.ArgumentParser:
     parent = argparse.ArgumentParser(add_help=False)
     selection = parent.add_argument_group("selection")
     selection.add_argument(
         "--strategy",
         action="append",
         default=[],
-        metavar="ID",
+        choices=strategy_ids,
         help="run only this strategy",
     )
     selection.add_argument(
@@ -48,13 +53,14 @@ def _selection_parent() -> argparse.ArgumentParser:
     return parent
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser(strategies: Sequence[Strategy]) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rust-python-harness",
         description="Run Rust/Python parity tests with a live strategy-by-SDK-function dashboard.",
     )
     subparsers = parser.add_subparsers(dest="verb", required=True)
-    selection = _selection_parent()
+    strategy_ids: Final = tuple(strategy.id for strategy in strategies)
+    selection = _selection_parent(strategy_ids)
 
     run_parser = subparsers.add_parser(
         "run", parents=[selection], help="run the selected strategies (default dashboard)"
@@ -93,28 +99,37 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-_PARSER = _build_parser()
 _INTERRUPTED_EXIT_CODE: Final = 130
 
 
 def _main(argv: Sequence[str] | None = None) -> int:
-    args = _PARSER.parse_args(argv)
+    strategies: Final = load_catalog()
+    parser: Final = _build_parser(strategies)
+    namespace: Final = parser.parse_args(argv)
+    try:
+        args: Final = _ARGS_ADAPTER.validate_python(vars(namespace))
+    except ValidationError as error:
+        parser.error(str(error))
     if args.verb == "run" and args.coverage and importlib.util.find_spec("pytest_cov") is None:
-        _PARSER.error(
+        parser.error(
             "--coverage requires the project's pytest-cov dependency; run with "
             "`poetry run python -m tests.rust-python-harness run --coverage`"
         )
-    strategies = load_catalog()
-    strategy_ids = set(args.strategy)
-    sdk_functions = set(args.sdk_functions)
-    if args.interactive:
-        picked_strategies, picked_functions = interactive_filters(strategies)
-        strategy_ids = strategy_ids or picked_strategies
-        sdk_functions = sdk_functions or picked_functions
+    strategy_ids: Final = frozenset(args.strategy)
+    sdk_functions: Final = frozenset(args.sdk_functions)
+    picked: Final[tuple[frozenset[str], frozenset[SdkFunction]]] = (
+        interactive_filters(strategies)
+        if args.interactive
+        else (frozenset[str](), frozenset[SdkFunction]())
+    )
+    selected_strategy_ids: Final = strategy_ids or picked[0]
+    selected_sdk_functions: Final = sdk_functions or picked[1]
     try:
-        cases = select(strategies, strategy_ids, sdk_functions, args.surface)
+        cases: Final = select(
+            strategies, selected_strategy_ids, selected_sdk_functions, args.surface
+        )
     except ValueError as exc:
-        _PARSER.error(str(exc))
+        parser.error(str(exc))
     match args.verb:
         case "run":
             return run_command(args, strategies, cases)
@@ -122,8 +137,6 @@ def _main(argv: Sequence[str] | None = None) -> int:
             return list_command(args, strategies, cases)
         case "check":
             return check_command(args, strategies, cases)
-        case _:
-            _PARSER.error(f"Unknown verb: {args.verb}")
     raise AssertionError("unreachable")
 
 

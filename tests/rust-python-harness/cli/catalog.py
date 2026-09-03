@@ -13,7 +13,7 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from .. import strategies as _strategies_package
-from ..shared.reporting.models import SDK_FUNCTIONS, HarnessCase, Strategy
+from ..shared.reporting.models import SDK_FUNCTIONS, HarnessCase, SdkFunction, Strategy
 from ..shared.reporting.strategy import StrategyDefinition
 
 _STRATEGIES_PACKAGE: Final = _strategies_package
@@ -27,8 +27,8 @@ class StrategySpec(BaseModel):
     id: str
     label: str
     description: str
-    functions: dict[str, dict[str, object]]
-    gateway: dict[str, dict[str, object]] = {}
+    functions: dict[SdkFunction, dict[str, object]]
+    gateway: dict[SdkFunction, dict[str, object]] = {}
 
 
 def _load_strategy_module(name: str, folder: Path, prefix: str | None) -> ModuleType:
@@ -65,7 +65,7 @@ def _load_strategy(name: str, folder: Path, prefix: str | None) -> Strategy:
         raise ValueError(f"{definition.directory}: missing strategy.json")
     try:
         data: Final = StrategySpec.model_validate_json(manifest.read_text(encoding="utf-8"))
-        adapter: Final = TypeAdapter(dict[str, definition.case_spec])
+        adapter: Final = TypeAdapter(dict[SdkFunction, definition.case_spec])
         functions: Final = adapter.validate_python(data.functions)
         gateway: Final = adapter.validate_python(data.gateway)
     except (ValidationError, json.JSONDecodeError) as error:

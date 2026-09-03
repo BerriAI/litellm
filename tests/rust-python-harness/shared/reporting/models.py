@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from time import monotonic
-from typing import TYPE_CHECKING, Iterable
+from typing import TYPE_CHECKING, Final, Iterable, Literal, TypeAlias
 
 if TYPE_CHECKING:
     from .strategy import CaseSpec, StrategyDefinition
@@ -36,16 +36,25 @@ class ConfidenceLevel(str, Enum):
     LOW = "LOW"
 
 
-SDK_FUNCTIONS = ("ocr", "messages", "responses", "count_tokens", "chat_completions", "transcription")
+SdkFunction: TypeAlias = Literal["ocr", "messages", "responses", "count_tokens", "chat_completions", "transcription"]
+Surface: TypeAlias = Literal["sdk", "gateway"]
+SDK_FUNCTIONS: Final[tuple[SdkFunction, ...]] = (
+    "ocr",
+    "messages",
+    "responses",
+    "count_tokens",
+    "chat_completions",
+    "transcription",
+)
 
 
 @dataclass(frozen=True)
 class HarnessCase:
     strategy_id: str
     strategy_label: str
-    sdk_function: str
+    sdk_function: SdkFunction
     spec: CaseSpec
-    surface: str = "sdk"
+    surface: Surface = "sdk"
 
     @property
     def key(self) -> str:

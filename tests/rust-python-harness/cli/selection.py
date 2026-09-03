@@ -1,34 +1,44 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Final
+from collections.abc import Callable, Sequence, Set
+from typing import Final, TypeVar
 
-from ..shared.reporting.models import SDK_FUNCTIONS, HarnessCase, Strategy
+from ..shared.reporting.models import (
+    SDK_FUNCTIONS,
+    HarnessCase,
+    SdkFunction,
+    Strategy,
+    Surface,
+)
+
+OptionValue = TypeVar("OptionValue", bound=str)
 
 
 def pick_values(
-    title: str, options: Sequence[tuple[str, str]], input_fn=input
-) -> set[str]:
+    title: str,
+    options: Sequence[tuple[OptionValue, str]],
+    input_fn: Callable[[str], str] = input,
+) -> frozenset[OptionValue]:
     print(f"\n{title} (Enter = all)")
     for index, (value, label) in enumerate(options, start=1):
         print(f"  {index:>2}. {label}  [{value}]")
     while True:
         answer = input_fn("Choose numbers, comma-separated: ").strip()
         if not answer:
-            return set()
+            return frozenset()
         try:
             indexes = {int(part.strip()) for part in answer.split(",")}
         except ValueError:
             print("Please enter numbers separated by commas.")
             continue
         if indexes and all(1 <= index <= len(options) for index in indexes):
-            return {options[index - 1][0] for index in indexes}
+            return frozenset(options[index - 1][0] for index in indexes)
         print(f"Choose values from 1 to {len(options)}.")
 
 
 def interactive_filters(
     strategies: Sequence[Strategy],
-) -> tuple[set[str], set[str]]:
+) -> tuple[frozenset[str], frozenset[SdkFunction]]:
     strategy_ids = pick_values(
         "Testing strategies", [(strategy.id, strategy.label) for strategy in strategies]
     )
@@ -41,9 +51,9 @@ def interactive_filters(
 
 def select(
     strategies: Sequence[Strategy],
-    strategy_ids: set[str],
-    sdk_functions: set[str],
-    surface: str | None = None,
+    strategy_ids: Set[str],
+    sdk_functions: Set[SdkFunction],
+    surface: Surface | None = None,
 ) -> tuple[HarnessCase, ...]:
     known_ids: Final = {strategy.id for strategy in strategies}
     unknown: Final = strategy_ids - known_ids

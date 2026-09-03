@@ -212,11 +212,30 @@ def test_run_reports_planned_cells_as_success(capsys: pytest.CaptureFixture[str]
     assert "Harness finished with exit code 0" in captured.out
 
 
-def test_run_rejects_an_unknown_strategy() -> None:
+def test_run_rejects_an_unknown_strategy(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     with pytest.raises(SystemExit) as excinfo:
         main(["run", "--strategy", "not-real"])
 
+    captured: Final = capsys.readouterr()
     assert excinfo.value.code == 2
+    assert "invalid choice: 'not-real'" in captured.err
+    assert "e2e_parity" in captured.err
+
+
+def test_run_help_lists_every_strategy(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main(["run", "--help"])
+
+    captured: Final = capsys.readouterr()
+    assert excinfo.value.code == 0
+    assert (
+        "--strategy {e2e_parity,trace_parity,unit_tests_mapping,unit_tests_parity,unit_tests_rust}"
+        in captured.out
+    )
 
 
 def test_keyboard_interrupt_exits_cleanly(

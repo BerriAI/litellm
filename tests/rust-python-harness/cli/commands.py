@@ -1,20 +1,54 @@
 from __future__ import annotations
 
-import argparse
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
-from ..shared.reporting.models import HarnessCase, Strategy
+from ..shared.reporting.models import HarnessCase, SdkFunction, Strategy, Surface
 from ..shared.reporting.orchestration import run_strategies
 from ..shared.reporting.strategy import SelectorCaseSpec, SuiteCaseSpec
 from ..shared.reporting.ui import make_dashboard
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
 COVERAGE_ROOT: Final = REPO_ROOT / "target" / "rust-python-harness"
+
+
+class RunArgs(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    verb: Literal["run"]
+    strategy: tuple[str, ...]
+    sdk_functions: tuple[SdkFunction, ...]
+    surface: Surface | None
+    interactive: bool
+    plain: bool
+    coverage: bool
+    pytest_arg: tuple[str, ...]
+
+
+class ListArgs(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    verb: Literal["list"]
+    strategy: tuple[str, ...]
+    sdk_functions: tuple[SdkFunction, ...]
+    surface: Surface | None
+    interactive: bool
+
+
+class CheckArgs(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    verb: Literal["check"]
+    strategy: tuple[str, ...]
+    sdk_functions: tuple[SdkFunction, ...]
+    surface: Surface | None
+    interactive: bool
+    verbose: bool
 
 
 def _coverage_pytest_args(output_root: Path = COVERAGE_ROOT) -> tuple[str, ...]:
@@ -36,7 +70,7 @@ def _grouped_cases(cases: Sequence[HarnessCase]) -> dict[str, tuple[HarnessCase,
 
 
 def run_command(
-    args: argparse.Namespace,
+    args: RunArgs,
     strategies: Sequence[Strategy],
     cases: Sequence[HarnessCase],
 ) -> int:
@@ -80,14 +114,14 @@ def _case_detail(case: HarnessCase) -> str:
 
 
 def list_command(
-    args: argparse.Namespace,
+    args: ListArgs,
     strategies: Sequence[Strategy],
     cases: Sequence[HarnessCase],
 ) -> int:
     del args
     selected_keys: Final = {case.key for case in cases}
     for strategy in strategies:
-        selected: Final = tuple(
+        selected = tuple(
             case for case in strategy.cases if case.key in selected_keys
         )
         if not selected:
@@ -101,7 +135,7 @@ def list_command(
 
 
 def check_command(
-    args: argparse.Namespace,
+    args: CheckArgs,
     strategies: Sequence[Strategy],
     cases: Sequence[HarnessCase],
 ) -> int:
