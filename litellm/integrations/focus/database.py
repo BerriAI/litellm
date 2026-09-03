@@ -103,7 +103,9 @@ class FocusLiteLLMDatabase:
             usage_rows: Final = (
                 db_response.to_dicts()
                 if isinstance(db_response, pl.DataFrame)
-                else db_response if isinstance(db_response, list) else []
+                else db_response
+                if isinstance(db_response, list)
+                else []
             )
             # v1.99 double-hashed DailyUserSpend.api_key values miss the
             # VerificationToken join above; recover alias/team for those rows.
