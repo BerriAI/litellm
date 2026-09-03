@@ -27065,6 +27065,27 @@
         "mode": "chat",
         "output_cost_per_token": 3.15e-06
     },
+    "baseten/zai-org/GLM-5.3": {
+        "cache_read_input_token_cost": 1.4e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://www.baseten.co/pricing/",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "baseten/zai-org/GLM-4.7": {
         "input_cost_per_token": 6e-07,
         "litellm_provider": "baseten",
