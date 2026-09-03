@@ -12,7 +12,11 @@ gets back a well-formed chat/text/embedding/moderation response with realistic
 ``usage`` so cost tracking and spend accounting still exercise their real code
 paths. The one behavioral special case mirrors the old hosted mock: a request
 whose ``model`` is ``429`` returns HTTP 429 so rate-limit and cooldown tests
-still have something to trip on.
+still have something to trip on, and a model named ``slow-endpoint`` sleeps past
+any short client deadline so timeout tests get a deterministic timeout. The Azure
+deployment, Anthropic ``/v1/messages`` and Bedrock ``converse`` URL shapes are
+served too, so provider timeout tests can point ``api_base`` here instead of
+racing a real provider.
 """
 
 from __future__ import annotations
@@ -21,7 +25,8 @@ import asyncio
 import json
 import time
 import uuid
-from typing import AsyncIterator, Final
+from collections.abc import AsyncIterator
+from typing import Final
 
 import uvicorn
 from starlette.applications import Starlette
@@ -63,6 +68,11 @@ def _usage() -> dict[str, int]:
 def _requested_model(body: dict[str, object]) -> str:
     model = body.get("model")
     return model if isinstance(model, str) else "mock-model"
+
+
+async def _sleep_if_slow(model: str) -> None:
+    if model == _SLOW_MODEL:
+        await asyncio.sleep(_SLOW_RESPONSE_SECONDS)
 
 
 def _wants_stream(body: dict[str, object]) -> bool:
@@ -136,19 +146,26 @@ async def _chat_completion_stream(model: str, with_usage: bool) -> AsyncIterator
     yield "data: [DONE]\n\n"
 
 
-async def chat_completions(request: Request) -> Response:
-    body = await _parse_body(request)
-    model = _requested_model(body)
+async def _chat_completion_response(model: str, body: dict[str, object]) -> Response:
     if model == _RATE_LIMIT_MODEL:
         return _rate_limit_response(model)
-    if model == _SLOW_MODEL:
-        await asyncio.sleep(_SLOW_RESPONSE_SECONDS)
+    await _sleep_if_slow(model)
     if _wants_stream(body):
         return StreamingResponse(
             _chat_completion_stream(model, _wants_stream_usage(body)),
             media_type="text/event-stream",
         )
     return JSONResponse(_chat_completion_body(model))
+
+
+async def chat_completions(request: Request) -> Response:
+    body = await _parse_body(request)
+    return await _chat_completion_response(_requested_model(body), body)
+
+
+async def azure_chat_completions(request: Request) -> Response:
+    body = await _parse_body(request)
+    return await _chat_completion_response(request.path_params["deployment"], body)
 
 
 def _text_completion_body(model: str) -> dict[str, object]:
@@ -195,8 +212,7 @@ async def completions(request: Request) -> Response:
     model = _requested_model(body)
     if model == _RATE_LIMIT_MODEL:
         return _rate_limit_response(model)
-    if model == _SLOW_MODEL:
-        await asyncio.sleep(_SLOW_RESPONSE_SECONDS)
+    await _sleep_if_slow(model)
     if _wants_stream(body):
         return StreamingResponse(
             _text_completion_stream(model, _wants_stream_usage(body)),
@@ -205,11 +221,8 @@ async def completions(request: Request) -> Response:
     return JSONResponse(_text_completion_body(model))
 
 
-async def embeddings(request: Request) -> Response:
-    body = await _parse_body(request)
-    model = _requested_model(body)
-    if model == _SLOW_MODEL:
-        await asyncio.sleep(_SLOW_RESPONSE_SECONDS)
+async def _embeddings_response(model: str, body: dict[str, object]) -> Response:
+    await _sleep_if_slow(model)
     raw_input = body.get("input", "")
     count = len(raw_input) if isinstance(raw_input, list) else 1
     return JSONResponse(
@@ -220,6 +233,76 @@ async def embeddings(request: Request) -> Response:
             "usage": {"prompt_tokens": 5, "total_tokens": 5},
         }
     )
+
+
+async def embeddings(request: Request) -> Response:
+    body = await _parse_body(request)
+    return await _embeddings_response(_requested_model(body), body)
+
+
+async def azure_embeddings(request: Request) -> Response:
+    body = await _parse_body(request)
+    return await _embeddings_response(request.path_params["deployment"], body)
+
+
+def _anthropic_message_body(model: str) -> dict[str, object]:
+    return {
+        "id": f"msg_{uuid.uuid4().hex[:24]}",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": _CANNED_CONTENT}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": _PROMPT_TOKENS, "output_tokens": _COMPLETION_TOKENS},
+    }
+
+
+async def _anthropic_message_stream(model: str) -> AsyncIterator[str]:
+    def event(name: str, payload: dict[str, object]) -> str:
+        return f"event: {name}\ndata: {json.dumps({'type': name} | payload)}\n\n"
+
+    opening = _anthropic_message_body(model) | {
+        "content": [],
+        "stop_reason": None,
+        "usage": {"input_tokens": _PROMPT_TOKENS, "output_tokens": 0},
+    }
+    yield event("message_start", {"message": opening})
+    yield event("content_block_start", {"index": 0, "content_block": {"type": "text", "text": ""}})
+    yield event("content_block_delta", {"index": 0, "delta": {"type": "text_delta", "text": _CANNED_CONTENT}})
+    yield event("content_block_stop", {"index": 0})
+    yield event(
+        "message_delta",
+        {"delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": _COMPLETION_TOKENS}},
+    )
+    yield event("message_stop", {})
+
+
+async def anthropic_messages(request: Request) -> Response:
+    body = await _parse_body(request)
+    model = _requested_model(body)
+    await _sleep_if_slow(model)
+    if _wants_stream(body):
+        return StreamingResponse(_anthropic_message_stream(model), media_type="text/event-stream")
+    return JSONResponse(_anthropic_message_body(model))
+
+
+def _bedrock_converse_body() -> dict[str, object]:
+    return {
+        "output": {"message": {"role": "assistant", "content": [{"text": _CANNED_CONTENT}]}},
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": _PROMPT_TOKENS,
+            "outputTokens": _COMPLETION_TOKENS,
+            "totalTokens": _PROMPT_TOKENS + _COMPLETION_TOKENS,
+        },
+        "metrics": {"latencyMs": 1},
+    }
+
+
+async def bedrock_converse(request: Request) -> Response:
+    await _sleep_if_slow(request.path_params["model_id"])
+    return JSONResponse(_bedrock_converse_body())
 
 
 async def triton_embeddings(_request: Request) -> Response:
@@ -286,6 +369,12 @@ app = Starlette(
         Route("/v1/completions", completions, methods=["POST"]),
         Route("/embeddings", embeddings, methods=["POST"]),
         Route("/v1/embeddings", embeddings, methods=["POST"]),
+        Route("/openai/deployments/{deployment}/chat/completions", azure_chat_completions, methods=["POST"]),
+        Route("/openai/deployments/{deployment}/embeddings", azure_embeddings, methods=["POST"]),
+        Route("/openai/v1/chat/completions", chat_completions, methods=["POST"]),
+        Route("/openai/v1/embeddings", embeddings, methods=["POST"]),
+        Route("/v1/messages", anthropic_messages, methods=["POST"]),
+        Route("/model/{model_id}/converse", bedrock_converse, methods=["POST"]),
         Route("/triton/embeddings", triton_embeddings, methods=["POST"]),
         Route("/moderations", moderations, methods=["POST"]),
         Route("/v1/moderations", moderations, methods=["POST"]),

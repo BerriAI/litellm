@@ -250,11 +250,15 @@ async def test_azure_ai_embedding_image(sync_mode):
 def test_openai_azure_embedding_timeouts():
     try:
         response = embedding(
-            model="azure/text-embedding-ada-002",
+            model="azure/slow-endpoint",
             input=["good morning from litellm"],
-            timeout=0.00001,
+            api_base=FAKE_OPENAI_API_BASE,
+            api_key="fake-key",
+            api_version="2024-10-21",
+            timeout=0.5,
         )
         print(response)
+        pytest.fail("Expected timeout error, the request returned instead")
     except openai.APITimeoutError:
         print("Good job got timeout error!")
         pass

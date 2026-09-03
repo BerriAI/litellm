@@ -1,11 +1,7 @@
 #### What this tests ####
 #    This tests the timeout decorator
 
-import os
-import traceback
-
-import time
-from litellm._uuid import uuid
+from typing import Final
 
 import httpx
 import openai
@@ -13,6 +9,32 @@ import pytest
 
 import litellm
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
+
+_ESSAY_MESSAGES: Final = [{"role": "user", "content": "hello, write a 20 pg essay"}]
+_TIMEOUT_SECONDS: Final = 0.5
+
+
+def _slow_openai_deployment(model_name: str) -> dict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "openai/slow-endpoint",
+            "api_base": FAKE_OPENAI_API_BASE,
+            "api_key": "fake-key",
+        },
+    }
+
+
+def _slow_azure_deployment(model_name: str) -> dict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "azure/slow-endpoint",
+            "api_base": FAKE_OPENAI_API_BASE,
+            "api_key": "fake-key",
+            "api_version": "2024-10-21",
+        },
+    }
 
 
 @pytest.mark.parametrize(
@@ -45,201 +67,73 @@ async def test_httpx_timeout(model, provider, sync_mode):
 
 
 def test_timeout():
-    # this Will Raise a timeout
     litellm.set_verbose = False
-    try:
-        response = litellm.completion(
-            model="gpt-3.5-turbo",
-            timeout=0.01,
-            messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
+    with pytest.raises(openai.APITimeoutError):
+        litellm.completion(
+            model="openai/slow-endpoint",
+            messages=_ESSAY_MESSAGES,
+            api_base=FAKE_OPENAI_API_BASE,
+            api_key="fake-key",
+            timeout=_TIMEOUT_SECONDS,
         )
-    except openai.APITimeoutError as e:
-        print(
-            "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
-        )
-        print(type(e))
-        pass
-    except Exception as e:
-        pytest.fail(
-            f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}"
-        )
-
-
-# test_timeout()
 
 
 def test_bedrock_timeout():
-    # this Will Raise a timeout
     litellm.set_verbose = True
-    try:
-        response = litellm.completion(
-            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            timeout=0.01,
-            messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
-        )
-        pytest.fail("Did not raise error `openai.APITimeoutError`")
-    except openai.APITimeoutError as e:
-        print(
-            "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
-        )
-        print(type(e))
-        pass
-    except Exception as e:
-        pytest.fail(
-            f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}"
+    with pytest.raises(openai.APITimeoutError):
+        litellm.completion(
+            model="bedrock/converse/slow-endpoint",
+            messages=_ESSAY_MESSAGES,
+            api_base=FAKE_OPENAI_API_BASE,
+            aws_access_key_id="fake-access-key",
+            aws_secret_access_key="fake-secret-key",
+            aws_region_name="us-east-1",
+            timeout=_TIMEOUT_SECONDS,
         )
 
 
-def test_hanging_request_azure():
-    """
-    Test that a slow Azure request properly raises APITimeoutError via the Router.
-
-    Uses a mock to simulate a slow HTTP response so the timeout fires reliably,
-    rather than racing against real network latency.
-    """
+@pytest.mark.asyncio
+async def test_hanging_request_azure():
     litellm.set_verbose = True
-    import asyncio
-    from unittest.mock import AsyncMock, patch
-
-    try:
-        router = litellm.Router(
-            model_list=[
-                {
-                    "model_name": "azure-gpt",
-                    "litellm_params": {
-                        "model": "azure/gpt-4.1-mini",
-                        "api_base": os.environ["AZURE_AI_API_BASE"],
-                        "api_key": os.environ["AZURE_AI_API_KEY"],
-                    },
-                },
-                {
-                    "model_name": "openai-gpt",
-                    "litellm_params": {"model": "gpt-3.5-turbo"},
-                },
-            ],
-            num_retries=0,
+    router = litellm.Router(
+        model_list=[_slow_azure_deployment("azure-gpt"), _slow_openai_deployment("openai-gpt")],
+        num_retries=0,
+    )
+    with pytest.raises(openai.APITimeoutError):
+        await router.acompletion(
+            model="azure-gpt",
+            messages=[{"role": "user", "content": "what color is red"}],
+            timeout=_TIMEOUT_SECONDS,
         )
-
-        encoded = litellm.utils.encode(model="gpt-3.5-turbo", text="blue")[0]
-
-        original_send = httpx.AsyncClient.send
-
-        async def _slow_send(self, request, *args, **kwargs):
-            await asyncio.sleep(5)
-            return await original_send(self, request, *args, **kwargs)
-
-        async def _test():
-            with patch.object(httpx.AsyncClient, "send", new=_slow_send):
-                response = await router.acompletion(
-                    model="azure-gpt",
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": f"what color is red {uuid.uuid4()}",
-                        }
-                    ],
-                    logit_bias={encoded: 100},
-                    timeout=0.01,
-                )
-                print(response)
-                return response
-
-        response = asyncio.run(_test())
-
-        if response.choices[0].message.content is not None:
-            pytest.fail("Got a response, expected a timeout")
-    except openai.APITimeoutError as e:
-        print(
-            "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
-        )
-        print(type(e))
-        pass
-    except Exception as e:
-        pytest.fail(
-            f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}"
-        )
-
-
-# test_hanging_request_azure()
 
 
 def test_hanging_request_openai():
     litellm.set_verbose = True
-    try:
-        router = litellm.Router(
-            model_list=[
-                {
-                    "model_name": "azure-gpt",
-                    "litellm_params": {
-                        "model": "azure/gpt-4.1-mini",
-                        "api_base": os.environ["AZURE_AI_API_BASE"],
-                        "api_key": os.environ["AZURE_AI_API_KEY"],
-                    },
-                },
-                {
-                    "model_name": "openai-gpt",
-                    "litellm_params": {"model": "gpt-3.5-turbo"},
-                },
-            ],
-            num_retries=0,
-        )
-
-        encoded = litellm.utils.encode(model="gpt-3.5-turbo", text="blue")[0]
-        response = router.completion(
+    router = litellm.Router(
+        model_list=[_slow_azure_deployment("azure-gpt"), _slow_openai_deployment("openai-gpt")],
+        num_retries=0,
+    )
+    with pytest.raises(openai.APITimeoutError):
+        router.completion(
             model="openai-gpt",
             messages=[{"role": "user", "content": "what color is red"}],
-            logit_bias={encoded: 100},
-            timeout=0.01,
+            timeout=_TIMEOUT_SECONDS,
         )
-        print(response)
-
-        if response.choices[0].message.content is not None:
-            pytest.fail("Got a response, expected a timeout")
-    except openai.APITimeoutError as e:
-        print(
-            "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
-        )
-        print(type(e))
-        pass
-    except Exception as e:
-        pytest.fail(
-            f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}"
-        )
-
-
-# test_hanging_request_openai()
-
-# test_timeout()
 
 
 def test_timeout_streaming():
-    # this Will Raise a timeout
     litellm.set_verbose = False
-    try:
+    with pytest.raises(openai.APITimeoutError):
         response = litellm.completion(
             model="openai/slow-endpoint",
-            messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
+            messages=_ESSAY_MESSAGES,
             api_base=FAKE_OPENAI_API_BASE,
             api_key="fake-key",
-            timeout=0.5,
+            timeout=_TIMEOUT_SECONDS,
             stream=True,
         )
         for chunk in response:
             print(chunk)
-        pytest.fail("Did not raise error `openai.APITimeoutError`. The stream completed instead")
-    except openai.APITimeoutError as e:
-        print(
-            "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
-        )
-        print(type(e))
-        pass
-    except Exception as e:
-        pytest.fail(
-            f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}"
-        )
-
-
-# test_timeout_streaming()
 
 
 @pytest.mark.skip(reason="local test")
@@ -273,32 +167,22 @@ def test_timeout_ollama():
 @pytest.mark.asyncio
 async def test_anthropic_timeout(streaming, sync_mode):
     litellm.set_verbose = False
-
-    try:
+    request: Final = {
+        "model": "anthropic/slow-endpoint",
+        "messages": _ESSAY_MESSAGES,
+        "api_base": FAKE_OPENAI_API_BASE,
+        "api_key": "fake-key",
+        "timeout": _TIMEOUT_SECONDS,
+        "stream": streaming,
+    }
+    with pytest.raises(openai.APITimeoutError):
         if sync_mode:
-            response = litellm.completion(
-                model="claude-sonnet-4-5-20250929",
-                timeout=0.01,
-                messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
-                stream=streaming,
-            )
+            response = litellm.completion(**request)
             if isinstance(response, litellm.CustomStreamWrapper):
-                for chunk in response:
+                for _ in response:
                     pass
         else:
-            response = await litellm.acompletion(
-                model="claude-sonnet-4-5-20250929",
-                timeout=0.01,
-                messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
-                stream=streaming,
-            )
+            response = await litellm.acompletion(**request)
             if isinstance(response, litellm.CustomStreamWrapper):
-                async for chunk in response:
+                async for _ in response:
                     pass
-        pytest.fail("Did not raise error `openai.APITimeoutError`")
-    except openai.APITimeoutError as e:
-        print(
-            "Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e
-        )
-        print(type(e))
-        pass

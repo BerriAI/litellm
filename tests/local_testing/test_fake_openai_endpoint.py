@@ -94,6 +94,77 @@ def test_slow_model_blocks_past_client_timeout():
         )
 
 
+_CHAT_BODY: Final = {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 5}
+_SLOW_PROVIDER_ROUTES: Final = (
+    ("/openai/deployments/slow-endpoint/chat/completions", _CHAT_BODY),
+    ("/openai/deployments/slow-endpoint/embeddings", {"input": "hi"}),
+    ("/v1/messages", _CHAT_BODY | {"model": "slow-endpoint"}),
+    ("/model/slow-endpoint/converse", _CHAT_BODY),
+)
+
+
+@pytest.mark.parametrize("path, body", _SLOW_PROVIDER_ROUTES)
+def test_slow_model_blocks_past_client_timeout_on_provider_routes(path, body):
+    base: Final = ensure_fake_openai_endpoint()
+    with pytest.raises(httpx.TimeoutException):
+        httpx.post(f"{base}{path}", json=body, timeout=0.5)
+
+
+def test_azure_deployment_route_answers_as_the_path_deployment():
+    base: Final = ensure_fake_openai_endpoint()
+    response: Final = httpx.post(
+        f"{base}/openai/deployments/my-deployment/chat/completions", json=_CHAT_BODY, timeout=10
+    )
+    assert response.status_code == 200
+    assert response.json()["model"] == "my-deployment"
+    assert response.json()["choices"][0]["message"]["content"]
+
+
+def test_azure_deployment_embeddings_route_shape():
+    base: Final = ensure_fake_openai_endpoint()
+    response: Final = httpx.post(
+        f"{base}/openai/deployments/my-embedding/embeddings", json={"input": ["a", "b"]}, timeout=10
+    )
+    assert response.status_code == 200
+    assert response.json()["model"] == "my-embedding"
+    assert len(response.json()["data"]) == 2
+
+
+def test_anthropic_messages_route_shape():
+    base: Final = ensure_fake_openai_endpoint()
+    response: Final = httpx.post(f"{base}/v1/messages", json=_CHAT_BODY | {"model": "claude-x"}, timeout=10)
+    assert response.status_code == 200
+    body: Final = response.json()
+    assert body["type"] == "message"
+    assert body["model"] == "claude-x"
+    assert body["content"][0]["text"]
+    assert body["usage"] == {"input_tokens": 20, "output_tokens": 20}
+
+
+def test_anthropic_messages_route_streams_a_complete_message():
+    base: Final = ensure_fake_openai_endpoint()
+    response: Final = httpx.post(
+        f"{base}/v1/messages", json=_CHAT_BODY | {"model": "claude-x", "stream": True}, timeout=10
+    )
+    assert response.status_code == 200
+    events: Final = re.findall(r"^event: (\S+)$", response.text, flags=re.MULTILINE)
+    assert events[0] == "message_start"
+    assert events[-1] == "message_stop"
+    assert "content_block_delta" in events
+
+
+def test_bedrock_converse_route_shape():
+    base: Final = ensure_fake_openai_endpoint()
+    response: Final = httpx.post(
+        f"{base}/model/anthropic.claude-haiku-4-5-20251001-v1:0/converse", json=_CHAT_BODY, timeout=10
+    )
+    assert response.status_code == 200
+    body: Final = response.json()
+    assert body["output"]["message"]["content"][0]["text"]
+    assert body["stopReason"] == "end_turn"
+    assert body["usage"]["totalTokens"] == 40
+
+
 def test_remote_env_base_resolves_to_local(monkeypatch):
     monkeypatch.setenv(
         "FAKE_OPENAI_API_BASE",
