@@ -264,10 +264,11 @@ class InMemoryCache(BaseCache):
         self._remove_key(key)
 
     async def async_get_ttl(self, key: str) -> int | None:
-        """
-        Get the remaining TTL of a key in in-memory cache
-        """
-        return self.ttl_dict.get(key, None)
+        """Get the remaining TTL of a key in in-memory cache"""
+        expiry = self.ttl_dict.get(key, None)
+        if expiry is None:
+            return None
+        return max(0, expiry - time.time())
 
     async def async_get_oldest_n_keys(self, n: int) -> list[str]:
         """
