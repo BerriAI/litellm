@@ -37206,6 +37206,11 @@ export interface components {
              */
             hide_default_credentials_hint: boolean;
             /**
+             * Hide Sso Login Notice
+             * @default false
+             */
+            hide_sso_login_notice: boolean;
+            /**
              * Is Control Plane
              * @default false
              */

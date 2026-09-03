@@ -27,6 +27,10 @@ async def get_ui_config():
         os.getenv("LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT", "false").lower() == "true"
         or general_settings.get("hide_default_credentials_hint", False) is True
     )
+    hide_sso_login_notice: Final = bool(
+        os.getenv("LITELLM_HIDE_SSO_LOGIN_NOTICE", "false").lower() == "true"
+        or general_settings.get("hide_sso_login_notice", False) is True
+    )
 
     sso_configured: Final = has_user_setup_sso()
 
@@ -41,6 +45,7 @@ async def get_ui_config():
         admin_ui_disabled=admin_ui_disabled,
         sso_configured=sso_configured,
         hide_default_credentials_hint=hide_default_credentials_hint,
+        hide_sso_login_notice=hide_sso_login_notice,
         is_control_plane=is_control_plane,
         workers=proxy_config.worker_registry if is_control_plane else [],
     )

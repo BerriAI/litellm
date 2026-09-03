@@ -400,6 +400,80 @@ def test_ui_discovery_endpoints_hide_default_credentials_hint_via_general_settin
         assert data["hide_default_credentials_hint"] is True
 
 
+def test_ui_discovery_endpoints_hide_sso_login_notice_default_false():
+    """SSO login notice is shown by default (flag false)."""
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    with (
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
+        patch("litellm.proxy.auth.auth_utils.has_user_setup_sso", return_value=True),
+        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
+    ):
+        os.environ.pop("LITELLM_HIDE_SSO_LOGIN_NOTICE", None)
+
+        response = client.get("/.well-known/litellm-ui-config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["sso_configured"] is True
+        assert data["hide_sso_login_notice"] is False
+
+
+def test_ui_discovery_endpoints_hide_sso_login_notice_via_env_var():
+    """LITELLM_HIDE_SSO_LOGIN_NOTICE=true hides the login-page SSO notice."""
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    with (
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
+        patch("litellm.proxy.auth.auth_utils.has_user_setup_sso", return_value=True),
+        patch.dict(
+            os.environ,
+            {
+                "LITELLM_HIDE_SSO_LOGIN_NOTICE": "true",
+                "DISABLE_ADMIN_UI": "false",
+            },
+            clear=False,
+        ),
+    ):
+
+        response = client.get("/.well-known/litellm-ui-config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["hide_sso_login_notice"] is True
+
+
+def test_ui_discovery_endpoints_hide_sso_login_notice_via_general_settings():
+    """general_settings.hide_sso_login_notice=true also hides the SSO notice."""
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    with (
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
+        patch("litellm.proxy.auth.auth_utils.has_user_setup_sso", return_value=True),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"hide_sso_login_notice": True},
+        ),
+        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
+    ):
+        os.environ.pop("LITELLM_HIDE_SSO_LOGIN_NOTICE", None)
+
+        response = client.get("/.well-known/litellm-ui-config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["hide_sso_login_notice"] is True
+
+
 def test_ui_discovery_endpoints_is_control_plane_false_when_no_workers():
     app = FastAPI()
     app.include_router(router)

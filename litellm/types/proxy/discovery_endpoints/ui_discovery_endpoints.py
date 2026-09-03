@@ -10,5 +10,6 @@ class UiDiscoveryEndpoints(BaseModel):
     admin_ui_disabled: bool
     sso_configured: bool
     hide_default_credentials_hint: bool = False
+    hide_sso_login_notice: bool = False
     is_control_plane: bool = False
     workers: list[WorkerRegistryEntry] = []
