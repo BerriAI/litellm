@@ -411,6 +411,84 @@ async def test_resolved_model_authorization_enforces_its_access_group_budget(
 
 
 @pytest.mark.asyncio
+async def test_resolved_model_authorization_does_not_recheck_its_own_reserved_group(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A Fusion dependency can share the virtual model's already-reserved group."""
+    from litellm.proxy import proxy_server
+
+    cache = await _cache()
+    prisma = _RecordingPrismaClient(_MagBudgetRow("tier-a", spend=9.0, max_budget=10.0))
+    router = Router(model_list=MODEL_LIST)
+    valid_token = UserAPIKeyAuth(
+        api_key="hashed",
+        models=["tier-a"],
+        budget_reservation={
+            "entries": [{"counter_key": MODEL_ACCESS_GROUP_COUNTER_KEY, "reserved_cost": 1.0}],
+        },
+    )
+    read, seen = _spend_reader({MODEL_ACCESS_GROUP_COUNTER_KEY: 10.0})
+
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=cache))
+    monkeypatch.setattr(proxy_server, "get_current_spend", read)
+
+    assert await can_key_call_resolved_model(
+        model="gpt-4o",
+        llm_model_list=MODEL_LIST,
+        valid_token=valid_token,
+        llm_router=router,
+    ) == ("tier-a",)
+    assert seen == []
+
+
+@pytest.mark.asyncio
+async def test_resolved_model_authorization_still_checks_a_new_dependency_group(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A reservation for one shared group must not exempt another dependency group."""
+    from litellm.proxy import proxy_server
+
+    cache = await _cache()
+    prisma = _RecordingPrismaClient(
+        _MagBudgetRow("tier-a", spend=9.0, max_budget=10.0),
+        _MagBudgetRow("tier-b", spend=2.0, max_budget=2.0),
+    )
+    router = Router(model_list=MODEL_LIST)
+    valid_token = UserAPIKeyAuth(
+        api_key="hashed",
+        models=["tier-a", "tier-b"],
+        budget_reservation={
+            "entries": [{"counter_key": MODEL_ACCESS_GROUP_COUNTER_KEY, "reserved_cost": 1.0}],
+        },
+    )
+    tier_b_counter_key = model_access_group_spend_counter_key("tier-b")
+    read, seen = _spend_reader(
+        {
+            MODEL_ACCESS_GROUP_COUNTER_KEY: 10.0,
+            tier_b_counter_key: 2.0,
+        }
+    )
+
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=cache))
+    monkeypatch.setattr(proxy_server, "get_current_spend", read)
+
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await can_key_call_resolved_model(
+            model="gpt-4o",
+            llm_model_list=MODEL_LIST,
+            valid_token=valid_token,
+            llm_router=router,
+        )
+
+    assert exc_info.value.entity_id == "tier-b"
+    assert seen == [tier_b_counter_key]
+
+
+@pytest.mark.asyncio
 async def test_group_just_under_its_max_budget_passes():
     """Asserting the counter was read is what keeps this honest: a group that got skipped entirely,
     because its row never arrived or carried no budget, would also not raise."""

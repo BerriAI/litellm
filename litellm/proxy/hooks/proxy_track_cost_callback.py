@@ -122,8 +122,8 @@ def _accumulate_fusion_cost(
     budget_reservation: dict,  # mutable-ok: SDK boundary
     response_cost: float,
     kwargs: dict,  # mutable-ok: SDK boundary
-) -> None:
-    """Add one hidden call exactly once before its asynchronous DB write."""
+) -> bool:
+    """Add one hidden call exactly once and report whether this callback was new."""
     call_id: Final = kwargs.get("litellm_call_id") or kwargs.get("id")
     seen_call_ids: Final = budget_reservation.setdefault(
         FUSION_BUDGET_ACCUMULATED_CALL_IDS_KEY,
@@ -132,7 +132,7 @@ def _accumulate_fusion_cost(
     if isinstance(seen_call_ids, list) and call_id is not None:
         normalized_call_id: Final = str(call_id)
         if normalized_call_id in seen_call_ids:
-            return
+            return False
         seen_call_ids.append(normalized_call_id)
     budget_reservation[  # rebind-ok: shared reservation ledger
         FUSION_BUDGET_ACCUMULATED_COST_KEY
@@ -142,6 +142,7 @@ def _accumulate_fusion_cost(
         )
         + max(response_cost, 0.0)
     )
+    return True
 
 
 def _failure_should_leave_fusion_reservation_open(
@@ -383,12 +384,15 @@ class _ProxyDBLogger(CustomLogger):
             )
 
             if response_cost is not None:
-                if defer_fusion_reconciliation and budget_reservation is not None:
+                fusion_call_should_charge_access_groups: Final = (
                     _accumulate_fusion_cost(
                         budget_reservation=budget_reservation,
                         response_cost=float(response_cost),
                         kwargs=kwargs,
                     )
+                    if defer_fusion_reconciliation and budget_reservation is not None
+                    else True
+                )
                 budget_counter_response_cost: Final = (
                     float(response_cost) + float(budget_reservation.get(FUSION_BUDGET_ACCUMULATED_COST_KEY) or 0.0)
                     if budget_reservation is not None
@@ -431,7 +435,11 @@ class _ProxyDBLogger(CustomLogger):
                         budget_counter_response_cost=budget_counter_response_cost,
                         defer_budget_counter_update=defer_fusion_reconciliation,
                         request_tags=tags,
-                        model_access_groups=model_access_groups,
+                        # The accumulator's call-id ledger owns idempotency for
+                        # the whole hidden call, including its deployment-group
+                        # charge. A duplicate callback may still be persisted as
+                        # before, but it must not debit the live budget twice.
+                        model_access_groups=(model_access_groups if fusion_call_should_charge_access_groups else ()),
                     )
 
                     # update cache (fire-and-forget for backward compat:

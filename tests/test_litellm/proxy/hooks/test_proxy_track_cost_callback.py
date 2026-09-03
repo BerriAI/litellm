@@ -680,6 +680,7 @@ async def test_fusion_hidden_costs_accumulate_then_continuation_reconciles_once(
                     "user_api_key_user_id": "user-1",
                     "internal_call_origin": origin,
                     "user_api_key_budget_reservation": reservation,
+                    MODEL_ACCESS_GROUP_METADATA_KEY: ["test-budget"],
                 }
             },
             "standard_logging_object": {
@@ -690,9 +691,18 @@ async def test_fusion_hidden_costs_accumulate_then_continuation_reconciles_once(
         }
 
     with (
-        patch("litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock) as increment,  # test-quality-ok: isolates proxy persistence while reservation state remains observable
-        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),  # test-quality-ok: isolates proxy persistence while reservation state remains observable
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as proxy_logging,  # test-quality-ok: injects the callback persistence boundary
+        patch(  # test-quality-ok: isolates proxy persistence while reservation state remains observable
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ) as increment,
+        patch(  # test-quality-ok: observes hidden-call group idempotency without touching global counters
+            "litellm.proxy.proxy_server.increment_fusion_model_access_group_spend_counters", new_callable=AsyncMock
+        ) as increment_fusion_groups,
+        patch(  # test-quality-ok: isolates proxy persistence while reservation state remains observable
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ),
+        patch(  # test-quality-ok: injects the callback persistence boundary
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as proxy_logging,
     ):
         proxy_logging.db_spend_update_writer.update_database = AsyncMock()
         proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
@@ -721,6 +731,10 @@ async def test_fusion_hidden_costs_accumulate_then_continuation_reconciles_once(
 
         assert reservation[FUSION_BUDGET_ACCUMULATED_COST_KEY] == pytest.approx(0.3)
         increment.assert_not_awaited()
+        assert increment_fusion_groups.await_count == 2
+        assert [call.kwargs["response_cost"] for call in increment_fusion_groups.await_args_list] == pytest.approx(
+            [0.1, 0.2]
+        )
 
         await logger._PROXY_track_cost_callback(
             kwargs=kwargs_for("fusion_continuation", 0.4, "continuation-call"),

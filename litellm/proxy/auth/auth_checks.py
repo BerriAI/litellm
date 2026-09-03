@@ -4380,9 +4380,22 @@ async def can_key_call_resolved_model(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
-    if matched_model_access_groups:
+    # A logical request may already have reserved its worst-case cost against
+    # the group that also serves this resolved model (Fusion dependencies are
+    # one example). Re-reading that live counter would mistake this request's
+    # own reservation for exhausted capacity. The reservation already secured
+    # the request; only newly encountered groups still need a read-time check.
+    from litellm.proxy.spend_tracking.budget_reservation import get_reserved_counter_keys
+
+    reserved_counter_keys: Final = get_reserved_counter_keys(budget_reservation=valid_token.budget_reservation)
+    unreserved_model_access_groups: Final = tuple(
+        group
+        for group in matched_model_access_groups
+        if model_access_group_spend_counter_key(group) not in reserved_counter_keys
+    )
+    if unreserved_model_access_groups:
         await _model_access_group_max_budget_check(
-            matched_model_access_groups=matched_model_access_groups,
+            matched_model_access_groups=unreserved_model_access_groups,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
         )
