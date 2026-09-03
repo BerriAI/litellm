@@ -6598,13 +6598,75 @@ def test_get_litellm_user_role_with_invalid_role():
     assert result is None
 
 
-def test_get_litellm_user_role_with_list_multiple_roles():
-    """Test that get_litellm_user_role takes the first element from a multi-element list."""
+@pytest.mark.parametrize(
+    "role_claim",
+    [
+        ["proxy_admin", "internal_user"],
+        ["internal_user", "proxy_admin"],
+    ],
+)
+def test_get_litellm_user_role_picks_highest_privilege_regardless_of_order(role_claim):
+    """A multi-valued role claim resolves to the most privileged role, not the first one listed."""
     from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.management_endpoints.types import get_litellm_user_role
 
-    result = get_litellm_user_role(["proxy_admin", "internal_user"])
-    assert result == LitellmUserRoles.PROXY_ADMIN
+    assert get_litellm_user_role(role_claim) == LitellmUserRoles.PROXY_ADMIN
+
+
+@pytest.mark.parametrize(
+    "role_claim",
+    [
+        ["proxy_admin_viewer", "internal_user"],
+        ["internal_user", "proxy_admin_viewer"],
+    ],
+)
+def test_get_litellm_user_role_keeps_org_spend_visibility_for_mixed_roles(role_claim):
+    """
+    Regression for LIT-6077: a user holding both proxy_admin_viewer and internal_user kept
+    losing org-level spend visibility whenever the IdP happened to list internal_user first.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.types import get_litellm_user_role
+
+    assert get_litellm_user_role(role_claim) == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+
+
+def test_get_litellm_user_role_ignores_unrecognised_entries():
+    """Roles LiteLLM does not know about are skipped rather than swallowing the whole claim."""
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.types import get_litellm_user_role
+
+    assert get_litellm_user_role(["some_idp_group", "internal_user"]) == LitellmUserRoles.INTERNAL_USER
+    assert get_litellm_user_role(["some_idp_group", "another_group"]) is None
+
+
+def test_get_litellm_user_role_list_lookup_is_case_insensitive():
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.types import get_litellm_user_role
+
+    assert get_litellm_user_role(["INTERNAL_USER", "Proxy_Admin"]) == LitellmUserRoles.PROXY_ADMIN
+
+
+@pytest.mark.parametrize(
+    "role_claim",
+    [
+        ["org_admin", "team"],
+        ["team", "org_admin"],
+    ],
+)
+def test_get_litellm_user_role_is_deterministic_for_unranked_roles(role_claim):
+    """Roles outside the privilege hierarchy still resolve the same way in either claim order."""
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.types import get_litellm_user_role
+
+    assert get_litellm_user_role(role_claim) == LitellmUserRoles.ORG_ADMIN
+
+
+def test_get_litellm_user_role_returns_none_for_non_string_claims():
+    from litellm.proxy.management_endpoints.types import get_litellm_user_role
+
+    assert get_litellm_user_role(None) is None
+    assert get_litellm_user_role({"role": "proxy_admin"}) is None
 
 
 # ============================================================================
@@ -6652,6 +6714,46 @@ def test_process_sso_jwt_access_token_extracts_role_from_access_token():
         )
 
     assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+
+
+@pytest.mark.parametrize(
+    "role_claim",
+    [
+        ["internal_user", "proxy_admin_viewer"],
+        ["proxy_admin_viewer", "internal_user"],
+    ],
+)
+def test_process_sso_jwt_access_token_resolves_highest_privilege_role(role_claim):
+    """
+    The generic SSO access-token path must land on the same role for a user whose role
+    claim holds several roles, whichever order the IdP emitted them in.
+    """
+    import jwt as pyjwt
+
+    from litellm.proxy._types import LitellmUserRoles
+
+    access_token_str = pyjwt.encode(
+        {"sub": "user-123", "email": "mixed@test.com", "litellm_role": role_claim},
+        "secret",
+        algorithm="HS256",
+    )
+    result = CustomOpenID(
+        id="user-123",
+        email="mixed@test.com",
+        display_name="Mixed Role User",
+        team_ids=[],
+        user_role=None,
+    )
+
+    with patch.dict(os.environ, {"GENERIC_USER_ROLE_ATTRIBUTE": "litellm_role"}):
+        process_sso_jwt_access_token(
+            access_token_str=access_token_str,
+            sso_jwt_handler=None,
+            result=result,
+            role_mappings=None,
+        )
+
+    assert result.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
 
 
 def test_process_sso_jwt_access_token_does_not_override_existing_role():
