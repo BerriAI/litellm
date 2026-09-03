@@ -3,7 +3,7 @@ Translate from OpenAI's `/v1/chat/completions` to the Opper AI gateway's `/v3/co
 """
 
 from collections.abc import AsyncIterator, Iterator
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -20,6 +20,9 @@ from ...openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
 from ..common_utils import OpperException
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class OpperConfig(OpenAIGPTConfig):
@@ -65,7 +68,7 @@ class OpperConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],  # mutable-ok: mirrors the OpenAIGPTConfig signature
         optional_params: dict,  # mutable-ok: mirrors the OpenAIGPTConfig signature
         litellm_params: dict,  # mutable-ok: mirrors the OpenAIGPTConfig signature
-        encoding: object,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -88,7 +91,7 @@ class OpperConfig(OpenAIGPTConfig):
             if response_json.get("usage"):
                 response_cost: Final = response_json["usage"].get("cost")
                 if response_cost is not None:
-                    headers: Final = transformed._hidden_params.setdefault(
+                    headers: Final = transformed._hidden_params.setdefault(  # pyright: ignore[reportPrivateUsage]  # the cost hand-off channel every provider writes
                         "additional_headers",
                         {},  # mutable-ok: _hidden_params carries plain dicts
                     )
