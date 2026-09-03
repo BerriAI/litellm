@@ -528,9 +528,7 @@ describe("RequestLogsPanel", () => {
     });
 
     it("opens a deep-linked multi-call session log in session mode", async () => {
-      respondWith([
-        logEntry({ request_id: "req-llm", session_id: "sess-1", session_total_count: 3 }),
-      ]);
+      respondWith([logEntry({ request_id: "req-llm", session_id: "sess-1", session_total_count: 3 })]);
       renderPanel("?log_id=req-llm");
 
       await waitFor(() => {
