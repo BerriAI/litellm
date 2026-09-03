@@ -7,6 +7,7 @@ round-trips exactly, a store failure never escapes into the login path, and a sa
 rotation re-encrypts stored rows like the sibling per-user credential tables.
 """
 
+import asyncio
 import json
 import os
 import time
@@ -15,11 +16,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import jwt as pyjwt
 import pytest
 
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
     _ASSERTION_CACHE,
     AssertionStoreUnavailable,
     DbSSOAssertionStore,
+    SSOAssertionCache,
     assertion_from_sso_login,
     ema_assertion_retention_enabled,
     fetch_sso_identity_assertion,
@@ -42,7 +43,7 @@ def _set_salt_key(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _flush_assertion_cache():
-    _ASSERTION_CACHE.flush_cache()
+    _ASSERTION_CACHE.flush()
 
 
 def _make_id_token(exp_offset: int = 3600, iss: str = ISSUER) -> str:
@@ -244,7 +245,7 @@ async def test_persist_overwrites_previous_login():
 async def test_fetch_serves_second_read_from_cache_without_db_read():
     stored = {}
     prisma = _make_prisma(stored)
-    cache = InMemoryCache()
+    cache = SSOAssertionCache()
     token = _make_id_token()
     assertion = assertion_from_sso_login(token, "rt_1")
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):  # test-quality-ok: fake DB seam has no injection boundary
@@ -262,7 +263,7 @@ async def test_fetch_serves_second_read_from_cache_without_db_read():
 async def test_persist_busts_cache_so_relogin_is_visible_immediately():
     stored = {}
     prisma = _make_prisma(stored)
-    cache = InMemoryCache()
+    cache = SSOAssertionCache()
     first_token = _make_id_token(exp_offset=100)
     second_token = _make_id_token(exp_offset=7200)
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):  # test-quality-ok: fake DB seam has no injection boundary
@@ -277,6 +278,42 @@ async def test_persist_busts_cache_so_relogin_is_visible_immediately():
 
 
 @pytest.mark.asyncio
+async def test_fetch_racing_a_relogin_does_not_cache_the_previous_assertion():
+    stored = {}
+    prisma = _make_prisma(stored)
+    cache = SSOAssertionCache()
+    first_token = _make_id_token(exp_offset=100)
+    second_token = _make_id_token(exp_offset=7200)
+    db_read_started = asyncio.Event()
+    relogin_done = asyncio.Event()
+    unpaused_find_unique = prisma.db.litellm_ssoidentityassertion.find_unique
+
+    async def _paused_find_unique(where):
+        row = await unpaused_find_unique(where=where)
+        db_read_started.set()
+        await relogin_done.wait()
+        return row
+
+    prisma.db.litellm_ssoidentityassertion.find_unique = _paused_find_unique
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):  # test-quality-ok: fake DB seam has no injection boundary
+        await persist_sso_identity_assertion("user-a", assertion_from_sso_login(first_token, None), cache=cache)
+        racing_fetch = asyncio.create_task(fetch_sso_identity_assertion("user-a", cache=cache))
+        await db_read_started.wait()
+        await persist_sso_identity_assertion(
+            "user-a",
+            assertion_from_sso_login(second_token, "rt_new"),
+            cache=cache,
+        )
+        relogin_done.set()
+        raced = await racing_fetch
+        after = await fetch_sso_identity_assertion("user-a", cache=cache)
+    assert raced is not None
+    assert after is not None
+    assert raced.id_token.get_secret_value() == first_token
+    assert after.id_token.get_secret_value() == second_token
+
+
+@pytest.mark.asyncio
 async def test_fetch_missing_row_returns_none():
     prisma = _make_prisma({})
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
@@ -286,7 +323,7 @@ async def test_fetch_missing_row_returns_none():
 @pytest.mark.asyncio
 async def test_fetch_does_not_cache_a_missing_row():
     prisma = _make_prisma({})
-    cache = InMemoryCache()
+    cache = SSOAssertionCache()
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):  # test-quality-ok: fake DB seam has no injection boundary
         first = await fetch_sso_identity_assertion("nobody", cache=cache)
         second = await fetch_sso_identity_assertion("nobody", cache=cache)
@@ -313,13 +350,17 @@ async def test_fetch_unparseable_payload_returns_none():
 async def test_cached_assertion_expires_after_ttl():
     stored = {}
     prisma = _make_prisma(stored)
-    cache = InMemoryCache(default_ttl=1)
+    cache = SSOAssertionCache(ttl_seconds=1)
     first_token = _make_id_token(exp_offset=100)
     second_token = _make_id_token(exp_offset=7200)
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):  # test-quality-ok: fake DB seam has no injection boundary
         await persist_sso_identity_assertion("user-a", assertion_from_sso_login(first_token, None), cache=cache)
         first = await fetch_sso_identity_assertion("user-a", cache=cache)
-        stored["user-a"] = encrypt_value_helper(json.dumps({"id_token": second_token, "issuer": ISSUER}))
+        await persist_sso_identity_assertion(
+            "user-a",
+            assertion_from_sso_login(second_token, "rt_new"),
+            cache=SSOAssertionCache(),
+        )
         cached = await fetch_sso_identity_assertion("user-a", cache=cache)
         time.sleep(1.1)
         expired = await fetch_sso_identity_assertion("user-a", cache=cache)
@@ -434,7 +475,7 @@ async def test_db_store_converts_a_driver_failure_into_assertion_store_unavailab
 async def test_db_store_uses_injected_cache():
     stored = {}
     prisma = _make_prisma(stored)
-    cache = InMemoryCache()
+    cache = SSOAssertionCache()
     token = _make_id_token()
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):  # test-quality-ok: fake DB seam has no injection boundary
         await persist_sso_identity_assertion("alice", assertion_from_sso_login(token, None), cache=cache)

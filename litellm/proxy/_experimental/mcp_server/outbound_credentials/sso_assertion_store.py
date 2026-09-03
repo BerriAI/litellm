@@ -11,14 +11,13 @@ being registered, so a gateway with no EMA upstream never stores bearer material
 The row is one encrypted payload per user, latest login wins. ``expires_at`` mirrors the
 id_token ``exp`` claim and is judged by the reader, never enforced by deletion here: an
 expired assertion with a refresh token is still renewable, and the DB row is the source of
-truth, the same contract as the per-user OAuth credential store. Reads are served from a
-per-process cache with TTL ``MCP_SSO_ASSERTION_CACHE_TTL_SECONDS`` that the persist write busts,
-so a re-login on the same pod is visible immediately and a login on another pod is visible within
-one TTL.
+truth, the same contract as the per-user OAuth credential store. Reads use a per-process cache with
+TTL ``MCP_SSO_ASSERTION_CACHE_TTL_SECONDS``; invalidation also guards against stale in-flight reads.
 """
 
 from __future__ import annotations
 
+import itertools
 import json
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Protocol
@@ -36,10 +35,6 @@ if TYPE_CHECKING:
 _ASSERTION_DECRYPT_LOG_KEY: Final = "sso_identity_assertion"
 _STR_ADAPTER: Final[TypeAdapter[str]] = TypeAdapter(str)
 _MAYBE_STR_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
-_ASSERTION_CACHE: Final = InMemoryCache(
-    max_size_in_memory=MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE,
-    default_ttl=MCP_SSO_ASSERTION_CACHE_TTL_SECONDS,
-)
 
 
 class SSOIdentityAssertion(BaseModel):
@@ -52,6 +47,51 @@ class SSOIdentityAssertion(BaseModel):
     refresh_token: SecretStr | None = None
     issuer: str | None = None
     expires_at: datetime | None = None
+
+
+class SSOAssertionCache:
+    """Process-local read cache. ``invalidate`` bumps a per-user generation so a fetch that read
+    the row before a login cannot repopulate the previous assertion after it."""
+
+    def __init__(self, ttl_seconds: int = MCP_SSO_ASSERTION_CACHE_TTL_SECONDS) -> None:
+        self._entries = InMemoryCache(
+            max_size_in_memory=MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE,
+            default_ttl=ttl_seconds,
+        )
+        self._generations = itertools.count(1)
+
+    def generation(self, user_id: str) -> int | None:
+        gen: Final = self._entries.get_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
+            f"gen:{user_id}"
+        )
+        return gen if isinstance(gen, int) else None
+
+    def get(self, user_id: str) -> SSOIdentityAssertion | None:
+        cached: Final = self._entries.get_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
+            user_id
+        )
+        return cached if isinstance(cached, SSOIdentityAssertion) else None
+
+    def set_if_unchanged(self, user_id: str, assertion: SSOIdentityAssertion, seen_generation: int | None) -> None:
+        if self.generation(user_id) != seen_generation:
+            return
+        self._entries.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
+            user_id, assertion
+        )
+
+    def invalidate(self, user_id: str) -> None:
+        self._entries.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
+            f"gen:{user_id}", next(self._generations)
+        )
+        self._entries.delete_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
+            user_id
+        )
+
+    def flush(self) -> None:
+        self._entries.flush_cache()  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
+
+
+_ASSERTION_CACHE: Final = SSOAssertionCache()
 
 
 class _IdTokenClaims(BaseModel):
@@ -117,7 +157,7 @@ async def ema_assertion_retention_enabled() -> bool:
 
 
 async def persist_sso_identity_assertion(
-    user_id: str, assertion: SSOIdentityAssertion, cache: InMemoryCache = _ASSERTION_CACHE
+    user_id: str, assertion: SSOIdentityAssertion, cache: SSOAssertionCache = _ASSERTION_CACHE
 ) -> None:
     from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper  # noqa: PLC0415  # runtime global
     from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime global
@@ -138,9 +178,7 @@ async def persist_sso_identity_assertion(
             "update": {"assertion_b64": encoded},
         },
     )
-    cache.delete_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
-        user_id
-    )
+    cache.invalidate(user_id)
 
 
 async def _read_assertion_from_db(user_id: str) -> SSOIdentityAssertion | None:
@@ -172,23 +210,18 @@ async def _read_assertion_from_db(user_id: str) -> SSOIdentityAssertion | None:
     )
 
 
-def _get_cached_assertion(cache: InMemoryCache, user_id: str) -> object | None:
-    return cache.get_cache(user_id)  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
-
-
 async def fetch_sso_identity_assertion(
-    user_id: str, cache: InMemoryCache = _ASSERTION_CACHE
+    user_id: str, cache: SSOAssertionCache = _ASSERTION_CACHE
 ) -> SSOIdentityAssertion | None:
     """The stored assertion for ``user_id``, or ``None`` when absent, undecryptable (salt-key
     rotation), or unparseable. Expiry is not judged here; the reader owns that policy."""
-    cached: Final = _get_cached_assertion(cache, user_id)
-    if isinstance(cached, SSOIdentityAssertion):
+    cached: Final = cache.get(user_id)
+    if cached is not None:
         return cached
+    seen_generation: Final = cache.generation(user_id)
     assertion: Final = await _read_assertion_from_db(user_id)
     if assertion is not None:
-        cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
-            user_id, assertion
-        )
+        cache.set_if_unchanged(user_id, assertion, seen_generation)
     return assertion
 
 
@@ -221,7 +254,7 @@ class DbSSOAssertionStore:
     from credential resolution and from the upstream-401 retry.
     """
 
-    def __init__(self, cache: InMemoryCache = _ASSERTION_CACHE) -> None:
+    def __init__(self, cache: SSOAssertionCache = _ASSERTION_CACHE) -> None:
         self._cache = cache
 
     async def fetch(self, user_id: str) -> SSOIdentityAssertion | None:
