@@ -152,6 +152,7 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
     from litellm.integrations.opentelemetry import OpenTelemetry
+    from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
 
     Span = _Span | Any
 else:
@@ -3592,35 +3593,49 @@ async def _run_direct_health_check_with_instrumentation(
 
 
 async def _window_gated_health_check_db_save(
-    save: Callable[[], Awaitable[None]],
+    save: Callable[[], Awaitable[bool]],
     pod_lock_manager: PodLockManager | None,
     lock_ttl: int | None,
 ) -> None:
     """
-    Persist at most once per window fleet-wide: the lock is the "this window's save is
-    done" marker, so it is deliberately never released and expires with the interval.
+    Persist at most once per window fleet-wide. A completed save keeps the lock as the
+    "this window's save is done" marker, so it is deliberately never released and expires
+    with the interval. A save that reports failure or is cancelled releases the lock so
+    another pod's cycle in the same window can retry, instead of the fleet going a whole
+    window without a write.
     """
-    if pod_lock_manager is not None and pod_lock_manager.redis_cache is not None:
-        acquired: Final = await pod_lock_manager.acquire_lock(
-            cronjob_id=BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME,
-            ttl=lock_ttl,
-            allow_reentrant=False,
+    if pod_lock_manager is None or pod_lock_manager.redis_cache is None:
+        await save()
+        return
+    acquired: Final = await pod_lock_manager.acquire_lock(
+        cronjob_id=BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME,
+        ttl=lock_ttl,
+        allow_reentrant=False,
+    )
+    if not acquired:
+        verbose_proxy_logger.debug("background_health_check_db_save_skipped another pod persisted this window")
+        return
+    try:
+        persisted: Final = await save()
+    except BaseException:
+        await pod_lock_manager.release_lock(cronjob_id=BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME)
+        raise
+    if not persisted:
+        verbose_proxy_logger.warning(
+            "background_health_check_db_save_incomplete released the window lock so another pod can retry"
         )
-        if not acquired:
-            verbose_proxy_logger.debug("background_health_check_db_save_skipped another pod persisted this window")
-            return
-    await save()
+        await pod_lock_manager.release_lock(cronjob_id=BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME)
 
 
 def _schedule_background_health_check_db_save(
-    prisma_client,
-    shared_health_manager,
+    prisma_client: PrismaClient | None,
+    shared_health_manager: "SharedHealthCheckManager | None",
     model_list: list,
     healthy_endpoints: list,
     unhealthy_endpoints: list,
     pod_lock_manager: PodLockManager | None = None,
     lock_ttl: int | None = None,
-):
+) -> None:
     """Fire-and-forget: persist health check results to DB if prisma is available."""
     if prisma_client is None:
         return
