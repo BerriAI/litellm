@@ -1095,7 +1095,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             add_guardrail_to_applied_guardrails_header,
         )
 
-        all_chunks: Final[Sequence[Any]] = tuple([chunk async for chunk in response])
+        all_chunks: Final[Sequence[object]] = tuple([chunk async for chunk in response])
 
         if not all_chunks or self._is_terminal_error_stream(all_chunks):
             for chunk in all_chunks:
