@@ -11,6 +11,8 @@ from litellm.utils import (
 
 from .gpt_transformation import OpenAIGPTConfig
 
+REASONING_GPT_GENERATIONS: Final = ("gpt-5", "gpt-6")
+
 
 def _catalogue_declares_default_effort() -> bool:
     """Whether the loaded cost map carries default_reasoning_effort for ANY entry.
@@ -87,7 +89,9 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         # than a substring check) makes this boundary explicit and avoids any ambiguity
         # if future model names coincidentally contain "gpt-5-chat" as an interior run.
         _normalized: Final = model.split("/")[-1]  # strip provider prefix, e.g. "openai/"
-        return "gpt-5" in model and not _normalized.startswith("gpt-5-chat")
+        return any(generation in model for generation in REASONING_GPT_GENERATIONS) and not _normalized.startswith(
+            "gpt-5-chat"
+        )
 
     @classmethod
     def is_model_gpt_5_search_model(cls, model: str) -> bool:
@@ -120,8 +124,10 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @classmethod
     def is_model_gpt_5_4_plus_model(cls, model: str) -> bool:
-        """Check if the model is gpt-5.4 or newer (5.4, 5.5, 5.6, etc., including pro)."""
+        """Check if the model is gpt-5.4 or newer (5.4, 5.5, 5.6, gpt-6, etc., including pro)."""
         model_name: Final = model.split("/")[-1]
+        if model_name.startswith("gpt-6"):
+            return True
         if not model_name.startswith("gpt-5."):
             return False
         try:

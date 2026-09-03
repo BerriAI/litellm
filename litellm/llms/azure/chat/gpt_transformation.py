@@ -139,7 +139,7 @@ class AzureOpenAIConfig(BaseConfig):
         name family needs the rename, including the ``gpt-5-chat*`` models that are excluded from
         the reasoning path by https://github.com/BerriAI/litellm/issues/13781.
         """
-        return "gpt-5" in model or "gpt5_series" in model
+        return any(generation in model for generation in ("gpt-5", "gpt-6")) or "gpt5_series" in model
 
     def _is_response_format_supported_model(self, model: str) -> bool:
         """

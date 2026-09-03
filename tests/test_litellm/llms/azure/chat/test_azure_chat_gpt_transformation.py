@@ -139,6 +139,7 @@ def test_transform_request_drops_tool_reference_parts():
         ("gpt-5-chat-latest", "max_completion_tokens", "max_tokens"),
         ("gpt-5-chat-2025-08-07", "max_completion_tokens", "max_tokens"),
         ("gpt-5", "max_completion_tokens", "max_tokens"),
+        ("gpt-6-astra", "max_completion_tokens", "max_tokens"),
         ("o3-mini", "max_completion_tokens", "max_tokens"),
         ("gpt-4o", "max_tokens", "max_completion_tokens"),
     ],

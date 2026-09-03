@@ -22,6 +22,7 @@ from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
+from ..chat.gpt_5_transformation import OpenAIGPT5Config
 from ..common_utils import OpenAIError
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
@@ -88,7 +89,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         parts: Final = model.split("/")
         if len(parts) > 1 and parts[0] not in ("openai",):
             return False
-        return "gpt-5" in model and "gpt-5-chat" not in model
+        return OpenAIGPT5Config.is_model_gpt_5_model(model)
 
     @staticmethod
     def _supports_reasoning_effort_none(model: str) -> bool:

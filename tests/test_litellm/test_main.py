@@ -860,7 +860,7 @@ def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_routes_
     assert model_info.get("mode") == "responses"
 
 
-@pytest.mark.parametrize("model_name", ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra"])
+@pytest.mark.parametrize("model_name", ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-6-astra"])
 def test_responses_api_bridge_check_gpt_5_6_tools_with_default_reasoning_routes_to_responses(
     monkeypatch, model_name
 ):

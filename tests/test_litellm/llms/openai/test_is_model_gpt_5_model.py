@@ -54,6 +54,8 @@ GPT5_MODELS = [
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
+    "gpt-6-astra",
+    "openai/gpt-6-astra",
     "gpt-5.1-chat",  # versioned chat — THE KEY REGRESSION CASE
     "gpt-5.2-chat",  # versioned chat — also a regression case
     "gpt-5.3-chat",  # versioned chat — THE KEY REGRESSION CASE
@@ -128,6 +130,8 @@ GPT5_4_PLUS_MODELS = [
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "openai/gpt-5.6-sol",
+    "gpt-6-astra",
+    "openai/gpt-6-astra",
 ]
 
 GPT5_PRE_5_4_MODELS = [

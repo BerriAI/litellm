@@ -1615,6 +1615,71 @@ def test_generic_cost_per_token_gpt56_terra_cache_costs_by_tier_and_context(_loc
     assert prompt_cost == pytest.approx(expected_prompt_cost)
 
 
+@pytest.mark.parametrize(
+    "service_tier,prompt_tokens,input_rate,cache_write_rate,cache_read_rate,output_rate",
+    [
+        (None, 100000, 1e-5, 1.25e-5, 1e-6, 5e-5),
+        ("flex", 100000, 5e-6, 6.25e-6, 5e-7, 2.5e-5),
+        ("priority", 100000, 2e-5, 2.5e-5, 2e-6, 1e-4),
+        (None, 300000, 2e-5, 2.5e-5, 2e-6, 7.5e-5),
+        ("flex", 300000, 1e-5, 1.25e-5, 1e-6, 3.75e-5),
+        ("priority", 300000, 4e-5, 5e-5, 4e-6, 1.5e-4),
+    ],
+)
+def test_generic_cost_per_token_gpt6_astra_by_tier_and_context(
+    _local_model_cost_map,
+    service_tier,
+    prompt_tokens,
+    input_rate,
+    cache_write_rate,
+    cache_read_rate,
+    output_rate,
+):
+    """gpt-6-astra: $10/$50 per 1M with $1 cache read and $12.50 cache write, flex at half,
+    priority at double, and the GPT-5.6 long-context multipliers (2x input and cache, 1.5x
+    output) once the prompt passes 272K tokens."""
+    cached_tokens = 50000
+    cache_write_tokens = 40000
+    text_tokens = prompt_tokens - cached_tokens - cache_write_tokens
+    completion_tokens = 1000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="gpt-6-astra",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier=service_tier,
+    )
+
+    assert prompt_cost == pytest.approx(
+        text_tokens * input_rate
+        + cached_tokens * cache_read_rate
+        + cache_write_tokens * cache_write_rate
+    )
+    assert completion_cost == pytest.approx(completion_tokens * output_rate)
+
+
+def test_batch_cost_gpt6_astra_is_half_the_standard_rate(_local_model_cost_map):
+    from litellm.cost_calculator import batch_cost_calculator
+
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+        model="gpt-6-astra",
+        custom_llm_provider="openai",
+        model_info=litellm.get_model_info("gpt-6-astra"),
+    )
+
+    assert prompt_cost == pytest.approx(1000 * 5e-6)
+    assert completion_cost == pytest.approx(500 * 2.5e-5)
+
+
 @pytest.mark.parametrize("model", ["gpt-5.6-cyber", "daybreak-red-latest"])
 @pytest.mark.parametrize(
     "prompt_tokens,input_rate,cache_write_rate,cache_read_rate,output_rate",
