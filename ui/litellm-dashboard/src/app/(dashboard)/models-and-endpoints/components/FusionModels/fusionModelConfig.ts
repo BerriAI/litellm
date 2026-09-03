@@ -19,6 +19,7 @@ export interface FusionRouterConfigValue {
 export interface FusionFormValue extends FusionRouterConfigValue {
   model_name: string;
   team_id: string;
+  web_access_enabled: boolean;
 }
 
 export const DEFAULT_FUSION_CONFIG: FusionRouterConfigValue = {
@@ -44,6 +45,9 @@ const numberOr = (value: unknown, fallback: number): number =>
   typeof value === "number" && Number.isFinite(value) ? value : fallback;
 
 const REASONING_EFFORTS = new Set<FusionReasoningEffort>(["none", "minimal", "low", "medium", "high", "xhigh"]);
+
+const webAccessConfigError = (value: FusionFormValue): string | null =>
+  value.web_access_enabled && !value.search_tool_name ? "Select a Search Tool or turn Web access off." : null;
 
 export const parseFusionConfig = (value: unknown): FusionRouterConfigValue => {
   const config = asRecord(value);
@@ -76,6 +80,8 @@ export const fusionConfigError = (value: FusionFormValue, requiresTeamScope: boo
   if (!value.outer_model) return "Select the outer model.";
   if (value.panel_models.length < 1) return "Select at least one panel model.";
   if (value.panel_models.length > 8) return "A Fusion panel can contain at most eight models.";
+  const webAccessError = webAccessConfigError(value);
+  if (webAccessError) return webAccessError;
   if (value.panel_timeout_seconds <= 0 || value.panel_timeout_seconds > 600) {
     return "Panel timeout must be between 1 and 600 seconds.";
   }
@@ -110,7 +116,7 @@ export const fusionModelPayload = (value: FusionFormValue, requiresTeamScope: bo
       max_completion_tokens: value.max_completion_tokens,
       temperature: value.temperature,
       reasoning_effort: value.reasoning_effort,
-      ...(value.search_tool_name ? { search_tool_name: value.search_tool_name } : {}),
+      ...(value.web_access_enabled && value.search_tool_name ? { search_tool_name: value.search_tool_name } : {}),
       max_tool_calls: value.max_tool_calls,
     },
   },

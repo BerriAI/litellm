@@ -32,7 +32,22 @@ vi.mock("@/components/shared/MultiSelect", () => ({
 }));
 
 vi.mock("@/components/search_tools/SearchToolSelector", () => ({
-  default: () => <div data-testid="search-tool-selector" />,
+  default: ({
+    onChange,
+    onOptionsLoaded,
+  }: {
+    onChange: (tools: string[]) => void;
+    onOptionsLoaded?: (tools: string[]) => void;
+  }) => (
+    <div data-testid="search-tool-selector">
+      <button type="button" onClick={() => onOptionsLoaded?.(["web-search"])}>
+        Load search tools
+      </button>
+      <button type="button" onClick={() => onChange(["web-search"])}>
+        Select web search
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("@/components/common_components/team_dropdown", () => ({
@@ -97,6 +112,7 @@ describe("FusionModelsPanel", () => {
     await user.click(screen.getByRole("button", { name: "Choose panel models" }));
     await user.click(screen.getByLabelText("Outer model"));
     await user.click(screen.getByRole("option", { name: "outer" }));
+    await user.click(screen.getByRole("button", { name: "Load search tools" }));
     await user.click(screen.getByRole("button", { name: "Create Fusion Model" }));
 
     await waitFor(() => expect(modelCreateCall).toHaveBeenCalledTimes(1));
@@ -113,6 +129,7 @@ describe("FusionModelsPanel", () => {
           max_completion_tokens: 16000,
           temperature: 0,
           reasoning_effort: "none",
+          search_tool_name: "web-search",
           max_tool_calls: 4,
         },
       },
@@ -135,6 +152,11 @@ describe("FusionModelsPanel", () => {
 
     await user.click(screen.getByRole("option", { name: /Always deliberate/ }));
     expect(behaviorSelector).toHaveTextContent("Always deliberate");
+
+    expect(screen.getByRole("switch", { name: "Web access" })).toBeChecked();
+    expect(screen.getByTestId("search-tool-selector")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Advanced settings" }));
+    expect(screen.getByLabelText("Maximum searches per internal model")).toHaveValue(4);
   });
 
   it("requires and sends a team for team-admin creation", async () => {
@@ -145,6 +167,7 @@ describe("FusionModelsPanel", () => {
     await user.click(screen.getByRole("button", { name: "Choose panel models" }));
     await user.click(screen.getByLabelText("Outer model"));
     await user.click(screen.getByRole("option", { name: "outer" }));
+    await user.click(screen.getByRole("button", { name: "Load search tools" }));
     await user.click(screen.getByRole("button", { name: "Create Fusion Model" }));
     expect(await screen.findByText("Select a team to continue.")).toBeInTheDocument();
     expect(modelCreateCall).not.toHaveBeenCalled();

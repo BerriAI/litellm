@@ -22,6 +22,7 @@ const validValue = (overrides: Partial<FusionFormValue> = {}): FusionFormValue =
   reasoning_effort: "none",
   search_tool_name: "",
   max_tool_calls: 4,
+  web_access_enabled: false,
   ...overrides,
 });
 
@@ -61,6 +62,16 @@ describe("Fusion model configuration", () => {
     expect(
       fusionConfigError(validValue({ panel_models: Array.from({ length: 9 }, (_, i) => `p-${i}`) }), false),
     ).toMatch(/at most eight/);
+  });
+
+  it("requires a Search Tool when web access is enabled", () => {
+    expect(fusionConfigError(validValue({ web_access_enabled: true }), false)).toBe(
+      "Select a Search Tool or turn Web access off.",
+    );
+    expect(
+      fusionModelPayload(validValue({ web_access_enabled: true, search_tool_name: "web-search" }), false).litellm_params
+        .fusion_router_config,
+    ).toMatchObject({ search_tool_name: "web-search", max_tool_calls: 4 });
   });
 
   it("includes team scope only when required", () => {

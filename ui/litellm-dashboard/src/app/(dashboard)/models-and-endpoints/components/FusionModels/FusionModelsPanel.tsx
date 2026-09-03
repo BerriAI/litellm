@@ -1,7 +1,8 @@
 "use client";
 
 import { Edit2, Plus, Trash2 } from "lucide-react";
-import { type FormEvent, useMemo, useState } from "react";
+import Link from "next/link";
+import { type FormEvent, useCallback, useMemo, useRef, useState } from "react";
 
 import {
   AutoRouterDeployment,
@@ -19,6 +20,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "@/lib/toast";
 import { canModifyModel, type ModelWriteScope } from "@/utils/modelPermissions";
 
@@ -80,6 +82,8 @@ function FusionModelDialog({
   const [temperature, setTemperature] = useState(initialConfig.temperature);
   const [reasoningEffort, setReasoningEffort] = useState(initialConfig.reasoning_effort);
   const [searchToolName, setSearchToolName] = useState(initialConfig.search_tool_name);
+  const [webAccessEnabled, setWebAccessEnabled] = useState(editing ? Boolean(initialConfig.search_tool_name) : true);
+  const searchDefaultsApplied = useRef(editing);
   const [maxToolCalls, setMaxToolCalls] = useState(initialConfig.max_tool_calls);
   const [preset, setPreset] = useState<FusionPreset>(initialConfig.invocation === "required" ? "always" : "auto");
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -95,6 +99,13 @@ function FusionModelDialog({
   const applyPreset = (nextPreset: FusionPreset) => {
     setPreset(nextPreset);
   };
+
+  const handleSearchOptionsLoaded = useCallback((options: string[]) => {
+    if (searchDefaultsApplied.current) return;
+    searchDefaultsApplied.current = true;
+    setWebAccessEnabled(options.length > 0);
+    setSearchToolName((current) => current || options[0] || "");
+  }, []);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -112,6 +123,7 @@ function FusionModelDialog({
       reasoning_effort: reasoningEffort,
       search_tool_name: searchToolName,
       max_tool_calls: maxToolCalls,
+      web_access_enabled: webAccessEnabled,
     };
     const validationError = fusionConfigError(value, requiresTeamScope);
     if (validationError) {
@@ -258,9 +270,42 @@ function FusionModelDialog({
             </p>
           </div>
 
+          <div className="space-y-3 rounded-md border p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <Label htmlFor="fusion-web-access">Web access</Label>
+                <p className="text-xs text-muted-foreground">
+                  Let every panel model and the analyst independently search for current evidence.
+                </p>
+              </div>
+              <Switch
+                id="fusion-web-access"
+                aria-label="Web access"
+                checked={webAccessEnabled}
+                onCheckedChange={setWebAccessEnabled}
+              />
+            </div>
+            {webAccessEnabled && (
+              <SearchToolSelector
+                accessToken={accessToken}
+                value={searchToolName ? [searchToolName] : []}
+                onChange={(tools) => setSearchToolName(tools.at(-1) ?? "")}
+                onOptionsLoaded={handleSearchOptionsLoaded}
+                placeholder="Select a Search Tool"
+              />
+            )}
+            <p className="text-xs text-muted-foreground">
+              Search runs privately and never exposes client action tools to the panel.{" "}
+              <Link href="/search-tools" className="font-medium text-primary hover:underline">
+                Manage Search Tools
+              </Link>
+            </p>
+          </div>
+
           <div className="rounded-md border">
             <button
               type="button"
+              aria-label="Advanced settings"
               className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-medium"
               onClick={() => setAdvancedOpen((current) => !current)}
             >
@@ -336,21 +381,9 @@ function FusionModelDialog({
                     Unsupported reasoning parameters are dropped for that provider.
                   </p>
                 </div>
-                <div className="space-y-2 sm:col-span-2">
-                  <Label>Web research</Label>
-                  <SearchToolSelector
-                    accessToken={accessToken}
-                    value={searchToolName ? [searchToolName] : []}
-                    onChange={(tools) => setSearchToolName(tools.at(-1) ?? "")}
-                    placeholder="Select one Search Tool (optional)"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    When selected, panel and analyst models can search through this server-side LiteLLM Search Tool.
-                  </p>
-                </div>
-                {searchToolName && (
+                {webAccessEnabled && (
                   <div className="space-y-2 sm:col-span-2">
-                    <Label htmlFor="fusion-tool-calls">Tool calls per internal model</Label>
+                    <Label htmlFor="fusion-tool-calls">Maximum searches per internal model</Label>
                     <Input
                       id="fusion-tool-calls"
                       type="number"
@@ -359,6 +392,9 @@ function FusionModelDialog({
                       value={maxToolCalls}
                       onChange={(event) => setMaxToolCalls(Number(event.target.value))}
                     />
+                    <p className="text-xs text-muted-foreground">
+                      Applied separately to every panel model and the analyst. Default 4; maximum 16.
+                    </p>
                   </div>
                 )}
               </div>
