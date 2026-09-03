@@ -43,7 +43,7 @@ DEFAULT_CLASSIFICATION_RUBRIC: Final[ClassificationRubric] = ClassificationRubri
 # The classifier_type values that can call classifier_llm_config.model. Every consumer asking
 # "is the classifier model a real dependency of this router" resolves it here, including the ones
 # that only hold the raw config mapping and cannot reach ComplexityRouterConfig.uses_llm_classifier.
-LLM_CLASSIFIER_TYPES: Final[frozenset[str]] = frozenset({"llm", "heuristic_first"})
+LLM_CLASSIFIER_TYPES: Final[frozenset[str]] = frozenset({"llm", "heuristic_first", "hybrid"})
 
 
 TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
@@ -627,12 +627,13 @@ class ComplexityRouterConfig(BaseModel):
     )
 
     # Classifier strategy
-    classifier_type: Literal["heuristic", "heuristic_v2", "llm", "custom", "heuristic_first"] = Field(
+    classifier_type: Literal["heuristic", "heuristic_v2", "llm", "custom", "heuristic_first", "hybrid"] = Field(
         default="heuristic",
         description=(
             "Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, "
-            "an LLM call, a custom classifier plugin, or 'heuristic_first', which scores locally and only pays "
-            "for the LLM classifier when the local scorer does not confidently land a cheap tier"
+            "an LLM call, a custom classifier plugin, 'heuristic_first', which scores locally and only pays "
+            "for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', "
+            "which trusts the local scorer everywhere except when its score lands near a tier boundary"
         ),
     )
     heuristic_v2_artifact: TrainedTierArtifact | Literal["ultrafeedback"] = Field(
@@ -644,7 +645,10 @@ class ComplexityRouterConfig(BaseModel):
     )
     classifier_llm_config: ClassifierLLMConfig | None = Field(
         default=None,
-        description="Configuration for the LLM classifier; required when classifier_type is 'llm' or 'heuristic_first'",
+        description=(
+            "Configuration for the LLM classifier; required when classifier_type is 'llm', "
+            "'heuristic_first' or 'hybrid'"
+        ),
     )
     heuristic_first_max_tier: str | None = Field(
         default=None,
@@ -657,6 +661,19 @@ class ComplexityRouterConfig(BaseModel):
             "otherwise land SIMPLE by default rather than by evidence, which is how a chained router "
             "would silently send unclassified traffic to the cheapest model. Names a built-in tier, and "
             "may not name the highest one, since that would make the LLM classifier unreachable."
+        ),
+    )
+    hybrid_boundary_margin: float | None = Field(
+        default=None,
+        ge=0,
+        le=1,
+        description=(
+            "How close to a tier boundary a heuristic score has to land before the LLM classifier breaks the "
+            "tie; required when classifier_type is 'hybrid' and rejected otherwise. Everything further than "
+            "this from every active boundary routes on the scorer's own tier with no classifier call, at any "
+            "tier, which is what separates 'hybrid' from 'heuristic_first' and its cheap-tier ceiling. A "
+            "prompt where no dimension fired still goes to the classifier, since the scorer has no opinion "
+            "to be near a boundary with. 0 escalates only scores sitting exactly on a boundary."
         ),
     )
     classifier_plugin: ClassifierPlugin | None = Field(
@@ -1135,6 +1152,23 @@ class ComplexityRouterConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_hybrid_boundary_margin(self) -> "ComplexityRouterConfig":
+        if self.classifier_type != "hybrid":
+            if self.hybrid_boundary_margin is not None:
+                raise ValueError(
+                    f"hybrid_boundary_margin is set but classifier_type is {self.classifier_type!r}; "
+                    "the scorer would never consult the classifier on a near-boundary score. Set "
+                    "classifier_type 'hybrid' or remove hybrid_boundary_margin"
+                )
+            return self
+        if self.hybrid_boundary_margin is None:
+            raise ValueError(
+                "hybrid_boundary_margin is required when classifier_type is 'hybrid': without a margin no "
+                "score is ever near enough to a boundary to escalate, which is classifier_type 'heuristic'"
+            )
+        return self
+
     @field_validator("fallback_tier")
     @classmethod
     def _reject_blank_optional_text(cls, value: str | None) -> str | None:
@@ -1257,7 +1291,7 @@ class ComplexityRouterConfig(BaseModel):
         )
         if duplicated:
             raise ValueError(f"tier_definitions names must be unique (case-insensitive): {', '.join(duplicated)}")
-        if self.classifier_type in ("heuristic", "heuristic_v2", "heuristic_first"):
+        if self.classifier_type in ("heuristic", "heuristic_v2", "heuristic_first", "hybrid"):
             raise ValueError(
                 "tier_definitions requires classifier_type 'llm' or 'custom': the heuristic scorer only "
                 "produces the four built-in tiers, as does heuristic_v2"
