@@ -1982,18 +1982,19 @@ class _ScanCountingGuardrail(CustomGuardrail):
         self.streaming_end_of_stream_only = end_of_stream_only
         self.streaming_buffer_until_moderated = buffer_until_moderated
         self.guardrail_config = {}
-        self.scans = []
+        self.scans: tuple[dict[str, object], ...] = ()
 
     def should_run_guardrail(self, data, event_type):  # type: ignore[override]
         return True
 
     async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
-        self.scans.append(
+        self.scans = (
+            *self.scans,
             {
                 "texts": list(inputs.get("texts") or []),
                 "tool_calls": list(inputs.get("tool_calls") or []),
                 "model": inputs.get("model"),
-            }
+            },
         )
         return inputs
 
@@ -2036,10 +2037,12 @@ class TestStreamingScanDedup:
     guardrail already cleared. Regression for LIT-6692."""
 
     @pytest.fixture(autouse=True)
-    def _use_real_mappings(self):
-        unified_module.endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
-        yield
-        unified_module.endpoint_guardrail_translation_mappings = None
+    def _use_real_mappings(self, monkeypatch):
+        monkeypatch.setattr(
+            unified_module,
+            "endpoint_guardrail_translation_mappings",
+            load_guardrail_translation_mappings(),
+        )
 
     @pytest.mark.asyncio
     async def test_chat_terminal_chunk_on_sampled_index_is_scanned_once(self):
@@ -2180,7 +2183,7 @@ class TestStreamingScanDedup:
         out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks, request_route="/v1/responses")
 
         assert len(out) == 12
-        assert guardrail.scans == [{"texts": ["t0t1t2t3t4"], "tool_calls": [], "model": None}]
+        assert guardrail.scans == ({"texts": ["t0t1t2t3t4"], "tool_calls": [], "model": None},)
 
     @pytest.mark.asyncio
     async def test_responses_tool_call_done_event_is_still_scanned(self):
