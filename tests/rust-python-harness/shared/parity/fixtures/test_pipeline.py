@@ -44,8 +44,9 @@ class _ParityCase(BaseModel):
 class _Upstream(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self) -> None:
+    def __init__(self, status: int = 200) -> None:
         super().__init__(("127.0.0.1", 0), _UpstreamHandler)
+        self.response_status: Final = status
 
     @property
     def url(self) -> str:
@@ -59,7 +60,9 @@ class _UpstreamHandler(BaseHTTPRequestHandler):
         length: Final = int(self.headers.get("content-length") or "0")
         self.rfile.read(length)
         body: Final = b"{}"
-        self.send_response(200)
+        server: Final = self.server
+        assert isinstance(server, _Upstream)
+        self.send_response(server.response_status)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(body)))
         self.end_headers()
@@ -70,8 +73,8 @@ class _UpstreamHandler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def _upstream() -> Generator[_Upstream]:
-    server: Final = _Upstream()
+def _upstream(status: int = 200) -> Generator[_Upstream]:
+    server: Final = _Upstream(status)
     thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -189,3 +192,26 @@ def test_failure_does_not_stop_independent_recordings(tmp_path: Path) -> None:
     assert len(summary.failed) == 1
     assert summary.failed[0].target_name == "stale"
     assert summary.exit_code == 1
+
+
+@pytest.mark.parametrize("status", (408, 429, 500, 503))
+def test_transient_response_is_not_cached_and_can_be_retried(tmp_path: Path, status: int) -> None:
+    case_input: Final = _FixtureInput(identifier="retry")
+    with _upstream(status) as upstream:
+        target: Final = _target("retry", upstream.url, case_input, _Invocation())
+        failed: Final = record_fixtures((target,), tmp_path, 1, 1, _ParityCase)
+    assert failed.exit_code == 1
+    assert not fixture_path(tmp_path / "retry", case_input).exists()
+    with _upstream() as healthy_upstream:
+        healthy_target: Final = _target("retry", healthy_upstream.url, case_input, _Invocation())
+        retried: Final = record_fixtures((healthy_target,), tmp_path, 1, 1, _ParityCase)
+    assert retried.exit_code == 0
+    assert len(retried.recorded) == 1
+
+
+def test_provider_rejected_response_can_be_recorded(tmp_path: Path) -> None:
+    with _upstream(400) as upstream:
+        target: Final = _target("rejected", upstream.url, _FixtureInput(identifier="invalid"), _Invocation())
+        summary: Final = record_fixtures((target,), tmp_path, 1, 1, _ParityCase)
+    assert summary.exit_code == 0
+    assert len(summary.recorded) == 1

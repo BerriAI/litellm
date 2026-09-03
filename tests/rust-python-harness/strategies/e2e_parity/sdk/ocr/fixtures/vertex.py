@@ -42,7 +42,7 @@ class VertexDeepSeekOcrSdkInput(OcrSdkInputBase):
     document: OcrDocument
     custom_llm_provider: Literal["vertex_ai"] | None = None
     vertex_project: str
-    vertex_location: str = "us-central1"
+    vertex_location: str = "global"
 
 
 def vertex_mistral_provider_rejected_inputs(
@@ -123,6 +123,8 @@ def vertex_recording_targets(
     if not api_key or not project:
         return ()
     base_url: Final = environ.get("VERTEX_AI_API_BASE") or f"https://{location}-aiplatform.googleapis.com"
+    deepseek_location: Final = environ.get("VERTEX_DEEPSEEK_LOCATION") or "global"
+    deepseek_base_url: Final = environ.get("VERTEX_DEEPSEEK_API_BASE") or "https://aiplatform.googleapis.com"
     invocation: Final = invoke_with_api_key(client, api_key)
     return (
         OcrRecordingTarget(
@@ -137,12 +139,12 @@ def vertex_recording_targets(
         ),
         OcrRecordingTarget(
             name="vertex-deepseek",
-            upstream=UpstreamEndpoint(base_url=base_url.rstrip("/")),
+            upstream=UpstreamEndpoint(base_url=deepseek_base_url.rstrip("/")),
             strategy=cast(
                 SearchStrategy[OcrSdkInputBase],
-                vertex_deepseek_input_strategy(project, location, inline_image_data_uri),
+                vertex_deepseek_input_strategy(project, deepseek_location, inline_image_data_uri),
             ),
             invocation=invocation,
-            required_inputs=vertex_deepseek_provider_rejected_inputs(project, location, inline_image_data_uri),
+            required_inputs=vertex_deepseek_provider_rejected_inputs(project, deepseek_location, inline_image_data_uri),
         ),
     )
