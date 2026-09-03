@@ -745,7 +745,13 @@ class OCIStreamWrapper(CustomStreamWrapper):
         # single-event case (terminal chunk carries the only copy of the text).
         self._cohere_text_emitted = False
 
-    def _with_stream_identity(self, parsed: ModelResponseStream) -> ModelResponseStream:
+    def _emit_chunk(self, parsed: ModelResponseStream) -> ModelResponseStream:
+        for choice in parsed.choices:
+            if getattr(choice.delta, "tool_calls", None):
+                self.tool_call = True
+            if choice.finish_reason is not None:
+                self.received_finish_reason = choice.finish_reason
+                self.sent_last_chunk = True
         return self.model_response_creator(chunk={"choices": parsed.choices})
 
     def chunk_creator(self, chunk: Any) -> ModelResponseStream | None:
@@ -780,8 +786,8 @@ class OCIStreamWrapper(CustomStreamWrapper):
                     if getattr(choice.delta, "content", None):
                         self._cohere_text_emitted = True
                         break
-            return self._with_stream_identity(result)
-        return self._with_stream_identity(handle_generic_stream_chunk(dict_chunk))
+            return self._emit_chunk(result)
+        return self._emit_chunk(handle_generic_stream_chunk(dict_chunk))
 
 
 __all__ = [
