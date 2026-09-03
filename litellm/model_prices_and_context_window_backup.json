@@ -24467,6 +24467,24 @@
         "mode": "chat",
         "output_cost_per_token": 7.5e-07
     },
+    "baseten/zai-org/GLM-5.3": {
+        "cache_read_input_token_cost": 1.4e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://docs.baseten.co/inference/model-apis/overview",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
     "baseten/zai-org/GLM-5": {
         "input_cost_per_token": 9.5e-07,
         "litellm_provider": "baseten",
