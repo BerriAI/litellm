@@ -8,7 +8,7 @@
 //! Installing from the dial rather than from a `main` also covers the `cdylib`
 //! the Python bridge loads, the tests, and the benches, none of which have one.
 //! ring is what reqwest already falls back to, so installing it changes no
-//! working path, and an embedder that installed its own provider first keeps it.
+//! working path, and whoever installs into this rustls build first still wins.
 
 use std::sync::Once;
 
@@ -38,13 +38,32 @@ where
 
 #[cfg(test)]
 mod tests {
+    use rustls::crypto::CryptoProvider;
+
     use super::ensure_crypto_provider;
+
+    fn fingerprint(
+        provider: &CryptoProvider,
+    ) -> (Vec<rustls::CipherSuite>, Vec<rustls::NamedGroup>) {
+        (
+            provider
+                .cipher_suites
+                .iter()
+                .map(|suite| suite.suite())
+                .collect(),
+            provider
+                .kx_groups
+                .iter()
+                .map(|group| group.name())
+                .collect(),
+        )
+    }
 
     #[test]
     fn client_config_builder_works_with_both_provider_features_enabled() {
         ensure_crypto_provider();
 
-        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+        assert!(CryptoProvider::get_default().is_some());
 
         let config = rustls::ClientConfig::builder()
             .with_root_certificates(rustls::RootCertStore::empty())
@@ -54,12 +73,28 @@ mod tests {
     }
 
     #[test]
+    fn installs_ring_rather_than_aws_lc_rs() {
+        ensure_crypto_provider();
+
+        let installed = CryptoProvider::get_default().expect("a provider is installed");
+
+        assert_eq!(
+            fingerprint(installed),
+            fingerprint(&rustls::crypto::ring::default_provider())
+        );
+        assert_ne!(
+            fingerprint(installed),
+            fingerprint(&rustls::crypto::aws_lc_rs::default_provider())
+        );
+    }
+
+    #[test]
     fn ensure_crypto_provider_is_idempotent() {
         ensure_crypto_provider();
-        let first = rustls::crypto::CryptoProvider::get_default().cloned();
+        let first = CryptoProvider::get_default().cloned();
 
         ensure_crypto_provider();
-        let second = rustls::crypto::CryptoProvider::get_default().cloned();
+        let second = CryptoProvider::get_default().cloned();
 
         assert!(first.is_some());
         assert!(std::sync::Arc::ptr_eq(&first.unwrap(), &second.unwrap()));
