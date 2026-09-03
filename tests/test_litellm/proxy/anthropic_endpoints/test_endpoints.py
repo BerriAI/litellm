@@ -124,6 +124,54 @@ class TestBlockedResponseUsage:
         assert response["usage"] == {"input_tokens": 12, "output_tokens": 5}
         mock_logging.post_call_failure_hook.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_blocked_streaming_response_uses_anthropic_sse_events(self):
+        """A streaming guardrail block must emit valid Anthropic SSE frames."""
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.integrations.custom_guardrail import ModifyResponseException
+
+        exc = ModifyResponseException(
+            message="blocked by guardrail",
+            model="claude-3-5-sonnet-20240620",
+            request_data={"stream": True, "messages": [{"role": "user", "content": "hi"}]},
+            guardrail_name="rubrik",
+            original_response={"usage": {"input_tokens": 12, "output_tokens": 5}},
+        )
+
+        processor = MagicMock()
+        processor.base_process_llm_request = AsyncMock(side_effect=exc)
+
+        with (
+            patch.object(  # test-quality-ok: isolate the endpoint request body for this branch regression
+                ep, "_read_request_body", new=AsyncMock(return_value={"stream": True})
+            ),
+            patch.object(  # test-quality-ok: inject a processor without mutating its class method
+                ep, "_create_base_llm_response_processor", return_value=processor
+            ),
+            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,  # test-quality-ok: isolate endpoint logging
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+            mock_logging.async_post_call_streaming_iterator_hook.side_effect = lambda **kwargs: kwargs["response"]
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=MagicMock(),
+                user_api_key_dict=MagicMock(),
+            )
+
+        frames = [chunk.decode() async for chunk in response.body_iterator]
+        event_types = [frame.splitlines()[0].removeprefix("event: ") for frame in frames]
+        assert event_types == [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+        ]
+        assert all(frame.startswith(f"event: {event}\ndata: ") for frame, event in zip(frames, event_types))
+        assert all(frame.endswith("\n\n") for frame in frames)
+
 
 class TestProxyExceptionPassthrough:
     @pytest.mark.asyncio
