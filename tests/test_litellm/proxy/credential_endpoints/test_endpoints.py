@@ -86,3 +86,31 @@ def test_update_credential_still_answers_200_on_a_successful_write():
 
     assert response.status_code == 200, response.text
     assert response.json()["success"] is True
+
+
+def _get_credential_by_name(name: str):
+    missing = object()
+    previous_override = app.dependency_overrides.get(user_api_key_auth, missing)
+    app.dependency_overrides[user_api_key_auth] = _as_admin
+    try:
+        return client.get(f"/credentials/by_name/{name}", headers={"Authorization": "Bearer test-key"})
+    finally:
+        if previous_override is missing:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+        else:
+            app.dependency_overrides[user_api_key_auth] = previous_override
+
+
+def test_looking_up_a_missing_credential_is_labelled_a_client_error_not_a_gateway_failure():
+    """Naming a credential that does not exist is the caller's own mistake, and the shared
+    handler used to label every one of these internal_server_error, so an SDK branching on
+    the type read a 404 it can never retry past as a gateway outage and backed off forever."""
+    response = _get_credential_by_name("definitely-not-there")
+
+    assert response.status_code == 404, f"lookup answered {response.status_code}: {response.text}"
+    assert response.json()["error"] == {
+        "message": "Credential not found. Got credential name: definitely-not-there",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "404",
+    }
