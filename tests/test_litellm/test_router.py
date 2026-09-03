@@ -12560,7 +12560,7 @@ def test_get_configured_mode_reads_deployment_model_info():
         model_list=[
             {
                 "model_name": "my-tts",
-                "litellm_params": {"model": "openai/tts-1", "api_key": "fake-key"},
+                "litellm_params": {"model": "openai/some-unmapped-mode-model"},
                 "model_info": {"mode": "audio_speech"},
             }
         ]
@@ -12575,7 +12575,7 @@ def test_get_configured_mode_returns_none_for_unset_blank_or_unknown(model_info)
         model_list=[
             {
                 "model_name": "plain-model",
-                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"},
+                "litellm_params": {"model": "openai/some-unmapped-mode-model"},
                 "model_info": model_info,
             }
         ]
