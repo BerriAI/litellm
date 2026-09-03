@@ -106,6 +106,20 @@ class RetryPolicy(BaseModel):
     InternalServerErrorRetries: int | None = None
 
 
+OptionalPreCallChecks = list[
+    Literal[
+        "prompt_caching",
+        "router_budget_limiting",
+        "responses_api_deployment_check",
+        "deployment_affinity",
+        "session_affinity",
+        "forward_client_headers_by_model_group",
+        "enforce_model_rate_limits",
+        "encrypted_content_affinity",
+    ]
+]
+
+
 class UpdateRouterConfig(BaseModel):
     """
     Set of params that you can modify via `router.update_settings()`.
@@ -128,6 +142,7 @@ class UpdateRouterConfig(BaseModel):
     model_group_alias: dict[str, str | dict] | None = {}
     enable_tag_filtering: bool | None = None
     tag_routing_prefix: str | None = None
+    optional_pre_call_checks: OptionalPreCallChecks | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -290,6 +305,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
 
     custom_llm_provider: str | None = None
+    rust: bool | None = None
     tpm: int | None = None
     rpm: int | None = None
     itpm: int | None = None
@@ -867,20 +883,6 @@ class FallbackAccessCheck(Protocol):
     """
 
     async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
-
-
-OptionalPreCallChecks = list[
-    Literal[
-        "prompt_caching",
-        "router_budget_limiting",
-        "responses_api_deployment_check",
-        "deployment_affinity",
-        "session_affinity",
-        "forward_client_headers_by_model_group",
-        "enforce_model_rate_limits",
-        "encrypted_content_affinity",
-    ]
-]
 
 
 class LiteLLM_RouterFileObject(TypedDict, total=False):

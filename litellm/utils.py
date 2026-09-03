@@ -2869,10 +2869,9 @@ def _update_dictionary(existing_dict: dict, new_dict: dict) -> dict:
             elif isinstance(v, dict):
                 existing_nested_dict = existing_dict.get(k)
                 if isinstance(existing_nested_dict, dict):
-                    existing_nested_dict.update(v)
-                    existing_dict[k] = existing_nested_dict
+                    existing_dict[k] = {**existing_nested_dict, **v}  # mutable-ok: copy-on-write merge
                 else:
-                    existing_dict[k] = v
+                    existing_dict[k] = dict(v)  # mutable-ok: detached copy, never the caller's dict by reference
             else:
                 existing_dict[k] = v
 
@@ -4877,11 +4876,7 @@ def _get_deployment_order(deployment: dict | Any) -> int | None:
 
 def _get_order_filtered_deployments(healthy_deployments: list[dict], target_order: int | None = None) -> list:
     if target_order is not None:
-        filtered: Final = [d for d in healthy_deployments if _get_deployment_order(d) == target_order]
-        if filtered:
-            return filtered
-        # target_order doesn't match any deployment (e.g., external fallback model) — return all
-        return healthy_deployments
+        return [d for d in healthy_deployments if _get_deployment_order(d) == target_order]
 
     # Default: pick min order group
     _valid_orders: Final[list[int]] = [
@@ -5109,49 +5104,6 @@ def get_response_string(response_obj: ModelResponse | ModelResponseStream) -> st
                 response_parts.append(str(choice.delta.content))
 
     return "".join(response_parts)
-
-
-def get_api_key(llm_provider: str, dynamic_api_key: str | None):
-    api_key = dynamic_api_key or litellm.api_key
-    # openai
-    if llm_provider == "openai" or llm_provider == "text-completion-openai":
-        api_key = api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
-    # anthropic
-    elif llm_provider == "anthropic" or llm_provider == "anthropic_text":
-        api_key = api_key or litellm.anthropic_key or get_secret("ANTHROPIC_API_KEY")
-    # ai21
-    elif llm_provider == "ai21":
-        api_key = api_key or litellm.ai21_key or get_secret("AI21_API_KEY")
-    # aleph_alpha
-    elif llm_provider == "aleph_alpha":
-        api_key = api_key or litellm.aleph_alpha_key or get_secret("ALEPH_ALPHA_API_KEY")
-    # baseten
-    elif llm_provider == "baseten":
-        api_key = api_key or litellm.baseten_key or get_secret("BASETEN_API_KEY")
-    # cohere
-    elif llm_provider == "cohere" or llm_provider == "cohere_chat":
-        api_key = api_key or litellm.cohere_key or get_secret("COHERE_API_KEY")
-    # huggingface
-    elif llm_provider == "huggingface":
-        api_key = api_key or litellm.huggingface_key or get_secret("HUGGINGFACE_API_KEY")
-    # nlp_cloud
-    elif llm_provider == "nlp_cloud":
-        api_key = api_key or litellm.nlp_cloud_key or get_secret("NLP_CLOUD_API_KEY")
-    # replicate
-    elif llm_provider == "replicate":
-        api_key = api_key or litellm.replicate_key or get_secret("REPLICATE_API_KEY")
-    # together_ai
-    elif llm_provider == "together_ai":
-        api_key = (
-            api_key or litellm.togetherai_api_key or get_secret("TOGETHERAI_API_KEY") or get_secret("TOGETHER_AI_TOKEN")
-        )
-    # nebius
-    elif llm_provider == "nebius":
-        api_key = api_key or litellm.nebius_key or get_secret("NEBIUS_API_KEY")
-    # wandb
-    elif llm_provider == "wandb":
-        api_key = api_key or litellm.wandb_key or get_secret("WANDB_API_KEY")
-    return api_key
 
 
 def get_utc_datetime():
@@ -5860,6 +5812,7 @@ def _get_model_info_helper(
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
                 ),
+                off_peak_pricing=_model_info.get("off_peak_pricing", None),
                 input_cost_per_character=_model_info.get("input_cost_per_character", None),
                 input_cost_per_token_above_128k_tokens=_model_info.get("input_cost_per_token_above_128k_tokens", None),
                 input_cost_per_token_above_200k_tokens=_model_info.get("input_cost_per_token_above_200k_tokens", None),

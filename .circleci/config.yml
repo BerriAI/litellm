@@ -112,10 +112,10 @@ commands:
             node --version
             npm --version
   install_rust:
-    description: "Install pinned rustup (1.28.2) and Rust toolchain (1.97.1) with checksum verification. Adds ~/.cargo/bin to PATH. Run this before any `uv sync` or `uv build` of the workspace: the root package builds litellm-rust through maturin, and on an image without cargo maturin fetches an unpinned rustup and a floating toolchain by itself."
+    description: "Install pinned rustup (1.28.2) and Rust toolchain (1.98.0) with checksum verification. Adds ~/.cargo/bin to PATH. Run this before any `uv sync` or `uv build` of the workspace: the root package builds litellm-rust through maturin, and on an image without cargo maturin fetches an unpinned rustup and a floating toolchain by itself."
     steps:
       - run:
-          name: Install Rust (rustup 1.28.2, toolchain 1.97.1)
+          name: Install Rust (rustup 1.28.2, toolchain 1.98.0)
           command: |
             case "$(uname -m)" in
               x86_64)
@@ -135,7 +135,7 @@ commands:
               "https://static.rust-lang.org/rustup/archive/1.28.2/${RUSTUP_TRIPLE}/rustup-init"
             echo "${RUSTUP_SHA256}  /tmp/rustup-init" | sha256sum -c -
             chmod +x /tmp/rustup-init
-            /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.97.1
+            /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.98.0
             rm -f /tmp/rustup-init
             echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$BASH_ENV"
             export PATH="$HOME/.cargo/bin:$PATH"
@@ -300,7 +300,7 @@ jobs:
             if ($rustupActual -ne $rustupExpected) {
               throw "rustup installer hash mismatch: expected $rustupExpected got $rustupActual"
             }
-            & $rustupInit -y --profile minimal --default-toolchain stable
+            & $rustupInit -y --profile minimal --default-toolchain 1.98.0
             if ($LASTEXITCODE -ne 0) {
               exit $LASTEXITCODE
             }
@@ -1483,7 +1483,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/local_testing/test_basic_python_version.py -k "not legacy_resolver"
+            uv run --no-sync python -m pytest -vv tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
 
   installing_litellm_on_python_3_13:
     docker:
@@ -1507,9 +1507,9 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/local_testing/test_basic_python_version.py -k "not legacy_resolver"
+            uv run --no-sync python -m pytest -v tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
 
-  installing_litellm_on_python_legacy_migration_resolver:
+  installing_litellm_on_python_v2_migration_resolver:
     docker:
       - *python312_image
       - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
@@ -1536,10 +1536,10 @@ jobs:
           url: tcp://localhost:5432
           timeout: "60"
       - run:
-          name: Run legacy migration resolver proxy smoke test
+          name: Run v2 migration resolver proxy smoke test
           command: |
             uv run --no-sync python -m pytest -vv \
-              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings_legacy_resolver
+              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings_v2_resolver
 
   helm_chart_testing:
     machine:
@@ -2879,8 +2879,7 @@ jobs:
           command: |
             if grep -q "Error: P1001: Can't reach database server at" docker_output.log && \
                (grep -q "Database setup failed after multiple retries" docker_output.log || \
-                grep -q "ERROR:    Application startup failed. Exiting." docker_output.log || \
-                grep -q "Database migration cannot proceed" docker_output.log); then
+                grep -q "ERROR:    Application startup failed. Exiting." docker_output.log); then
               echo "Expected error found. Test passed."
             else
               echo "Expected error not found. Test failed."
@@ -3012,7 +3011,7 @@ workflows:
           filters: *main_branches
       - installing_litellm_on_python_3_13:
           filters: *main_branches
-      - installing_litellm_on_python_legacy_migration_resolver:
+      - installing_litellm_on_python_v2_migration_resolver:
           filters: *main_branches
       - helm_chart_testing:
           requires:

@@ -9,10 +9,48 @@ DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT"
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 ROUTER_MAX_FALLBACKS: Final = int(os.getenv("ROUTER_MAX_FALLBACKS", 5))
 ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS: Final = 2000
+RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
+    {
+        "routing_strategy_args",
+        "routing_strategy",
+        "routing_groups",
+        "allowed_fails",
+        "cooldown_time",
+        "num_retries",
+        "timeout",
+        "max_retries",
+        "retry_after",
+        "fallbacks",
+        "context_window_fallbacks",
+        "retry_policy",
+        "model_group_retry_policy",
+        "model_group_alias",
+        "enable_weighted_failover",
+        "enable_tag_filtering",
+        "tag_routing_prefix",
+        "optional_pre_call_checks",
+    }
+)
+ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
+    {
+        "model_list",
+        "search_tools",
+        "assistants_config",
+        "router_general_settings",
+        "ignore_invalid_deployments",
+        "fallback_access_check",
+    }
+)
 DEFAULT_BATCH_SIZE: Final = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
 DEFAULT_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SECONDS", 5))
 DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_S3_BATCH_SIZE: Final = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
+# https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
+MAX_S3_OBJECT_KEY_BYTES: Final = 1024
+S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
+S3_PREFIX_DIGEST_CHARS: Final = 16
+# s3 allows 2048 bytes of combined metadata headers, which Content-Disposition counts against
+MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))
 DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1))
@@ -130,6 +168,7 @@ MCP_CLIENT_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"
 MCP_TOOL_LISTING_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
 MCP_METADATA_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
+MCP_TOOL_LISTING_MAX_PAGES: Final = 1000
 
 # Allowlist of commands permitted for MCP stdio transport.
 # Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
@@ -1583,6 +1622,7 @@ KEY_ROTATION_JOB_NAME: Final = "litellm_key_rotation_job"
 EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME: Final = "litellm_expired_ui_session_key_cleanup_job"
 WEEKLY_SPEND_REPORT_JOB_ID: Final = "weekly_spend_report_job"
 MONTHLY_SPEND_REPORT_JOB_ID: Final = "monthly_spend_report_job"
+USER_SPEND_ALERTS_JOB_ID: Final = "user_spend_alerts_job"
 PROMETHEUS_FALLBACK_STATS_JOB_ID: Final = "prometheus_fallback_stats_job"
 SLACK_DAILY_REPORT_LOCK_ID: Final = "slack_daily_report"
 SLACK_MODEL_DEPRECATION_LOCK_ID: Final = "slack_model_deprecation_warning"
@@ -1702,6 +1742,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "anthropic_prompt_caching_ttl",
     "max_ui_session_budget",
     "budget_rollover",
+    "mcp_tool_search",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))

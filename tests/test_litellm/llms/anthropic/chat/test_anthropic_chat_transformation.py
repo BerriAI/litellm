@@ -3128,6 +3128,31 @@ def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(
 
 
 @pytest.mark.parametrize(
+    "model,budget_tokens,expected",
+    [
+        ("claude-opus-4-8", 4096, ({"type": "adaptive"}, {"effort": "high"})),
+        ("claude-opus-4-7", 24000, ({"type": "adaptive"}, {"effort": "xhigh"})),
+        ("claude-opus-4-6", 4096, ({"type": "enabled", "budget_tokens": 4096}, None)),
+        ("claude-sonnet-4-5-20250929", 4096, ({"type": "enabled", "budget_tokens": 4096}, None)),
+    ],
+)
+def test_legacy_thinking_translated_to_adaptive_on_adaptive_only_models(model, budget_tokens, expected):
+    """Adaptive-only models reject thinking={type: enabled} with a 400, so the
+    legacy shape must be upgraded to adaptive + output_config.effort on
+    /chat/completions too, while models that accept it keep the caller's budget."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": budget_tokens}, "max_tokens": 64000},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert (result["thinking"], result.get("output_config")) == expected
+
+
+@pytest.mark.parametrize(
     "bad_value",
     [
         {"summary": "concise"},  # missing effort
@@ -6354,3 +6379,33 @@ def test_anthropic_drop_params_reduces_mixed_output_config_to_format(monkeypatch
     )
 
     assert result.get("output_config") == {"format": schema_format}
+
+
+def test_response_format_tool_path_skips_forced_tool_choice_when_unsupported(local_model_cost_map, monkeypatch):
+    """Backstop: on the tool-based structured-output path, a model flagged
+    ``supports_forced_tool_use: false`` must not get the forced response-format
+    tool_choice the provider would 400 on."""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "claude-test-no-forced-tools",
+        {"litellm_provider": "anthropic", "mode": "chat", "supports_forced_tool_use": False},
+    )
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+                },
+            }
+        },
+        optional_params={},
+        model="claude-test-no-forced-tools",
+        drop_params=False,
+    )
+
+    assert "tools" in result
+    assert "tool_choice" not in result

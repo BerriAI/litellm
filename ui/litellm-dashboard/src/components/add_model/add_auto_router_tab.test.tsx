@@ -101,18 +101,24 @@ vi.mock("./build_complexity_router_config", async (importOriginal) => {
 });
 
 // A real TeamDropdown fetches teams and renders an antd Select; the wiring under test is
-// whether team_id is registered, validated and forwarded, so a plain control stands in.
+// whether team_id is registered, validated and forwarded, so a plain control stands in. The
+// clear button mirrors the real dropdown's x, which emits null rather than a string.
 vi.mock("../common_components/team_dropdown", () => ({
-  default: ({ value, onChange }: { value?: string; onChange?: (next: string) => void }) => (
-    <select
-      data-testid="team-dropdown"
-      value={value ?? ""}
-      onChange={(event) => onChange?.(event.target.value)}
-      aria-label="Select Team"
-    >
-      <option value="">none</option>
-      <option value="team-1">team-1</option>
-    </select>
+  default: ({ value, onChange }: { value?: string; onChange?: (next: string | null) => void }) => (
+    <>
+      <select
+        data-testid="team-dropdown"
+        value={value ?? ""}
+        onChange={(event) => onChange?.(event.target.value)}
+        aria-label="Select Team"
+      >
+        <option value="">none</option>
+        <option value="team-1">team-1</option>
+      </select>
+      <button type="button" data-testid="team-dropdown-clear" onClick={() => onChange?.(null)}>
+        clear team
+      </button>
+    </>
   ),
 }));
 
@@ -348,6 +354,25 @@ describe("AddAutoRouterTab", () => {
     );
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "team-scoped-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    expect(await screen.findByText("Please select a team to continue")).toBeInTheDocument();
+    expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
+  });
+
+  // The shared dropdown emits null on clear while this form's schema wants a string, so the
+  // form maps null back to "": the user sees the pick-a-team message, not a zod type error.
+  it("treats a team picked and then cleared like no team at all", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(
+      <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" userRole="Internal User" createScope="team-required" />,
+    );
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "team-scoped-router");
+    await user.selectOptions(screen.getByTestId("team-dropdown"), "team-1");
+    await user.click(screen.getByTestId("team-dropdown-clear"));
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     expect(await screen.findByText("Please select a team to continue")).toBeInTheDocument();

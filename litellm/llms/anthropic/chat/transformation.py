@@ -1516,7 +1516,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     _tool = self.map_response_format_to_anthropic_tool(value, optional_params, is_thinking_enabled)
                     if _tool is None:
                         continue
-                    if not is_thinking_enabled:
+                    if not is_thinking_enabled and not AnthropicModelInfo.forced_tool_use_unsupported(model):
                         _tool_choice = {
                             "name": RESPONSE_FORMAT_TOOL_NAME,
                             "type": "tool",
@@ -1565,6 +1565,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         optional_params.pop("thinking", None)
                 else:
                     optional_params["thinking"] = value
+                    AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+                        model=model, optional_params=optional_params, custom_llm_provider=self._resolved_provider
+                    )
             elif param == "reasoning_effort":
                 # Accept both string ("low") and dict ({"effort": "low",
                 # "summary": "concise"}). The Responses->Chat parser keeps the

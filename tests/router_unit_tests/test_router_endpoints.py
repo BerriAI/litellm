@@ -1324,6 +1324,98 @@ async def test_init_containers_api_endpoints_managed_id_without_model_id_applies
     assert call_kw["custom_llm_provider"] == "azure"
 
 
+@pytest.mark.asyncio
+async def test_init_containers_api_endpoints_create_with_model_uses_deployment_credentials(monkeypatch):
+    """
+    ``POST /v1/containers`` carries no container ID, so a ``model`` in the request
+    body is the only way to pick a deployment. The upstream call must receive that
+    deployment's ``api_key``/``api_base`` instead of falling back to the global
+    ``OPENAI_API_KEY`` (which may be unset on the proxy).
+    """
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.4",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4",
+                    "api_key": "sk-model-list-key",
+                    "api_base": "https://custom.openai.example/v1",
+                },
+            }
+        ]
+    )
+    mock_original_function = AsyncMock(return_value={"id": "cntr_test", "name": "Test Container"})
+
+    await router._init_containers_api_endpoints(
+        original_function=mock_original_function,
+        custom_llm_provider="openai",
+        name="Test Container",
+        model="gpt-5.4",
+    )
+
+    mock_original_function.assert_called_once()
+    call_kw = mock_original_function.call_args.kwargs
+    assert call_kw["api_key"] == "sk-model-list-key"
+    assert call_kw["api_base"] == "https://custom.openai.example/v1"
+    assert call_kw["model"] == "openai/gpt-5.4"
+    assert call_kw["name"] == "Test Container"
+
+
+@pytest.mark.asyncio
+async def test_init_containers_api_endpoints_create_without_model_calls_directly():
+    """
+    Without ``model`` (or with ``model=None`` as the proxy forwards it), create/list
+    must keep calling the handler directly with global provider credentials.
+    """
+    router = Router(model_list=[])
+    router._ageneric_api_call_with_fallbacks = AsyncMock()
+    mock_original_function = AsyncMock(return_value={"id": "cntr_test"})
+
+    await router._init_containers_api_endpoints(
+        original_function=mock_original_function,
+        custom_llm_provider="openai",
+        name="Test Container",
+        model=None,
+    )
+
+    router._ageneric_api_call_with_fallbacks.assert_not_called()
+    mock_original_function.assert_called_once_with(custom_llm_provider="openai", name="Test Container", model=None)
+
+
+@pytest.mark.asyncio
+async def test_init_containers_api_endpoints_create_with_unknown_model_passes_through(monkeypatch):
+    """
+    A ``model`` that names no configured deployment must not turn into a 400. The call
+    falls through to the handler with the caller's model and no injected deployment
+    credentials, matching the behaviour before model-based routing existed.
+    """
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.4",
+                "litellm_params": {"model": "openai/gpt-5.4", "api_key": "sk-model-list-key"},
+            }
+        ]
+    )
+    mock_original_function = AsyncMock(return_value={"id": "cntr_test"})
+
+    await router._init_containers_api_endpoints(
+        original_function=mock_original_function,
+        custom_llm_provider="openai",
+        name="Test Container",
+        model="does-not-exist",
+    )
+
+    mock_original_function.assert_called_once()
+    call_kw = mock_original_function.call_args.kwargs
+    assert call_kw["model"] == "does-not-exist"
+    assert call_kw["name"] == "Test Container"
+    assert "api_key" not in call_kw
+    assert "api_base" not in call_kw
+
+
 def test_router_model_group_encrypted_content_affinity_callback_registration():
     from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
         DeploymentAffinityCheck,

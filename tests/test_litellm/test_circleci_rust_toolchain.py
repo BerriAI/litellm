@@ -17,28 +17,27 @@ Two invariants are pinned here:
      Windows job, so the check accepts either. A new job that syncs without one
      falls back to the unpinned path, which is exactly the regression a static
      check catches at PR time and a green CI run does not.
-  2. `install_rust` itself pins what it downloads: an explicit rustup version in
-     the URL, a verified SHA-256, and an exact toolchain version rather than a
-     channel name.
-
-The Windows job predates `install_rust` and provisions its toolchain inline, so
-invariant 2 is scoped to `install_rust`; invariant 1 covers both.
+  2. Both installers pin what they download: an explicit rustup version, a
+     verified SHA-256, and the exact toolchain in `rust-toolchain.toml`.
 """
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Final
 
 import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG = REPO_ROOT / ".circleci" / "config.yml"
+TOOLCHAIN: Final = REPO_ROOT / "rust-toolchain.toml"
 
 BUILDS_WORKSPACE = re.compile(r"\buv\s+(?:sync|build)\b")
 RUSTUP_ARCHIVE_URL = re.compile(r"https://static\.rust-lang\.org/rustup/archive/\d+\.\d+\.\d+/")
-EXACT_TOOLCHAIN = re.compile(r"--default-toolchain\s+\"?\d+\.\d+\.\d+\"?")
+EXACT_TOOLCHAIN = re.compile(r"--default-toolchain\s+\"?(\d+\.\d+\.\d+)\"?")
+TOOLCHAIN_CHANNEL: Final = re.compile(r'^channel = "(\d+\.\d+\.\d+)"$', re.MULTILINE)
 
 
 def _config() -> dict[str, object]:
@@ -55,6 +54,12 @@ def _step_text(step: object) -> str:
             command = run.get("command")
             return command if isinstance(command, str) else ""
     return ""
+
+
+def _pinned_toolchain() -> str:
+    match: Final = TOOLCHAIN_CHANNEL.search(TOOLCHAIN.read_text())
+    assert match is not None, "rust-toolchain.toml must pin an exact channel"
+    return match.group(1)
 
 
 def _without_comments(text: str) -> str:
@@ -142,7 +147,17 @@ def test_install_rust_verifies_the_installer_checksum(install_rust_command: str)
 
 
 def test_install_rust_pins_an_exact_toolchain_version(install_rust_command: str) -> None:
-    assert EXACT_TOOLCHAIN.search(install_rust_command), (
-        "install_rust must pin an exact toolchain version (e.g. 1.97.1); a channel name like "
+    match: Final = EXACT_TOOLCHAIN.search(install_rust_command)
+    assert match is not None, (
+        "install_rust must pin an exact toolchain version (e.g. 1.98.0); a channel name like "
         "stable/beta/nightly makes the compiler drift with whatever upstream published that day"
     )
+    assert match.group(1) == _pinned_toolchain()
+
+
+def test_windows_installer_matches_the_repo_toolchain() -> None:
+    windows_steps: Final = _step_lists()["job using_litellm_on_windows"]
+    windows_command: Final = "\n".join(_step_text(step) for step in windows_steps)
+    match: Final = EXACT_TOOLCHAIN.search(windows_command)
+    assert match is not None
+    assert match.group(1) == _pinned_toolchain()
