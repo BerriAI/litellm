@@ -25,6 +25,7 @@ from litellm.constants import (
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_OMITTED_METADATA_KEY,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
@@ -734,10 +735,13 @@ def apply_missing_session_id_policy(
     request: Request,
 ) -> None:
     policy: Final = general_settings.get("missing_session_id") if general_settings else None
-    if policy is None or policy == "omit" or not _is_llm_inference_route(request):
+    if policy is None or not _is_llm_inference_route(request):
         return
     metadata: Final = data.get(_metadata_variable_name)
     if not isinstance(metadata, dict):
+        return
+    if policy == "omit":
+        metadata[SESSION_ID_OMITTED_METADATA_KEY] = True
         return
     if data.get("litellm_session_id") or metadata.get("session_id"):
         return

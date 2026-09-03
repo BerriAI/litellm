@@ -14,6 +14,7 @@ from litellm.constants import (
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
     REDACTED_BY_LITELM_STRING,
+    SESSION_ID_OMITTED_METADATA_KEY,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
@@ -128,18 +129,26 @@ def test_legacy_policy_keeps_trace_id_fallback():
 
 
 @pytest.mark.parametrize(
-    ("general_settings", "expected"),
-    [({}, "trace-abc"), ({"missing_session_id": "generate"}, "trace-abc"), ({"missing_session_id": "omit"}, None)],
+    ("request_metadata", "expected"),
+    [
+        ({"trace_id": "trace-abc"}, "trace-abc"),
+        ({"trace_id": "trace-abc", SESSION_ID_OMITTED_METADATA_KEY: True}, None),
+        ({"trace_id": "trace-abc", "session_id": "chain-1", SESSION_ID_OMITTED_METADATA_KEY: True}, "chain-1"),
+    ],
 )
-def test_get_logging_payload_applies_missing_session_id_policy(general_settings: dict[str, str], expected: str | None):
-    with patch(  # test-quality-ok: general_settings is proxy config, loaded from yaml, not an HTTP boundary
-        "litellm.proxy.proxy_server.general_settings", general_settings
+def test_get_logging_payload_reads_omit_decision_stamped_on_request(
+    request_metadata: dict[str, object], expected: str | None
+):
+    """The pre-call stamp, not the live general_settings, decides the policy, so a config reload between
+    pre-call and spend logging cannot fabricate a session for a request accepted under `omit`."""
+    with patch(  # test-quality-ok: proves log time ignores proxy config; general_settings is yaml, not an HTTP boundary
+        "litellm.proxy.proxy_server.general_settings", {"missing_session_id": "generate"}
     ):
         payload: SpendLogsPayload = get_logging_payload(
             kwargs={
                 "model": "gpt-4o-mini",
                 "litellm_trace_id": "trace-abc",
-                "litellm_params": {"litellm_session_id": "trace-abc", "metadata": {"trace_id": "trace-abc"}},
+                "litellm_params": {"litellm_session_id": "trace-abc", "metadata": request_metadata},
                 "standard_logging_object": _TRACE_ONLY_STANDARD_LOGGING,
             },
             response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),

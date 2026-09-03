@@ -41,7 +41,7 @@ from litellm.litellm_core_utils.get_provider_specific_headers import (
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
 )
-from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY, SESSION_ID_OMITTED_METADATA_KEY
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import CredentialItem
@@ -7737,8 +7737,8 @@ def _request_for(path: str) -> MagicMock:
     return request
 
 
-def _spend_log_session_id(data: dict[str, object], omit_when_missing: bool = False) -> str | None:
-    """Resolve session_id the way LiteLLM_SpendLogs does for the given `missing_session_id` policy."""
+def _spend_log_session_id(data: dict[str, object]) -> str | None:
+    """Resolve session_id the way LiteLLM_SpendLogs does, reading the omit decision stamped on the request."""
     from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_session_id_for_spend_log
@@ -7758,7 +7758,7 @@ def _spend_log_session_id(data: dict[str, object], omit_when_missing: bool = Fal
         kwargs={},
         metadata=metadata,
         standard_logging_payload={"trace_id": trace_id},
-        omit_when_missing=omit_when_missing,
+        omit_when_missing=bool(metadata.get(SESSION_ID_OMITTED_METADATA_KEY)),
     )
 
 
@@ -7822,7 +7822,8 @@ async def test_missing_session_id_omit_leaves_spend_log_session_id_null():
 
     assert "session_id" not in updated["metadata"]
     assert updated["litellm_trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
-    assert _spend_log_session_id(updated, omit_when_missing=True) is None
+    assert updated["metadata"][SESSION_ID_OMITTED_METADATA_KEY] is True
+    assert _spend_log_session_id(updated) is None
 
 
 @pytest.mark.asyncio
@@ -7839,7 +7840,7 @@ async def test_missing_session_id_omit_keeps_client_supplied_session_id():
     )
 
     assert updated["metadata"]["session_id"] == "client-session-1"
-    assert _spend_log_session_id(updated, omit_when_missing=True) == "client-session-1"
+    assert _spend_log_session_id(updated) == "client-session-1"
 
 
 @pytest.mark.asyncio

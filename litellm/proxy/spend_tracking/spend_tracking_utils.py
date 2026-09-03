@@ -15,6 +15,7 @@ from litellm.constants import (
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
     REDACTED_BY_LITELM_STRING,
+    SESSION_ID_OMITTED_METADATA_KEY,
 )
 from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
@@ -580,7 +581,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
                 kwargs=kwargs,
                 metadata=metadata,
                 standard_logging_payload=standard_logging_payload,
-                omit_when_missing=_omits_session_id_when_missing(),
+                omit_when_missing=bool(metadata.get(SESSION_ID_OMITTED_METADATA_KEY)) if metadata else False,
             ),
             request_duration_ms=_get_request_duration_ms(start_time, end_time),
             status=_get_status_for_spend_log(
@@ -604,19 +605,15 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         raise e
 
 
-def _omits_session_id_when_missing() -> bool:
-    from litellm.proxy.proxy_server import general_settings
-
-    return general_settings.get("missing_session_id") == "omit"
-
-
 def _get_session_id_for_spend_log(
     kwargs: Mapping[str, object],
     metadata: Mapping[str, object] | None,
     standard_logging_payload: StandardLoggingPayload | None,
     omit_when_missing: bool,
 ) -> str | None:
-    """`omit` trusts only `metadata.session_id`, the key Langfuse reads; `litellm_session_id` may be a copied trace id."""
+    """`omit_when_missing` is the pre-call `missing_session_id: omit` decision stamped on this request, so a config
+    reload mid-flight cannot change it. Under it only `metadata.session_id`, the key Langfuse reads, counts as a session;
+    `litellm_session_id` may be a copied trace id."""
     if omit_when_missing:
         session_id: Final = metadata.get("session_id") if metadata else None
         return str(session_id) if session_id else None
