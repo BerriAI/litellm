@@ -56,6 +56,7 @@ describe("buildComplexityRouterConfig", () => {
       session_affinity: false,
       deployment_affinity: true,
       modality_routing: false,
+      modality_pin_override: false,
       escalation_keywords: ["LITELLM ESCALATE"],
     };
     expect(config).toEqual(expected);
@@ -268,6 +269,14 @@ describe("buildComplexityRouterConfig", () => {
     expect(buildComplexityRouterConfig({ ...baseParams, modalityRouting: true }).modality_routing).toBe(true);
     expect(buildComplexityRouterConfig(baseParams).modality_routing).toBe(false);
     expect(buildComplexityRouterConfig({ ...baseParams, modalityRouting: false }).modality_routing).toBe(false);
+  });
+
+  it("writes modality_pin_override explicitly both ways, so the stored config never relies on the backend default", () => {
+    expect(buildComplexityRouterConfig({ ...baseParams, modalityPinOverride: true }).modality_pin_override).toBe(true);
+    expect(buildComplexityRouterConfig(baseParams).modality_pin_override).toBe(false);
+    expect(buildComplexityRouterConfig({ ...baseParams, modalityPinOverride: false }).modality_pin_override).toBe(
+      false,
+    );
   });
 
   it("writes session_affinity=true so turning the toggle on overrides the backend's off-by-default", () => {
