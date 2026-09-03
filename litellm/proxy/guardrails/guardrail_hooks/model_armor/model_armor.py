@@ -984,8 +984,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         return tuple(str(getattr(chunk, attr, None)) for attr in _RESPONSES_DELTA_FIELD_ATTRS)
 
     @staticmethod
-    def _responses_delta_text(all_chunks: Sequence[object]) -> str:
-        """Text a ``/v1/responses`` stream has already spelled out in its delta events.
+    def _responses_delta_field_texts(all_chunks: Sequence[object]) -> tuple[str, ...]:
+        """Text each field of a ``/v1/responses`` turn has already spelled out in its delta events.
 
         One field's deltas are joined as they streamed, since a finding can be split across them,
         and separate fields stay apart, so a reasoning summary running into the visible answer
@@ -997,7 +997,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             if getattr(chunk, "type", None) in _RESPONSES_DELTA_EVENT_TYPES
             and isinstance(delta := getattr(chunk, "delta", None), str)
         )
-        return "\n".join(
+        return tuple(
             "".join(delta for field, delta in deltas if field == streamed_field)
             for streamed_field in dict.fromkeys(field for field, _ in deltas)
         )
@@ -1011,17 +1011,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         """Text to scan for a buffered stream, which is everything the client is about to receive.
 
         A ``/v1/responses`` stream also spells out reasoning summaries and tool-call arguments in
-        delta events that its terminal body never repeats, so body and deltas are scanned together.
+        delta events that its terminal body never repeats, so every delta field the body does not
+        already carry is scanned after it.
         """
         content: Final = self._extract_streaming_content(assembled_response)
         if surface is not _StreamSurface.RESPONSES:
             return content
-        delta_text: Final = self._responses_delta_text(all_chunks)
-        if delta_text in content:
-            return content
-        if content in delta_text:
-            return delta_text
-        return f"{content}\n{delta_text}"
+        unscanned: Final = tuple(text for text in self._responses_delta_field_texts(all_chunks) if text not in content)
+        return "\n".join(part for part in (content, *unscanned) if part)
 
     @staticmethod
     def _apply_sanitized_content(assembled_response: ModelResponse, sanitized_content: str) -> None:

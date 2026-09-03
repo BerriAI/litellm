@@ -4855,6 +4855,66 @@ async def test_streaming_responses_one_fields_deltas_still_join_into_a_single_fi
     assert "Streaming response blocked by Model Armor" in rendered
 
 
+@pytest.mark.asyncio
+async def test_streaming_responses_fields_the_body_repeats_are_not_scanned_a_second_time():
+    """A turn whose visible fields all reach the terminal body is scanned once, not twice.
+
+    Two output_text fields stream as deltas and come back in the completed body, so scanning the
+    deltas on top of the body would send Model Armor two copies of everything the client sees.
+    """
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    paragraphs = ("the first thing to know", "a second and separate point")
+    text_deltas = tuple(
+        OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id=f"msg_{index}",
+            output_index=index,
+            content_index=0,
+            delta=paragraph,
+        )
+        for index, paragraph in enumerate(paragraphs)
+    )
+    completed = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_1",
+            created_at=0,
+            model="gpt-5-mini",
+            object="response",
+            output=[
+                {
+                    "type": "message",
+                    "id": f"msg_{index}",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": paragraph, "annotations": []}],
+                }
+                for index, paragraph in enumerate(paragraphs)
+            ],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        ),
+    )
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, (*text_deltas, completed))
+
+    post.assert_called_once()
+    scanned = post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    assert [scanned.count(paragraph) for paragraph in paragraphs] == [1, 1]
+    rendered = "".join(str(item) for item in delivered)
+    assert all(paragraph in rendered for paragraph in paragraphs)
+
+
 def test_every_responses_delta_event_is_in_the_scanned_set():
     """Every ``.delta`` the Responses event enum defines is model output on its way to the client."""
     from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import (
