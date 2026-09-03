@@ -373,17 +373,17 @@ def cost_per_token(
     if model is None:
         raise Exception("Invalid arg. Model cannot be none.")
 
-    coerced_prompt_tokens = _coerce_token_count(prompt_tokens)
-    coerced_completion_tokens = _coerce_token_count(completion_tokens)
+    prompt_tokens = _coerce_token_count(prompt_tokens)
+    completion_tokens = _coerce_token_count(completion_tokens)
 
     ## RECONSTRUCT USAGE BLOCK ##
     if usage_object is not None:
         usage_block = usage_object
     else:
         usage_block = Usage(
-            prompt_tokens=coerced_prompt_tokens,
-            completion_tokens=coerced_completion_tokens,
-            total_tokens=coerced_prompt_tokens + coerced_completion_tokens,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
         )
