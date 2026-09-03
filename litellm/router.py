@@ -21,7 +21,7 @@ import time
 import traceback
 import weakref
 from collections import defaultdict
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator, Iterator, Mapping, Sequence
 from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
@@ -117,6 +117,9 @@ from litellm.router_utils.add_retry_fallback_headers import (
 from litellm.router_utils.auto_router_model_naming import (
     AUTO_ROUTER_MODEL_PREFIX,
     classify_strategy_router_model,
+    count_heuristic_v2_routers,
+    heuristic_v2_limit_violation,
+    uses_heuristic_v2_classifier,
 )
 from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
@@ -211,6 +214,7 @@ from litellm.types.router import (
     DeploymentTypedDict,
     FallbackAccessCheck,
     GuardrailTypedDict,
+    HeuristicV2RouterLimit,
     LiteLLM_Params,
     MockRouterTestingParams,
     ModelGroupInfo,
@@ -684,6 +688,7 @@ class Router:
         background_health_check_model_groups: Sequence[str] | None = None,
         enable_weighted_failover: bool = False,
         fallback_access_check: FallbackAccessCheck | None = None,
+        heuristic_v2_router_limit: HeuristicV2RouterLimit | None = None,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -760,6 +765,7 @@ class Router:
 
         self.set_verbose = set_verbose
         self.ignore_invalid_deployments = ignore_invalid_deployments
+        self.heuristic_v2_router_limit = heuristic_v2_router_limit
         self.fallback_access_check: Final = fallback_access_check
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
@@ -8794,6 +8800,30 @@ class Router:
         """
         return classify_strategy_router_model(litellm_params.model) == "complexity"
 
+    def config_deployments(self) -> Iterator[Mapping[str, object]]:
+        """The model_list rows that came from config.yaml rather than the DB (``model_info.db_model`` unset)."""
+        for deployment in self.model_list:
+            if not isinstance(deployment, Mapping):
+                continue
+            model_info = deployment.get("model_info")
+            if not (isinstance(model_info, Mapping) and model_info.get("db_model")):
+                yield deployment
+
+    def heuristic_v2_router_limit_violation(self) -> str | None:
+        """
+        Why one more heuristic_v2 router cannot join this router, or None when it can.
+
+        Judged against every deployment currently on the model_list; an upsert pops the row being
+        edited first, so an edit of an existing heuristic_v2 router keeps its own slot. The limit is
+        resolved on every call through ``heuristic_v2_router_limit``; unset means unlimited, which
+        is the SDK default, and the proxy injects a resolver backed by its license.
+        """
+        limit: Final = self.heuristic_v2_router_limit() if self.heuristic_v2_router_limit is not None else None
+        others: Final = count_heuristic_v2_routers(
+            deployment for deployment in self.model_list if isinstance(deployment, Mapping)
+        )
+        return heuristic_v2_limit_violation(held=others + 1, limit=limit)
+
     def init_complexity_router_deployment(self, deployment: Deployment):
         """
         Initialize the complexity-router deployment.
@@ -8811,6 +8841,10 @@ class Router:
         )
 
         complexity_router_config: Final[dict | None] = deployment.litellm_params.complexity_router_config
+        if uses_heuristic_v2_classifier(complexity_router_config):
+            limit_violation: Final = self.heuristic_v2_router_limit_violation()
+            if limit_violation is not None:
+                raise ValueError(limit_violation)
 
         default_model: str | None = deployment.litellm_params.complexity_router_default_model
 
@@ -9634,8 +9668,16 @@ class Router:
                 raise e
 
     def _restore_deployment_after_failed_upsert(self, previous_deployment: Deployment | None, model_id: str) -> None:
+        """Put a deployment back the way it was before a failed upsert popped it.
+
+        A rollback re-admits state that was already serving, so it does not go through the
+        heuristic_v2 ceiling a newcomer gets: with the ceiling tightened since the deployment first
+        registered, judging the rollback would drop a serving router over an unrelated failed edit.
+        """
         if previous_deployment is None or self.has_model_id(model_id):
             return
+        limit_resolver: Final = self.heuristic_v2_router_limit
+        self.heuristic_v2_router_limit = None
         try:
             self.add_deployment(deployment=previous_deployment)
             verbose_router_logger.info(
@@ -9650,6 +9692,8 @@ class Router:
                 model_id,
                 restore_error,
             )
+        finally:
+            self.heuristic_v2_router_limit = limit_resolver
 
     @staticmethod
     def _backend_cost_map_keys(model: str, custom_llm_provider: str | None) -> tuple[str, ...]:
@@ -9978,6 +10022,17 @@ class Router:
             coerce_token_limit(model_info.get("max_input_tokens")),
             coerce_token_limit(model_info.get("max_output_tokens")),
         )
+
+    def get_configured_mode(self, model_name: str) -> "str | None":
+        """Return the mode explicitly configured for a concrete deployment."""
+        deployment: Final = self.get_deployment_by_model_group_name(model_group_name=model_name)
+        if deployment is None:
+            return None
+
+        mode: Final = deployment.model_info.get("mode")
+        if isinstance(mode, str) and mode.strip():
+            return mode
+        return None
 
     def get_configured_display_name(self, model_name: str) -> "str | None":
         """
