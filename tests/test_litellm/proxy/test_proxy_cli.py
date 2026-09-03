@@ -95,6 +95,7 @@ class TestProxyInitializationHelpers:
         assert args["app"] == "litellm.proxy.proxy_server:app"
         assert args["host"] == "localhost"
         assert args["port"] == 8000
+        assert args["server_header"] is False
 
         # Test with log_config
         args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
