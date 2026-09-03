@@ -414,6 +414,11 @@ def _resolve_vertex_location_for_cost(
     return VertexBase.get_vertex_region(configured_location, model)
 
 
+def _provider_response_id(source: object) -> str | None:
+    candidate: Final = source.get("id") if isinstance(source, dict) else getattr(source, "id", None)
+    return candidate if isinstance(candidate, str) and candidate else None
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -3832,11 +3837,12 @@ class Logging(LiteLLMLoggingBaseClass):
         if isinstance(result, ResponsesAPIResponse):
             return self._translate_responses_api_response_to_model_response(result)
 
+        provider_response_id: Final = _provider_response_id(result)
         httpx_response: Final = self.model_call_details.get("httpx_response", None)
         if httpx_response and isinstance(httpx_response, httpx.Response):
             result = litellm.AnthropicConfig().transform_response(
                 raw_response=httpx_response,
-                model_response=litellm.ModelResponse(),
+                model_response=litellm.ModelResponse(id=provider_response_id),
                 model=self.model,
                 messages=[],
                 logging_obj=self,
@@ -3859,7 +3865,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     status_code=200,
                     headers={},
                 ),
-                model_response=litellm.ModelResponse(),
+                model_response=litellm.ModelResponse(id=provider_response_id),
                 json_mode=None,
                 speed=self.optional_params.get("speed") if self.optional_params else None,
             )
@@ -3882,7 +3888,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return LiteLLMResponsesTransformationHandler().transform_response(
                 model=self.model,
                 raw_response=result,
-                model_response=litellm.ModelResponse(),
+                model_response=litellm.ModelResponse(id=_provider_response_id(result)),
                 logging_obj=self,
                 request_data={},
                 messages=[],
@@ -3897,7 +3903,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "usage-only ModelResponse to keep the spend_logs row.",
                 str(e),
             )
-            model_response: Final = litellm.ModelResponse()
+            model_response: Final = litellm.ModelResponse(id=_provider_response_id(result))
             model_response.model = self.model
             usage: Final = getattr(result, "usage", None)
             if usage is not None and ResponseAPILoggingUtils._is_response_api_usage(usage):

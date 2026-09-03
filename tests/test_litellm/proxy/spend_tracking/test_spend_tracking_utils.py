@@ -3956,3 +3956,207 @@ def test_caller_forged_router_metadata_is_discarded(bucket):
     )
     metadata = json.loads(payload["metadata"])
     assert metadata["router_metadata"] is None
+
+
+ANTHROPIC_MESSAGES_RESPONSE: Final = {
+    "id": "msg_01Lit6806NonStreaming",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-haiku-4-5",
+    "content": [{"type": "text", "text": "epsilon"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 14, "output_tokens": 4},
+}
+
+ANTHROPIC_MESSAGES_SSE_CHUNKS: Final = (
+    'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_01Lit6806Streaming",'
+    '"type":"message","role":"assistant","model":"claude-haiku-4-5","content":[],'
+    '"usage":{"input_tokens":14,"output_tokens":1}}}\n\n',
+    'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+    '"content_block":{"type":"text","text":""}}\n\n',
+    'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+    '"delta":{"type":"text_delta","text":"epsilon"}}\n\n',
+    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
+    '"usage":{"output_tokens":4}}\n\n',
+    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+)
+
+
+def _anthropic_messages_logging_obj(*, stream: bool) -> Any:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=stream,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(timezone.utc),
+        litellm_call_id="6806cafe-0000-4000-8000-000000000001",
+        function_id="1234",
+    )
+    logging_obj.optional_params = {}
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+    return logging_obj
+
+
+def _spend_log_request_id(response_obj: Any, kwargs: dict) -> str:
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    return payload["request_id"]
+
+
+def test_spend_log_request_id_is_the_message_id_a_non_streaming_messages_caller_received():
+    """
+    POST /v1/messages hands the caller `id: msg_...`, the only request id they ever see, so
+    GET /spend/logs?request_id=msg_... has to find the row.
+    """
+    logging_obj = _anthropic_messages_logging_obj(stream=False)
+
+    logged_response = logging_obj._handle_anthropic_messages_response_logging(
+        result=ANTHROPIC_MESSAGES_RESPONSE
+    )
+
+    assert logged_response.id == "msg_01Lit6806NonStreaming"
+    assert (
+        _spend_log_request_id(
+            response_obj=logged_response,
+            kwargs={
+                "call_type": "anthropic_messages",
+                "model": "claude-haiku-4-5",
+                "litellm_call_id": "6806cafe-0000-4000-8000-000000000001",
+                "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            },
+        )
+        == "msg_01Lit6806NonStreaming"
+    )
+
+
+def test_spend_log_request_id_is_the_message_id_a_streaming_messages_caller_received():
+    """
+    The streaming leg of /v1/messages logs through the Anthropic passthrough handler, which used
+    to stamp litellm_call_id over the msg_ id carried by the message_start event.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+        AnthropicPassthroughLoggingHandler,
+    )
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+
+    logging_obj = _anthropic_messages_logging_obj(stream=True)
+    logging_obj.model_call_details["stream"] = True
+
+    logged = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-haiku-4-5"},
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime.datetime.now(timezone.utc),
+        all_chunks=list(ANTHROPIC_MESSAGES_SSE_CHUNKS),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert logged["result"].id == "msg_01Lit6806Streaming"
+    assert (
+        _spend_log_request_id(
+            response_obj=logged["result"],
+            kwargs={
+                **logged["kwargs"],
+                "call_type": "anthropic_messages",
+                "litellm_call_id": "6806cafe-0000-4000-8000-000000000001",
+                "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            },
+        )
+        == "msg_01Lit6806Streaming"
+    )
+
+
+def test_spend_log_request_id_still_falls_back_to_litellm_call_id_without_a_provider_id():
+    """
+    Anthropic-compatible upstreams that omit `id` must keep landing on litellm_call_id rather
+    than on a fresh chatcmpl- uuid nobody can look up.
+    """
+    logging_obj = _anthropic_messages_logging_obj(stream=True)
+    logging_obj.model_call_details["stream"] = True
+
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+        AnthropicPassthroughLoggingHandler,
+    )
+
+    AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+        litellm_model_response=litellm.ModelResponse(id="chatcmpl-generated"),
+        model="claude-haiku-4-5",
+        kwargs={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+        logging_obj=logging_obj,
+    )
+    assert logging_obj.model_call_details["complete_streaming_response"].id == (
+        "6806cafe-0000-4000-8000-000000000001"
+    )
+
+
+def test_spend_log_request_id_for_chat_completions_is_untouched():
+    """
+    /v1/chat/completions callers look their rows up by the chatcmpl- id in the response body.
+    """
+    assert (
+        _spend_log_request_id(
+            response_obj=litellm.ModelResponse(id="chatcmpl-EJvWIw3DAhuKYuwp3jJI4Pnhp2vjv", choices=[]),
+            kwargs={
+                "call_type": "acompletion",
+                "model": "gpt-5.6",
+                "litellm_call_id": "6806cafe-0000-4000-8000-000000000002",
+                "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            },
+        )
+        == "chatcmpl-EJvWIw3DAhuKYuwp3jJI4Pnhp2vjv"
+    )
+
+
+def test_spend_log_request_id_is_the_response_id_a_bridged_messages_caller_received():
+    """
+    /v1/messages against a non-Anthropic model answers with the Responses id the caller then
+    looks their row up by, so the row must not fall back to a fresh chatcmpl- uuid.
+    """
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+    logging_obj = _anthropic_messages_logging_obj(stream=False)
+    bridged_response = ResponsesAPIResponse(
+        id="resp_01Lit6806Bridged",
+        object="response",
+        created_at=1767225600,
+        model="gpt-5.6",
+        status="completed",
+        output=[
+            {
+                "id": "msg_bridged_output",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "delta", "annotations": []}],
+            }
+        ],
+        usage=ResponseAPIUsage(input_tokens=13, output_tokens=5, total_tokens=18),
+    )
+
+    logged_response = logging_obj._handle_anthropic_messages_response_logging(result=bridged_response)
+
+    assert logged_response.id == "resp_01Lit6806Bridged"
+    assert (
+        _spend_log_request_id(
+            response_obj=logged_response,
+            kwargs={
+                "call_type": "anthropic_messages",
+                "model": "gpt-5.6",
+                "litellm_call_id": "6806cafe-0000-4000-8000-000000000003",
+                "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            },
+        )
+        == "resp_01Lit6806Bridged"
+    )
