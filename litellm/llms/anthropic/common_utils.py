@@ -14,7 +14,12 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 import litellm
-from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME
+from litellm.constants import (
+    DEFAULT_MODEL_CREATED_AT_TIME,
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
 )
@@ -647,6 +652,51 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             model,
         )
         optional_params.pop("thinking", None)
+
+    @staticmethod
+    def translate_legacy_thinking_for_adaptive_model(
+        model: str,
+        optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param like the sibling helpers
+        custom_llm_provider: str,
+    ) -> None:
+        """Translate legacy ``thinking.type=enabled`` to adaptive for the
+        adaptive-thinking models that reject it (4.7+ and the 5 families).
+        Models flagged ``supports_legacy_thinking`` (the 4.6 family) accept the
+        legacy shape natively, so it is forwarded verbatim and the caller's
+        ``budget_tokens`` cap keeps applying. Caller-provided
+        ``output_config.effort`` is never overridden.
+        """
+        if not AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
+            return
+        if AnthropicModelInfo._supports_legacy_thinking(model, custom_llm_provider):
+            return
+        thinking: Final = optional_params.get("thinking")
+        if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
+            return
+
+        effort: Final = AnthropicModelInfo._legacy_budget_to_effort(
+            model=model,
+            budget_tokens=int(thinking.get("budget_tokens") or 0),
+            custom_llm_provider=custom_llm_provider,
+        )
+        existing_output_config: Final = optional_params.get("output_config")
+        optional_params["thinking"] = {"type": "adaptive"}
+        optional_params["output_config"] = {
+            "effort": effort,
+            **(existing_output_config if isinstance(existing_output_config, dict) else MappingProxyType({})),
+        }
+
+    @staticmethod
+    def _legacy_budget_to_effort(model: str, budget_tokens: int, custom_llm_provider: str) -> str:
+        if budget_tokens >= DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET and (
+            AnthropicModelInfo._supports_model_capability(model, "supports_xhigh_reasoning_effort", custom_llm_provider)
+        ):
+            return "xhigh"
+        if budget_tokens >= DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET:
+            return "high"
+        if budget_tokens >= DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET:
+            return "medium"
+        return "low"
 
     def is_effort_used(
         self,
