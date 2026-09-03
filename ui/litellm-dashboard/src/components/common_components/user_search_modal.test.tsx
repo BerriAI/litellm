@@ -130,7 +130,8 @@ describe("UserSearchModal submit payload", () => {
     const { onSubmit } = setup();
     const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
 
-    await user.click(screen.getByLabelText("Member Role"));
+    act(() => screen.getByLabelText("Member Role").focus());
+    await user.keyboard("{Enter}");
     await user.click(await screen.findByRole("option", { name: /^admin/ }));
     await user.click(save());
 
