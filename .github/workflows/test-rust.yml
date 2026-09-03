@@ -80,6 +80,9 @@ jobs:
       - name: Run core tests with Bedrock auth
         run: cargo test -p litellm-core --features bedrock-auth --locked
 
+      - name: Run gateway tests with Python config
+        run: cargo test -p litellm-ai-gateway --features python-config --locked
+
   release-wheel:
     name: release wheel
     runs-on: ubuntu-latest
