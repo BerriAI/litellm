@@ -1271,6 +1271,16 @@ def test_get_autorouter_presets_local_mode_serves_bundled_catalog(
     assert response.status_code == 200
     payload = response.json()
     assert "anthropic_family" in payload
+    assert payload["1m_context"]["complexity_router_config"]["classifier_type"] == "heuristic_v2"
+    assert payload["1m_context"]["complexity_router_config"]["tiers"] == {
+        "SIMPLE": ["gpt-5.6-luna"],
+        "MEDIUM": ["gpt-5.6-terra"],
+        "COMPLEX": ["claude-opus-5"],
+        "REASONING": ["claude-opus-5"],
+    }
+    assert payload["1m_context"]["complexity_router_config"]["tier_model_configs"] == {
+        "REASONING": [{"model_name": "claude-opus-5", "litellm_params": {"reasoning_effort": "high"}}]
+    }
     for preset in payload.values():
         assert isinstance(preset["label"], str)
         assert isinstance(preset["description"], str)

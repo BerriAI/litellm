@@ -235,7 +235,7 @@ async def get_credentials(
         ]
         return {"success": True, "credentials": masked_credentials}
     except Exception as e:
-        return handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(
@@ -406,7 +406,12 @@ async def delete_credential(
         _reject_non_admin_wif_fields(
             await named_credential_wif_fields(credential_name, prisma_client), user_api_key_dict
         )
-        await CredentialsRepository(prisma_client).delete_by_name(credential_name)
+        deleted: Final = await CredentialsRepository(prisma_client).delete_by_name(credential_name)
+        if deleted is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Credential not found. Got credential name: " + credential_name,
+            )
 
         ## DELETE FROM LITELLM ##
         litellm.credential_list = [cred for cred in litellm.credential_list if cred.credential_name != credential_name]
@@ -414,7 +419,7 @@ async def delete_credential(
     except HTTPException:
         raise
     except Exception as e:
-        return handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(e)
 
 
 def update_db_credential(

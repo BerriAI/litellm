@@ -670,6 +670,37 @@ def test_get_provider_specific_params():
     )  # Literal type should be select
 
 
+@pytest.mark.asyncio
+async def test_provider_specific_params_includes_hide_secrets():
+    """hide-secrets lives in the enterprise package so it is not in
+    guardrail_class_registry; the endpoint must still advertise it or the
+    Add Guardrail UI dropdown never offers it (LIT-3548)."""
+    from litellm.proxy.guardrails.guardrail_endpoints import (
+        get_provider_specific_params,
+    )
+
+    provider_params = await get_provider_specific_params()
+
+    assert "hide-secrets" in provider_params
+    # populateGuardrailProviders() in the dashboard only lists providers whose
+    # entry carries a ui_friendly_name.
+    assert provider_params["hide-secrets"]["ui_friendly_name"] == "Hide Secrets"
+    assert provider_params["hide-secrets"]["detect_secrets_config"]["required"] is False
+
+
+@pytest.mark.asyncio
+async def test_add_guardrail_settings_restricts_hide_secrets_to_pre_call():
+    """hide-secrets only implements async_pre_call_hook, so offering the other
+    modes in the UI would create configs that boot clean and never run."""
+    from litellm.proxy.guardrails.guardrail_endpoints import (
+        get_guardrail_ui_settings,
+    )
+
+    settings = await get_guardrail_ui_settings()
+
+    assert settings.supported_modes_by_provider["hide-secrets"] == ["pre_call"]
+
+
 def test_optional_params_not_returned_when_not_overridden():
     """Test that optional_params is not returned when the config model doesn't override it"""
     from typing import Optional

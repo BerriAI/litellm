@@ -4922,19 +4922,21 @@ class TestAnthropicProxyRouteCallerAuthHeaders:
 
     @pytest.mark.asyncio
     async def test_wif_credential_drops_configured_custom_key_header(self, monkeypatch):
+        from litellm.proxy import proxy_server
+
         self._clear_anthropic_env(monkeypatch)
         self._enable_wif(monkeypatch)
+        monkeypatch.setitem(proxy_server.general_settings, "litellm_key_header_name", "X-Tenant-Key")
 
-        with patch.dict("litellm.proxy.proxy_server.general_settings", {"litellm_key_header_name": "X-Tenant-Key"}):
-            sent: Final = await self._upstream_headers(
-                self._request(
-                    {
-                        "content-type": "application/json",
-                        "x-tenant-key": "sk-caller-virtual-key",
-                        "x-tenant-region": "eu",
-                    }
-                )
+        sent: Final = await self._upstream_headers(
+            self._request(
+                {
+                    "content-type": "application/json",
+                    "x-tenant-key": "sk-caller-virtual-key",
+                    "x-tenant-region": "eu",
+                }
             )
+        )
 
         assert sent["authorization"] == f"Bearer {self._MINTED}"
         assert "x-tenant-key" not in sent
