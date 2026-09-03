@@ -27,14 +27,17 @@ pub enum OcrResponseHandling {
 pub trait OcrProviderConfig: Sync {
     fn supported_ocr_params(&self) -> &'static [&'static str];
 
-    fn map_ocr_params(&self, non_default_params: &Map<String, Value>) -> Map<String, Value> {
+    fn map_ocr_params(
+        &self,
+        non_default_params: &Map<String, Value>,
+    ) -> Result<Map<String, Value>, Error> {
         let mut mapped_params = Map::new();
         for (param, value) in non_default_params {
             if self.supported_ocr_params().contains(&param.as_str()) {
                 mapped_params.insert(param.clone(), value.clone());
             }
         }
-        mapped_params
+        Ok(mapped_params)
     }
 
     fn transform_ocr_request(
@@ -49,6 +52,15 @@ pub trait OcrProviderConfig: Sync {
         model: &str,
         response_json: Value,
     ) -> Result<OcrResponseData, Error>;
+
+    fn transform_ocr_response_with_params(
+        &self,
+        model: &str,
+        response_json: Value,
+        _optional_params: &Map<String, Value>,
+    ) -> Result<OcrResponseData, Error> {
+        self.transform_ocr_response(model, response_json)
+    }
 
     fn complete_url(
         &self,
@@ -66,6 +78,10 @@ pub trait OcrProviderConfig: Sync {
 
     fn auth_strategy(&self) -> OcrAuthStrategy {
         OcrAuthStrategy::Bearer
+    }
+
+    fn allows_bearer_auth_fallback(&self) -> bool {
+        false
     }
 
     fn requires_data_uri_document(&self) -> bool {
