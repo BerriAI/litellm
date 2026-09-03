@@ -27,14 +27,15 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           SMOKE_TESTS: tests/e2e/access_control
+          OWN_LANE: '^tests/e2e/(ui|claude_code|load)/|^tests/e2e/batches/test_managed_files_enforcement_e2e\.py$'
         run: |
           files="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate \
             --jq '.[] | select(.status != "removed") | .filename')"
           tests="$(printf '%s\n' "${files}" \
             | grep -E '^tests/e2e/([A-Za-z0-9_.-]+/)*test_[A-Za-z0-9_.-]+\.py$' \
-            | grep -vE '^tests/e2e/(ui|claude_code|load)/' \
+            | grep -vE "${OWN_LANE}" \
             | sort -u | tr '\n' ' ' | sed 's/ $//')" || true
-          if [ -z "${tests}" ] && printf '%s\n' "${files}" | grep -vE '^tests/e2e/(ui|claude_code|load)/' \
+          if [ -z "${tests}" ] && printf '%s\n' "${files}" | grep -vE "${OWN_LANE}" \
             | grep -qE '^(tests/e2e/|\.github/e2e-stack/|\.github/workflows/test-e2e-changed\.yml$)'; then
             tests="${SMOKE_TESTS}"
             echo "harness or stack changed without a test file; running the smoke suite"
