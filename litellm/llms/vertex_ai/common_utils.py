@@ -998,6 +998,16 @@ def replace_project_and_location_in_route(requested_route: str, vertex_project: 
     return modified_route
 
 
+def _api_version_for_route(requested_route: str) -> Literal["v1", "v1beta1"]:
+    return "v1beta1" if "cachedContent" in requested_route else "v1"
+
+
+def _with_api_version(requested_route: str) -> str:
+    if not requested_route.startswith("/projects/"):
+        return requested_route
+    return f"/{_api_version_for_route(requested_route)}{requested_route}"
+
+
 def construct_target_url(
     base_url: str,
     requested_route: str,
@@ -1017,18 +1027,19 @@ def construct_target_url(
 
     new_base_url: Final = httpx.URL(base_url)
     if "locations" in requested_route:  # contains the target project id + location
-        if vertex_project and vertex_location:
-            requested_route = replace_project_and_location_in_route(requested_route, vertex_project, vertex_location)
-        return new_base_url.copy_with(path=requested_route)
+        targeted_route: Final = (
+            replace_project_and_location_in_route(requested_route, vertex_project, vertex_location)
+            if vertex_project and vertex_location
+            else requested_route
+        )
+        return new_base_url.copy_with(path=_with_api_version(targeted_route))
 
     """
     - Add endpoint version (e.g. v1beta for cachedContent, v1 for rest)
     - Add default project id
     - Add default location
     """
-    vertex_version: Literal["v1", "v1beta1"] = "v1"
-    if "cachedContent" in requested_route:
-        vertex_version = "v1beta1"
+    vertex_version: Literal["v1", "v1beta1"] = _api_version_for_route(requested_route)
 
     # Check if the requested route starts with a version
     # e.g. /v1beta1/publishers/google/models/gemini-3-pro-preview:streamGenerateContent

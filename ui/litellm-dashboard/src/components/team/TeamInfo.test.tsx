@@ -1888,6 +1888,8 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     mcp_access_groups: [],
     mcp_tool_permissions: {},
     mcp_toolsets: [],
+    agents: [],
+    agent_access_groups: [],
     vector_stores: ["vs-1"],
   };
 
@@ -1906,6 +1908,49 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
       ...alwaysSent,
       object_permission: mcpPermissions,
     });
+  });
+
+  const openEditorWithAgents = async (user: ReturnType<typeof userEvent.setup>) => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        models: ["gpt-4"],
+        object_permission: { agents: ["agent-1"], agent_access_groups: ["group-a"] },
+      }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+  };
+
+  it("resends the stored agents and agent_access_groups when the selector is left untouched", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithAgents(user);
+
+    const payload = await save(user);
+
+    const objectPermission = wireBody(payload).object_permission as Record<string, unknown>;
+    expect(objectPermission.agents).toStrictEqual(["agent-1"]);
+    expect(objectPermission.agent_access_groups).toStrictEqual(["group-a"]);
+  });
+
+  it("sends empty agents and agent_access_groups arrays after the last agent chip is removed", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithAgents(user);
+
+    await user.click(within(screen.getByLabelText("agent-1")).getByRole("button"));
+    await user.click(within(screen.getByLabelText("group:group-a")).getByRole("button"));
+    expect(screen.queryByLabelText("agent-1")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("group:group-a")).not.toBeInTheDocument();
+
+    const payload = await save(user);
+
+    const objectPermission = wireBody(payload).object_permission as Record<string, unknown>;
+    expect(objectPermission.agents).toStrictEqual([]);
+    expect(objectPermission.agent_access_groups).toStrictEqual([]);
   });
 
   it("resends every stored value once both sections are opened", async () => {
