@@ -193,6 +193,33 @@ async def test_apply_guardrail_compresses_and_returns_structured_messages(
     assert "headroom" in _applied_guardrails(request_data)
 
 
+@pytest.mark.asyncio
+async def test_apply_guardrail_leaves_background_requests_uncompressed(
+    guardrail: HeadroomGuardrail,
+):
+    inputs = GenericGuardrailAPIInputs(
+        texts=["A" * 5000],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+    request_data = {"model": "gpt-4o", "background": True}
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response(COMPRESSED_MESSAGES),
+    ) as post:
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    assert result is inputs
+    post.assert_not_awaited()
+    assert _recorded_guardrail_entries(request_data) == []
+
+
 def _recorded_guardrail_response(request_data: dict) -> dict:
     entries = request_data["metadata"]["standard_logging_guardrail_information"]
     assert len(entries) == 1
@@ -2071,6 +2098,22 @@ async def test_pre_call_deployment_hook_converts_stream_only_for_ccr_chat_comple
     assert result is not None
     assert result["stream"] is False
     assert result[HEADROOM_CONVERTED_STREAM_KEY] is True
+    assert kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_pre_call_deployment_hook_leaves_background_streams_alone(guardrail: HeadroomGuardrail):
+    kwargs = {
+        "model": "gpt-4o",
+        "stream": True,
+        "background": True,
+        "tools": [_responses_retrieve_tool_definition()],
+    }
+
+    result = await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.aresponses)
+
+    assert result is kwargs
+    assert HEADROOM_CONVERTED_STREAM_KEY not in kwargs
     assert kwargs["stream"] is True
 
 
