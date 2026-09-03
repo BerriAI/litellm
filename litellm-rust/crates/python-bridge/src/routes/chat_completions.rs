@@ -6,15 +6,20 @@ use litellm_core::chat_completions::{
     chat_completions as run_chat_completions, chat_completions_decline_reason,
 };
 use pyo3::prelude::*;
+use pyo3::pybacked::PyBackedStr;
 use serde_json::Value;
 
 use crate::errors::chat_completions_error_to_pyerr;
-use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty, required_value};
+use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
+
+fn messages_from_py(value: &Bound<'_, PyAny>) -> PyResult<Value> {
+    litellm_python_interop::array_from_py("messages", value)
+}
 
 fn prepare_chat_completions(
     inputs: ChatCompletionsInputs,
 ) -> PyResult<impl Future<Output = Result<ChatCompletionsResponse, Error>> + Send + 'static> {
-    let messages = required_value("messages", inputs.messages, Value::is_array, "list")?;
+    let messages = inputs.messages;
     let optional_params = object_or_empty("optional_params", inputs.optional_params)?;
     let options = RouteOptions::from_python(RouteOptionsInputs {
         model: inputs.model,
@@ -51,10 +56,10 @@ fn prepare_chat_completions(
 #[pyfunction]
 #[pyo3(signature = (model, messages, optional_params=None, custom_llm_provider=None))]
 fn chat_completions_decline(
-    model: String,
+    model: PyBackedStr,
     #[pyo3(from_py_with = litellm_python_interop::from_py)] messages: Value,
     #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
-    custom_llm_provider: Option<String>,
+    custom_llm_provider: Option<PyBackedStr>,
 ) -> PyResult<Option<String>> {
     let optional_params = object_or_empty("optional_params", optional_params)?;
     Ok(chat_completions_decline_reason(
@@ -71,21 +76,22 @@ bridge_route! {
     asynchronous = achat_completions,
     inputs = ChatCompletionsInputs,
     required = {
-        model: String,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
+        model: PyBackedStr,
+        #[pyo3(from_py_with = messages_from_py)]
         messages: Value,
     },
     optional = {
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
         optional_params: Option<Value>,
-        api_key: Option<String>,
-        api_base: Option<String>,
-        custom_llm_provider: Option<String>,
+        api_key: Option<PyBackedStr>,
+        api_base: Option<PyBackedStr>,
+        custom_llm_provider: Option<PyBackedStr>,
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
         extra_headers: Option<Value>,
         timeout_seconds: Option<f64>,
     },
     prepare = prepare_chat_completions,
     errors = chat_completions_error_to_pyerr,
+    marshal = crate::execution::GenericMarshal,
     extra = [chat_completions_decline],
 }

@@ -3,22 +3,23 @@ use std::time::Duration;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::pybacked::PyBackedStr;
 use serde_json::{Map, Value};
 
 pub(crate) struct RouteOptions {
-    pub(crate) model: String,
-    pub(crate) api_key: Option<String>,
-    pub(crate) api_base: Option<String>,
-    pub(crate) custom_llm_provider: Option<String>,
+    pub(crate) model: PyBackedStr,
+    pub(crate) api_key: Option<PyBackedStr>,
+    pub(crate) api_base: Option<PyBackedStr>,
+    pub(crate) custom_llm_provider: Option<PyBackedStr>,
     pub(crate) extra_headers: Option<Map<String, Value>>,
     pub(crate) timeout: Option<Duration>,
 }
 
 pub(crate) struct RouteOptionsInputs {
-    pub(crate) model: String,
-    pub(crate) api_key: Option<String>,
-    pub(crate) api_base: Option<String>,
-    pub(crate) custom_llm_provider: Option<String>,
+    pub(crate) model: PyBackedStr,
+    pub(crate) api_key: Option<PyBackedStr>,
+    pub(crate) api_base: Option<PyBackedStr>,
+    pub(crate) custom_llm_provider: Option<PyBackedStr>,
     pub(crate) extra_headers: Option<Value>,
     pub(crate) timeout_seconds: Option<f64>,
 }
@@ -34,20 +35,6 @@ impl RouteOptions {
             timeout: optional_timeout(inputs.timeout_seconds),
         })
     }
-}
-
-pub(crate) fn required_value(
-    name: &'static str,
-    value: Value,
-    expected: fn(&Value) -> bool,
-    expected_name: &'static str,
-) -> PyResult<Value> {
-    if expected(&value) {
-        return Ok(value);
-    }
-    Err(PyValueError::new_err(format!(
-        "{name} must be a {expected_name}"
-    )))
 }
 
 pub(crate) fn object_or_empty(

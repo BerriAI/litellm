@@ -4,6 +4,7 @@ use litellm_core::messages::types::{
     AnthropicMessagesRequest, AnthropicMessagesResponse, MessagesRequest,
 };
 use pyo3::prelude::*;
+use pyo3::pybacked::PyBackedStr;
 use serde_json::Value;
 use std::future::Future;
 
@@ -50,18 +51,19 @@ bridge_route! {
     asynchronous = amessages,
     inputs = MessagesInputs,
     required = {
-        model: String,
+        model: PyBackedStr,
         #[pyo3(from_py_with = crate::messages::messages_from_py)]
         body: AnthropicMessagesRequest,
     },
     optional = {
-        api_key: Option<String>,
-        api_base: Option<String>,
-        custom_llm_provider: Option<String>,
+        api_key: Option<PyBackedStr>,
+        api_base: Option<PyBackedStr>,
+        custom_llm_provider: Option<PyBackedStr>,
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
         extra_headers: Option<Value>,
         timeout_seconds: Option<f64>,
     },
     prepare = prepare_messages,
     errors = core_error_to_pyerr,
+    marshal = crate::execution::GenericMarshal,
 }

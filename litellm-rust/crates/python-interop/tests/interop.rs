@@ -1,8 +1,11 @@
-use pyo3::Python;
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyDictMethods, PyList, PyString, PyTuple};
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 
-use litellm_python_interop::{from_py, release_count, release_gil, to_py};
+use litellm_python_interop::{
+    array_from_py, from_py, release_count, release_gil, to_py, value_to_py,
+};
 
 struct InitializedPython;
 
@@ -31,6 +34,98 @@ fn serde_values_round_trip_through_python(#[from(initialized_python)] python: &I
             from_py(python_value.bind(py)).expect("Python value should convert to serde");
 
         assert_eq!(actual, expected);
+    });
+}
+
+#[rstest]
+fn value_converter_matches_pythonize_and_round_trips(
+    #[from(initialized_python)] python: &InitializedPython,
+) {
+    python.attach(|py| {
+        let payload = json!({
+            "null": null,
+            "bools": [true, false],
+            "numbers": [0, -9223372036854775808i64, 9223372036854775807i64, 18446744073709551615u64],
+            "floats": [0.0, -2.5, 1024.75],
+            "unicode": "héllo 🌍 中文",
+            "empty_list": [],
+            "empty_dict": {},
+            "nested": {"a": [{"b": [null, {"c": "deep", "d": [1, 2, 3]}]}]},
+        });
+        let converted = value_to_py(py, &payload).expect("value should convert to Python");
+        let reference = to_py(py, &payload).expect("pythonize should convert the same value");
+        let equal: bool = converted
+            .bind(py)
+            .eq(reference.bind(py))
+            .expect("converted values should compare in Python");
+        assert!(equal, "value converter diverged from pythonize");
+
+        let round_tripped: Value = from_py(converted.bind(py)).expect("Python value should convert back");
+        assert_eq!(round_tripped, payload);
+    });
+}
+
+#[rstest]
+fn value_converter_shares_repeated_keys_within_one_call(
+    #[from(initialized_python)] python: &InitializedPython,
+) {
+    python.attach(|py| {
+        let payload = json!({
+            "type": "message",
+            "content": [
+                {"type": "text", "text": "one", "index": 0},
+                {"type": "text", "text": "two", "index": 1},
+                {"type": "text", "text": "three", "index": 2},
+            ],
+        });
+        let first = value_to_py(py, &payload).expect("first payload should convert");
+        let second = value_to_py(py, &payload).expect("second payload should convert");
+        let globals = PyDict::new(py);
+        globals
+            .set_item("first", &first)
+            .expect("first payload should enter Python locals");
+        globals
+            .set_item("second", &second)
+            .expect("second payload should enter Python locals");
+        py.run(
+            c"
+first_keys = [k for block in first['content'] for k in block]
+second_keys = [k for block in second['content'] for k in block]
+shared = [k for k in first_keys if k == 'type']
+assert all(k is shared[0] for k in shared)
+assert all(k is not second_keys[0] for k in first_keys)
+",
+            Some(&globals),
+            None,
+        )
+        .expect("repeated keys should resolve to one object per conversion");
+    });
+}
+
+#[rstest]
+fn array_from_py_validates_shape_before_depythonizing(
+    #[from(initialized_python)] python: &InitializedPython,
+) {
+    python.attach(|py| {
+        for rejected in [
+            PyDict::new(py).into_any(),
+            PyString::new(py, "text").into_any(),
+            py.None().into_bound(py),
+        ] {
+            let error = array_from_py("messages", &rejected)
+                .expect_err("non-array input should be rejected before depythonization");
+            assert_eq!(error.to_string(), "ValueError: messages must be a list");
+        }
+
+        let list = PyList::new(py, [1, 2]).expect("list should be created");
+        let converted = array_from_py("messages", &list)
+            .expect("list input should depythonize after the shape check");
+        assert_eq!(converted, json!([1, 2]));
+
+        let tuple = PyTuple::new(py, ["a"]).expect("tuple should be created");
+        let converted = array_from_py("messages", &tuple)
+            .expect("tuple input should depythonize after the shape check");
+        assert_eq!(converted, json!(["a"]));
     });
 }
 
