@@ -2871,18 +2871,17 @@ def add_guardrails_from_auth_metadata(
     metadata_variable_name: str,
 ) -> None:
     """Resolve key, team, and project guardrails (direct and via policies) onto ``data[metadata_variable_name]``."""
-    project_metadata: Final = user_api_key_dict.project_metadata or {}
     _add_guardrails_from_key_or_team_metadata(
         key_metadata=user_api_key_dict.metadata,
         team_metadata=user_api_key_dict.team_metadata,
-        project_metadata=project_metadata,
+        project_metadata=user_api_key_dict.project_metadata,
         data=data,
         metadata_variable_name=metadata_variable_name,
     )
     _add_guardrails_from_policies_in_metadata(
         key_metadata=user_api_key_dict.metadata,
         team_metadata=user_api_key_dict.team_metadata,
-        project_metadata=project_metadata,
+        project_metadata=user_api_key_dict.project_metadata,
         data=data,
         metadata_variable_name=metadata_variable_name,
     )
