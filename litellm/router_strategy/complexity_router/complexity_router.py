@@ -26,13 +26,22 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 from pydantic import BaseModel, create_model
 
 from litellm._logging import verbose_router_logger
-from litellm.constants import EMPTY_MAPPING, RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import (
+    EMPTY_MAPPING,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
+    SESSION_ID_GENERATED_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.router_strategy.adaptive_router.classifier import classify_prompt
+from litellm.router_strategy.complexity_router.tier_predictor import (
+    TierSuccessPredictor,
+    resolve_tier_artifact,
+)
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     ModelResponse,
@@ -742,7 +751,8 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
 
     A modality escalation is transient the same way: it describes what this one call carries (an
     image), not what the session's traffic looks like, and pinning it would hold every following
-    text turn on the vision-capable model the image forced.
+    text turn on the vision-capable model the image forced. A modality pin override is the same
+    fact on a session that already holds a pin, so it must not overwrite the pin it displaced.
     """
     return decision is None or (
         decision.get("cause")
@@ -751,6 +761,7 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
             "plan_mode",
             "housekeeping",
             "modality_escalation",
+            "modality_pin_override",
         )
         and not decision.get("context_escalated")
     )
@@ -790,9 +801,11 @@ class ClassificationOutcome(NamedTuple):
     signals: tuple[str, ...]
     cause: Literal[
         "heuristic_scorer",
+        "heuristic_v2",
         "reasoning_override",
         "llm_classifier",
         "heuristic_first_short_circuit",
+        "hybrid_short_circuit",
         "housekeeping",
         "classifier_plugin",
         "classifier_fallback",
@@ -976,6 +989,11 @@ class ComplexityRouter(CustomLogger):
         self._classifier_response_format: Mapping[str, object] | None = (
             type_to_response_format_param(_tier_classification_model(self.config.classifier_wire_labels()))
             if llm_classifier_configured
+            else None
+        )
+        self._tier_success_predictor: TierSuccessPredictor | None = (
+            TierSuccessPredictor(resolve_tier_artifact(self.config.heuristic_v2_artifact))
+            if self.config.classifier_type == "heuristic_v2"
             else None
         )
 
@@ -1230,6 +1248,15 @@ class ComplexityRouter(CustomLogger):
 
         return tier, weighted_score, tuple(signals), "heuristic_scorer"
 
+    def _is_near_tier_boundary(self, score: float, margin: float) -> bool:
+        boundaries: Final = self._effective_tier_boundaries()
+        active_boundaries: Final = (
+            boundaries["simple_medium"],
+            boundaries["medium_complex"],
+            boundaries["complex_reasoning"],
+        )
+        return any(abs(score - boundary) <= margin for boundary in active_boundaries)
+
     def _effective_reasoning_override_min_score(self) -> float:
         """The score a request must reach before the reasoning-marker override may promote it.
 
@@ -1350,14 +1377,36 @@ class ComplexityRouter(CustomLogger):
         custom tier set, and classifier_fallback otherwise decides between the heuristic scorer and
         default_model. The outcome's `cause` reports which path actually ran.
         """
+        if self.config.classifier_type == "heuristic_v2":
+            return self._classify_with_heuristic_v2(prompt)
         if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
         if self.config.classifier_type == "heuristic_first" and self.config.classifier_llm_config is not None:
             return await self._classify_heuristic_first(prompt, system_prompt, request_kwargs, messages)
+        if self.config.classifier_type == "hybrid" and self.config.classifier_llm_config is not None:
+            return await self._classify_hybrid(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type != "llm" or self.config.classifier_llm_config is None:
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
+
+    def _classify_with_heuristic_v2(self, prompt: str) -> ClassificationOutcome:
+        predictor: Final = self._tier_success_predictor
+        if predictor is None:
+            raise ValueError("heuristic v2 predictor is not configured")
+        request_type: Final = classify_prompt(prompt)
+        prediction: Final = predictor.predict(prompt, request_type)
+        tier: Final = TIER_SEVERITY_ORDER[prediction.required_tier - 1]
+        probability_signals: Final = tuple(
+            f"tier-probability:{candidate.value.lower()}={prediction.probabilities[index]:.6f}"
+            for index, candidate in enumerate(TIER_SEVERITY_ORDER, start=1)
+        )
+        return ClassificationOutcome(
+            tier=tier,
+            score=None,
+            signals=(f"request-type:{request_type.value}", *probability_signals),
+            cause="heuristic_v2",
+        )
 
     async def _classify_heuristic_first(
         self,
@@ -1385,6 +1434,29 @@ class ComplexityRouter(CustomLogger):
         )
         if decided_cheaply:
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="heuristic_first_short_circuit")
+        return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
+
+    async def _classify_hybrid(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: dict[str, Any] | None,  # mutable-ok: handed to _classify_with_llm as-is
+        messages: Sequence[Mapping[str, object]] | None,
+    ) -> ClassificationOutcome:
+        """Score locally, and only pay for the classifier when the score sits near a tier boundary.
+
+        Where heuristic_first asks how CHEAP the scorer's tier is, this asks how DECIDED it is, so a
+        confident score keeps its tier at every tier including the most expensive one. Two things make
+        a score undecided: landing within hybrid_boundary_margin of an active boundary, where a
+        hair's difference in score would have named the adjacent tier and its model pool, and firing
+        no dimension at all, which scores 0.0 and lands SIMPLE by default rather than by evidence.
+        """
+        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
+        scored: Final = ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        margin: Final = self.config.hybrid_boundary_margin
+        decided: Final = margin is not None and bool(signals) and not self._is_near_tier_boundary(score, margin)
+        if decided:
+            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="hybrid_short_circuit")
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
 
     async def _llm_classifier_outcome(
@@ -2323,8 +2395,11 @@ class ComplexityRouter(CustomLogger):
         """Replace a routed model that cannot accept this request's image input.
 
         The single modality owner, applied to the decided response at the hook's exits so every
-        routing path is covered uniformly. A KEPT session pin is exempt by design (its cause);
-        replacement picks and every other path are just responses. The re-placement walks
+        routing path is covered uniformly. A KEPT session pin is exempt by design (its cause)
+        unless modality_pin_override is set, in which case the image turn is re-placed and reported
+        as modality_pin_override while the stored pin, written upstream from the session's own
+        model, is left for the next text turn; replacement picks and every other path are just
+        responses. The re-placement walks
         UPWARD-ONLY from the decision's tier (so a plan-mode floor can never be undercut), picks
         through `_pick_model_for_tier` so routing plugins still apply, then falls to
         default_model (never on plugin routers, and never on a plan-floored decision, since
@@ -2337,7 +2412,11 @@ class ComplexityRouter(CustomLogger):
             not self.config.modality_routing
             or not resolved_messages
             or response.model is None
-            or (decision is not None and decision.get("cause") == "session_affinity_pin")
+            or (
+                decision is not None
+                and decision.get("cause") == "session_affinity_pin"
+                and not self.config.modality_pin_override
+            )
             or not request_contains_image_content(resolved_messages)
             or self._model_accepts_image_input(response.model)
         ):
@@ -2379,6 +2458,10 @@ class ComplexityRouter(CustomLogger):
         self._restamp_adaptive_choice(request_kwargs, response.model, new_model)
         same_tier: Final = capable is not None and decided == capable
         base_cause: Final = (decision.get("cause") if decision is not None else None) or "default_fallback"
+        # Reaching here on a kept pin means modality_pin_override is on, since the guard above
+        # returns otherwise. The model moved off the pin even on a same-tier repick, so reporting
+        # the pin's own cause would claim the session's model served a request it did not.
+        displaced_pin: Final = base_cause == "session_affinity_pin"
         displaced_default: Final = decided is None and response.model == self.config.default_model
         markers: Final = (
             "modality:image",
@@ -2388,7 +2471,7 @@ class ComplexityRouter(CustomLogger):
         old_signals: Final = tuple(decision.get("signals") or ()) if decision is not None else ()
         new_decision: Final = self._build_routing_decision(
             routed_model=new_model,
-            cause=base_cause if same_tier else "modality_escalation",
+            cause="modality_pin_override" if displaced_pin else (base_cause if same_tier else "modality_escalation"),
             tier=new_tier,
             score=decision.get("score") if decision is not None else None,
             signals=(*old_signals, *markers),
@@ -2646,7 +2729,7 @@ class ComplexityRouter(CustomLogger):
         """Resolve a client-supplied session_id."""
         for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
             session_id = metadata.get("session_id")
-            if session_id is not None:
+            if session_id is not None and not metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
                 return str(session_id)
         return None
 

@@ -3131,9 +3131,9 @@ def test_stream_chunk_builder_prices_proxy_alias_via_model_map():
     assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
 
 
-def _stream_builder_logging_obj() -> LiteLLMLogging:
+def _stream_builder_logging_obj(model: str = "gpt-4o", custom_llm_provider: str = "openai") -> LiteLLMLogging:
     logging_obj: Final = LiteLLMLogging(
-        model="gpt-4o",
+        model=model,
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
         call_type="completion",
@@ -3142,10 +3142,11 @@ def _stream_builder_logging_obj() -> LiteLLMLogging:
         function_id="test-function-id",
     )
     logging_obj.update_environment_variables(
-        model="gpt-4o",
+        model=model,
         user=None,
         optional_params={},
-        litellm_params={"custom_llm_provider": "openai"},
+        litellm_params={"custom_llm_provider": custom_llm_provider},
+        custom_llm_provider=custom_llm_provider,
     )
     return logging_obj
 
@@ -3237,6 +3238,27 @@ def test_stream_chunk_builder_prices_alias_from_openai_sdk_usage_chunk():
     assert response.usage.completion_tokens == 60
     assert getattr(response.usage, "cost", None) == pytest.approx(0.000704)
     assert response._hidden_params["response_cost"] == pytest.approx(0.000704)
+
+
+def test_stream_chunk_builder_leaves_xai_reported_cost_to_the_calculator(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "cost_margin_config", {"xai": 0.5})
+    usage_chunk: Final = _stream_builder_text_chunk("grok-4", "")
+    usage_chunk.usage = Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7, cost=0.42)
+    chunks: Final = [
+        _stream_builder_text_chunk("grok-4", "Hello "),
+        _stream_builder_text_chunk("grok-4", "world.", finish_reason="stop"),
+        usage_chunk,
+    ]
+    logging_obj: Final = _stream_builder_logging_obj(model="grok-4", custom_llm_provider="xai")
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=logging_obj
+    )
+
+    assert response is not None
+    assert getattr(response.usage, "cost", None) == pytest.approx(0.42)
+    assert response._hidden_params.get("response_cost") is None
+    assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.63)
 
 
 def test_speech_mistral_dispatches_and_decodes_audio(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):

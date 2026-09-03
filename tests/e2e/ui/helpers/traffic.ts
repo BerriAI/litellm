@@ -21,6 +21,8 @@ interface ChatOptions {
   apiKey?: string;
   /** Sent as `user`, which lands in the spend log's end_user column. */
   endUser?: string;
+  /** Sent as `litellm_trace_id`, which lands in the spend log's session_id column. */
+  traceId?: string;
 }
 
 /** POST /v1/chat/completions and return the completion id (the Logs Request ID). */
@@ -34,6 +36,7 @@ export async function sendChatCompletion(request: APIRequestContext, opts: ChatO
       model: opts.model,
       messages: [{ role: "user", content: opts.prompt }],
       ...(opts.endUser ? { user: opts.endUser } : {}),
+      ...(opts.traceId ? { litellm_trace_id: opts.traceId } : {}),
     },
   });
   expect(res.ok(), `chat completion for ${opts.model} failed (${res.status()}): ${await res.text()}`).toBe(true);

@@ -107,9 +107,11 @@ export interface BuildComplexityRouterConfigParams {
   classifierFallback: ClassifierFallback | undefined;
   classificationPrompt: string | undefined;
   heuristicFirstMaxTier: string | undefined;
+  hybridBoundaryMargin?: number;
   classificationMode: ClassificationMode | undefined;
   sessionAffinity: boolean;
   modalityRouting?: boolean;
+  modalityPinOverride?: boolean;
   deploymentAffinity: boolean;
   customTechnicalKeywords: string[];
   keywordTierRules: KeywordTierRule[];
@@ -163,10 +165,12 @@ export interface ComplexityRouterConfigPayload {
   classifier_fallback?: ClassifierFallback;
   classification_prompt?: string;
   heuristic_first_max_tier?: string;
+  hybrid_boundary_margin?: number;
   classification_mode: ClassificationMode;
   session_affinity: boolean;
   deployment_affinity: boolean;
   modality_routing: boolean;
+  modality_pin_override: boolean;
   custom_technical_keywords?: string[];
   keyword_tier_rules?: { keywords: string[]; tier: KeywordTierRule["tier"] }[];
   semantic_keyword_matching?: boolean;
@@ -352,6 +356,7 @@ const classifierWireFields = (
     classifierLlmConfig,
     classifierFallback,
     heuristicFirstMaxTier,
+    hybridBoundaryMargin,
     classifierContextWindowSize,
     classifierContextBudgetChars,
     classifierContextIncludeAssistantTurns,
@@ -360,6 +365,7 @@ const classifierWireFields = (
     | "classifierLlmConfig"
     | "classifierFallback"
     | "heuristicFirstMaxTier"
+    | "hybridBoundaryMargin"
     | "classifierContextWindowSize"
     | "classifierContextBudgetChars"
     | "classifierContextIncludeAssistantTurns"
@@ -371,6 +377,8 @@ const classifierWireFields = (
     classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
   ...(effectiveType === "heuristic_first" &&
     heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
+  ...(effectiveType === "hybrid" &&
+    hybridBoundaryMargin !== undefined && { hybrid_boundary_margin: hybridBoundaryMargin }),
   ...(usesLlmClassifier(effectiveType) &&
     classifierContextWindowSize !== undefined && {
       classifier_context_window_size: classifierContextWindowSize,
@@ -399,9 +407,11 @@ export const buildComplexityRouterConfig = ({
   classifierFallback,
   classificationPrompt,
   heuristicFirstMaxTier,
+  hybridBoundaryMargin,
   classificationMode,
   sessionAffinity,
   modalityRouting,
+  modalityPinOverride,
   deploymentAffinity,
   customTechnicalKeywords,
   keywordTierRules,
@@ -444,6 +454,7 @@ export const buildComplexityRouterConfig = ({
     classifierLlmConfig,
     classifierFallback,
     heuristicFirstMaxTier,
+    hybridBoundaryMargin,
     classifierContextWindowSize,
     classifierContextBudgetChars,
     classifierContextIncludeAssistantTurns,
@@ -464,6 +475,7 @@ export const buildComplexityRouterConfig = ({
     session_affinity: sessionAffinity,
     deployment_affinity: deploymentAffinity,
     modality_routing: modalityRouting ?? false,
+    modality_pin_override: modalityPinOverride ?? false,
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
     escalation_keywords: cleanedEscalationKeywords,

@@ -4220,3 +4220,88 @@ async def test_user_new_persists_model_max_budget(
     )
 
     assert captured["user_data"].get("model_max_budget") == expected_written
+
+
+@pytest.fixture
+def _admin_prisma(mocker):
+    """A mocked prisma_client wired in as proxy_server's module globals, for
+    the password-policy tests below (mirrors the pattern every other test in
+    this file repeats per-test; consolidated here since these three share it
+    verbatim)."""
+    mock_prisma_client = mocker.MagicMock()
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    )
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    )
+    return mock_prisma_client
+
+
+@pytest.mark.asyncio
+async def test_user_update_rejects_weak_password(_admin_prisma):
+    """/user/update must reject a password that fails the configured
+    policy before it ever reaches the DB write."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    user_request = UpdateUserRequest(user_id="target-user", password="short1!")
+    admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
+
+    assert exc_info.value.code == "400"
+    _admin_prisma.db.litellm_usertable.find_first.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_user_update_rejects_weak_password_against_configured_policy(_admin_prisma, mocker):
+    """A password that meets the default policy but not a stricter
+    admin-configured one must still be rejected."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
+        "litellm.proxy.proxy_server.general_settings",
+        {"password_policy_min_length": 24},
+    )
+
+    user_request = UpdateUserRequest(user_id="target-user", password="Str0ng!Passw0rd")
+    admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
+
+    assert "24 characters" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_user_update_hashes_and_persists_strong_password(_admin_prisma, mocker):
+    """A password meeting the policy is hashed (never stored in plaintext)
+    and reaches the DB write."""
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = _admin_prisma
+    existing_user = mocker.MagicMock()
+    existing_user.model_dump.return_value = {"user_id": "target-user"}
+    existing_user.user_id = "target-user"
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=existing_user)
+    mock_prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": "target-user"})
+    mock_prisma_client.jsonify_object = mocker.MagicMock(side_effect=lambda x: x)
+
+    strong_password = "Str0ng!Passw0rd"
+    user_request = UpdateUserRequest(user_id="target-user", password=strong_password)
+    admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
+
+    written_data = mock_prisma_client.update_data.call_args.kwargs["data"]
+    assert written_data.get("password") is not None
+    assert written_data["password"] != strong_password

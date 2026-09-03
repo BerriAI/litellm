@@ -56,6 +56,7 @@ describe("buildComplexityRouterConfig", () => {
       session_affinity: false,
       deployment_affinity: true,
       modality_routing: false,
+      modality_pin_override: false,
       escalation_keywords: ["LITELLM ESCALATE"],
     };
     expect(config).toEqual(expected);
@@ -109,6 +110,21 @@ describe("buildComplexityRouterConfig", () => {
       classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
     });
     expect(config.classifier_llm_config).toBeUndefined();
+  });
+
+  it("emits heuristic_v2 without classifier-only fields", () => {
+    const trainedParams: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "heuristic_v2",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+      classifierContextWindowSize: 5,
+      classifierFallback: "heuristic",
+    };
+    const config = buildComplexityRouterConfig(trainedParams);
+    expect(config.classifier_type).toBe("heuristic_v2");
+    expect(config.classifier_llm_config).toBeUndefined();
+    expect(config.classifier_context_window_size).toBeUndefined();
+    expect(config.classifier_fallback).toBeUndefined();
   });
 
   it("includes classifier_context_window_size and classifier_context_budget_chars only when classifier_type is llm", () => {
@@ -253,6 +269,14 @@ describe("buildComplexityRouterConfig", () => {
     expect(buildComplexityRouterConfig({ ...baseParams, modalityRouting: true }).modality_routing).toBe(true);
     expect(buildComplexityRouterConfig(baseParams).modality_routing).toBe(false);
     expect(buildComplexityRouterConfig({ ...baseParams, modalityRouting: false }).modality_routing).toBe(false);
+  });
+
+  it("writes modality_pin_override explicitly both ways, so the stored config never relies on the backend default", () => {
+    expect(buildComplexityRouterConfig({ ...baseParams, modalityPinOverride: true }).modality_pin_override).toBe(true);
+    expect(buildComplexityRouterConfig(baseParams).modality_pin_override).toBe(false);
+    expect(buildComplexityRouterConfig({ ...baseParams, modalityPinOverride: false }).modality_pin_override).toBe(
+      false,
+    );
   });
 
   it("writes session_affinity=true so turning the toggle on overrides the backend's off-by-default", () => {
@@ -713,6 +737,10 @@ describe("getClassifierModelError", () => {
     expect(getClassifierModelError({ classifier_type: "heuristic" })).toBeNull();
   });
 
+  it("stays quiet for a heuristic v2 router, which runs locally", () => {
+    expect(getClassifierModelError({ classifier_type: "heuristic_v2" })).toBeNull();
+  });
+
   it("blocks an LLM classifier with no model, which the router cannot start without", () => {
     expect(getClassifierModelError({ classifier_type: "llm" })).toBe(
       "Please select a classifier model, or switch back to Heuristic",
@@ -791,9 +819,42 @@ describe("heuristic_first", () => {
   });
 
   it("omits heuristic_first_max_tier on every other classifier type, which the backend rejects it on", () => {
-    for (const classifierType of ["heuristic", "llm"] as const) {
+    for (const classifierType of ["heuristic", "heuristic_v2", "llm"] as const) {
       const config = buildComplexityRouterConfig({ ...heuristicFirstParams, classifierType });
       expect(config.heuristic_first_max_tier).toBeUndefined();
+    }
+  });
+});
+
+describe("hybrid", () => {
+  const hybridParams: BuildComplexityRouterConfigParams = {
+    ...baseParams,
+    classifierType: "hybrid",
+    hybridBoundaryMargin: 0.03,
+    classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    classifierFallback: "default_model",
+  };
+
+  it("emits hybrid_boundary_margin, zero included since exactly-on-a-boundary is a real setting", () => {
+    expect(buildComplexityRouterConfig(hybridParams).hybrid_boundary_margin).toBe(0.03);
+    expect(buildComplexityRouterConfig({ ...hybridParams, hybridBoundaryMargin: 0 }).hybrid_boundary_margin).toBe(0);
+  });
+
+  it("keeps every classifier key the operator set, since hybrid still calls the classifier", () => {
+    const config = buildComplexityRouterConfig(hybridParams);
+    expect(config.classifier_type).toBe("hybrid");
+    expect(config.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
+    expect(config.classifier_fallback).toBe("default_model");
+  });
+
+  it("omits hybrid_boundary_margin on every other classifier type, which the backend rejects it on", () => {
+    for (const classifierType of ["heuristic", "llm", "heuristic_first"] as const) {
+      const config = buildComplexityRouterConfig({
+        ...hybridParams,
+        classifierType,
+        ...(classifierType === "heuristic_first" && { heuristicFirstMaxTier: "SIMPLE" }),
+      });
+      expect(config.hybrid_boundary_margin).toBeUndefined();
     }
   });
 });
@@ -905,10 +966,12 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
       dimensionWeights: { length: 1 },
       reasoningOverrideMinScore: 0.5,
       heuristicFirstMaxTier: "SIMPLE",
+      hybridBoundaryMargin: 0.03,
       customTechnicalKeywords: ["kubernetes"],
     };
     const emittingType = key === "heuristic_first_max_tier" ? "heuristic_first" : "llm";
-    expect(buildComplexityRouterConfig({ ...baseParams, ...loaded, classifierType: emittingType })).toHaveProperty(key);
+    const typeForKey = key === "hybrid_boundary_margin" ? "hybrid" : emittingType;
+    expect(buildComplexityRouterConfig({ ...baseParams, ...loaded, classifierType: typeForKey })).toHaveProperty(key);
     expect(build(loaded)).not.toHaveProperty(key);
   });
 
