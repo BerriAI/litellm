@@ -152,7 +152,9 @@ def translate_libpq_ssl_params(url: str) -> str:
         for key, value in pairs
         if key != "sslrootcert"
     )
-    root_cert: Final = tuple(("sslcert", value) for key, value in pairs if key == "sslrootcert" and "sslcert" not in keys)
+    root_cert: Final = tuple(
+        ("sslcert", value) for key, value in pairs if key == "sslrootcert" and "sslcert" not in keys
+    )
     strict: Final = () if "sslaccept" in keys else (("sslaccept", "strict"),)
     query: Final = urllib.parse.urlencode(translated + root_cert + strict)
     return urllib.parse.urlunsplit(parsed._replace(query=query))
