@@ -370,6 +370,7 @@ async def test_bedrock_kb_request_body_has_transformed_filters(
         custom_llm_provider,
         litellm_params,
         logging_obj,
+        embedding_executor=None,
         extra_headers=None,
         extra_body=None,
         timeout=None,
