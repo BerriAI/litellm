@@ -5803,7 +5803,7 @@ async def list_keys(
     ),
     search: str | None = Query(
         None,
-        description="Combined search: matches keys whose token (key hash) equals the value, hashing a raw sk- key first, OR whose key_alias contains it (case-insensitive).",
+        description="Combined search: matches keys whose token (key hash) equals the value OR whose key_alias contains it (case-insensitive).",
     ),
     return_full_object: bool = Query(False, description="Return full key object"),
     include_team_keys: bool = Query(False, description="Include all keys for teams that user is an admin of."),
@@ -5867,17 +5867,13 @@ async def list_keys(
                 detail={"error": "Invalid expires value. Supported: 'active', 'expired'."},
             )
 
-        hashed_key_hash: Final[str | None] = (
-            _hash_token_if_needed(token=key_hash) if isinstance(key_hash, str) else None
-        )
-
         complete_user_info: Final = await validate_key_list_check(
             user_api_key_dict=user_api_key_dict,
             user_id=user_id,
             team_id=team_id,
             organization_id=organization_id,
             key_alias=key_alias,
-            key_hash=hashed_key_hash,
+            key_hash=key_hash,
             prisma_client=prisma_client,
         )
 
@@ -5937,7 +5933,7 @@ async def list_keys(
             user_id=user_id,
             team_id=team_id,
             key_alias=key_alias,
-            key_hash=hashed_key_hash,
+            key_hash=key_hash,
             return_full_object=return_full_object,
             organization_id=organization_id,
             admin_team_ids=admin_team_ids,
@@ -6175,7 +6171,7 @@ def _build_expires_where_clause(expires_filter: str, now: datetime) -> dict[str,
 def _build_key_search_where(search: str) -> KeySearchWhere:
     search_where: Final[KeySearchWhere] = {
         "OR": (
-            {"token": _hash_token_if_needed(token=search)},
+            {"token": search},
             {"key_alias": {"contains": search, "mode": "insensitive"}},
         )
     }

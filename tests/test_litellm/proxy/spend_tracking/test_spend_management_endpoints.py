@@ -61,7 +61,7 @@ def _filter_logs_by_date_range(logs, where):
 _SEARCH_CLAUSE_RE = re.compile(
     r'\(request_id = \$(\d+) OR \("startTime" >= \(\$(\d+)::timestamptz AT TIME ZONE \'UTC\'\) '
     r'AND "startTime" <= \(\$(\d+)::timestamptz AT TIME ZONE \'UTC\'\) '
-    r'AND \(api_key = \$(\d+) OR team_id = \$\1 OR "user" = \$\1 OR end_user = \$\1 '
+    r'AND \(api_key = \$\1 OR team_id = \$\1 OR "user" = \$\1 OR end_user = \$\1 '
     r"OR session_id = \$\1 OR model_id = \$\1\)\)\)"
 )
 
@@ -72,9 +72,8 @@ def _matches_spend_log_search(log, search):
         return True
     if not _filter_logs_by_date_range([log], {"startTime": {"gte": search["gte"], "lte": search["lte"]}}):
         return False
-    if log.get("api_key") == search["api_key"]:
-        return True
-    return any(log.get(col) == search["value"] for col in ("team_id", "user", "end_user", "session_id", "model_id"))
+    columns = ("api_key", "team_id", "user", "end_user", "session_id", "model_id")
+    return any(log.get(col) == search["value"] for col in columns)
 
 
 def _reconstruct_ui_where_from_sql(sql_query, params):
@@ -98,10 +97,9 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
 
     search_clause = _SEARCH_CLAUSE_RE.search(clause.group(1))
     if search_clause:
-        raw_index, start_index, end_index, hashed_index = (int(g) for g in search_clause.groups())
+        raw_index, start_index, end_index = (int(g) for g in search_clause.groups())
         where["search"] = {
             "value": params[raw_index - 1],
-            "api_key": params[hashed_index - 1],
             "gte": _iso(params[start_index - 1]),
             "lte": _iso(params[end_index - 1]),
         }
@@ -2384,31 +2382,20 @@ async def test_ui_view_spend_logs_request_id_owner_scoped_by_id_only(
 
 def test_build_spend_log_search_condition_windows_every_branch_except_request_id():
     """LIT-4741: request_id matches across all time; the six other id columns only inside the window,
-    and a raw sk- key is hashed for the api_key branch alone."""
+    all comparing the pasted value verbatim."""
     start = datetime.datetime(2026, 8, 1, tzinfo=timezone.utc)
     end = datetime.datetime(2026, 8, 2, tzinfo=timezone.utc)
 
     condition = spend_management_endpoints._build_spend_log_search_condition(
-        search="sk-raw-key", start_date=start, end_date=end, next_param_index=3
+        search="key-hash-7", start_date=start, end_date=end, next_param_index=3
     )
 
     assert condition.sql == (
-        "(request_id = $3 OR (\"startTime\" >= ($5::timestamptz AT TIME ZONE 'UTC') "
-        "AND \"startTime\" <= ($6::timestamptz AT TIME ZONE 'UTC') "
-        'AND (api_key = $4 OR team_id = $3 OR "user" = $3 OR end_user = $3 OR session_id = $3 OR model_id = $3)))'
+        "(request_id = $3 OR (\"startTime\" >= ($4::timestamptz AT TIME ZONE 'UTC') "
+        "AND \"startTime\" <= ($5::timestamptz AT TIME ZONE 'UTC') "
+        'AND (api_key = $3 OR team_id = $3 OR "user" = $3 OR end_user = $3 OR session_id = $3 OR model_id = $3)))'
     )
-    assert condition.params == ("sk-raw-key", hashlib.sha256(b"sk-raw-key").hexdigest(), start, end)
-
-
-def test_build_spend_log_search_condition_leaves_non_key_values_unhashed():
-    start = datetime.datetime(2026, 8, 1, tzinfo=timezone.utc)
-    end = datetime.datetime(2026, 8, 2, tzinfo=timezone.utc)
-
-    condition = spend_management_endpoints._build_spend_log_search_condition(
-        search="sess-42", start_date=start, end_date=end, next_param_index=1
-    )
-
-    assert condition.params == ("sess-42", "sess-42", start, end)
+    assert condition.params == ("key-hash-7", start, end)
 
 
 def _search_fixture_logs(today):
@@ -2427,7 +2414,7 @@ def _search_fixture_logs(today):
     return [
         {**base, "request_id": "req-session", "session_id": "sess-42", "startTime": recent},
         {**base, "request_id": "req-session-old", "session_id": "sess-42", "startTime": old},
-        {**base, "request_id": "req-key", "api_key": hashlib.sha256(b"sk-raw-key").hexdigest(), "startTime": recent},
+        {**base, "request_id": "req-key", "api_key": "hashed-7", "startTime": recent},
         {**base, "request_id": "req-team", "team_id": "team-7", "startTime": recent},
         {**base, "request_id": "req-user", "user": "user-7", "startTime": recent},
         {**base, "request_id": "req-end-user", "end_user": "cust-7", "startTime": recent},
@@ -2461,7 +2448,7 @@ def _five_day_window(today):
     [
         ("req-session-old", {"req-session-old"}),
         ("sess-42", {"req-session"}),
-        ("sk-raw-key", {"req-key"}),
+        ("hashed-7", {"req-key"}),
         ("team-7", {"req-team"}),
         ("user-7", {"req-user"}),
         ("cust-7", {"req-end-user"}),

@@ -16,7 +16,7 @@ class KeyAliasContainsWhere(TypedDict):
 
 
 class KeySearchWhere(TypedDict):
-    """Prisma filter behind `/key/list?search=`: exact token (sk- keys hashed) or alias substring, case-insensitive."""
+    """Prisma filter behind `/key/list?search=`: exact token or case-insensitive alias substring."""
 
     OR: ReadOnly[tuple[KeyTokenWhere, KeyAliasContainsWhere]]
 

@@ -1,4 +1,3 @@
-import hashlib
 from datetime import datetime, timedelta
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -169,24 +168,6 @@ def test_search_matches_any_id_column_alongside_the_other_filters(mock_prisma_cl
                 )
             },
         ),
-    }
-
-
-def test_search_hashes_a_raw_virtual_key_for_the_hashed_columns(mock_prisma_client):
-    where: Final = _list_audit_logs_where(mock_prisma_client, "search=sk-raw")
-
-    hashed: Final = hashlib.sha256(b"sk-raw").hexdigest()
-    assert where == {
-        "AND": (
-            {
-                "OR": (
-                    {"id": "sk-raw"},
-                    {"changed_by": "sk-raw"},
-                    {"object_id": hashed},
-                    {"changed_by_api_key": hashed},
-                )
-            },
-        )
     }
 
 
