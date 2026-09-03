@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import json
 from datetime import timezone
+from collections.abc import Mapping
 from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -3915,3 +3916,112 @@ def test_get_logging_payload_handles_missing_fallback_info_gracefully():
     assert (
         metadata.get("original_model_group") is None
     ), "original_model_group should be None when not provided"
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+def test_injected_cache_breakpoints_survive_into_spend_log_metadata(bucket):
+    """The injection marker only gates savings if it reaches the spend-log row.
+
+    _get_spend_logs_metadata projects onto SpendLogsMetadata.__annotations__, so an
+    undeclared key is dropped silently. Both buckets are covered because chat routes
+    stamp metadata while /v1/messages routes stamp litellm_metadata, and
+    record_gateway_injection writes into whichever the request carries.
+    """
+    payload = get_logging_payload(
+        kwargs={
+            "model": "claude-sonnet-5",
+            "litellm_params": {
+                bucket: {
+                    "user_api_key": "test-key",
+                    "litellm_gateway_injected_cache": "dep-of-this-row",
+                }
+            },
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-injected", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["litellm_gateway_injected_cache"] == "dep-of-this-row"
+
+
+def test_passthrough_caching_carries_no_injection_marker():
+    """The negative class the gate depends on: a request whose cache_control the client
+    supplied must read as unmarked, not merely unlabelled by accident."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "claude-sonnet-5",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-passthrough", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["litellm_gateway_injected_cache"] is None
+
+
+def _routed_call_kwargs(model_info: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "model": "claude-haiku-4-5",
+        "custom_llm_provider": "azure_ai",
+        "litellm_call_id": "router-corr-123",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "test-key",
+                "model_group": "internal-router/gpt-5.4",
+                "deployment": "azure_ai/claude-haiku-4-5",
+                "model_info": model_info,
+            }
+        },
+    }
+
+
+def test_router_metadata_stamped_for_internal_router_model_deployment():
+    """A deployment flagged model_info.internal_router_model gets a router_metadata
+    block correlating the requested model group with the selected deployment."""
+    payload = get_logging_payload(
+        kwargs=_routed_call_kwargs({"id": "mi-1", "internal_router_model": True}),
+        response_obj=litellm.ModelResponse(id="chatcmpl-router-meta", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["router_metadata"] == {
+        "requested_model": "internal-router/gpt-5.4",
+        "selected_model": "azure_ai/claude-haiku-4-5",
+        "selected_provider": "azure_ai",
+        "router_correlation_id": "router-corr-123",
+    }
+
+
+def test_router_metadata_absent_without_internal_router_model_flag():
+    payload = get_logging_payload(
+        kwargs=_routed_call_kwargs({"id": "mi-1"}),
+        response_obj=litellm.ModelResponse(id="chatcmpl-unflagged", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["router_metadata"] is None
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+def test_caller_forged_router_metadata_is_discarded(bucket):
+    """The raw request bucket is client-writable and _get_spend_logs_metadata projects
+    every SpendLogsMetadata key from it, so the server-derived value must overwrite
+    unconditionally or a caller could plant router provenance the router never produced."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {
+                bucket: {
+                    "user_api_key": "test-key",
+                    "router_metadata": {"requested_model": "forged", "router_correlation_id": "forged-id"},
+                }
+            },
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-forged-router-meta", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["router_metadata"] is None

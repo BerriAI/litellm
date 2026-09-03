@@ -179,6 +179,18 @@
         "comment": {
           "type": "string"
         },
+        "default_reasoning_effort": {
+          "type": "string",
+          "description": "Reasoning effort the provider applies when the request omits reasoning_effort. Gates whether a non-default temperature or the top_p/logprobs sampling params are accepted, which hold only when the effort resolves to 'none'.",
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ]
+        },
         "deprecation_date": {
           "type": "string",
           "description": "Date the provider deprecates the model, YYYY-MM-DD.",
@@ -532,6 +544,22 @@
           "type": "object",
           "description": "Provider-internal routing hints (e.g. bedrock_invocation_schema)."
         },
+        "reasoning_effort_levels": {
+          "type": "array",
+          "description": "Exact reasoning_effort levels this deployment accepts; wins over supports_* flags.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        },
         "regional_endpoint_uplift_multiplier": {
           "type": "number",
           "minimum": 1,
@@ -632,6 +660,9 @@
           "type": "boolean"
         },
         "supports_embedding_image_input": {
+          "type": "boolean"
+        },
+        "supports_forced_tool_use": {
           "type": "boolean"
         },
         "supports_function_calling": {

@@ -6,10 +6,11 @@ import re
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone, tzinfo
-from typing import Any, Final, TypedDict, cast
+from typing import Any, Final, Protocol, cast
 
 import httpx
 from pydantic import BaseModel, Field
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -33,6 +34,34 @@ GALILEO_CLOUD_API_BASE_URL: Final = "https://api.galileo.ai"
 # Cap the in-memory buffer so persistent flush failures (e.g. Galileo
 # unavailable, invalid credentials) cannot leak memory unboundedly.
 GALILEO_MAX_IN_MEMORY_RECORDS: Final = 1000
+
+
+class _GalileoLoginBody(TypedDict):
+    """Decoded body of the Galileo login response."""
+
+    access_token: ReadOnly[str]
+
+
+class _GalileoLoginResponse(Protocol):
+    """The login call's HTTP response, read for the access token it carries."""
+
+    def json(self) -> _GalileoLoginBody: ...
+
+
+class _JsonResponse(Protocol):
+    """An HTTP response read only for whatever JSON body it decodes to."""
+
+    def json(self) -> object: ...
+
+
+def _login_access_token(response: _GalileoLoginResponse) -> str:
+    """Read the bearer token out of a Galileo login response body."""
+    return response.json()["access_token"]
+
+
+def _decoded_body(response: _JsonResponse) -> object:
+    """Decode a response body without asserting anything about its shape."""
+    return response.json()
 
 
 class GalileoStandardLoggingFields(TypedDict, total=False):
@@ -156,7 +185,7 @@ class GalileoObserve(CustomLogger):
             },
         )
         galileo_login_response.raise_for_status()
-        access_token: Final = galileo_login_response.json()["access_token"]
+        access_token: Final = _login_access_token(galileo_login_response)
         self.headers = {
             "accept": "application/json",
             "Content-Type": "application/json",
@@ -421,7 +450,7 @@ class GalileoObserve(CustomLogger):
         try:
             verbose_logger.debug(
                 "Galileo Logger HTTP error response json: %s",
-                response.json(),
+                _decoded_body(response),
             )
         except Exception:
             pass

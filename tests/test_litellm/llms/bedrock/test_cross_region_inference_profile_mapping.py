@@ -59,17 +59,17 @@ class GptProfile(NamedTuple):
 GPT_5_6_PROFILES = [
     GptProfile(
         model_id="us.openai.gpt-5.6-sol",
-        input_cost=5.5e-06, input_cost_above_272k=1.1e-05,
-        cache_write=6.875e-06, cache_write_above_272k=1.375e-05,
-        cache_read=5.5e-07, cache_read_above_272k=1.1e-06,
-        output_cost=3.3e-05, output_cost_above_272k=4.95e-05,
+        input_cost=4.4e-06, input_cost_above_272k=8.8e-06,
+        cache_write=5.5e-06, cache_write_above_272k=1.1e-05,
+        cache_read=4.4e-07, cache_read_above_272k=8.8e-07,
+        output_cost=2.2e-05, output_cost_above_272k=3.3e-05,
     ),
     GptProfile(
         model_id="global.openai.gpt-5.6-sol",
-        input_cost=5e-06, input_cost_above_272k=1e-05,
-        cache_write=6.25e-06, cache_write_above_272k=1.25e-05,
-        cache_read=5e-07, cache_read_above_272k=1e-06,
-        output_cost=3e-05, output_cost_above_272k=4.5e-05,
+        input_cost=4e-06, input_cost_above_272k=8e-06,
+        cache_write=5e-06, cache_write_above_272k=1e-05,
+        cache_read=4e-07, cache_read_above_272k=8e-07,
+        output_cost=2e-05, output_cost_above_272k=3e-05,
     ),
     GptProfile(
         model_id="us.openai.gpt-5.6-terra",
@@ -221,7 +221,7 @@ def test_bedrock_gpt_5_6_above_272k_tier_applies_to_cost(local_model_cost_map):
         custom_llm_provider="bedrock",
     )
 
-    assert cost == pytest.approx((300000 * 1.1e-05) + (1000 * 4.95e-05), rel=1e-9)
+    assert cost == pytest.approx((300000 * 8.8e-06) + (1000 * 3.3e-05), rel=1e-9)
 
 
 def test_bedrock_gpt_5_6_bills_cache_read_tokens(local_model_cost_map):
@@ -241,10 +241,10 @@ def test_bedrock_gpt_5_6_bills_cache_read_tokens(local_model_cost_map):
         custom_llm_provider="bedrock",
     )
 
-    expected = (2 * 5.5e-06) + (15609 * 5.5e-07) + (5 * 3.3e-05)
+    expected = (2 * 4.4e-06) + (15609 * 4.4e-07) + (5 * 2.2e-05)
     assert cost == pytest.approx(expected, rel=1e-9)
     # Without cache_read_input_token_cost the cached prefix bills at zero.
-    assert cost > (15611 * 5.5e-06) * 0.1
+    assert cost > (15611 * 4.4e-06) * 0.1
 
 
 def test_bedrock_gpt_5_6_bills_cache_write_tokens(local_model_cost_map):
@@ -263,7 +263,7 @@ def test_bedrock_gpt_5_6_bills_cache_write_tokens(local_model_cost_map):
         custom_llm_provider="bedrock",
     )
 
-    expected = (2 * 5.5e-06) + (15609 * 6.875e-06) + (5 * 3.3e-05)
+    expected = (2 * 4.4e-06) + (15609 * 5.5e-06) + (5 * 2.2e-05)
     assert cost == pytest.approx(expected, rel=1e-9)
 
 

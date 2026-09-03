@@ -1373,6 +1373,7 @@ class TestLoginConfigClaude:
         assert result.exit_code == 0
         written = json.loads(settings_path.read_text())
         assert written["env"]["ANTHROPIC_BASE_URL"] == "https://test.example.com"
+        assert written["env"]["ENABLE_TOOL_SEARCH"] == "true"
         assert written["apiKeyHelper"] == "/usr/local/bin/lite --base-url https://test.example.com auth print-token"
         assert "Configured Claude Code" in result.output
 

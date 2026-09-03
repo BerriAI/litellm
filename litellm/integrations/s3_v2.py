@@ -16,7 +16,12 @@ from urllib.parse import quote
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import DEFAULT_S3_BATCH_SIZE, DEFAULT_S3_FLUSH_INTERVAL_SECONDS
-from litellm.integrations.s3 import get_s3_object_key, resolve_sse_params
+from litellm.integrations.s3 import (
+    get_s3_object_download_filename,
+    get_s3_object_key,
+    resolve_sse_params,
+)
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -222,7 +227,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 protocol: Final = "https://" if self.s3_endpoint_url.startswith("https://") else "http://"
                 return f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{encoded_key}"
             return f"{self.s3_endpoint_url}/{self.s3_bucket_name}/{encoded_key}"
-        return f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{encoded_key}"
+        return (
+            f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}."
+            f"{get_aws_dns_suffix(self.s3_region_name)}/{encoded_key}"
+        )
 
     def _sse_headers(self) -> Mapping[str, str]:
         candidates: Final = {
@@ -255,11 +263,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             now: Final = datetime.now(timezone.utc)
             audit_log_id: Final = audit_log.get("id", "unknown")
 
-            s3_path = cast(str | None, self.s3_path) or ""
-            s3_path = s3_path.rstrip("/") + "/" if s3_path else ""
-
-            s3_object_key: Final = (
-                f"{s3_path}audit_logs/{now.strftime('%Y-%m-%d')}/{now.strftime('%H-%M-%S')}_{audit_log_id}.json"
+            s3_object_key: Final = get_s3_object_key(
+                cast(str | None, self.s3_path) or "",
+                "audit_logs/",
+                now,
+                f"{now.strftime('%H-%M-%S')}_{audit_log_id}",
             )
 
             element: Final = s3BatchLoggingElement(
@@ -459,9 +467,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         )
         verbose_logger.debug("s3_object_key=%s", s3_object_key)
 
-        s3_object_download_filename: Final = (
-            f"time-{start_time.strftime('%Y-%m-%dT%H-%M-%S-%f')}_{standard_logging_payload['id']}.json"
-        )
+        s3_object_download_filename: Final = get_s3_object_download_filename(start_time, standard_logging_payload["id"])
 
         return s3BatchLoggingElement(
             payload=dict(standard_logging_payload),

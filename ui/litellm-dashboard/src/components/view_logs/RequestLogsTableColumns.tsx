@@ -90,6 +90,7 @@ export const getRequestLogsTableColumns = ({
         sessionLlmCount > 0 && `${sessionLlmCount} LLM`,
         sessionAgentCount > 0 && `${sessionAgentCount} Agent`,
         sessionMcpCount > 0 && `${sessionMcpCount} MCP`,
+        log.session_cache_hit_count != null && `${log.session_cache_hit_count} cache hit`,
       ].filter(Boolean);
       return <CellTooltip content={tooltipParts.join(" • ")} trigger={sessionTypeBadge} />;
     },

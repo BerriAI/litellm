@@ -1,4 +1,6 @@
-from typing import Final
+from collections.abc import Mapping, Sequence
+from datetime import datetime
+from typing import Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -18,7 +20,59 @@ from litellm.repositories.table_repositories import JWTKeyMappingRepository
 router: Final = APIRouter()
 
 
-def _to_response(mapping) -> JWTKeyMappingResponse:
+class _JWTKeyMappingRecord(Protocol):
+    """A ``LiteLLM_JWTKeyMapping`` row, viewed through the columns these endpoints read."""
+
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def jwt_claim_name(self) -> str: ...
+
+    @property
+    def jwt_claim_value(self) -> str: ...
+
+    @property
+    def description(self) -> str | None: ...
+
+    @property
+    def is_active(self) -> bool: ...
+
+    @property
+    def created_at(self) -> datetime: ...
+
+    @property
+    def updated_at(self) -> datetime: ...
+
+    @property
+    def created_by(self) -> str | None: ...
+
+    @property
+    def updated_by(self) -> str | None: ...
+
+
+class _JWTKeyMappingTable(Protocol):
+    """The Prisma table actions these endpoints issue against the JWT key mapping table."""
+
+    async def create(self, *, data: Mapping[str, object]) -> _JWTKeyMappingRecord: ...
+
+    async def find_unique(self, *, where: Mapping[str, object]) -> _JWTKeyMappingRecord | None: ...
+
+    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> _JWTKeyMappingRecord: ...
+
+    async def delete(self, *, where: Mapping[str, object]) -> _JWTKeyMappingRecord | None: ...
+
+    async def find_many(self, *, skip: int, take: int, order: Mapping[str, str]) -> Sequence[_JWTKeyMappingRecord]: ...
+
+    async def count(self) -> int: ...
+
+
+def _mapping_table(prisma_client: object) -> _JWTKeyMappingTable:
+    """View the JWT key mapping repository's untyped Prisma table through the actions used here."""
+    return JWTKeyMappingRepository(prisma_client).table
+
+
+def _to_response(mapping: _JWTKeyMappingRecord) -> JWTKeyMappingResponse:
     """Convert a Prisma mapping object to a safe response (no hashed token)."""
     return JWTKeyMappingResponse(
         id=mapping.id,
@@ -62,7 +116,7 @@ async def create_jwt_key_mapping(
         if data.description is not None:
             create_data["description"] = data.description
 
-        new_mapping: Final = await JWTKeyMappingRepository(prisma_client).table.create(data=create_data)
+        new_mapping: Final = await _mapping_table(prisma_client).create(data=create_data)
 
         # Invalidate cache
         cache_key: Final = f"jwt_key_mapping:{data.jwt_claim_name}:{data.jwt_claim_value}"
@@ -110,7 +164,7 @@ async def update_jwt_key_mapping(
 
     try:
         # Get old mapping for cache invalidation
-        old_mapping: Final = await JWTKeyMappingRepository(prisma_client).table.find_unique(where={"id": data.id})
+        old_mapping: Final = await _mapping_table(prisma_client).find_unique(where={"id": data.id})
 
         if old_mapping is None:
             raise HTTPException(status_code=404, detail="Mapping not found")
@@ -118,9 +172,7 @@ async def update_jwt_key_mapping(
         cache_key = f"jwt_key_mapping:{old_mapping.jwt_claim_name}:{old_mapping.jwt_claim_value}"
         await user_api_key_cache.async_delete_cache(cache_key)
 
-        updated_mapping: Final = await JWTKeyMappingRepository(prisma_client).table.update(
-            where={"id": data.id}, data=update_data
-        )
+        updated_mapping: Final = await _mapping_table(prisma_client).update(where={"id": data.id}, data=update_data)
 
         if updated_mapping is None:
             raise HTTPException(status_code=404, detail="Mapping not found")
@@ -162,7 +214,7 @@ async def delete_jwt_key_mapping(
 
     try:
         # Get old mapping for cache invalidation
-        old_mapping: Final = await JWTKeyMappingRepository(prisma_client).table.find_unique(where={"id": data.id})
+        old_mapping: Final = await _mapping_table(prisma_client).find_unique(where={"id": data.id})
 
         if old_mapping is None:
             raise HTTPException(status_code=404, detail="Mapping not found")
@@ -170,7 +222,7 @@ async def delete_jwt_key_mapping(
         cache_key: Final = f"jwt_key_mapping:{old_mapping.jwt_claim_name}:{old_mapping.jwt_claim_value}"
         await user_api_key_cache.async_delete_cache(cache_key)
 
-        await JWTKeyMappingRepository(prisma_client).table.delete(where={"id": data.id})
+        await _mapping_table(prisma_client).delete(where={"id": data.id})
         return {"status": "success"}
     except HTTPException:
         raise
@@ -198,12 +250,12 @@ async def list_jwt_key_mappings(
 
     try:
         skip: Final = (page - 1) * size
-        mappings: Final = await JWTKeyMappingRepository(prisma_client).table.find_many(
+        mappings: Final = await _mapping_table(prisma_client).find_many(
             skip=skip,
             take=size,
             order={"created_at": "desc"},
         )
-        total_count: Final = await JWTKeyMappingRepository(prisma_client).table.count()
+        total_count: Final = await _mapping_table(prisma_client).count()
         return {
             "mappings": [_to_response(m) for m in mappings],
             "total_count": total_count,
@@ -235,7 +287,7 @@ async def info_jwt_key_mapping(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        mapping: Final = await JWTKeyMappingRepository(prisma_client).table.find_unique(where={"id": id})
+        mapping: Final = await _mapping_table(prisma_client).find_unique(where={"id": id})
         if mapping is None:
             raise HTTPException(status_code=404, detail="Mapping not found")
         return _to_response(mapping)

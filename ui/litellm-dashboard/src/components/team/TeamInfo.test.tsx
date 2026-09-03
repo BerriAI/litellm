@@ -21,7 +21,10 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   }),
 }));
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 vi.mock("@/components/networking", () => ({
+  serverRootPath: "",
   teamInfoCall: vi.fn(),
   teamMemberDeleteCall: vi.fn(),
   teamMemberAddCall: vi.fn(),
@@ -276,6 +279,36 @@ describe("TeamInfoView", () => {
         const teamNameElements = screen.queryAllByText("Test Team");
         expect(teamNameElements.length).toBeGreaterThan(0);
       });
+    });
+
+    it("links direct and access-group model badges to the models page filtered to that group", async () => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          models: ["gpt-4.1"],
+          access_group_models: ["claude-sonnet-5"],
+          access_group_details: [{ access_group_id: "ag-1", access_group_name: "prod", models: ["claude-sonnet-5"] }],
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      expect(await screen.findByRole("link", { name: "gpt-4.1" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/models-and-endpoints?model_group=gpt-4.1"),
+      );
+      expect(screen.getByRole("link", { name: "claude-sonnet-5" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/models-and-endpoints?model_group=claude-sonnet-5"),
+      );
+    });
+
+    it("keeps the all-proxy-models badge non-clickable", async () => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["all-proxy-models"] }));
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      expect(await screen.findByText("All proxy models")).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "All proxy models" })).not.toBeInTheDocument();
     });
 
     it("should display loading state while fetching team data", () => {

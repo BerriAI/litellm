@@ -17,7 +17,12 @@ from litellm.anthropic_interface import messages
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.utils import Delta, ModelResponse, StreamingChoices
+from litellm.types.utils import (
+    Delta,
+    ModelResponse,
+    StandardLoggingPayloadErrorInformation,
+    StreamingChoices,
+)
 
 
 def test_anthropic_experimental_pass_through_messages_handler():
@@ -704,8 +709,8 @@ def test_handler_strips_when_no_presanitized_flag():
 
     with patch.object(
         handler,
-        "strip_empty_text_blocks_from_anthropic_messages",
-        wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+        "strip_empty_content_blocks_from_anthropic_messages",
+        wraps=handler.strip_empty_content_blocks_from_anthropic_messages,
     ) as spy:
         result = handler.anthropic_messages_handler(
             max_tokens=10,
@@ -724,8 +729,8 @@ def test_handler_skips_strip_when_presanitized():
 
     with patch.object(
         handler,
-        "strip_empty_text_blocks_from_anthropic_messages",
-        wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+        "strip_empty_content_blocks_from_anthropic_messages",
+        wraps=handler.strip_empty_content_blocks_from_anthropic_messages,
     ) as spy:
         result = handler.anthropic_messages_handler(
             max_tokens=10,
@@ -844,8 +849,8 @@ async def test_async_wrapper_sets_presanitized_and_sanitizes_once():
         patch("asyncio.get_event_loop", return_value=fake_loop),
         patch.object(
             handler,
-            "strip_empty_text_blocks_from_anthropic_messages",
-            wraps=handler.strip_empty_text_blocks_from_anthropic_messages,
+            "strip_empty_content_blocks_from_anthropic_messages",
+            wraps=handler.strip_empty_content_blocks_from_anthropic_messages,
         ) as spy,
     ):
         await handler.anthropic_messages(
@@ -1292,7 +1297,7 @@ class TestMessagesStreamingSuccessLogging:
 class _FailureCapture(CustomLogger):
     def __init__(self):
         super().__init__()
-        self.error_information: List[Dict[str, Any]] = []
+        self.error_information: list[StandardLoggingPayloadErrorInformation] = []
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         payload = kwargs.get("standard_logging_object") or {}

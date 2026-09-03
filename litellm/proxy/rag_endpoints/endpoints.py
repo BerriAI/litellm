@@ -7,12 +7,14 @@ Provides:
 """
 
 import base64
+import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse, StreamingResponse
+from starlette.datastructures import UploadFile
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -45,6 +47,16 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 
+def _as_string_keyed_mapping(value: object) -> Mapping[str, object] | None:
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
+def _response_attr(source: object, name: str) -> object:
+    return getattr(source, name, None)
+
+
 def _raise_vector_store_scan_depth_exceeded() -> None:
     raise HTTPException(
         status_code=400,
@@ -53,8 +65,8 @@ def _raise_vector_store_scan_depth_exceeded() -> None:
 
 
 def _append_payload_to_scan_stack(
-    payload_stack: list[tuple[Any, int]],
-    value: Any,
+    payload_stack: list[tuple[object, int]],
+    value: object,
     next_depth: int,
 ) -> None:
     if isinstance(value, dict):
@@ -117,7 +129,7 @@ async def _authorize_nested_vector_store_ids(
 
 
 def _build_file_metadata_entry(
-    response: Any,
+    response: object,
     file_data: tuple[str, bytes, str] | None = None,
     file_url: str | None = None,
 ) -> Mapping[str, str | int | None]:
@@ -135,11 +147,11 @@ def _build_file_metadata_entry(
     from datetime import datetime, timezone
 
     # Extract file_id from response
-    file_id = None
-    if hasattr(response, "get"):
-        file_id = response.get("file_id")
-    elif hasattr(response, "file_id"):
-        file_id = response.file_id
+    mapping_response: Final = _as_string_keyed_mapping(response)
+    raw_file_id: Final = (
+        mapping_response.get("file_id") if mapping_response is not None else _response_attr(response, "file_id")
+    )
+    file_id: Final = raw_file_id if isinstance(raw_file_id, str) else None
 
     # Extract file information from file_data tuple
     filename = None
@@ -152,7 +164,7 @@ def _build_file_metadata_entry(
         content_type = file_data[2] if len(file_data) > 2 else None
 
     # Build file metadata entry
-    file_entry: Final = {
+    file_entry: Final[dict[str, str | int | None]] = {
         "file_id": file_id,
         "filename": filename,
         "file_url": file_url,
@@ -169,7 +181,7 @@ def _build_file_metadata_entry(
 
 
 async def _save_vector_store_to_db_from_rag_ingest(
-    response: Any,
+    response: object,
     ingest_options: Mapping[str, dict[str, str | None]],
     prisma_client: "PrismaClient",
     user_api_key_dict: UserAPIKeyAuth,
@@ -197,10 +209,11 @@ async def _save_vector_store_to_db_from_rag_ingest(
     )
 
     # Handle both dict and object responses
-    if hasattr(response, "get"):
-        vector_store_id = response.get("vector_store_id")
+    mapping_response: Final = _as_string_keyed_mapping(response)
+    if mapping_response is not None:
+        vector_store_id = mapping_response.get("vector_store_id")
     elif hasattr(response, "vector_store_id"):
-        vector_store_id = response.vector_store_id
+        vector_store_id = _response_attr(response, "vector_store_id")
     else:
         verbose_proxy_logger.warning("Unable to extract vector_store_id from response type: %s", type(response))
         return
@@ -266,14 +279,13 @@ async def _save_vector_store_to_db_from_rag_ingest(
             verbose_proxy_logger.info("Vector store %s already exists, appending file to metadata", vector_store_id)
 
             # Update existing vector store with new file
-            existing_metadata = existing_vector_store.vector_store_metadata or {}
-            if isinstance(existing_metadata, str):
-                import json
+            stored_metadata: Final = existing_vector_store.vector_store_metadata or {}
+            existing_metadata: dict[str, object] = (
+                json.loads(stored_metadata) if isinstance(stored_metadata, str) else stored_metadata
+            )
 
-                existing_metadata = json.loads(existing_metadata)
-
-            ingested_files: Final = existing_metadata.get("ingested_files", [])
-            ingested_files.append(file_entry)
+            previous_files: Final = existing_metadata.get("ingested_files", [])
+            ingested_files: Final = [*previous_files, file_entry] if isinstance(previous_files, list) else [file_entry]
             existing_metadata["ingested_files"] = ingested_files
 
             # Update the vector store
@@ -340,9 +352,9 @@ async def parse_rag_ingest_request(
 
         # Get file
         file_obj = form_data.get("file")
-        if file_obj is not None and hasattr(file_obj, "read"):
+        if isinstance(file_obj, UploadFile):
             file_content = await file_obj.read(MAX_UPLOAD_SIZE_BYTES + 1)
-            file_data = (file_obj.filename, file_content, file_obj.content_type)
+            file_data = (file_obj.filename or "", file_content, file_obj.content_type or "")
 
         # Parse JSON from 'request' form field (contains full request body as JSON)
         request_json_str: Final[str | bytes | None] = form_data.get("request")

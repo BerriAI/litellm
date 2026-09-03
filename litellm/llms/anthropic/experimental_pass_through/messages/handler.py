@@ -17,7 +17,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.anthropic.common_utils import (
     flatten_unencrypted_web_search_results_in_anthropic_messages,
     sanitize_tool_use_ids_in_anthropic_messages,
-    strip_empty_text_blocks_from_anthropic_messages,
+    strip_empty_content_blocks_from_anthropic_messages,
 )
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -242,17 +242,20 @@ async def anthropic_messages(
     """
     Async: Make llm api request in Anthropic /messages API spec.
 
-    Runs the empty-text-block sanitizer before any backend dispatch.
+    Runs the empty-content-block sanitizer before any backend dispatch.
     """
     # Anthropic's API rejects requests containing empty / whitespace-only
-    # text content blocks with "messages: text content blocks must be
-    # non-empty".  Multi-turn tool-use clients (e.g. Claude Code) routinely
-    # loop assistant responses that contain {"type": "text", "text": ""}
-    # alongside tool_use blocks back as conversation history, which then
-    # causes the next /v1/messages call to 400.  /v1/chat/completions
-    # already handles this in anthropic_messages_pt; sanitize the native
-    # Anthropic Messages path here for the same guarantee.  See #22930.
-    messages = strip_empty_text_blocks_from_anthropic_messages(messages)
+    # text content blocks ("messages: text content blocks must be
+    # non-empty") and empty thinking blocks ("each thinking block must
+    # contain thinking").  Multi-turn tool-use clients (e.g. Claude Code)
+    # routinely loop assistant responses that contain such blocks — an empty
+    # text block alongside tool_use, or an empty thinking block from a turn
+    # a non-Anthropic reasoning model served through the bridge — back as
+    # conversation history, which then causes the next /v1/messages call to
+    # 400.  /v1/chat/completions already handles this in
+    # anthropic_messages_pt; sanitize the native Anthropic Messages path
+    # here for the same guarantee.  See #22930.
+    messages = strip_empty_content_blocks_from_anthropic_messages(messages)
     # Replay of cross-provider tool history (e.g. kimi -> Anthropic) may carry
     # ids like ``functions.Bash:0`` that violate Anthropic's id pattern.
     messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
@@ -374,7 +377,7 @@ async def anthropic_messages(
         api_base=api_base,
         client=client,
         custom_llm_provider=custom_llm_provider,
-        # messages were already empty-text-block sanitized at the top of this
+        # messages were already empty-content-block sanitized at the top of this
         # function and are NOT reassigned before this dispatch, so the handler
         # can skip its (otherwise redundant) second full-messages scan. Passed
         # explicitly (not via **kwargs) so it only affects this direct
@@ -451,7 +454,7 @@ def anthropic_messages_handler(
     # ``_litellm_messages_presanitized`` to skip this redundant second
     # full-messages scan. Pop it so it never leaks into provider params.
     if not kwargs.pop("_litellm_messages_presanitized", False):
-        messages = strip_empty_text_blocks_from_anthropic_messages(messages)
+        messages = strip_empty_content_blocks_from_anthropic_messages(messages)
         messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
         messages = flatten_unencrypted_web_search_results_in_anthropic_messages(messages)
 
@@ -568,7 +571,34 @@ def anthropic_messages_handler(
         anthropic_messages_provider_config = OpenAILikeAnthropicMessagesConfig()
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
-        _shared_kwargs: Final = dict(
+        if _should_route_to_responses_api(custom_llm_provider, original_model, model):
+            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+                max_tokens=max_tokens,
+                messages=messages,
+                model=original_model,
+                metadata=metadata,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                _is_async=is_async,
+                api_key=api_key,
+                api_base=api_base,
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                **kwargs,
+            )
+
+        # The in-gateway context_management polyfill runs inside
+        # ``async_anthropic_messages_handler`` so it can ``await`` the
+        # summarization model for ``compact_20260112``. ``context_management``
+        # is passed through as a regular kwarg.
+        return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
             max_tokens=max_tokens,
             messages=messages,
             model=original_model,
@@ -588,16 +618,6 @@ def anthropic_messages_handler(
             client=client,
             custom_llm_provider=custom_llm_provider,
             **kwargs,
-        )
-        if _should_route_to_responses_api(custom_llm_provider, original_model, model):
-            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(**_shared_kwargs)
-
-        # The in-gateway context_management polyfill runs inside
-        # ``async_anthropic_messages_handler`` so it can ``await`` the
-        # summarization model for ``compact_20260112``. ``context_management``
-        # is passed through as a regular kwarg.
-        return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
-            **_shared_kwargs,
         )
 
     if custom_llm_provider is None:

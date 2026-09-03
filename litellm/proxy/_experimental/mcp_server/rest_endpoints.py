@@ -168,8 +168,11 @@ if MCP_AVAILABLE:
             MCPRequestHandler,
         )
         from litellm.proxy._experimental.mcp_server.tool_search import (
+            AGENT_SEARCH_TOOL_NAME,
+            DEFAULT_AGENT_SEARCH_TOP_K,
             MCP_TOOL_SEARCH_TOOL_NAME,
             coerce_top_k,
+            handle_agent_search,
             handle_mcp_tool_call,
             handle_mcp_tool_search,
         )
@@ -182,6 +185,14 @@ if MCP_AVAILABLE:
                 detail={"error": "forbidden", "message": f"{tool_name} requires mcp_tool_search_enabled on the key"},
             )
         tool_arguments: Final = data.get("arguments") or {}
+        if tool_name == AGENT_SEARCH_TOOL_NAME:
+            return await handle_agent_search(
+                query=str(tool_arguments.get("query", "")),
+                top_k=coerce_top_k(
+                    tool_arguments.get("top_k", DEFAULT_AGENT_SEARCH_TOP_K), default=DEFAULT_AGENT_SEARCH_TOP_K
+                ),
+                user_api_key_dict=user_api_key_dict,
+            )
         rest_client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
         (
             virtual_mcp_auth_header,
@@ -939,12 +950,9 @@ if MCP_AVAILABLE:
             tool_name: Final[str | None] = data.get("name")
             tool_arguments: Final[dict[str, object]] = data.get("arguments") or {}
 
-            from litellm.proxy._experimental.mcp_server.tool_search import (
-                MCP_TOOL_CALL_TOOL_NAME,
-                MCP_TOOL_SEARCH_TOOL_NAME,
-            )
+            from litellm.proxy._experimental.mcp_server.tool_search import VIRTUAL_TOOL_NAMES
 
-            if tool_name in (MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME):
+            if tool_name in VIRTUAL_TOOL_NAMES:
                 return await _handle_virtual_mcp_tool(request, data, tool_name, user_api_key_dict)
 
             # Validate required parameters early

@@ -487,12 +487,11 @@ async def new_organization(
         for m in data.models:
             await can_user_call_model(m, llm_router=llm_router, user_object=user_object_correct_type)
 
-    organization_row: Final = LiteLLM_OrganizationTable(
-        **data.json(exclude_none=True),
-        object_permission_id=object_permission_id,
-        created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
-        updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
-    )
+    organization_payload: Final = _STR_OBJECT_DICT_ADAPTER.validate_python(data.json(exclude_none=True))
+    organization_payload["object_permission_id"] = object_permission_id
+    organization_payload["created_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
+    organization_payload["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
+    organization_row: Final = LiteLLM_OrganizationTable.model_validate(organization_payload)
 
     for field in LiteLLM_ManagementEndpoint_MetadataFields:
         if getattr(data, field, None) is not None:
@@ -644,7 +643,7 @@ async def update_organization(
         )
 
     # Transform UI payload to expected format
-    raw_data: Final = await request.json()
+    raw_data: Final[dict[str, object]] = await request.json()
     raw_data_with_flat_budget_fields: Final = handle_nested_budget_structure_in_organization_update_request(raw_data)
 
     # Create validated data model
@@ -691,7 +690,7 @@ async def update_organization(
     # Merge metadata from existing organization with updated metadata
     if updated_organization_row_json.get("metadata") is not None:
         existing_metadata: Final = existing_organization_row.metadata or {}
-        updated_metadata: Final = updated_organization_row_json.get("metadata", {})
+        updated_metadata: Final[dict[str, object]] = updated_organization_row_json.get("metadata", {})
         merged_metadata: Final[Mapping[str, object]] = _update_dictionary(
             existing_dict=cast(  # cast-ok: prisma de-serializes a Json column to the plain python dict it stores
                 "dict[str, object]", existing_metadata

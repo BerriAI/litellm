@@ -22,7 +22,9 @@ import type { ObjectPermission } from "@/components/object_permission_types";
 import { isProxyAdminRole } from "@/utils/roles";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/status_badge";
+import { BadgeLink } from "@/components/shared/BadgeLink";
 import { Badge } from "@/components/ui/badge";
+import { modelGroupHref } from "@/utils/entityLinks";
 import { Card } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input as UIInput } from "@/components/ui/input";
@@ -53,6 +55,7 @@ import {
   computeTeamModelBadges,
   normalizeTeamModelSelection,
   TeamAccessGroupModelGrant,
+  TeamModelBadge,
   TeamModelBadgeKind,
 } from "./teamModelAccess";
 import MetadataKeyValueFields, {
@@ -110,6 +113,9 @@ const TEAM_MODEL_BADGE_TONES: Record<TeamModelBadgeKind, StatusTone> = {
   direct: "info",
   "access-group": "success",
 };
+
+const teamModelBadgeHref = (badge: TeamModelBadge): string | undefined =>
+  badge.kind === "direct" || badge.kind === "access-group" ? modelGroupHref(badge.label) : undefined;
 
 export interface TeamMembership {
   user_id: string;
@@ -1006,7 +1012,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 (badge, index) => (
                   <SimpleTooltip key={`${badge.kind}-${badge.label}-${index}`} content={badge.tooltip}>
                     <span>
-                      <StatusBadge tone={TEAM_MODEL_BADGE_TONES[badge.kind]} label={badge.label} />
+                      <StatusBadge
+                        tone={TEAM_MODEL_BADGE_TONES[badge.kind]}
+                        label={badge.label}
+                        href={teamModelBadgeHref(badge)}
+                      />
                     </span>
                   </SimpleTooltip>
                 ),
@@ -1727,9 +1737,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <p className="font-medium">Models</p>
                 <div className="flex flex-wrap gap-2 mt-1">
                   {info.models.map((model, index) => (
-                    <Badge key={index} variant="secondary">
+                    <BadgeLink key={index} href={modelGroupHref(model)}>
                       {model}
-                    </Badge>
+                    </BadgeLink>
                   ))}
                 </div>
               </div>
@@ -1738,9 +1748,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <p className="font-medium">Default Member Models</p>
                   <div className="flex flex-wrap gap-2 mt-1">
                     {info.default_team_member_models.map((model, index) => (
-                      <Badge key={index} variant="secondary">
+                      <BadgeLink key={index} href={modelGroupHref(model)}>
                         {model}
-                      </Badge>
+                      </BadgeLink>
                     ))}
                   </div>
                 </div>

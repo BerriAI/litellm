@@ -30,16 +30,13 @@ test.describe("Internal User with no team memberships", () => {
     const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
     await teamSelect.click();
 
-    const dropdown = page.locator('[data-slot="combobox-content"]:visible').first();
-    await expect(dropdown).toBeVisible({ timeout: 5_000 });
-
     // Wait for the settled-empty state, not a transient one. The dropdown shows
     // "Loading teams…" while teams load and only swaps in "No teams found" once
     // the request resolves with nothing (team_dropdown.tsx passes both copies to
     // PaginatedSearchSelect). Asserting on it means a regression where teams DO
     // load for this user fails here instead of racing a one-shot count() against
     // an in-flight request.
-    await expect(dropdown.getByText("No teams found")).toBeVisible({ timeout: 10_000 });
-    await expect(dropdown.getByRole("option")).toHaveCount(0);
+    await expect(page.getByText("No teams found")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("option")).toHaveCount(0);
   });
 });

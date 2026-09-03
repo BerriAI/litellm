@@ -195,6 +195,22 @@ def test_set_schema_property_ordering_with_excessive_nesting():
         set_schema_property_ordering(schema)
 
 
+def test_set_schema_property_ordering_skips_non_dict_property_values():
+    """Non-dict property values must be skipped, not recursed into (they used to raise)."""
+    schema = {
+        "properties": {
+            "a": "hello",
+            "b": {"type": "string"},
+            "c": ["x"],
+            "d": "a string mentioning items",
+        }
+    }
+
+    result = set_schema_property_ordering(schema)
+
+    assert result["propertyOrdering"] == ["a", "b", "c", "d"]
+
+
 def test_build_vertex_schema():
     """Test build_vertex_schema with a sample schema"""
     from litellm.llms.vertex_ai.common_utils import _build_vertex_schema

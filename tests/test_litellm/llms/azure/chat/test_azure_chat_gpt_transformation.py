@@ -102,6 +102,35 @@ def test_transform_request_hoists_tool_message_image():
     ]
 
 
+def test_transform_request_drops_tool_reference_parts():
+    """Azure's transform_request shares the tool-message sanitizing with OpenAI:
+    tool_reference parts are dropped, a reference-only result keeps its tool
+    message with empty text (#37462 round trip)."""
+    messages = [
+        {"role": "user", "content": "load the WebFetch tool"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "ToolSearch", "arguments": "{}"}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "tool_reference", "tool_name": "WebFetch"}],
+        },
+    ]
+
+    request = AzureOpenAIConfig().transform_request(
+        model="gpt-4o",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][2]["content"] == ""
+
+
 @pytest.mark.parametrize(
     "model, emitted_key, absent_key",
     [

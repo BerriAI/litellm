@@ -2,7 +2,7 @@
 ## File for 'response_cost' calculation in Logging
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
@@ -76,7 +76,10 @@ from litellm.llms.perplexity.cost_calculator import (
 from litellm.llms.tencent.cost_calculator import (
     cost_per_token as tencent_cost_per_token,
 )
-from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
+from litellm.llms.together_ai.cost_calculator import (
+    get_model_params_and_category,
+    has_together_registry_pricing,
+)
 from litellm.llms.vertex_ai.cost_calculator import (
     cost_per_character as google_cost_per_character,
 )
@@ -557,9 +560,10 @@ def cost_per_token(
         )
     elif call_type == "atranscription" or call_type == "transcription":
         if _transcription_usage_has_token_details(usage_block):
-            return openai_cost_per_token(
+            return generic_cost_per_token(
                 model=model_without_prefix,
                 usage=usage_block,
+                custom_llm_provider=custom_llm_provider,
                 service_tier=service_tier,
                 data_residency=data_residency,
             )
@@ -637,12 +641,12 @@ def cost_per_token(
         return xai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "lemonade":
         return lemonade_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "dashscope":
+    elif custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
         from litellm.llms.dashscope.cost_calculator import (
             cost_per_token as dashscope_cost_per_token,
         )
 
-        return dashscope_cost_per_token(model=model, usage=usage_block)
+        return dashscope_cost_per_token(model=model, usage=usage_block, custom_llm_provider=custom_llm_provider)
     elif custom_llm_provider == "azure_ai":
         return azure_ai_cost_per_token(
             model=model,
@@ -735,6 +739,13 @@ def _get_provider_for_cost_calc(
     return custom_llm_provider
 
 
+def _get_hidden_str_for_cost_calc(hidden_params: object, key: str) -> str | None:
+    if not isinstance(hidden_params, Mapping):
+        return None
+    value: Final[object] = hidden_params.get(key)
+    return value if isinstance(value, str) and value else None
+
+
 def _select_model_name_for_cost_calc(
     model: str | None,
     completion_response: object | None,
@@ -751,7 +762,6 @@ def _select_model_name_for_cost_calc(
     """
 
     return_model: str | None = None
-    region_name: str | None = None
     custom_llm_provider = _get_provider_for_cost_calc(model=model, custom_llm_provider=custom_llm_provider)
 
     completion_response_model: str | None = None
@@ -761,6 +771,14 @@ def _select_model_name_for_cost_calc(
         elif isinstance(completion_response, dict):
             completion_response_model = completion_response.get("model", None)
     hidden_params: Final[dict | None] = getattr(completion_response, "_hidden_params", None)
+    provider_response_model: Final = _get_hidden_str_for_cost_calc(hidden_params, "provider_response_model")
+    explicit_pricing: Final = custom_pricing is True or base_model is not None
+    priced_from_response: Final = provider_response_model is not None or completion_response_model is not None
+    region_name: Final = (
+        _get_hidden_str_for_cost_calc(hidden_params, "region_name")
+        if not explicit_pricing and priced_from_response
+        else None
+    )
 
     if custom_pricing is True:
         if router_model_id is not None and router_model_id in litellm.model_cost:
@@ -776,14 +794,12 @@ def _select_model_name_for_cost_calc(
         else:
             return_model = model
 
-    elif base_model is not None:
-        return_model = base_model
+    elif base_model is not None or provider_response_model is not None:
+        return_model = base_model if base_model is not None else provider_response_model
 
     elif completion_response_model is None and hidden_params is not None:
         if hidden_params.get("model", None) is not None and len(hidden_params["model"]) > 0:
             return_model = hidden_params.get("model", model)
-    elif hidden_params is not None and hidden_params.get("region_name", None) is not None:
-        region_name = hidden_params.get("region_name", None)
 
     if return_model is None and completion_response_model is not None:
         return_model = completion_response_model
@@ -1568,10 +1584,9 @@ def completion_cost(
 
                     return MCPCostCalculator.calculate_mcp_tool_call_cost(litellm_logging_obj=litellm_logging_obj)
                 # Calculate cost based on prompt_tokens, completion_tokens
-                if "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai":
-                    # together ai prices based on size of llm
-                    # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json
-
+                if (
+                    "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai"
+                ) and not has_together_registry_pricing(model, litellm.model_cost):
                     model = get_model_params_and_category(model, call_type=CallTypes(call_type))
 
                 # replicate llms are calculate based on time for request running
@@ -1895,12 +1910,15 @@ def ocr_cost(
     if credits is not None and cost_per_credit is not None:
         return cost_per_credit * credits, 0.0
 
-    ocr_cost_per_page: float | None = None
-    if model_info is not None:
-        ocr_cost_per_page = model_info.get("ocr_cost_per_page")
+    ocr_cost_per_page: Final = model_info.get("ocr_cost_per_page") if model_info is not None else None
+    annotation_cost_per_page: Final = model_info.get("annotation_cost_per_page") if model_info is not None else None
+    annotation_rate: Final = annotation_cost_per_page if annotation_cost_per_page is not None else ocr_cost_per_page
 
     pages_processed: Final = response.usage_info.pages_processed
-    if pages_processed is None:
+    annotation_pages: Final = response.usage_info.pages_processed_annotation or 0
+    has_billable_annotation_pages: Final = annotation_rate is not None and annotation_pages > 0
+
+    if pages_processed is None and not has_billable_annotation_pages:
         if cost_per_credit is not None or ocr_cost_per_page is None:
             # Surface missing usage data instead of silently under-reporting
             # cost. The previous behavior raised ValueError; we now return 0.0
@@ -1916,7 +1934,7 @@ def ocr_cost(
             return 0.0, 0.0
         raise ValueError("OCR response pages_processed is None")
 
-    if ocr_cost_per_page is None:
+    if ocr_cost_per_page is None and not has_billable_annotation_pages:
         # No per-page pricing configured. Either the model is on credit-based
         # pricing (and credits weren't returned, so the credit branch above did
         # not match) or the model has no OCR pricing entry at all. Surface a
@@ -1932,8 +1950,9 @@ def ocr_cost(
         )
         return 0.0, 0.0
 
-    total_ocr_processing_cost: Final[float] = ocr_cost_per_page * pages_processed
-    return total_ocr_processing_cost, 0.0
+    ocr_pages_cost: Final = (ocr_cost_per_page or 0.0) * (pages_processed or 0)
+    annotation_pages_cost: Final = (annotation_rate or 0.0) * annotation_pages
+    return ocr_pages_cost + annotation_pages_cost, 0.0
 
 
 def vector_store_search_cost(
@@ -2253,6 +2272,10 @@ def batch_cost_calculator(
     return total_prompt_cost, total_completion_cost
 
 
+def _attribute_value(obj: object, name: str) -> object:
+    return getattr(obj, name)
+
+
 def _summable_prompt_token_fields(prompt_tokens_details: BaseModel) -> list[str]:
     field_names: Final = list(type(prompt_tokens_details).model_fields)
     if getattr(prompt_tokens_details, "cache_write_tokens", None) is None:
@@ -2278,7 +2301,7 @@ class BaseTokenUsageProcessor:
         for usage in usage_objects:
             # Handle direct attributes by checking what exists in the model
             for attr in dir(usage):
-                if not attr.startswith("_") and not callable(getattr(usage, attr)):
+                if not attr.startswith("_") and not callable(_attribute_value(usage, attr)):
                     current_val = getattr(combined, attr, 0)
                     new_val = getattr(usage, attr, 0)
                     if (
@@ -2298,7 +2321,7 @@ class BaseTokenUsageProcessor:
                     if (
                         hasattr(usage.prompt_tokens_details, attr)
                         and not attr.startswith("_")
-                        and not callable(getattr(usage.prompt_tokens_details, attr))
+                        and not callable(_attribute_value(usage.prompt_tokens_details, attr))
                     ):
                         current_val = getattr(combined.prompt_tokens_details, attr, 0) or 0
                         new_val = getattr(usage.prompt_tokens_details, attr, 0) or 0
@@ -2317,7 +2340,9 @@ class BaseTokenUsageProcessor:
                 # Check what keys exist in the model's completion_tokens_details
                 # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
                 for attr in type(usage.completion_tokens_details).model_fields:
-                    if not attr.startswith("_") and not callable(getattr(usage.completion_tokens_details, attr)):
+                    if not attr.startswith("_") and not callable(
+                        _attribute_value(usage.completion_tokens_details, attr)
+                    ):
                         current_val = getattr(combined.completion_tokens_details, attr, 0) or 0
                         new_val = getattr(usage.completion_tokens_details, attr, 0) or 0
                         if isinstance(new_val, (int, float)):

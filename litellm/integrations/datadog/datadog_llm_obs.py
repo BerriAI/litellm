@@ -9,6 +9,7 @@ API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=examp
 import asyncio
 import json
 import os
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, Final, Literal
 
@@ -334,7 +335,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
     def _get_response_messages(
         self, standard_logging_payload: StandardLoggingPayload, call_type: str | None
-    ) -> list[Any]:
+    ) -> list[object]:
         """
         Get the messages from the response object
 
@@ -484,7 +485,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         # Default fallback for unknown or passthrough operations
         return "llm"
 
-    def _ensure_string_content(self, messages: str | list[Any] | dict[Any, Any] | None) -> list[Any]:
+    def _ensure_string_content(self, messages: str | Sequence[object] | Mapping[object, object] | None) -> list[object]:
         if messages is None:
             return []
         if isinstance(messages, str):
@@ -495,11 +496,11 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             return [str(messages.get("content", ""))]
         return []
 
-    def _get_dd_llm_obs_payload_metadata(self, standard_logging_payload: StandardLoggingPayload) -> dict[str, Any]:
+    def _get_dd_llm_obs_payload_metadata(self, standard_logging_payload: StandardLoggingPayload) -> dict[str, object]:
         """
         Fields to track in DD LLM Observability metadata from litellm standard logging payload
         """
-        _metadata: Final[dict[str, Any]] = {
+        _metadata: Final[dict[str, object]] = {
             "model_name": standard_logging_payload.get("model", "unknown"),
             "model_provider": standard_logging_payload.get("custom_llm_provider", "unknown"),
             "id": standard_logging_payload.get("id", "unknown"),
@@ -647,7 +648,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         return spend_metrics
 
-    def _process_input_messages_preserving_tool_calls(self, messages: list[Any]) -> list[dict[str, Any]]:
+    def _process_input_messages_preserving_tool_calls(self, messages: Sequence[object]) -> list[dict[str, object]]:
         """
         Process input messages while preserving tool_calls and tool message types.
 
@@ -671,13 +672,13 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         return processed
 
     @staticmethod
-    def _tool_calls_kv_pair(tool_calls: list[dict[str, Any]]) -> dict[str, Any]:
+    def _tool_calls_kv_pair(tool_calls: list[dict[str, Any]]) -> dict[str, object]:
         """
         Extract tool call information into key-value pairs for Datadog metadata.
 
         Similar to OpenTelemetry's implementation but adapted for Datadog's format.
         """
-        kv_pairs: Final[dict[str, Any]] = {}
+        kv_pairs: Final[dict[str, object]] = {}
         for idx, tool_call in enumerate(tool_calls):
             try:
                 # Extract tool call ID
@@ -712,11 +713,11 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         return kv_pairs
 
-    def _extract_tool_call_metadata(self, standard_logging_payload: StandardLoggingPayload) -> dict[str, Any]:
+    def _extract_tool_call_metadata(self, standard_logging_payload: StandardLoggingPayload) -> dict[str, object]:
         """
         Extract tool call information from both input messages and response for Datadog metadata.
         """
-        tool_call_metadata: Final[dict[str, Any]] = {}
+        tool_call_metadata: Final[dict[str, object]] = {}
 
         try:
             # Extract tool calls from input messages

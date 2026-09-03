@@ -4,17 +4,16 @@ description: >-
   so only the first job on a given Cargo.lock compiles the bridge from scratch.
 
   litellm builds through maturin, which compiles litellm-rust/crates/python-bridge
-  in release mode before it can produce a wheel. `uv sync` therefore pays a full
-  build in every job that installs the workspace: measured at 2m40s per unit shard
-  on 2026-08-21, more than the whole unit tier spends running tests. Nothing caught
-  it, because the uv cache holds wheels uv downloads rather than wheels it builds,
-  and a path dependency whose source moves every commit could never hit that cache
-  anyway. Cargo rebuilds only what changed when its target directory survives, so a
-  warm job pays for the bridge crate alone.
+  in the dev profile for editable installs. `uv sync` therefore pays a full build
+  in every job that installs the workspace. Nothing caught it, because the uv cache
+  holds wheels uv downloads rather than wheels it builds, and a path dependency
+  whose source moves every commit could never hit that cache anyway. Cargo rebuilds
+  only what changed when its target directory survives, so a warm job pays for the
+  bridge crate alone.
 
-  The key namespace is separate from test-rust.yml's. Both cache the same directory,
-  but that workflow fills it with debug and clippy artifacts, which a release build
-  cannot reuse, and a shared key would let whichever ran first deny the other a save.
+  The key namespace is separate from test-rust.yml's check and release caches. They
+  cache the same directory for different workloads, and a shared key would let
+  whichever ran first deny the others a save.
 
 runs:
   using: composite
@@ -26,6 +25,6 @@ runs:
           ~/.cargo/registry
           ~/.cargo/git
           litellm-rust/target
-        key: ${{ runner.os }}-cargo-release-${{ hashFiles('litellm-rust/Cargo.lock') }}
+        key: ${{ runner.os }}-maturin-dev-${{ hashFiles('litellm-rust/Cargo.lock') }}
         restore-keys: |
-          ${{ runner.os }}-cargo-release-
+          ${{ runner.os }}-maturin-dev-

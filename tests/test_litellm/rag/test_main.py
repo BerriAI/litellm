@@ -18,7 +18,22 @@ import pytest
 import litellm
 from litellm._internal_context import is_internal_call
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import CallTypes, ModelResponse
+
+
+async def _drain_logging_worker() -> None:
+    """Run every queued logging task to completion on the current event loop.
+
+    The success event is delivered through the fire-and-forget GLOBAL_LOGGING_WORKER
+    singleton, whose queue survives across tests. start() rebinds any tasks left over
+    from a previous test's event loop onto the current one, and flush() waits until
+    the queue is fully processed, so tests neither miss their own event nor observe
+    a neighbour's
+    """
+    await asyncio.sleep(0)
+    GLOBAL_LOGGING_WORKER.start()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
 
 
 class RecordingLogger(CustomLogger):
@@ -39,6 +54,7 @@ async def test_aquery_single_billing_event_carries_completion_usage_and_cost(use
     not the vector store search response. The proxy always passes a router, so
     both the router and non-router completion branches are pinned.
     """
+    await _drain_logging_worker()
     recording_logger = RecordingLogger()
     original_callbacks = litellm.callbacks
     litellm.callbacks = [recording_logger]
@@ -66,11 +82,7 @@ async def test_aquery_single_billing_event_carries_completion_usage_and_cost(use
         assert isinstance(response, ModelResponse)
         assert is_internal_call.get() is False
 
-        for _ in range(50):
-            if recording_logger.success_events:
-                break
-            await asyncio.sleep(0.1)
-        await asyncio.sleep(0.5)
+        await _drain_logging_worker()
     finally:
         litellm.callbacks = original_callbacks
 
@@ -102,6 +114,8 @@ async def test_aquery_response_hidden_params_carry_completion_cost():
         mock_response="hi there",
     )
 
+    await _drain_logging_worker()
+
     assert isinstance(response, ModelResponse)
     response_cost = response._hidden_params.get("response_cost")
     assert response_cost is not None
@@ -115,6 +129,7 @@ async def test_aquery_billed_cost_includes_priced_vector_store_search():
     that cost must be folded into the aquery billing instead of being dropped
     with the suppressed sub-call event.
     """
+    await _drain_logging_worker()
     recording_logger = RecordingLogger()
     original_callbacks = litellm.callbacks
     litellm.callbacks = [recording_logger]
@@ -128,11 +143,7 @@ async def test_aquery_billed_cost_includes_priced_vector_store_search():
                 mock_response="hi there",
             )
 
-        for _ in range(50):
-            if recording_logger.success_events:
-                break
-            await asyncio.sleep(0.1)
-        await asyncio.sleep(0.5)
+        await _drain_logging_worker()
     finally:
         litellm.callbacks = original_callbacks
 
@@ -155,6 +166,7 @@ async def test_aquery_with_rerank_bills_once_and_folds_rerank_cost():
     """
     from litellm.types.rerank import RerankResponse
 
+    await _drain_logging_worker()
     recording_logger = RecordingLogger()
     original_callbacks = litellm.callbacks
     litellm.callbacks = [recording_logger]
@@ -176,11 +188,7 @@ async def test_aquery_with_rerank_bills_once_and_folds_rerank_cost():
                 mock_response="hi there",
             )
 
-        for _ in range(50):
-            if recording_logger.success_events:
-                break
-            await asyncio.sleep(0.1)
-        await asyncio.sleep(0.5)
+        await _drain_logging_worker()
     finally:
         litellm.callbacks = original_callbacks
 
@@ -210,6 +218,7 @@ async def test_aquery_streaming_bills_sub_call_costs_into_final_event():
     """
     from litellm.types.rerank import RerankResponse
 
+    await _drain_logging_worker()
     recording_logger = RecordingLogger()
     original_callbacks = litellm.callbacks
     litellm.callbacks = [recording_logger]
@@ -237,11 +246,7 @@ async def test_aquery_streaming_bills_sub_call_costs_into_final_event():
             async for _ in response:
                 pass
 
-        for _ in range(50):
-            if recording_logger.success_events:
-                break
-            await asyncio.sleep(0.1)
-        await asyncio.sleep(0.5)
+        await _drain_logging_worker()
     finally:
         litellm.callbacks = original_callbacks
 

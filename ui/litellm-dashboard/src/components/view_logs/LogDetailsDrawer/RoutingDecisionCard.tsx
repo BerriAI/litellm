@@ -66,6 +66,16 @@ function describePlanModeFloor(matchedKeyword: string | undefined): string {
   return "Plan-mode floor";
 }
 
+/**
+ * The sentinel is the whole reason this row is worth reading: it is the string an operator
+ * would add to housekeeping_patterns to cover another client, so naming it turns the row into
+ * the instruction. Without it the drawer says only that the classifier was skipped.
+ */
+function describeHousekeeping(matchedKeyword: string | undefined): string {
+  if (matchedKeyword) return `Client housekeeping call: "${matchedKeyword}"`;
+  return "Client housekeeping call, classifier skipped";
+}
+
 /** Rows logged before the floor was recorded name what it tracked back then instead of a number. */
 function describeReasoningOverride(tierLabel: string | undefined, floor: number | undefined): string {
   const stated = floor === undefined ? "the Simple to Medium boundary" : String(floor);
@@ -79,6 +89,8 @@ const CONSTANT_CAUSE_LABELS: Record<string, string> = {
   semantic_keyword_match: "Semantic keyword match",
   session_affinity_pin: "Pinned to session",
   session_affinity_escalation: "Escalated from session pin",
+  user_turn_continuation: "Continuation turn, classifier skipped",
+  modality_escalation: "Escalated for image input",
   quality_tier: "Quality tier mapping",
   bandit: "Adaptive bandit",
   default_fallback: "Default model, no route matched",
@@ -108,6 +120,8 @@ function describeCause(decision: RoutingDecision): string {
       return matchedKeyword ? `Keyword match: "${matchedKeyword}"` : "Keyword match";
     case "plan_mode":
       return describePlanModeFloor(matchedKeyword);
+    case "housekeeping":
+      return describeHousekeeping(matchedKeyword);
     default:
       return cause ?? "Unknown";
   }

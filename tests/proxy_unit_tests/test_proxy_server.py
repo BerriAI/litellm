@@ -2661,7 +2661,7 @@ async def test_run_direct_health_check_drops_only_the_rejected_kwarg(monkeypatch
     rejected argument alongside working ones would probe deployments the operator opted out."""
     import litellm.proxy.proxy_server as proxy_server
 
-    seen: list = []
+    seen: list[tuple[dict[str, str] | None, bool]] = []
 
     async def fake_perform_health_check(
         model_list,

@@ -154,6 +154,9 @@ model_list:
         
         # Fallback model if tier cannot be determined
         default_model: gpt-4o
+
+        # Replace a routed model that cannot take image input (default: false)
+        modality_routing: true
 ```
 
 ## Usage
@@ -177,6 +180,25 @@ response = litellm.completion(
 ```
 
 ## Special Behaviors
+
+### Modality-based capability routing
+
+The classifier reads text alone, so a request carrying an image can classify cheap and land on a
+text-only model, which rejects it with a provider 400 no fallback catches. With
+`modality_routing: true`, one gate inspects every decided placement: when the routed model is
+explicitly declared `supports_vision: false` (deployment `model_info` first, the model cost map
+otherwise; unmapped names stay routable, and a multi-deployment group must accept on every
+deployment), the request is re-placed on the nearest HIGHER tier holding a capable model, with
+routing plugins still applied to the re-pick, then on `default_model` (never on plugin routers
+and never for a plan-floored decision), and otherwise rejected with a clear 400 naming the
+router. The walk only ever goes up, so a plan-mode floor cannot be undercut; a router whose only
+vision model sits below the decided tier gets the 400 and an actionable message instead.
+
+A same-tier re-pick keeps the decision's cause and adds `modality:image` to `signals`; a tier
+change or default takeover records `cause: modality_escalation` with the displaced placement
+(`modality_escalated_from:<TIER>` or `modality_displaced_default_model`). Escalations are never
+pinned by session affinity, and a KEPT session pin bypasses the gate entirely: a session pinned
+to a text-only model keeps it even when an image arrives.
 
 ### Heuristic-first chaining
 

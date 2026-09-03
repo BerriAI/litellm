@@ -10,11 +10,14 @@ with deployment credentials, bypassing the managed files access-control hooks.
 
 import base64
 import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.caching.dual_cache import DualCache
+from litellm.proxy._types import CallTypes, UserAPIKeyAuth
+from litellm.types.utils import LiteLLMBatch
 
 
 def _make_user_api_key_dict(user_id: str) -> UserAPIKeyAuth:
@@ -158,6 +161,108 @@ async def test_service_account_blocked_from_other_team_file():
 
     with pytest.raises(HTTPException) as exc_info:
         await managed_files.check_managed_file_id_access(data, sa)
+    assert exc_info.value.status_code == 403
+
+
+# --- Keyless key must not be locked out of the batch it created ---
+
+
+def _make_unified_batch_id() -> str:
+    raw = "litellm_proxy;model_id:my-model-id;llm_batch_id:batch_raw_123"
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _make_managed_files_instance_with_object_store():
+    """Managed-files hook backed by an in-memory stand-in for the managed
+    object table, so create and retrieve exercise the same stored row."""
+    from litellm_enterprise.proxy.hooks.managed_files import (
+        _PROXY_LiteLLMManagedFiles,
+    )
+
+    store = {}
+
+    async def upsert(where, data):
+        store[where["unified_object_id"]] = SimpleNamespace(**data["create"])
+
+    async def find_first(where):
+        return store.get(where["unified_object_id"])
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_managedobjecttable.upsert = AsyncMock(side_effect=upsert)
+    mock_prisma.db.litellm_managedobjecttable.find_first = AsyncMock(
+        side_effect=find_first
+    )
+
+    return (
+        _PROXY_LiteLLMManagedFiles(
+            internal_usage_cache=DualCache(),
+            prisma_client=mock_prisma,
+        ),
+        store,
+    )
+
+
+async def _store_batch(managed_files, unified_batch_id: str, creator: UserAPIKeyAuth):
+    await managed_files.store_unified_object_id(
+        unified_object_id=unified_batch_id,
+        file_object=LiteLLMBatch(
+            id="batch_raw_123",
+            completion_window="24h",
+            created_at=0,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-1",
+            object="batch",
+            status="validating",
+        ),
+        litellm_parent_otel_span=None,
+        model_object_id="batch_raw_123",
+        file_purpose="batch",
+        user_api_key_dict=creator,
+    )
+
+
+@pytest.mark.asyncio
+async def test_keyless_key_can_retrieve_the_batch_it_created():
+    """Regression: a key with no user_id and no team_id (what `/key/generate`
+    by a proxy admin and service-account keys produce) stamped
+    `created_by=None` and was then denied its own managed batch with
+    "User None does not have access"."""
+    unified_batch_id = _make_unified_batch_id()
+    managed_files, store = _make_managed_files_instance_with_object_store()
+    keyless = UserAPIKeyAuth(api_key="sk-keyless", parent_otel_span=None)
+
+    await _store_batch(managed_files, unified_batch_id, keyless)
+    assert store[unified_batch_id].created_by == f"key:{keyless.token}"
+
+    data = {"batch_id": unified_batch_id}
+    await managed_files.async_pre_call_hook(
+        user_api_key_dict=keyless,
+        cache=DualCache(),
+        data=data,
+        call_type=CallTypes.aretrieve_batch.value,
+    )
+    assert data["batch_id"] == "batch_raw_123"
+    assert data["model"] == "my-model-id"
+
+
+@pytest.mark.asyncio
+async def test_other_keyless_key_still_denied_the_batch():
+    unified_batch_id = _make_unified_batch_id()
+    managed_files, _ = _make_managed_files_instance_with_object_store()
+
+    await _store_batch(
+        managed_files,
+        unified_batch_id,
+        UserAPIKeyAuth(api_key="sk-creator", parent_otel_span=None),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await managed_files.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-other", parent_otel_span=None),
+            cache=DualCache(),
+            data={"batch_id": unified_batch_id},
+            call_type=CallTypes.aretrieve_batch.value,
+        )
     assert exc_info.value.status_code == 403
 
 

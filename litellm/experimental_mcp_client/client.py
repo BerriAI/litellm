@@ -56,6 +56,9 @@ from litellm.types.mcp import (
     MCPStdioConfig,
     MCPTransport,
     MCPTransportType,
+    credential_redirect_hook,
+    has_header,
+    without_header,
 )
 
 
@@ -273,6 +276,7 @@ class MCPClient:
         transport_type: MCPTransportType = MCPTransport.http,
         auth_type: MCPAuthType = None,
         auth_value: str | dict[str, str] | None = None,
+        auth_header_name: str | None = None,
         timeout: float | None = None,
         stdio_config: MCPStdioConfig | None = None,
         extra_headers: dict[str, str] | None = None,
@@ -288,6 +292,11 @@ class MCPClient:
         self.auth_type: MCPAuthType = auth_type
         self.timeout: float = timeout if timeout is not None else MCP_CLIENT_TIMEOUT
         self._mcp_auth_value: str | dict[str, str] | None = None
+        # The one place this client decides which header its credential occupies: the operator's
+        # configured slot on the v1 path, or the slot the v2 resolver's auth object already owns.
+        # Every consumer reads this rather than re-deriving it, since each re-derivation so far
+        # picked up a different bug.
+        self._credential_slot: str | None = auth_header_name or getattr(resolved_auth, "header_name", None)
         self.stdio_config: MCPStdioConfig | None = stdio_config
         self.extra_headers: dict[str, str] | None = extra_headers
         self.ssl_verify: VerifyTypes | None = ssl_verify
@@ -501,26 +510,33 @@ class MCPClient:
         else:
             self._mcp_auth_value = mcp_auth_value
 
+    def _header_slot(self, default: str) -> str:
+        return self._credential_slot or default
+
     def _get_auth_headers(self) -> dict:
         """Generate authentication headers based on auth type."""
         headers: Final = {}
         if self._mcp_auth_value:
             if isinstance(self._mcp_auth_value, str):
                 if self.auth_type == MCPAuth.bearer_token:
-                    headers["Authorization"] = f"Bearer {strip_auth_scheme(self._mcp_auth_value, 'Bearer')}"
+                    static_bearer: Final = strip_auth_scheme(self._mcp_auth_value, "Bearer")
+                    headers[self._header_slot("Authorization")] = f"Bearer {static_bearer}"
                 elif self.auth_type == MCPAuth.basic:
-                    headers["Authorization"] = f"Basic {self._mcp_auth_value}"
+                    headers[self._header_slot("Authorization")] = f"Basic {self._mcp_auth_value}"
                 elif self.auth_type == MCPAuth.api_key:
-                    headers["X-API-Key"] = self._mcp_auth_value
+                    headers[self._header_slot("X-API-Key")] = self._mcp_auth_value
                 elif self.auth_type == MCPAuth.authorization:
                     # This auth type means the caller owns the whole header value.
-                    headers["Authorization"] = self._mcp_auth_value
+                    headers[self._header_slot("Authorization")] = self._mcp_auth_value
                 elif self.auth_type == MCPAuth.oauth2:
-                    headers["Authorization"] = f"Bearer {strip_auth_scheme(self._mcp_auth_value, 'Bearer')}"
+                    oauth2_bearer: Final = strip_auth_scheme(self._mcp_auth_value, "Bearer")
+                    headers[self._header_slot("Authorization")] = f"Bearer {oauth2_bearer}"
                 elif self.auth_type == MCPAuth.token:
-                    headers["Authorization"] = f"token {strip_auth_scheme(self._mcp_auth_value, 'token')}"
+                    scheme_token: Final = strip_auth_scheme(self._mcp_auth_value, "token")
+                    headers[self._header_slot("Authorization")] = f"token {scheme_token}"
                 elif self.auth_type == MCPAuth.oauth2_token_exchange:
-                    headers["Authorization"] = f"Bearer {strip_auth_scheme(self._mcp_auth_value, 'Bearer')}"
+                    exchanged_bearer: Final = strip_auth_scheme(self._mcp_auth_value, "Bearer")
+                    headers[self._header_slot("Authorization")] = f"Bearer {exchanged_bearer}"
             elif isinstance(self._mcp_auth_value, dict):
                 headers.update(self._mcp_auth_value)
         # Note: aws_sigv4 auth is not handled here — SigV4 requires per-request
@@ -528,7 +544,14 @@ class MCPClient:
         # of static headers. See MCPSigV4Auth and _create_httpx_client_factory().
         # update the headers with the extra headers
         if self.extra_headers:
-            headers.update(self.extra_headers)
+            # Mirrors _resolve_v2_auth: when the operator named a slot for the credential the
+            # gateway resolved, no injected header may shadow it, case-insensitively, since HTTP
+            # header names are. Without a configured slot the old precedence stands unchanged.
+            slot: Final = self._credential_slot
+            injected: Final = (
+                without_header(self.extra_headers, slot) if slot and has_header(headers, slot) else self.extra_headers
+            )
+            headers.update(injected or {})
         return _strip_header_whitespace(headers)
 
     def _create_httpx_client_factory(self) -> Callable[..., httpx.AsyncClient]:
@@ -556,12 +579,14 @@ class MCPClient:
             # SigV4 aws_auth. Both are None for the common case — no behavior change.
             fallback_auth: Final = self._resolved_auth if self._resolved_auth is not None else self._aws_auth
             effective_auth: Final = auth if auth is not None else fallback_auth
+            guard: Final = credential_redirect_hook(self.server_url, self._credential_slot)
             return httpx.AsyncClient(
                 headers=headers,
                 timeout=timeout,
                 auth=effective_auth,
                 verify=ssl_config,
                 follow_redirects=True,
+                event_hooks={"request": [guard]} if guard else {},
             )
 
         return factory

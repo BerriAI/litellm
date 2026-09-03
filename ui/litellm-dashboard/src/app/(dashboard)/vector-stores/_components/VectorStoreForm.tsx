@@ -298,7 +298,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                         }}
                       </SelectValue>
                     </SelectTrigger>
-                    <SelectContent alignItemWithTrigger={false}>
+                    <SelectContent>
                       {Object.entries(VectorStoreProviders).map(([providerEnum, providerDisplayName]) => (
                         <SelectItem key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
                           <Logo

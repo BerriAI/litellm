@@ -29,6 +29,7 @@ from litellm.rag.ingestion.openai_ingestion import OpenAIRAGIngestion
 from litellm.rag.ingestion.s3_vectors_ingestion import S3VectorsRAGIngestion
 from litellm.rag.ingestion.vertex_ai_ingestion import VertexAIRAGIngestion
 from litellm.rag.rag_query import RAGQuery
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.rag import (
     RAGIngestOptions,
     RAGIngestResponse,
@@ -204,7 +205,7 @@ def _suppressed_sub_call_billing() -> Iterator[None]:
 
 async def _execute_query_pipeline(
     model: str,
-    messages: list[Any],
+    messages: list[AllMessageValues],
     retrieval_config: dict[str, Any],
     rerank: dict[str, Any] | None = None,
     stream: bool = False,
@@ -311,7 +312,7 @@ async def _execute_query_pipeline(
 @client
 async def aquery(
     model: str,
-    messages: list[Any],
+    messages: list[AllMessageValues],
     retrieval_config: dict[str, Any],
     rerank: dict[str, Any] | None = None,
     stream: bool = False,
@@ -358,12 +359,12 @@ async def aquery(
 @client
 def query(
     model: str,
-    messages: list[Any],
+    messages: list[AllMessageValues],
     retrieval_config: dict[str, Any],
     rerank: dict[str, Any] | None = None,
     stream: bool = False,
     **kwargs,
-) -> ModelResponse | Coroutine[Any, Any, ModelResponse]:
+) -> ModelResponse | Coroutine[None, None, ModelResponse]:
     """
     Query a RAG pipeline.
     """
@@ -410,7 +411,7 @@ def ingest(
     file_id: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     **kwargs,
-) -> RAGIngestResponse | Coroutine[Any, Any, RAGIngestResponse]:
+) -> RAGIngestResponse | Coroutine[None, None, RAGIngestResponse]:
     """
     Ingest a document into a vector store.
 

@@ -7,6 +7,7 @@ with ``client_id``, ``client_secret``, and ``token_url``.
 
 import asyncio
 import hashlib
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -313,9 +314,26 @@ async def resolve_mcp_auth(
     1. ``mcp_auth_header`` — per-request/per-user override
     2. OAuth2 client_credentials token — auto-fetched and cached
     3. ``server.authentication_token`` — static token from config/DB
+
+    ``resolved_token_header`` answers, for the same two inputs, which header the value belongs in.
     """
     if mcp_auth_header:
         return mcp_auth_header
     if server.has_client_credentials:
         return await mcp_oauth2_token_cache.async_get_token(server)
     return server.authentication_token
+
+
+def resolved_token_header(
+    server: "MCPServer",
+    mcp_auth_header: str | Mapping[str, str] | None = None,
+) -> str | None:
+    """Which upstream header the value ``resolve_mcp_auth`` just returned belongs in.
+
+    ``None`` means keep the auth_type default. A caller-supplied ``mcp_auth_header`` is the caller's
+    own credential aimed at the slot the upstream normally uses, so it never moves; only the values
+    the gateway resolved from its own config (the minted M2M token, the static token) follow
+    ``upstream_token_header``. Same inputs and same branch order as ``resolve_mcp_auth``, so the two
+    cannot disagree about which case they are in.
+    """
+    return None if mcp_auth_header else server.upstream_token_header

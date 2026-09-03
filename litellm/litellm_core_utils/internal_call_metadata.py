@@ -25,6 +25,13 @@ from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN, Inter
 
 BUDGET_RESERVATION_METADATA_KEYS: Final = frozenset({"user_api_key_budget_reservation"})
 
+MODEL_ACCESS_GROUP_METADATA_KEY: Final = "user_api_key_matched_model_access_groups"
+"""Where auth records the model access groups that authorized the request, for the spend writer.
+
+The ``user_api_key`` prefix is load-bearing, not cosmetic: when a request carries both
+``metadata`` and ``litellm_metadata``, ``get_litellm_metadata_from_kwargs`` returns the latter and
+copies a key across only when ``user_api_key`` appears in its name."""
+
 _USER_API_KEY_AUTH_KEY: Final = "user_api_key_auth"
 
 FORWARDABLE_IDENTITY_METADATA_KEYS: Final = frozenset(

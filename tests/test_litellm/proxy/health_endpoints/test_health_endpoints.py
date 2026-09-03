@@ -1,8 +1,9 @@
+import asyncio
+import json
 import time
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
-
 
 import httpx
 import pytest
@@ -14,8 +15,7 @@ from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, Prisma
 import litellm
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
 from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
-
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
@@ -145,7 +145,9 @@ async def test_db_health_transport_error_never_raises(transport_error):
 
     assert result["status"] == "disconnected"
     mock_prisma.attempt_db_reconnect.assert_called_once_with(
-        reason="health_readiness_check"
+        reason="health_readiness_check",
+        timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
+        lock_timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
     )
 
 
@@ -177,7 +179,9 @@ async def test_db_health_transport_error_reconnect_succeeds(transport_error):
 
     assert result["status"] == "connected"
     mock_prisma.attempt_db_reconnect.assert_called_once_with(
-        reason="health_readiness_check"
+        reason="health_readiness_check",
+        timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
+        lock_timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
     )
     assert mock_prisma.health_check.call_count == 2
 
@@ -198,9 +202,7 @@ async def test_db_health_transport_error_reconnect_fails(transport_error):
     """
     mock_prisma = MagicMock()
     mock_prisma.health_check = AsyncMock(side_effect=transport_error)
-    mock_prisma.attempt_db_reconnect = AsyncMock(
-        side_effect=RuntimeError("reconnect failed")
-    )
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=RuntimeError("reconnect failed"))
 
     _health_endpoints_module.db_health_cache = {
         "status": "connected",
@@ -252,9 +254,7 @@ async def test_health_services_endpoint_sqs(status, error_message):
     """
     with patch("litellm.integrations.sqs.SQSLogger") as MockSQSLogger:
         mock_instance = MagicMock()
-        mock_instance.async_health_check = AsyncMock(
-            return_value={"status": status, "error_message": error_message}
-        )
+        mock_instance.async_health_check = AsyncMock(return_value={"status": status, "error_message": error_message})
         MockSQSLogger.return_value = mock_instance
 
         result = await health_services_endpoint(service="sqs")
@@ -451,14 +451,9 @@ async def test_test_model_connection_loads_config_from_router():
         # Verify that config params were loaded and merged
         # Note: request params override config params, so model from request is used
         assert model_params.get("api_key") == "resolved-api-key-from-env"
-        assert (
-            model_params.get("api_base")
-            == "https://resolved-endpoint.openai.azure.com/"
-        )
+        assert model_params.get("api_base") == "https://resolved-endpoint.openai.azure.com/"
         assert model_params.get("api_version") == "2024-10-21"
-        assert (
-            model_params.get("model") == "gpt-4o"
-        )  # Request param overrides config param
+        assert model_params.get("model") == "gpt-4o"  # Request param overrides config param
 
         # Verify result
         assert result["status"] == "success"
@@ -594,9 +589,7 @@ async def test_test_model_connection_uses_model_info_id_to_disambiguate_duplicat
         assert ahealth_check_call_args is not None
         model_params = ahealth_check_call_args.kwargs.get("model_params", {})
 
-        assert model_params.get("api_base") == (
-            "https://deployment-B-base.invalid/v1"
-        ), (
+        assert model_params.get("api_base") == ("https://deployment-B-base.invalid/v1"), (
             "Expected /health/test_connection to probe deployment B's "
             "api_base when model_info.id='deployment-B-id' was provided. "
             f"Got: {model_params.get('api_base')!r}. This means the "
@@ -771,14 +764,10 @@ async def test_test_model_connection_uses_loaded_deployment_team_id():
             "can_user_make_model_call",
             wraps=ModelManagementAuthChecks.can_user_make_model_call,
         ) as spy_auth_check,
-        patch(
-            "litellm.proxy.management_endpoints.model_management_endpoints.TeamRepository"
-        ) as MockTeamRepo,
+        patch("litellm.proxy.management_endpoints.model_management_endpoints.TeamRepository") as MockTeamRepo,
     ):
         mock_team_repo_instance = MagicMock()
-        mock_team_repo_instance.table.find_unique = AsyncMock(
-            side_effect=fake_find_unique
-        )
+        mock_team_repo_instance.table.find_unique = AsyncMock(side_effect=fake_find_unique)
         MockTeamRepo.return_value = mock_team_repo_instance
 
         with pytest.raises(HTTPException) as exc_info:
@@ -873,14 +862,10 @@ async def test_test_model_connection_uses_loaded_deployment_team_id_via_model_na
             "can_user_make_model_call",
             wraps=ModelManagementAuthChecks.can_user_make_model_call,
         ) as spy_auth_check,
-        patch(
-            "litellm.proxy.management_endpoints.model_management_endpoints.TeamRepository"
-        ) as MockTeamRepo,
+        patch("litellm.proxy.management_endpoints.model_management_endpoints.TeamRepository") as MockTeamRepo,
     ):
         mock_team_repo_instance = MagicMock()
-        mock_team_repo_instance.table.find_unique = AsyncMock(
-            side_effect=fake_find_unique
-        )
+        mock_team_repo_instance.table.find_unique = AsyncMock(side_effect=fake_find_unique)
         MockTeamRepo.return_value = mock_team_repo_instance
 
         with pytest.raises(HTTPException) as exc_info:
@@ -920,9 +905,7 @@ async def test_test_model_connection_authorizes_on_params_after_health_check_par
     from litellm.types.router import Deployment
 
     marker = "sentinel-from-health-check-params"
-    mock_can_user_make_model_call = AsyncMock(
-        side_effect=HTTPException(status_code=403, detail="denied")
-    )
+    mock_can_user_make_model_call = AsyncMock(side_effect=HTTPException(status_code=403, detail="denied"))
 
     with (
         patch(  # test-quality-ok: proxy module global, no injection seam
@@ -1005,9 +988,7 @@ async def test_test_model_connection_authorized_team_admin_passes_real_auth():
             return SimpleNamespace(
                 model_dump=lambda: LiteLLM_TeamTable(
                     team_id=owner_team_id,
-                    members_with_roles=[
-                        {"user_id": owner_admin_user_id, "role": "admin"}
-                    ],
+                    members_with_roles=[{"user_id": owner_admin_user_id, "role": "admin"}],
                 ).model_dump()
             )
         return None
@@ -1023,9 +1004,7 @@ async def test_test_model_connection_authorized_team_admin_passes_real_auth():
             "can_user_make_model_call",
             wraps=ModelManagementAuthChecks.can_user_make_model_call,
         ) as spy_auth_check,
-        patch(
-            "litellm.proxy.management_endpoints.model_management_endpoints.TeamRepository"
-        ) as MockTeamRepo,
+        patch("litellm.proxy.management_endpoints.model_management_endpoints.TeamRepository") as MockTeamRepo,
         patch(
             "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
             AsyncMock(return_value=health_result),
@@ -1036,9 +1015,7 @@ async def test_test_model_connection_authorized_team_admin_passes_real_auth():
         ),
     ):
         mock_team_repo_instance = MagicMock()
-        mock_team_repo_instance.table.find_unique = AsyncMock(
-            side_effect=fake_find_unique
-        )
+        mock_team_repo_instance.table.find_unique = AsyncMock(side_effect=fake_find_unique)
         MockTeamRepo.return_value = mock_team_repo_instance
 
         result = await health_test_model_connection(
@@ -1065,9 +1042,7 @@ async def test_test_model_connection_authorized_team_admin_passes_real_auth():
 async def test_health_services_endpoint_galileo(status, error_message):
     with patch("litellm.integrations.galileo.GalileoObserve") as MockGalileoObserve:
         mock_instance = MagicMock()
-        mock_instance.async_health_check = AsyncMock(
-            return_value={"status": status, "error_message": error_message}
-        )
+        mock_instance.async_health_check = AsyncMock(return_value={"status": status, "error_message": error_message})
         MockGalileoObserve.return_value = mock_instance
 
         result = await health_services_endpoint(service="galileo")
@@ -1140,13 +1115,9 @@ async def test_health_services_endpoint_newrelic_blocks_non_admin(role):
         user_role=role,
     )
 
-    with patch(
-        "litellm.integrations.newrelic.newrelic.NewRelicLogger"
-    ) as MockNewRelicLogger:
+    with patch("litellm.integrations.newrelic.newrelic.NewRelicLogger") as MockNewRelicLogger:
         mock_instance = MagicMock()
-        mock_instance.async_health_check = AsyncMock(
-            return_value={"status": "healthy", "error_message": ""}
-        )
+        mock_instance.async_health_check = AsyncMock(return_value={"status": "healthy", "error_message": ""})
         MockNewRelicLogger.return_value = mock_instance
 
         with pytest.raises(ProxyException) as exc_info:
@@ -1175,13 +1146,9 @@ async def test_health_services_endpoint_newrelic_allows_proxy_admin(admin_role):
         user_role=admin_role,
     )
 
-    with patch(
-        "litellm.integrations.newrelic.newrelic.NewRelicLogger"
-    ) as MockNewRelicLogger:
+    with patch("litellm.integrations.newrelic.newrelic.NewRelicLogger") as MockNewRelicLogger:
         mock_instance = MagicMock()
-        mock_instance.async_health_check = AsyncMock(
-            return_value={"status": "healthy", "error_message": ""}
-        )
+        mock_instance.async_health_check = AsyncMock(return_value={"status": "healthy", "error_message": ""})
         MockNewRelicLogger.return_value = mock_instance
 
         result = await health_services_endpoint(
@@ -1232,20 +1199,14 @@ def test_health_liveliness_endpoint(proxy_client):
     duration_ms = (end_time - start_time) * 1000
 
     # Assert response status
-    assert (
-        response.status_code == 200
-    ), f"Expected 200 OK, got {response.status_code}: {response.text}"
+    assert response.status_code == 200, f"Expected 200 OK, got {response.status_code}: {response.text}"
 
     # Assert response content (FastAPI JSON-encodes the string)
-    assert (
-        response.json() == "I'm alive!"
-    ), f"Expected 'I'm alive!' message, got: {response.json()}"
+    assert response.json() == "I'm alive!", f"Expected 'I'm alive!' message, got: {response.json()}"
 
     # Verify response is fast (should be < 100ms for a simple endpoint)
     # This is critical for orchestration systems that poll frequently
-    assert (
-        duration_ms < 100
-    ), f"Health check took {duration_ms:.2f}ms, expected < 100ms for a simple endpoint"
+    assert duration_ms < 100, f"Health check took {duration_ms:.2f}ms, expected < 100ms for a simple endpoint"
 
     # Log the duration for visibility (useful for CI/CD monitoring)
     print(f"\n/health/liveliness response time: {duration_ms:.2f}ms")
@@ -1265,19 +1226,13 @@ def test_health_liveness_endpoint(proxy_client):
     duration_ms = (end_time - start_time) * 1000
 
     # Assert response status
-    assert (
-        response.status_code == 200
-    ), f"Expected 200 OK, got {response.status_code}: {response.text}"
+    assert response.status_code == 200, f"Expected 200 OK, got {response.status_code}: {response.text}"
 
     # Assert response content (FastAPI JSON-encodes the string)
-    assert (
-        response.json() == "I'm alive!"
-    ), f"Expected 'I'm alive!' message, got: {response.json()}"
+    assert response.json() == "I'm alive!", f"Expected 'I'm alive!' message, got: {response.json()}"
 
     # Verify response is fast (should be < 100ms for a simple endpoint)
-    assert (
-        duration_ms < 100
-    ), f"Health check took {duration_ms:.2f}ms, expected < 100ms for a simple endpoint"
+    assert duration_ms < 100, f"Health check took {duration_ms:.2f}ms, expected < 100ms for a simple endpoint"
 
     # Log the duration for visibility (useful for CI/CD monitoring)
     print(f"\n/health/liveness response time: {duration_ms:.2f}ms")
@@ -1298,15 +1253,11 @@ def test_health_readiness(proxy_client):
     duration_ms = (end_time - start_time) * 1000
 
     # Assert response status
-    assert (
-        response.status_code == 200
-    ), f"Expected 200 OK, got {response.status_code}: {response.text}"
+    assert response.status_code == 200, f"Expected 200 OK, got {response.status_code}: {response.text}"
 
     # Verify response is fast (readiness may include DB check if available, so < 500ms is reasonable)
     # This is critical for orchestration systems (Kubernetes) that poll frequently
-    assert (
-        duration_ms < 500
-    ), f"Health check took {duration_ms:.2f}ms, expected < 500ms for readiness endpoint"
+    assert duration_ms < 500, f"Health check took {duration_ms:.2f}ms, expected < 500ms for readiness endpoint"
 
     # Assert response contains only low-detail public probe fields. `db` is
     # included so unauthenticated probes can distinguish "DB unreachable"
@@ -1325,9 +1276,7 @@ def test_health_readiness_details_returns_diagnostic_fields(monkeypatch):
     """
     app = FastAPI()
     app.include_router(_health_endpoints_module.router)
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN
-    )
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
     client = TestClient(app)
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
@@ -1477,9 +1426,7 @@ def test_get_callback_identifier_custom_logger_registry_and_fallback():
 
     unregistered = UnregisteredCallback()
     # Mock registry to return empty list (not registered)
-    with patch.object(
-        CustomLoggerRegistry, "get_all_callback_strs_from_class_type", return_value=[]
-    ):
+    with patch.object(CustomLoggerRegistry, "get_all_callback_strs_from_class_type", return_value=[]):
         result = get_callback_identifier(unregistered)
         # Should fall back to callback_name() which returns __class__.__name__
         assert result == "UnregisteredCallback"
@@ -1568,13 +1515,9 @@ async def test_health_endpoint_filters_model_list_by_user_access():
 
         await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict)
 
-    assert (
-        "model_list" in captured
-    ), "health_endpoint did not call _perform_health_check_and_save"
+    assert "model_list" in captured, "health_endpoint did not call _perform_health_check_and_save"
     returned_names = {m["model_name"] for m in captured["model_list"]}
-    assert returned_names == {
-        "model-a"
-    }, f"health_endpoint did not scope model_list to caller access: {returned_names}"
+    assert returned_names == {"model-a"}, f"health_endpoint did not scope model_list to caller access: {returned_names}"
 
 
 @pytest.mark.asyncio
@@ -1704,9 +1647,7 @@ async def test_health_endpoint_resolves_all_team_models_to_team_allowlist():
         await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict)
 
     returned_names = {m["model_name"] for m in captured["model_list"]}
-    assert returned_names == {
-        "model-b"
-    }, f"all-team-models key should health-check the team's models: {returned_names}"
+    assert returned_names == {"model-b"}, f"all-team-models key should health-check the team's models: {returned_names}"
 
 
 @pytest.mark.asyncio
@@ -1788,15 +1729,13 @@ async def test_health_endpoint_filters_background_cache_by_user_access():
     # vacuously when the cache filter drops everything because cached
     # entries lack the model_id key — both entries carry model_id above.)
     assert len(cached_results["healthy_endpoints"]) == 2
-    assert all(
-        ep.get("model_id") for ep in cached_results["healthy_endpoints"]
-    ), "test fixture invariant: every cached entry must carry a model_id"
+    assert all(ep.get("model_id") for ep in cached_results["healthy_endpoints"]), (
+        "test fixture invariant: every cached entry must carry a model_id"
+    )
 
     # The non-admin caller must not see api_base on the returned cache entries.
     returned = result.get("healthy_endpoints", [])
-    assert (
-        len(returned) == 1
-    ), f"expected exactly one cached entry after scoping, got {len(returned)}"
+    assert len(returned) == 1, f"expected exactly one cached entry after scoping, got {len(returned)}"
     assert returned[0]["model_id"] == "id-a"
     assert "api_base" not in returned[0]
     assert result["healthy_count"] == 1
@@ -1887,13 +1826,12 @@ async def test_health_endpoint_admin_sees_routing_fields_non_admin_does_not():
     non_admin_eps = non_admin_result.get("healthy_endpoints", [])
 
     assert len(admin_eps) == 1
-    assert (
-        admin_eps[0]["api_base"]
-        == "https://us-central1-aiplatform.googleapis.com/v1/projects/p"
-    ), "admin must see the full api_base so they can identify the region"
-    assert (
-        admin_eps[0]["api_version"] == "2024-10-21"
-    ), "admin must see api_version so they can distinguish provider deployments"
+    assert admin_eps[0]["api_base"] == "https://us-central1-aiplatform.googleapis.com/v1/projects/p", (
+        "admin must see the full api_base so they can identify the region"
+    )
+    assert admin_eps[0]["api_version"] == "2024-10-21", (
+        "admin must see api_version so they can distinguish provider deployments"
+    )
 
     assert len(non_admin_eps) == 1
     assert "api_base" not in non_admin_eps[0]
@@ -1910,10 +1848,7 @@ async def test_health_endpoint_admin_sees_routing_fields_non_admin_does_not():
     # Stripping must produce a copy — the shared cache must still carry the
     # routing fields so the next admin caller can read them.
     cached_first = cached_results["healthy_endpoints"][0]
-    assert (
-        cached_first["api_base"]
-        == "https://us-central1-aiplatform.googleapis.com/v1/projects/p"
-    )
+    assert cached_first["api_base"] == "https://us-central1-aiplatform.googleapis.com/v1/projects/p"
     assert cached_first["api_version"] == "2024-10-21"
 
 
@@ -2058,9 +1993,7 @@ async def test_health_endpoint_blocks_cross_scope_model_id_under_background_cach
 
     leaked_ids = {ep.get("model_id") for ep in result.get("healthy_endpoints", [])}
     leaked_ids |= {ep.get("model_id") for ep in result.get("unhealthy_endpoints", [])}
-    assert (
-        "id-b" not in leaked_ids
-    ), "background cache leaked an out-of-scope deployment to a scoped caller"
+    assert "id-b" not in leaked_ids, "background cache leaked an out-of-scope deployment to a scoped caller"
     assert result["healthy_count"] == 0
     assert response.status_code == 503
 
@@ -2287,9 +2220,7 @@ async def test_health_endpoint_no_model_param_returns_200_even_when_zero_healthy
     async def fake_perform(**kwargs):
         return {
             "healthy_endpoints": [],
-            "unhealthy_endpoints": [
-                {"model": "openai/gpt-4o", "model_id": "id-a", "error": "boom"}
-            ],
+            "unhealthy_endpoints": [{"model": "openai/gpt-4o", "model_id": "id-a", "error": "boom"}],
             "healthy_count": 0,
             "unhealthy_count": 1,
         }
@@ -2350,6 +2281,159 @@ async def test_health_readiness_returns_503_when_db_disconnected():
 
     assert response.status_code == 503
     assert result == {"status": "healthy", "db": "disconnected"}
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_returns_200_when_db_down_and_allow_requests_on_db_unavailable():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/34934.
+
+    allow_requests_on_db_unavailable keeps the proxy serving through a DB
+    outage, so the readiness probe must keep the pod in rotation (200) and
+    report the DB state through the body, not the status code. Otherwise
+    K8s pulls every replica before the request-layer fail-open can run.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=PrismaError("nope"))
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still nope"))
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    response = Response()
+    with (
+        patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch.dict(  # test-quality-ok: the fail-open flag lives in the proxy-global general_settings; no injection seam
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": True},
+        ),
+    ):
+        result = await health_readiness(response=response)
+
+    assert response.status_code == 200
+    assert result == {"status": "healthy", "db": "disconnected"}
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_details_returns_200_when_db_down_and_allow_requests_on_db_unavailable():
+    """
+    The detailed readiness payload (public via
+    allow_public_health_readiness_details, or /health/readiness/details)
+    must honor the same flag so probes pointed at it also stay 200.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _get_health_readiness_details,
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=PrismaError("nope"))
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still nope"))
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    response = Response()
+    with (
+        patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch.dict(  # test-quality-ok: the fail-open flag lives in the proxy-global general_settings; no injection seam
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": True},
+        ),
+    ):
+        result = await _get_health_readiness_details(response=response)
+
+    assert response.status_code == 200
+    assert result["db"] == "disconnected"
+
+
+@pytest.mark.asyncio
+async def test_db_health_readiness_check_bounds_hung_health_check():
+    """
+    A connection that hangs mid-failover must not stall the probe past the
+    kubelet's timeoutSeconds; the DB round-trip is bounded and reported as
+    disconnected instead.
+    """
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _db_health_readiness_check,
+    )
+
+    async def hang():
+        await asyncio.sleep(60)
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = hang
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still down"))
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    with patch(  # test-quality-ok: lowers the module-level probe timeout so the hung-call test finishes fast
+        "litellm.proxy.health_endpoints._health_endpoints.DB_READINESS_CHECK_TIMEOUT_SECONDS",
+        0.05,
+    ):
+        start = time.monotonic()
+        with patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ):
+            result = await _db_health_readiness_check()
+        elapsed = time.monotonic() - start
+
+    assert result["status"] == "disconnected"
+    assert elapsed < 5
+
+
+@pytest.mark.asyncio
+async def test_db_health_readiness_check_overall_deadline_bounds_hung_reconnect():
+    """
+    The whole probe-path DB check (initial check + reconnect + re-check,
+    including reconnect lock waits) runs under one deadline, so a reconnect
+    that hangs on the lock still returns disconnected within the deadline.
+    """
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _db_health_readiness_check,
+    )
+
+    async def hang(**kwargs):
+        await asyncio.sleep(60)
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=httpx.ConnectError("down"))
+    mock_prisma.attempt_db_reconnect = hang
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    with patch(  # test-quality-ok: lowers the module-level probe timeout so the hung-call test finishes fast
+        "litellm.proxy.health_endpoints._health_endpoints.DB_READINESS_PROBE_DEADLINE_SECONDS",
+        0.05,
+    ):
+        start = time.monotonic()
+        with patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ):
+            result = await _db_health_readiness_check()
+        elapsed = time.monotonic() - start
+
+    assert result["status"] == "disconnected"
+    assert elapsed < 5
 
 
 @pytest.mark.asyncio
@@ -2747,6 +2831,70 @@ class TestNoRedisWarning:
         assert details["show_no_redis_warning"] is False
 
 
+@pytest.mark.asyncio
+async def test_health_services_endpoint_ms_teams_posts_adaptive_card():
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_post = AsyncMock(return_value=mock_response)
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.slack_alerting_instance.async_http_handler.post = mock_post
+
+    with (
+        patch(  # test-quality-ok: endpoint reads proxy_server module globals, same pattern as sibling tests
+            "litellm.proxy.proxy_server.general_settings",
+            {"alerting": ["ms_teams"]},
+        ),
+        patch(  # test-quality-ok: endpoint reads proxy_server module globals, same pattern as sibling tests
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            mock_proxy_logging,
+        ),
+        patch.dict("os.environ", {"MS_TEAMS_WEBHOOK_URL": "https://teams.example/webhook"}),
+    ):
+        result = await health_services_endpoint(service="ms_teams")
+
+    assert result["status"] == "success"
+    call_kwargs = mock_post.call_args.kwargs
+    assert call_kwargs["url"] == "https://teams.example/webhook"
+    sent_body = json.loads(call_kwargs["data"])
+    assert sent_body["type"] == "message"
+    assert sent_body["attachments"][0]["contentType"] == "application/vnd.microsoft.card.adaptive"
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_ms_teams_surfaces_delivery_failure():
+    mock_response = MagicMock()
+    mock_response.status_code = 400
+    mock_response.text = "Invalid webhook"
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.slack_alerting_instance.async_http_handler.post = AsyncMock(return_value=mock_response)
+
+    with (
+        patch(  # test-quality-ok: endpoint reads proxy_server module globals, same pattern as sibling tests
+            "litellm.proxy.proxy_server.general_settings",
+            {"alerting": ["ms_teams"]},
+        ),
+        patch(  # test-quality-ok: endpoint reads proxy_server module globals, same pattern as sibling tests
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            mock_proxy_logging,
+        ),
+        patch.dict("os.environ", {"MS_TEAMS_WEBHOOK_URL": "https://teams.example/webhook"}),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await health_services_endpoint(service="ms_teams")
+
+    assert "status 400" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_ms_teams_requires_alerting_config():
+    with patch(  # test-quality-ok: endpoint reads proxy_server module globals, same pattern as sibling tests
+        "litellm.proxy.proxy_server.general_settings",
+        {"alerting": ["slack"]},
+    ):
+        with pytest.raises(ProxyException):
+            await health_services_endpoint(service="ms_teams")
+
+
 def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
     """
     Regression: /health/test_connection rejected mode=image_edit with a 422
@@ -2758,13 +2906,13 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
 
     app = FastAPI()
     app.include_router(_health_endpoints_module.router)
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN
-    )
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
     client = TestClient(app)
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+        patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
         respx.mock(assert_all_called=True) as respx_mock,
     ):
         respx_mock.post(host="api.openai.com", path="/v1/images/edits").respond(

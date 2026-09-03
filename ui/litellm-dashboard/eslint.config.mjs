@@ -104,10 +104,13 @@ const eslintConfig = [
     plugins: { "testing-library": testingLibrary, "jest-dom": jestDom },
     rules: {
       "testing-library/await-async-queries": "error",
+      "testing-library/no-container": "warn",
+      "testing-library/no-node-access": "warn",
       "testing-library/no-wait-for-multiple-assertions": "error",
       "testing-library/no-wait-for-side-effects": "error",
       "testing-library/prefer-find-by": "error",
       "testing-library/prefer-presence-queries": "error",
+      "testing-library/prefer-screen-queries": "warn",
       "jest-dom/prefer-checked": "error",
       "jest-dom/prefer-empty": "error",
       "jest-dom/prefer-enabled-disabled": "error",

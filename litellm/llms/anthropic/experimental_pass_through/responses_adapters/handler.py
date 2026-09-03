@@ -5,10 +5,11 @@ Used when the target model is an OpenAI or Azure model.
 """
 
 from collections.abc import AsyncIterator, Coroutine, Mapping
-from typing import Any, Final
+from typing import Any, Final, TypeAlias
 
 import litellm
 from litellm.types.llms.anthropic import (
+    AllAnthropicMessageValues,
     AllAnthropicToolsValues,
     AnthropicMessagesRequest,
     AnthropicOutputConfig,
@@ -23,6 +24,8 @@ from ..utils import local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
+AnthropicRequestMessages: TypeAlias = list[AllAnthropicMessageValues] | list[dict[str, object]]
+
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
 
 
@@ -34,22 +37,22 @@ def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str,
 def _build_responses_kwargs(
     *,
     max_tokens: int,
-    messages: list[dict],
+    messages: AnthropicRequestMessages,
     model: str,
-    context_management: dict | None = None,
-    metadata: dict | None = None,
+    context_management: dict[str, object] | None = None,
+    metadata: dict[str, object] | None = None,
     output_config: AnthropicOutputConfig | None = None,
     stop_sequences: list[str] | None = None,
     stream: bool | None = False,
     system: str | None = None,
     temperature: float | None = None,
-    thinking: dict | None = None,
-    tool_choice: dict | None = None,
-    tools: list[AllAnthropicToolsValues | dict] | None = None,
+    thinking: dict[str, object] | None = None,
+    tool_choice: dict[str, object] | None = None,
+    tools: list[AllAnthropicToolsValues | dict[str, object]] | None = None,
     top_k: int | None = None,
     top_p: float | None = None,
     output_format: AnthropicOutputSchema | None = None,
-    extra_kwargs: dict[str, Any] | None = None,
+    extra_kwargs: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
@@ -83,30 +86,32 @@ def _build_responses_kwargs(
 
     anthropic_request: Final = AnthropicMessagesRequest(**request_data)
     responses_kwargs: Final = _ADAPTER.translate_request(anthropic_request)
+    forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
 
     # Normalize reasoning effort based on model capabilities
     # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
     reasoning: Final = responses_kwargs.get("reasoning")
-    if isinstance(reasoning, dict) and "effort" in reasoning:
-        from litellm.llms.anthropic.experimental_pass_through.utils import (
-            normalize_reasoning_effort_value,
-        )
+    if isinstance(reasoning, dict):
+        effort: Final[object] = reasoning.get("effort")
+        if isinstance(effort, str):
+            from litellm.llms.anthropic.experimental_pass_through.utils import (
+                normalize_reasoning_effort_value,
+            )
 
-        effort: Final = reasoning["effort"]
-        normalized: Final = normalize_reasoning_effort_value(
-            effort,
-            model=model,
-            custom_llm_provider=(extra_kwargs or {}).get("custom_llm_provider"),
-        )
-        if normalized != effort:
-            responses_kwargs["reasoning"] = {**reasoning, "effort": normalized}
+            provider_hint: Final = forwarded_kwargs.get("custom_llm_provider")
+            normalized: Final = normalize_reasoning_effort_value(
+                effort,
+                model=model,
+                custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None,
+            )
+            if normalized != effort:
+                responses_kwargs["reasoning"] = {**reasoning, "effort": normalized}
 
     if stream:
         responses_kwargs["stream"] = True
 
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
     excluded: Final = {"anthropic_messages"}
-    forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
     for key, value in forwarded_kwargs.items():
         if key == "litellm_logging_obj" and value is not None:
             from litellm.litellm_core_utils.litellm_logging import (
@@ -140,22 +145,22 @@ class LiteLLMMessagesToResponsesAPIHandler:
     @staticmethod
     async def async_anthropic_messages_handler(
         max_tokens: int,
-        messages: list[dict],
+        messages: AnthropicRequestMessages,
         model: str,
-        context_management: dict | None = None,
-        metadata: dict | None = None,
+        context_management: dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
         output_config: AnthropicOutputConfig | None = None,
         stop_sequences: list[str] | None = None,
         stream: bool | None = False,
         system: str | None = None,
         temperature: float | None = None,
-        thinking: dict | None = None,
-        tool_choice: dict | None = None,
-        tools: list[AllAnthropicToolsValues | dict] | None = None,
+        thinking: dict[str, object] | None = None,
+        tool_choice: dict[str, object] | None = None,
+        tools: list[AllAnthropicToolsValues | dict[str, object]] | None = None,
         top_k: int | None = None,
         top_p: float | None = None,
         output_format: AnthropicOutputSchema | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> AnthropicMessagesResponse | AsyncIterator[bytes]:
         responses_kwargs: Final = _build_responses_kwargs(
             max_tokens=max_tokens,
@@ -193,23 +198,23 @@ class LiteLLMMessagesToResponsesAPIHandler:
     @staticmethod
     def anthropic_messages_handler(
         max_tokens: int,
-        messages: list[dict],
+        messages: AnthropicRequestMessages,
         model: str,
-        context_management: dict | None = None,
-        metadata: dict | None = None,
+        context_management: dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
         output_config: AnthropicOutputConfig | None = None,
         stop_sequences: list[str] | None = None,
         stream: bool | None = False,
         system: str | None = None,
         temperature: float | None = None,
-        thinking: dict | None = None,
-        tool_choice: dict | None = None,
-        tools: list[AllAnthropicToolsValues | dict] | None = None,
+        thinking: dict[str, object] | None = None,
+        tool_choice: dict[str, object] | None = None,
+        tools: list[AllAnthropicToolsValues | dict[str, object]] | None = None,
         top_k: int | None = None,
         top_p: float | None = None,
         output_format: AnthropicOutputSchema | None = None,
         _is_async: bool = False,
-        **kwargs,
+        **kwargs: object,
     ) -> (
         AnthropicMessagesResponse
         | AsyncIterator[bytes]

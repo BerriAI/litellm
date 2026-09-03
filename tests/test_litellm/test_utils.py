@@ -6,6 +6,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import respx
 from jsonschema import validate
 
 
@@ -118,6 +119,21 @@ def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map
         model="claude-opus-4-9", custom_llm_provider="anthropic"
     )
     assert generalized["supports_adaptive_thinking"] is True
+
+
+
+def test_get_model_info_surfaces_supports_parallel_function_calling(local_model_cost_map):
+    """A registry entry's supports_parallel_function_calling must read back through get_model_info
+    and litellm.supports_parallel_function_calling. Regression: the key was never copied into
+    ModelInfo, so provider-prefixed entries read None / False even when the map said True, and an
+    explicit False was indistinguishable from unset."""
+    declared_true = litellm.get_model_info(model="together_ai/zai-org/GLM-5.3-Flash")
+    assert declared_true["supports_parallel_function_calling"] is True
+    assert litellm.supports_parallel_function_calling(model="together_ai/zai-org/GLM-5.3-Flash") is True
+
+    declared_false = litellm.get_model_info(model="o3-mini")
+    assert declared_false["supports_parallel_function_calling"] is False
+    assert litellm.supports_parallel_function_calling(model="o3-mini") is False
 
 
 def test_get_model_info_surfaces_supported_endpoints(local_model_cost_map):
@@ -989,6 +1005,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "gemini_native_audio": {"type": "boolean"},
                 "gemini_audio_only_live": {"type": "boolean"},
                 "supports_embedding_image_input": {"type": "boolean"},
+                "supports_forced_tool_use": {"type": "boolean"},
                 "supports_function_calling": {"type": "boolean"},
                 "supports_image_input": {"type": "boolean"},
                 "supports_nova_canvas_image_edit": {"type": "boolean"},
@@ -1014,6 +1031,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_none_reasoning_effort": {"type": "boolean"},
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
+                "reasoning_effort_levels": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]},
+                },
+                "default_reasoning_effort": {
+                    "type": "string",
+                    "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
+                },
                 "supports_adaptive_thinking": {"type": "boolean"},
                 "supports_legacy_thinking": {"type": "boolean"},
                 "thinking_always_on": {"type": "boolean"},
@@ -1047,6 +1072,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/speech",
                             "/v1/ocr",
                             "/vertex_ai/live",
+                            "/v1beta/interactions",
                         ],
                     },
                 },
@@ -1389,6 +1415,26 @@ def test_get_provider_rerank_config():
         "my_model", LlmProviders.HOSTED_VLLM, "http://localhost", []
     )
     assert isinstance(config, HostedVLLMRerankConfig)
+
+
+def test_get_provider_text_to_speech_config_vertex_gemini_skips_cloud_tts():
+    """Regression for LIT-6501: mapping vertex Gemini TTS params through Google Cloud TTS
+    dropped response_format before the speech_to_completion bridge could honor it."""
+    from litellm.llms.vertex_ai.text_to_speech.transformation import VertexAITextToSpeechConfig
+    from litellm.utils import LlmProviders
+
+    assert (
+        ProviderConfigManager.get_provider_text_to_speech_config(
+            model="gemini-2.5-flash-preview-tts", provider=LlmProviders.VERTEX_AI
+        )
+        is None
+    )
+    assert isinstance(
+        ProviderConfigManager.get_provider_text_to_speech_config(
+            model="en-US-Studio-O", provider=LlmProviders.VERTEX_AI
+        ),
+        VertexAITextToSpeechConfig,
+    )
 
 
 # Models that should be skipped during testing
@@ -4267,7 +4313,11 @@ class TestGetOptionalParamsTencent:
     """Tests that tencent provider uses TencentChatConfig for parameter mapping."""
 
     def test_tencent_supports_thinking_param(self):
-        """Verify get_optional_params for tencent accepts the 'thinking' param."""
+        """Verify get_optional_params for tencent accepts the 'thinking' param.
+
+        `thinking` must be nested in extra_body: tencent routes through the
+        OpenAI SDK's chat.completions.create(), which rejects unknown kwargs.
+        """
         from unittest.mock import patch
 
         from litellm.utils import get_optional_params
@@ -4281,7 +4331,8 @@ class TestGetOptionalParamsTencent:
                 custom_llm_provider="tencent",
                 thinking={"type": "enabled"},
             )
-        assert result.get("thinking") == {"type": "enabled"}
+        assert "thinking" not in result
+        assert result["extra_body"]["thinking"] == {"type": "enabled"}
 
     def test_tencent_supports_reasoning_effort(self):
         """Verify get_optional_params for tencent converts reasoning_effort to thinking."""
@@ -4298,7 +4349,8 @@ class TestGetOptionalParamsTencent:
                 custom_llm_provider="tencent",
                 reasoning_effort="medium",
             )
-        assert result.get("thinking") == {"type": "enabled"}
+        assert "thinking" not in result
+        assert result["extra_body"]["thinking"] == {"type": "enabled"}
 
     def test_tencent_supported_params_includes_thinking_and_reasoning_effort(self):
         """Verify get_supported_openai_params for tencent includes custom params."""
@@ -4400,6 +4452,53 @@ class TestVertexEmbeddingEncodingFormat:
             custom_llm_provider="vertex_ai",
         )
         assert optional_params.get("outputDimensionality") == 256
+
+
+class TestBedrockCohereEmbeddingDispatch:
+    """All bedrock cohere.embed models must route to BedrockCohereEmbeddingConfig,
+    not just multilingual-v3/v4: english-v3 was falling into the unmapped
+    else-branch and rejecting encoding_format. Issue #38659."""
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "cohere.embed-english-v3",
+            "cohere.embed-multilingual-v3",
+            "cohere.embed-v4:0",
+        ],
+    )
+    def test_cohere_embed_models_accept_encoding_format(self, model):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model=model,
+            encoding_format="float",
+            custom_llm_provider="bedrock",
+        )
+        assert optional_params.get("embedding_types") == ["float"]
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "cohere.embed-english-v3",
+            "cohere.embed-multilingual-v3",
+            "cohere.embed-v4:0",
+        ],
+    )
+    def test_cohere_embed_models_map_base64_to_float(self, model):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model=model,
+            encoding_format="base64",
+            custom_llm_provider="bedrock",
+        )
+        assert optional_params.get("embedding_types") == ["float"]
+
+    def test_cohere_embed_english_v3_maps_dimensions(self):
+        optional_params = litellm.utils.get_optional_params_embeddings(
+            model="cohere.embed-english-v3",
+            encoding_format="float",
+            dimensions=512,
+            custom_llm_provider="bedrock",
+        )
+        assert optional_params.get("output_dimension") == 512
 
 
 @pytest.mark.parametrize(
@@ -5635,3 +5734,85 @@ def test_snapshot_exception_for_hook_preserves_suppress_context_flag() -> None:
     snapshot = _snapshot_exception_for_hook(e)
     assert snapshot.__suppress_context__ is False
     assert snapshot.__context__ is e.__context__
+
+
+class TestDefaultReasoningEffortHydration:
+    """`get_model_info` is the public shape every other capability key is readable through, so
+    the declared default has to survive hydration too, not only the raw-map fallback the
+    request-path gate happens to reach it by.
+    """
+
+    @pytest.mark.parametrize(
+        "model, provider",
+        [("gpt-5.1", "openai"), ("gpt-5.4", "openai"), ("azure/gpt-5.1", "azure")],
+    )
+    def test_the_declared_default_survives_model_info_hydration(self, local_model_cost_map, model, provider):
+        from litellm.utils import _get_model_info_helper
+
+        model_info = dict(_get_model_info_helper(model=model, custom_llm_provider=provider))
+        assert model_info["default_reasoning_effort"] == "none"
+
+    def test_a_model_that_declares_nothing_hydrates_to_none(self, local_model_cost_map):
+        """Absent means "the map does not say", which the gate reads as reasoning being active."""
+        from litellm.utils import _get_model_info_helper
+
+        model_info = dict(_get_model_info_helper(model="gpt-5.6-terra", custom_llm_provider="openai"))
+        assert model_info.get("default_reasoning_effort") is None
+
+
+class TestHuggingFaceConfigFetch:
+    """The Hugging Face config.json fetch runs on background logging threads during cost
+    calculation, so an unbounded request can hang a whole test job; the timeout is the fix."""
+
+    @pytest.fixture
+    def hf_config_route(self):
+        with respx.mock(assert_all_called=True) as respx_mock:
+            yield respx_mock.get(url__regex=r"https://huggingface\.co/.*/config\.json").respond(
+                json={"max_position_embeddings": 512}
+            )
+
+    def test_get_max_tokens_reads_hf_config_with_a_bounded_timeout(self, hf_config_route):
+        from litellm.constants import HF_CONFIG_FETCH_TIMEOUT_SECONDS
+        from litellm.utils import get_max_tokens
+
+        assert get_max_tokens("huggingface/some-org/some-model") == 512
+        request_timeout = hf_config_route.calls.last.request.extensions["timeout"]
+        assert request_timeout["read"] == HF_CONFIG_FETCH_TIMEOUT_SECONDS
+
+    def test_get_max_position_embeddings_reads_hf_config_with_a_bounded_timeout(self, hf_config_route):
+        from litellm.constants import HF_CONFIG_FETCH_TIMEOUT_SECONDS
+        from litellm.utils import _get_max_position_embeddings
+
+        assert _get_max_position_embeddings("some-org/some-model") == 512
+        request_timeout = hf_config_route.calls.last.request.extensions["timeout"]
+        assert request_timeout["read"] == HF_CONFIG_FETCH_TIMEOUT_SECONDS
+
+
+class TestIsVisionExplicitlyDisabled:
+    """github_copilot and chatgpt run an OAuth device flow inside get_llm_provider; the
+    explicit-disable lookup must adopt the declared prefix instead of resolving it, exactly
+    as _supports_factory does, or a capability check on a copilot deployment blocks routing
+    on a device-code prompt."""
+
+    @pytest.mark.parametrize("model", ["github_copilot/gpt-4o", "chatgpt/gpt-5"])
+    def test_never_resolves_an_authenticating_prefix(self, model, monkeypatch):
+        from litellm.utils import is_vision_explicitly_disabled
+
+        lookups: list = []
+
+        def _record(*args, **kwargs):
+            lookups.append((args, kwargs))
+            raise RuntimeError("provider resolution must not run for an authenticating provider")
+
+        monkeypatch.setattr(litellm, "get_llm_provider", _record)
+
+        assert is_vision_explicitly_disabled(model) is False
+        assert lookups == []
+
+    def test_explicit_false_detected_and_absent_reads_enabled(self):
+        from litellm.utils import is_vision_explicitly_disabled
+
+        assert (
+            is_vision_explicitly_disabled("fireworks_ai/accounts/fireworks/models/deepseek-v4-flash-0731") is True
+        )
+        assert is_vision_explicitly_disabled("anthropic/claude-sonnet-4-5") is False

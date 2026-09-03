@@ -8,14 +8,14 @@ from fastapi import APIRouter, Depends, Query, Request
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.management_v1.common import (
-    MANAGEMENT_V1_PREFIX,
+from litellm.proxy.list_api.common import (
     PROBLEM_TYPE_BASE,
     ManagementProblem,
     build_page_links,
     escape_like,
     reject_unknown_query_params,
 )
+from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.management_endpoints.management_v1 import (
     FacetListResponse,

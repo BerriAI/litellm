@@ -80,6 +80,15 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.getByText(/Score > 0.60/)).toBeInTheDocument();
   });
 
+  it("leaves the score threshold list color to the theme instead of an inline style", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    const list = screen.getByText(/Score < 0.15/).closest<HTMLUListElement>("ul");
+    expect(list).toBeInTheDocument();
+    expect(list).toHaveClass("text-muted-foreground");
+    expect(list?.style.color).toBe("");
+  });
+
   it("should default to heuristic and hide classifier model/timeout fields", () => {
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
     expect(screen.getByText("Advanced: Classification Method")).toBeInTheDocument();
@@ -131,10 +140,8 @@ describe("ComplexityRouterConfig", () => {
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
 
     expect(screen.getByText("Classifier Model")).toBeInTheDocument();
-    expect(screen.getByText("Timeout (ms)")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("750")).toBeInTheDocument();
-    expect(screen.getByText("Context Window Size")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("5")).toBeInTheDocument();
+    expect(screen.getByLabelText("Timeout (ms)")).toHaveValue("750");
+    expect(screen.getByLabelText("Context Window Size")).toHaveValue("5");
     expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
   });
 
@@ -148,11 +155,8 @@ describe("ComplexityRouterConfig", () => {
 
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
 
-    const windowSizeSection = screen.getByText("Context Window Size").closest("div") as HTMLElement;
-    expect(within(windowSizeSection).getByDisplayValue("3")).toBeInTheDocument();
-
-    const budgetSection = screen.getByText("Context Character Budget").closest("div") as HTMLElement;
-    expect(within(budgetSection).getByDisplayValue("8000")).toBeInTheDocument();
+    expect(screen.getByLabelText("Context Window Size")).toHaveValue("3");
+    expect(screen.getByLabelText("Context Character Budget")).toHaveValue("8000");
   });
 
   it("should warn when the budget is too small to quote any turn that does not already fit", () => {
@@ -247,7 +251,11 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
   });
 
-  it("should call onChange with the updated classifier_context_window_size when edited", () => {
+  it.each([
+    ["Timeout (ms)", "7", { classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 7 } }],
+    ["Context Window Size", "0", { classifier_context_window_size: 0 }],
+    ["Context Character Budget", "7", { classifier_context_budget_chars: 7 }],
+  ])("keeps %s empty while it is being edited, then commits %s", (label, replacement, expected) => {
     const onChange = vi.fn();
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
@@ -257,14 +265,31 @@ describe("ComplexityRouterConfig", () => {
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
 
-    const windowSizeSection = screen.getByText("Context Window Size").closest("div") as HTMLElement;
-    const input = within(windowSizeSection).getByRole("spinbutton");
-    fireEvent.change(input, { target: { value: "7" } });
+    const input = screen.getByLabelText(label);
+    fireEvent.change(input, { target: { value: "" } });
 
-    expect(onChange).toHaveBeenCalledWith({
-      ...llmValue,
-      classifier_context_window_size: 7,
-    });
+    expect(input).toHaveValue("");
+    expect(onChange).not.toHaveBeenCalled();
+
+    fireEvent.change(input, { target: { value: replacement } });
+
+    expect(onChange).toHaveBeenLastCalledWith({ ...llmValue, ...expected });
+  });
+
+  it("restores the committed context window size after an empty field loses focus", () => {
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    const input = screen.getByLabelText("Context Window Size");
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.blur(input);
+
+    expect(input).toHaveValue("3");
   });
 
   it("should render the custom technical keywords field", () => {
@@ -573,6 +598,82 @@ describe("ComplexityRouterConfig classifier fallback", () => {
   });
 });
 
+describe("ComplexityRouterConfig classification frequency", () => {
+  const llmValue: ComplexityRouterConfigValue = {
+    ...defaultValue,
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+  };
+
+  it("defaults to every request, matching both backend field defaults", () => {
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByRole("radio", { name: /Every request/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Every new user message/ })).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: /Once per session/ })).not.toBeChecked();
+  });
+
+  it("writes both wire fields when the frequency moves to every new user message", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    fireEvent.click(screen.getByRole("radio", { name: /Every new user message/ }));
+    expect(onChange).toHaveBeenCalledWith({
+      ...llmValue,
+      classification_mode: "user_turn",
+      session_affinity: false,
+    });
+  });
+
+  it("writes session affinity, not a classification mode, when the frequency moves to once per session", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    fireEvent.click(screen.getByRole("radio", { name: /Once per session/ }));
+    expect(onChange).toHaveBeenCalledWith({
+      ...llmValue,
+      classification_mode: "every_request",
+      session_affinity: true,
+    });
+  });
+
+  it("shows a hand-authored config that sets both fields as once per session, matching the backend", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        modelInfo={mockModelInfo}
+        value={{ ...llmValue, classification_mode: "user_turn", session_affinity: true }}
+        onChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByRole("radio", { name: /Once per session/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Every new user message/ })).not.toBeChecked();
+  });
+
+  it("records a switch back to every request", () => {
+    const onChange = vi.fn();
+    renderWithProviders(
+      <ComplexityRouterConfig
+        modelInfo={mockModelInfo}
+        value={{ ...llmValue, classification_mode: "user_turn" }}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByRole("radio", { name: /Every new user message/ })).toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: /Every request/ }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ classification_mode: "every_request" }));
+  });
+
+  it("offers the frequency on a heuristic router, where holding the tier still pins the model", () => {
+    // The backend pin is gated on the two fields alone, so a heuristic router that switches models
+    // mid tool loop is fixed by this control too.
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByRole("radio", { name: /Every new user message/ })).toBeInTheDocument();
+  });
+});
+
 describe("ComplexityRouterConfig classifier rubric", () => {
   const llmValue: ComplexityRouterConfigValue = {
     ...defaultValue,
@@ -735,13 +836,34 @@ describe("ComplexityRouterConfig tier labels", () => {
   });
 });
 
+describe("ComplexityRouterConfig modality panel", () => {
+  it("defaults the image-routing switch off and writes modality_routing through onChange", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Modality Routing"));
+
+    const toggle = screen.getByRole("switch", { name: "Route image requests to vision-capable models" });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+
+    expect(onChange).toHaveBeenCalledWith({ ...defaultValue, modality_routing: true });
+  });
+
+  it("renders a stored modality_routing=true as on", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={{ ...defaultValue, modality_routing: true }} />);
+    fireEvent.click(screen.getByText("Advanced: Modality Routing"));
+
+    expect(screen.getByRole("switch", { name: "Route image requests to vision-capable models" })).toBeChecked();
+  });
+});
+
 describe("ComplexityRouterConfig affinity panel", () => {
-  it("holds both affinity switches with their backend defaults", () => {
+  it("holds the deployment switch at its backend default, session pinning having moved to the frequency choice", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     fireEvent.click(screen.getByText("Advanced: Affinity"));
 
     expect(screen.getByRole("switch", { name: "Pin a session to one deployment per model group" })).toBeChecked();
-    expect(screen.getByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
+    expect(screen.queryByRole("switch", { name: "Pin a session to its first model" })).not.toBeInTheDocument();
   });
 
   it("writes deployment_affinity through onChange without touching other keys", () => {
@@ -1054,5 +1176,259 @@ describe("ComplexityRouterConfig custom technical keywords", () => {
       classifier_fallback: "default_model",
     });
     expect(screen.queryByText("Custom Technical Keywords")).not.toBeInTheDocument();
+  });
+});
+
+describe("ComplexityRouterConfig tier editing", () => {
+  const renderEditor = (
+    value?: ComplexityRouterConfigValue,
+    props: Partial<React.ComponentProps<typeof ComplexityRouterConfig>> = {},
+  ) => {
+    const onChange = vi.fn();
+    const view = renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        {...(value ? { value } : {})}
+        onChange={onChange}
+        editingTiers
+        onEditingTiersChange={vi.fn()}
+        {...props}
+      />,
+    );
+    return { ...view, committed: () => onChange.mock.calls[0][0] as ComplexityRouterConfigValue, onChange };
+  };
+
+  const customValue: ComplexityRouterConfigValue = {
+    ...defaultValue,
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-4", timeout_ms: 3000 },
+    custom_tier_set: {
+      tiers: [
+        { id: "CASUAL", name: "CASUAL", definition: "small talk", models: ["gpt-3.5-turbo"] },
+        { id: "sec", name: "SECURITY_REVIEW", definition: "audits", models: ["gpt-4"] },
+      ],
+      fallback_tier_id: "CASUAL",
+    },
+  };
+
+  it("offers Edit tiers only when the parent owns the editor flag", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    expect(screen.queryByRole("button", { name: "Edit tiers" })).not.toBeInTheDocument();
+  });
+
+  it("surfaces the caller's orphaned-rule verdict while editing, so Done is not a silent exit", () => {
+    renderEditor(customValue, { keywordRulesError: "Keyword rule(s) 1 route to a tier this router no longer has" });
+    expect(
+      screen.getByText("Keyword rule(s) 1 route to a tier this router no longer has", { exact: false }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the orphaned-rule verdict out of the collapsed view, where the submit tooltip owns it", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={customValue}
+        onEditingTiersChange={vi.fn()}
+        keywordRulesError="Keyword rule(s) 1 route to a tier this router no longer has"
+      />,
+    );
+    expect(screen.queryByText("route to a tier this router no longer has", { exact: false })).not.toBeInTheDocument();
+  });
+
+  it("renders the four built-in tiers before any edit, unchanged", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onEditingTiersChange={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Edit tiers" })).toBeInTheDocument();
+    expect(screen.getByText("Tier 1 of 4", { exact: false })).toHaveTextContent("SIMPLE");
+  });
+
+  it("adds a row and moves the form into an edited tier set, which the built-in record never leaves", () => {
+    const { committed } = renderEditor();
+    fireEvent.click(screen.getByRole("button", { name: "Add tier" }));
+    const next = committed();
+    expect(next.custom_tier_set?.tiers).toHaveLength(5);
+    expect(next.tiers).toEqual(defaultValue.tiers);
+  });
+
+  it("renames a built-in tier straight from the editor, which is what makes the set custom", () => {
+    const { committed } = renderEditor();
+    fireEvent.change(screen.getByLabelText("Name for tier 3"), { target: { value: "SECURITY_REVIEW" } });
+    const next = committed();
+    expect(next.custom_tier_set?.tiers.map((row) => row.name)).toEqual([
+      "SIMPLE",
+      "MEDIUM",
+      "SECURITY_REVIEW",
+      "REASONING",
+    ]);
+    expect(next.tiers).toEqual(defaultValue.tiers);
+  });
+
+  it("opening the editor and changing nothing leaves the router on the built-in tiers", () => {
+    const { onChange } = renderEditor();
+    expect(screen.getByRole("button", { name: "Done" })).toBeEnabled();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("swaps the display-name field for the tier-name field while the editor is open", () => {
+    const { rerender } = renderWithProviders(<ComplexityRouterConfig {...baseProps} onEditingTiersChange={vi.fn()} />);
+    expect(screen.getByLabelText("Display name for the Simple tier")).toBeInTheDocument();
+    rerender(<ComplexityRouterConfig {...baseProps} editingTiers onEditingTiersChange={vi.fn()} />);
+    expect(screen.queryByLabelText("Display name for the Simple tier")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Name for tier 1")).toBeInTheDocument();
+  });
+
+  it("drops the scorer card entirely once an edited tier set replaces the heuristic", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={customValue} onEditingTiersChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.queryByText("How Classification Works")).not.toBeInTheDocument();
+    expect(screen.queryByText("scores each request across 7 dimensions", { exact: false })).not.toBeInTheDocument();
+  });
+
+  it("keeps the scorer card on a built-in router, whose tiers the score still decides", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onEditingTiersChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByText("How Classification Works")).toBeInTheDocument();
+    expect(screen.getByText("scores each request across 7 dimensions", { exact: false })).toBeInTheDocument();
+  });
+
+  it("says why a custom row is blocked instead of only reddening its border", () => {
+    const missingDefinition: ComplexityRouterConfigValue = {
+      ...customValue,
+      custom_tier_set: {
+        tiers: [customValue.custom_tier_set!.tiers[0], { id: "b", name: "AUDIT", definition: "", models: ["gpt-4"] }],
+        fallback_tier_id: "CASUAL",
+      },
+    };
+    renderEditor(missingDefinition, { showValidationErrors: true });
+    expect(screen.getByText("A definition is required", { exact: false })).toBeInTheDocument();
+  });
+
+  it("keeps Done disabled while a row is incomplete and says what is missing", async () => {
+    const incomplete: ComplexityRouterConfigValue = {
+      ...customValue,
+      custom_tier_set: {
+        tiers: [customValue.custom_tier_set!.tiers[0], { id: "new", name: "", definition: "", models: [] }],
+        fallback_tier_id: "CASUAL",
+      },
+    };
+    renderEditor(incomplete);
+    expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
+  });
+
+  it("enables Done once every row carries a name, a definition and a model", () => {
+    renderEditor(customValue);
+    expect(screen.getByRole("button", { name: "Done" })).toBeEnabled();
+  });
+
+  it("refuses to remove a row that would take the set below the backend's minimum", () => {
+    renderEditor(customValue);
+    expect(screen.getByRole("button", { name: "Remove the CASUAL tier" })).toBeDisabled();
+  });
+
+  it("keeps a definition on one line, because the backend rejects a newline in it", () => {
+    const { committed } = renderEditor(customValue);
+    fireEvent.change(screen.getByLabelText("Definition for tier 2"), { target: { value: "audits\nand reviews" } });
+    const next = committed();
+    expect(next.custom_tier_set?.tiers[1].definition).toBe("audits and reviews");
+  });
+
+  it("moves a keyword rule with the tier it points at when that tier is renamed", () => {
+    const onKeywordTierRulesChange = vi.fn();
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={customValue}
+        keywordTierRules={[{ id: "r1", keywords: ["audit"], tier: "SECURITY_REVIEW" }]}
+        onKeywordTierRulesChange={onKeywordTierRulesChange}
+        editingTiers
+        onEditingTiersChange={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Name for tier 2"), { target: { value: "AUDIT" } });
+    expect(onKeywordTierRulesChange).toHaveBeenCalledWith([{ id: "r1", keywords: ["audit"], tier: "AUDIT" }]);
+  });
+
+  it("re-points the fallback tier when the row it named is removed, never leaving it dangling", () => {
+    const threeRows: ComplexityRouterConfigValue = {
+      ...customValue,
+      custom_tier_set: {
+        tiers: [
+          ...customValue.custom_tier_set!.tiers,
+          { id: "third", name: "MEDIUM", definition: "", models: ["gpt-4"] },
+        ],
+        fallback_tier_id: "sec",
+      },
+    };
+    const { committed } = renderEditor(threeRows);
+    fireEvent.click(screen.getByRole("button", { name: "Remove the SECURITY_REVIEW tier" }));
+    const next = committed();
+    expect(next.custom_tier_set?.tiers.some((row) => row.id === next.custom_tier_set?.fallback_tier_id)).toBe(true);
+  });
+
+  it("turns off a plan-mode floor whose row was removed, rather than leaving it pointing at nothing", () => {
+    const withFloor: ComplexityRouterConfigValue = {
+      ...customValue,
+      plan_mode_min_tier: "sec",
+      custom_tier_set: {
+        tiers: [
+          ...customValue.custom_tier_set!.tiers,
+          { id: "third", name: "BULK", definition: "d", models: ["gpt-4"] },
+        ],
+        fallback_tier_id: "CASUAL",
+      },
+    };
+    const { committed } = renderEditor(withFloor);
+    fireEvent.click(screen.getByRole("button", { name: "Remove the SECURITY_REVIEW tier" }));
+    expect(committed().plan_mode_min_tier).toBeUndefined();
+  });
+
+  it("replaces the display-name inputs with the reason an edited tier set forbids them", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={customValue} onEditingTiersChange={vi.fn()} />);
+    expect(screen.queryByLabelText("Display name for the Simple tier")).not.toBeInTheDocument();
+    expect(screen.getByText("Display names rename the built-in tiers", { exact: false })).toBeInTheDocument();
+    expect(screen.getByLabelText("Fallback tier")).toBeInTheDocument();
+  });
+
+  it("disables the once-per-session frequency and says why, rather than letting a stripped value look saved", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...customValue, session_affinity: true }}
+        onEditingTiersChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    const sessionOption = screen.getByRole("radio", { name: /Once per session/ });
+    expect(sessionOption).toHaveAttribute("aria-disabled", "true");
+    expect(sessionOption).not.toBeChecked();
+    expect(
+      screen.getByText("Session pinning escalates along the built-in tier ladder", { exact: false }),
+    ).toBeInTheDocument();
+  });
+
+  it("lets an edited tier set write its own opening instructions instead of refusing a prompt outright", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={customValue} onEditingTiersChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByText("your own calibration examples", { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit prompt" })).toBeInTheDocument();
+    expect(screen.queryByText("A replacement prompt drops the tier bullets", { exact: false })).not.toBeInTheDocument();
+  });
+
+  it("keeps the whole-prompt replacement editor on built-in routers, which the backend still accepts there", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, classifier_type: "llm", classifier_llm_config: { model: "gpt-4", timeout_ms: 3000 } }}
+        onEditingTiersChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByText("Replace the built-in complexity rubric", { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText("your own calibration examples", { exact: false })).not.toBeInTheDocument();
+  });
+
+  it("leaves built-in routers with their display-name inputs and no restriction copy", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onEditingTiersChange={vi.fn()} />);
+    expect(screen.getByLabelText("Display name for the Simple tier")).toBeInTheDocument();
+    expect(screen.queryByText("Display names rename the built-in tiers", { exact: false })).not.toBeInTheDocument();
   });
 });

@@ -173,3 +173,41 @@ def test_bedrock_converse_alias_keeps_nova_web_search_options():
 
     assert nova_params is not None
     assert "web_search_options" in nova_params
+
+
+class TestDeclaredAuthenticatingProvider:
+    """github_copilot and chatgpt run an OAuth device flow inside get_llm_provider, so every
+    metadata funnel must adopt a declared prefix instead of resolving it. A raising sentinel
+    cannot prove the lookup was skipped, because these callers swallow resolver errors."""
+
+    @pytest.mark.parametrize(
+        "model, provider, expected",
+        [
+            ("github_copilot/gpt-4o", None, "github_copilot"),
+            ("chatgpt/gpt-5", None, "chatgpt"),
+            ("gpt-4o", "github_copilot", "github_copilot"),
+            ("openai/gpt-4o", None, None),
+            ("gpt-4o", "openai", None),
+        ],
+    )
+    def test_names_only_the_providers_whose_resolution_authenticates(self, model, provider, expected):
+        from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+
+        assert declared_authenticating_provider(model, provider) == expected
+
+    @pytest.mark.parametrize("model", ["github_copilot/gpt-4o", "chatgpt/gpt-5"])
+    def test_supported_params_never_resolve_an_authenticating_prefix(self, model, monkeypatch):
+        import litellm
+
+        lookups: list = []
+
+        def _record(*args, **kwargs):
+            lookups.append((args, kwargs))
+            raise RuntimeError("provider resolution must not run for an authenticating provider")
+
+        monkeypatch.setattr(litellm, "get_llm_provider", _record)
+
+        params = get_supported_openai_params(model=model)
+
+        assert params is not None
+        assert lookups == []
