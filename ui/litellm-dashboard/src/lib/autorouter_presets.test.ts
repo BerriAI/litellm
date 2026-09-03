@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
+import bundledPresets from "../../../../litellm/proxy/public_endpoints/autorouter_presets.json";
 import {
-  getAllPresets,
-  getPresetByKey,
+  hydratePresets,
+  AutoRouterPreset,
+  AutoRouterPresetsResponse,
   getRequiredModelsInPreset,
   getMissingModelsInPreset,
   getRequiredModels,
@@ -18,8 +20,13 @@ import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKe
 
 const groupsOnly = (models: Iterable<string>) => buildModelAvailability(models, []);
 
+// Hydrated from the real bundled catalog so a catalog edit flows into these expectations.
+const PRESETS = hydratePresets(bundledPresets as AutoRouterPresetsResponse);
+const getAllPresets = (): AutoRouterPreset[] => PRESETS;
+const getPresetByKey = (key: string): AutoRouterPreset | undefined => PRESETS.find((p) => p.key === key);
+
 describe("autorouter_presets", () => {
-  it("loads exactly the bundled presets", () => {
+  it("hydrates exactly the bundled presets", () => {
     const presets = getAllPresets();
     expect(presets.map((p) => p.label).sort()).toEqual(["Anthropic Family", "Gemini Family", "Lite", "OpenAI Family"]);
     // Every preset carries all four fields the UI relies on; a JSON typo dropping one fails here.
@@ -139,6 +146,25 @@ describe("autorouter_presets", () => {
       groupsOnly(getRequiredModelsInPreset(preset)),
     );
     expect(withoutFlag.complexityRouterConfig.modality_routing).toBe(false);
+  });
+
+  it("carries a preset's modality_pin_override into the prefilled form state", () => {
+    const preset = getPresetByKey("anthropic_family")!;
+    const withFlag = { ...preset.complexity_router_config, modality_routing: true, modality_pin_override: true };
+    const prefill = buildPresetPrefill(withFlag, groupsOnly(getRequiredModelsInPreset(preset)));
+    expect(prefill.complexityRouterConfig.modality_pin_override).toBe(true);
+    const withoutFlag = buildPresetPrefill(
+      preset.complexity_router_config,
+      groupsOnly(getRequiredModelsInPreset(preset)),
+    );
+    expect(withoutFlag.complexityRouterConfig.modality_pin_override).toBe(false);
+  });
+
+  it("ships every bundled preset with both modality flags written out, since the payload type requires them", () => {
+    for (const preset of getAllPresets()) {
+      expect(preset.complexity_router_config.modality_routing, preset.key).toBe(false);
+      expect(preset.complexity_router_config.modality_pin_override, preset.key).toBe(false);
+    }
   });
 
   it("prefills the anthropic preset's effort through to tier_model_params", () => {

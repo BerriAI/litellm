@@ -111,6 +111,7 @@ export interface BuildComplexityRouterConfigParams {
   classificationMode: ClassificationMode | undefined;
   sessionAffinity: boolean;
   modalityRouting?: boolean;
+  modalityPinOverride?: boolean;
   deploymentAffinity: boolean;
   customTechnicalKeywords: string[];
   keywordTierRules: KeywordTierRule[];
@@ -169,6 +170,7 @@ export interface ComplexityRouterConfigPayload {
   session_affinity: boolean;
   deployment_affinity: boolean;
   modality_routing: boolean;
+  modality_pin_override: boolean;
   custom_technical_keywords?: string[];
   keyword_tier_rules?: { keywords: string[]; tier: KeywordTierRule["tier"] }[];
   semantic_keyword_matching?: boolean;
@@ -409,6 +411,7 @@ export const buildComplexityRouterConfig = ({
   classificationMode,
   sessionAffinity,
   modalityRouting,
+  modalityPinOverride,
   deploymentAffinity,
   customTechnicalKeywords,
   keywordTierRules,
@@ -472,6 +475,7 @@ export const buildComplexityRouterConfig = ({
     session_affinity: sessionAffinity,
     deployment_affinity: deploymentAffinity,
     modality_routing: modalityRouting ?? false,
+    modality_pin_override: modalityPinOverride ?? false,
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
     escalation_keywords: cleanedEscalationKeywords,

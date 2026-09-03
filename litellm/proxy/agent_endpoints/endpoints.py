@@ -13,10 +13,10 @@ import os
 import uuid
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Annotated, Final, TypedDict, assert_never
+from typing import Annotated, Final, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from typing_extensions import ReadOnly, Required
+from typing_extensions import ReadOnly, Required, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger

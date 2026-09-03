@@ -7,6 +7,8 @@
     "ocr": {"coverage": "planned", "selectors": []},
     "messages": {"coverage": "planned", "selectors": []},
     "responses": {"coverage": "planned", "selectors": []},
-    "count_tokens": {"coverage": "planned", "selectors": []}
+    "count_tokens": {"coverage": "planned", "selectors": []},
+    "chat_completions": {"coverage": "planned", "selectors": []},
+    "transcription": {"coverage": "planned", "selectors": []}
   }
 }
