@@ -421,6 +421,75 @@ def test_rag_query_store_params_win_over_user_retrieval_config(client_internal_u
     assert forwarded_config["aws_region_name"] == "eu-west-1"
 
 
+def test_rag_query_forwards_managed_store_credentials_to_search(client_internal_user):
+    """
+    Regression for LIT-6773: the registry store's api_key / api_base and its
+    provider extras (Milvus outputFields, milvus_text_field) must reach the
+    vector store search the way the direct /v1/vector_stores/{id}/search
+    endpoint forwards them. Pre-fix the RAG path allowlisted them away and a
+    managed Milvus store 500'd with "MILVUS_API_KEY is not set".
+    """
+    import litellm
+    from litellm import Router
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    mock_vector_store = {
+        "vector_store_id": "customer_kb",
+        "custom_llm_provider": "milvus",
+        "litellm_params": {
+            "vector_store_id": "customer_kb",
+            "custom_llm_provider": "milvus",
+            "api_base": "http://127.0.0.1:19530",
+            "api_key": "root:Milvus",
+            "litellm_embedding_model": "multilingual-e5-large",
+            "milvus_text_field": "book_intro_text",
+            "outputFields": ["book_intro_text"],
+        },
+    }
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = mock_vector_store
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", "mock_response": "hi"},
+            }
+        ]
+    )
+
+    with patch(  # test-quality-ok: asearch is the boundary the store-credential forwarding under test targets; the real aquery pipeline runs in between
+        "litellm.vector_stores.asearch", new=fake_search
+    ), patch.object(litellm, "vector_store_registry", mock_registry), patch(  # test-quality-ok: seeds the managed-store registry and a mock-response router so real store resolution and the completion step run
+        "litellm.proxy.proxy_server.llm_router", router
+    ), patch(  # test-quality-ok: grants store access, which is not under test, so the endpoint reaches the search boundary
+        "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+        new=AsyncMock(return_value=True),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "which database is built for similarity search?"}],
+                "retrieval_config": {"vector_store_id": "customer_kb", "custom_llm_provider": "milvus", "top_k": 2},
+            },
+        )
+
+    assert response.status_code == 200, response.json()
+    fake_search.assert_awaited_once()
+    search_kwargs = fake_search.await_args.kwargs
+    assert search_kwargs["vector_store_id"] == "customer_kb"
+    assert search_kwargs["custom_llm_provider"] == "milvus"
+    assert search_kwargs["max_num_results"] == 2
+    assert search_kwargs["api_base"] == "http://127.0.0.1:19530"
+    assert search_kwargs["api_key"] == "root:Milvus"
+    assert search_kwargs["litellm_embedding_model"] == "multilingual-e5-large"
+    assert search_kwargs["milvus_text_field"] == "book_intro_text"
+    assert search_kwargs["outputFields"] == ["book_intro_text"]
+
+
 @pytest.mark.parametrize(
     "blocked_key",
     ["embedding_model", "litellm_embedding_model", "litellm_embedding_config", "litellm_credential_name"],
