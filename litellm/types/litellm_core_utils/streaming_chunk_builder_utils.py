@@ -14,5 +14,5 @@ class UsagePerChunk(TypedDict):
     completion_tokens_details: CompletionTokensDetails | None
     prompt_tokens_details: PromptTokensDetailsWrapper | None
     cost: float | None
-    inference_geo: str | None
-    speed: str | None
+    inference_geo: ReadOnly[str | None]
+    speed: ReadOnly[str | None]
