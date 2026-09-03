@@ -5983,3 +5983,73 @@ class TestVerboseRequestLineRedaction:
         assert "model='gpt-3.5-turbo'" in printed
         assert "max_tokens=17" in printed
         assert "temperature=0.25" in printed
+
+
+class TestFinalOptionalParamsLineRedaction:
+    """A verbose run echoes the fully built optional params too, and `extra_body` carries whatever the
+    caller nested inside it straight onto that line, so a credential tucked in there lands in a terminal
+    or a log drain in plaintext. It has to be redacted on both surfaces `print_verbose` writes to, and the
+    line has to keep printing on both, because `litellm.set_verbose` and the DEBUG logger are independent
+    switches and neither implies the other."""
+
+    FAKE_NESTED_KEY: Final = "sk-fake-lit6835-nested-0000000000"
+
+    def _complete(self, **kwargs) -> None:
+        litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hello"}],
+            mock_response="hi",
+            **kwargs,
+        )
+
+    def _printed_line(self, capsys) -> str:
+        captured: Final = capsys.readouterr()
+        return "\n".join(
+            line for line in (captured.out + captured.err).splitlines() if "Final returned optional params" in line
+        )
+
+    def test_nested_credential_is_redacted_when_only_set_verbose_is_on(self, capsys, caplog, monkeypatch):
+        monkeypatch.setattr(litellm, "set_verbose", True)
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            capsys.readouterr()
+            self._complete(extra_body={"providers": [{"name": "openai", "api_key": self.FAKE_NESTED_KEY}]})
+            printed: Final = self._printed_line(capsys)
+
+        assert printed
+        assert self.FAKE_NESTED_KEY not in printed
+        assert "'api_key': 'REDACTED'" in printed
+        assert "'name': 'openai'" in printed
+
+    def test_line_still_reaches_the_logger_when_only_the_debug_logger_is_on(self, capsys, caplog, monkeypatch):
+        monkeypatch.setattr(litellm, "set_verbose", False)
+        with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+            self._complete(extra_body={"providers": [{"name": "openai", "api_key": self.FAKE_NESTED_KEY}]})
+            logged: Final = "\n".join(
+                record.getMessage()
+                for record in caplog.records
+                if "Final returned optional params" in record.getMessage()
+            )
+
+        assert logged
+        assert self.FAKE_NESTED_KEY not in logged
+        assert "'name': 'openai'" in logged
+
+    def test_nothing_is_emitted_when_neither_verbose_switch_is_on(self, capsys, caplog, monkeypatch):
+        monkeypatch.setattr(litellm, "set_verbose", False)
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            capsys.readouterr()
+            self._complete(extra_body={"providers": [{"name": "openai", "api_key": self.FAKE_NESTED_KEY}]})
+            captured: Final = capsys.readouterr()
+
+        assert "Final returned optional params" not in captured.out + captured.err
+        assert self.FAKE_NESTED_KEY not in captured.out + captured.err
+
+    def test_ordinary_optional_params_still_reach_the_line(self, capsys, caplog, monkeypatch):
+        monkeypatch.setattr(litellm, "set_verbose", True)
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            capsys.readouterr()
+            self._complete(max_tokens=17, temperature=0.25)
+            printed: Final = self._printed_line(capsys)
+
+        assert "'max_tokens': 17" in printed
+        assert "'temperature': 0.25" in printed
