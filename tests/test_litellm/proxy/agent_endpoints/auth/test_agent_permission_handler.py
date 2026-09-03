@@ -4,14 +4,11 @@ Unit tests for AgentRequestHandler - Agent permission management for keys and te
 
 import hashlib
 import json
-import os
-import sys
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry

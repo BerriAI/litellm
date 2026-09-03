@@ -1,9 +1,9 @@
 "use client";
 
 import { ChevronRight } from "lucide-react";
-import { useRouter } from "next/navigation";
 import * as React from "react";
 
+import { useEntityLinkClick } from "@/components/shared/EntityLink";
 import { cn } from "@/lib/cva.config";
 
 interface IdentityCellProps {
@@ -57,15 +57,7 @@ export function IdentityCell({ title, subtitle, badge, onClick, href, className,
 }
 
 function IdentityCellLink({ href, className, body }: { href: string; className?: string; body: React.ReactNode }) {
-  const router = useRouter();
-
-  const handleClick = (e: React.MouseEvent) => {
-    const hasModifierKey = e.metaKey || e.ctrlKey || e.shiftKey;
-    const isNativeNewTabClick = hasModifierKey || e.button === 1;
-    if (isNativeNewTabClick) return;
-    e.preventDefault();
-    router.push(href);
-  };
+  const handleClick = useEntityLinkClick(href);
 
   return (
     <a href={href} onClick={handleClick} className={cn(INTERACTIVE_CELL_CLASSES, className)}>

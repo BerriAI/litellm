@@ -1,12 +1,22 @@
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 
 
 @pytest.fixture()
 def config() -> AzureOpenAIGPT5Config:
     return AzureOpenAIGPT5Config()
+
+
+@pytest.fixture(autouse=True)
+def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
+    """Pin the bundled cost map: these gates read model-map capability keys, and the default
+    import path fetches the published map, which lags a key added in this repo."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
+    litellm.add_known_models(model_cost_map=litellm.model_cost)
 
 
 def test_azure_gpt5_supports_reasoning_effort(config: AzureOpenAIGPT5Config):
@@ -299,3 +309,30 @@ def test_azure_gpt5_1_does_not_support_logprobs(config: AzureOpenAIGPT5Config):
     supported_params = config.get_supported_openai_params(model="gpt-5.1")
     assert "logprobs" not in supported_params
     assert "top_logprobs" not in supported_params
+
+
+class TestAzureResolvesTheDeclaredDefaultEffort:
+    """Azure reaches the same models under names that are not cost-map keys. Every capability
+    lookup therefore has to normalise the name identically, which is why the normalisation is
+    one overridden resolver rather than a rewrite inside a single lookup.
+    """
+
+    @pytest.mark.parametrize(
+        "model, temperature_survives",
+        [
+            ("azure/gpt-5.1", True),
+            ("gpt5_series/gpt-5.1", True),
+            ("gpt-5.1", True),
+            ("azure/gpt-5.6-terra", False),
+            ("gpt5_series/gpt-5.6-terra", False),
+            ("azure/gpt-5.5", False),
+        ],
+    )
+    def test_every_azure_name_shape_reads_the_same_entry(self, config, model, temperature_survives):
+        mapped = config.map_openai_params(
+            non_default_params={"temperature": 0},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        assert ("temperature" in mapped) is temperature_survives

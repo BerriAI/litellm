@@ -18,7 +18,22 @@ import pytest
 import litellm
 from litellm._internal_context import is_internal_call
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import CallTypes, ModelResponse
+
+
+async def _drain_logging_worker() -> None:
+    """Run every queued logging task to completion on the current event loop.
+
+    The success event is delivered through the fire-and-forget GLOBAL_LOGGING_WORKER
+    singleton, whose queue survives across tests. start() rebinds any tasks left over
+    from a previous test's event loop onto the current one, and flush() waits until
+    the queue is fully processed, so tests neither miss their own event nor observe
+    a neighbour's
+    """
+    await asyncio.sleep(0)
+    GLOBAL_LOGGING_WORKER.start()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
 
 
 class RecordingLogger(CustomLogger):
@@ -39,6 +54,7 @@ async def test_aquery_single_billing_event_carries_completion_usage_and_cost(use
     not the vector store search response. The proxy always passes a router, so
     both the router and non-router completion branches are pinned.
     """
+    await _drain_logging_worker()
     recording_logger = RecordingLogger()
     original_callbacks = litellm.callbacks
     litellm.callbacks = [recording_logger]
@@ -66,11 +82,7 @@ async def test_aquery_single_billing_event_carries_completion_usage_and_cost(use
         assert isinstance(response, ModelResponse)
         assert is_internal_call.get() is False
 
-        for _ in range(50):
-            if recording_logger.success_events:
-                break
-            await asyncio.sleep(0.1)
-        await asyncio.sleep(0.5)
+        await _drain_logging_worker()
     finally:
         litellm.callbacks = original_callbacks
 
@@ -102,6 +114,8 @@ async def test_aquery_response_hidden_params_carry_completion_cost():
         mock_response="hi there",
     )
 
+    await _drain_logging_worker()
+
     assert isinstance(response, ModelResponse)
     response_cost = response._hidden_params.get("response_cost")
     assert response_cost is not None
@@ -115,6 +129,7 @@ async def test_aquery_billed_cost_includes_priced_vector_store_search():
     that cost must be folded into the aquery billing instead of being dropped
     with the suppressed sub-call event.
     """
+    await _drain_logging_worker()
     recording_logger = RecordingLogger()
     original_callbacks = litellm.callbacks
     litellm.callbacks = [recording_logger]
@@ -128,11 +143,7 @@ async def test_aquery_billed_cost_includes_priced_vector_store_search():
                 mock_response="hi there",
             )
 
-        for _ in range(50):
-            if recording_logger.success_events:
-                break
-            await asyncio.sleep(0.1)
-        await asyncio.sleep(0.5)
+        await _drain_logging_worker()
     finally:
         litellm.callbacks = original_callbacks
 
@@ -155,6 +166,7 @@ async def test_aquery_with_rerank_bills_once_and_folds_rerank_cost():
     """
     from litellm.types.rerank import RerankResponse
 
+    await _drain_logging_worker()
     recording_logger = RecordingLogger()
     original_callbacks = litellm.callbacks
     litellm.callbacks = [recording_logger]
@@ -176,11 +188,7 @@ async def test_aquery_with_rerank_bills_once_and_folds_rerank_cost():
                 mock_response="hi there",
             )
 
-        for _ in range(50):
-            if recording_logger.success_events:
-                break
-            await asyncio.sleep(0.1)
-        await asyncio.sleep(0.5)
+        await _drain_logging_worker()
     finally:
         litellm.callbacks = original_callbacks
 
@@ -210,6 +218,7 @@ async def test_aquery_streaming_bills_sub_call_costs_into_final_event():
     """
     from litellm.types.rerank import RerankResponse
 
+    await _drain_logging_worker()
     recording_logger = RecordingLogger()
     original_callbacks = litellm.callbacks
     litellm.callbacks = [recording_logger]
@@ -237,11 +246,7 @@ async def test_aquery_streaming_bills_sub_call_costs_into_final_event():
             async for _ in response:
                 pass
 
-        for _ in range(50):
-            if recording_logger.success_events:
-                break
-            await asyncio.sleep(0.1)
-        await asyncio.sleep(0.5)
+        await _drain_logging_worker()
     finally:
         litellm.callbacks = original_callbacks
 
@@ -252,6 +257,135 @@ async def test_aquery_streaming_bills_sub_call_costs_into_final_event():
     standard_logging_object = recording_logger.success_events[0]["kwargs"]["standard_logging_object"]
     assert standard_logging_object["call_type"] == "aquery"
     assert standard_logging_object["response_cost"] >= 0.003
+
+
+@pytest.mark.asyncio
+async def test_aquery_forwards_provider_retrieval_config_and_router_to_search():
+    """
+    Regression: provider-specific retrieval_config keys (aws_region_name,
+    embedding_model, vector_bucket_name, ...) and the router must be forwarded
+    to the vector store search call. Pre-fix they were silently dropped, so
+    /v1/rag/query failed with provider config errors (e.g. S3 Vectors
+    "aws_region_name is required") even when the caller supplied them.
+    """
+    from unittest.mock import AsyncMock
+
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+            }
+        ]
+    )
+
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page", search_query="q", data=[]
+        )
+    )
+    with patch("litellm.vector_stores.asearch", new=fake_search):  # test-quality-ok: asearch is the boundary the forwarding contract under test targets
+        response = await litellm.aquery(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            retrieval_config={
+                "vector_store_id": "bkt:idx",
+                "custom_llm_provider": "s3_vectors",
+                "top_k": 5,
+                "aws_region_name": "eu-west-1",
+                "embedding_model": "my-embed",
+                "vector_bucket_name": "bkt",
+            },
+            router=router,
+            mock_response="hi",
+        )
+
+    assert isinstance(response, ModelResponse)
+    fake_search.assert_awaited_once()
+    search_kwargs = fake_search.await_args.kwargs
+    assert search_kwargs["vector_store_id"] == "bkt:idx"
+    assert search_kwargs["custom_llm_provider"] == "s3_vectors"
+    assert search_kwargs["max_num_results"] == 5
+    assert search_kwargs["router"] is router
+    # provider-specific extras forwarded
+    assert search_kwargs["aws_region_name"] == "eu-west-1"
+    assert search_kwargs["embedding_model"] == "my-embed"
+    assert search_kwargs["vector_bucket_name"] == "bkt"
+    # consumed keys are not duplicated into the spread
+    assert "top_k" not in search_kwargs
+
+
+@pytest.mark.asyncio
+async def test_aquery_minimal_retrieval_config_forwards_no_extras():
+    """
+    A minimal retrieval_config must not leak consumed keys (or invent extras)
+    into the vector store search call.
+    """
+    from unittest.mock import AsyncMock
+
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page", search_query="q", data=[]
+        )
+    )
+    with patch("litellm.vector_stores.asearch", new=fake_search):  # test-quality-ok: asearch is the boundary the forwarding contract under test targets
+        await litellm.aquery(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            retrieval_config={"vector_store_id": "vs_test_123", "custom_llm_provider": "openai"},
+            mock_response="hi",
+        )
+
+    fake_search.assert_awaited_once()
+    search_kwargs = fake_search.await_args.kwargs
+    assert search_kwargs["vector_store_id"] == "vs_test_123"
+    assert search_kwargs["custom_llm_provider"] == "openai"
+    assert search_kwargs["router"] is None
+    leaked = {"top_k", "filters", "retrieval_filter", "aws_region_name", "embedding_model", "vector_bucket_name"}
+    assert not (leaked & set(search_kwargs.keys()))
+
+
+@pytest.mark.asyncio
+async def test_aquery_does_not_forward_connection_override_keys_to_search():
+    """
+    Only allowlisted retrieval_config keys may reach the vector store search
+    call. Caller-controlled connection overrides (api_base, api_key, arbitrary
+    extras) must be dropped, otherwise a caller could redirect store
+    credentials to an attacker-chosen host.
+    """
+    from unittest.mock import AsyncMock
+
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page", search_query="q", data=[]
+        )
+    )
+    with patch("litellm.vector_stores.asearch", new=fake_search):  # test-quality-ok: asearch is the boundary the forwarding contract under test targets
+        await litellm.aquery(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            retrieval_config={
+                "vector_store_id": "bkt:idx",
+                "custom_llm_provider": "s3_vectors",
+                "aws_region_name": "eu-west-1",
+                "api_base": "https://attacker.example.com",
+                "api_key": "attacker-key",
+                "arbitrary_extra": "nope",
+            },
+            mock_response="hi",
+        )
+
+    fake_search.assert_awaited_once()
+    search_kwargs = fake_search.await_args.kwargs
+    assert search_kwargs["aws_region_name"] == "eu-west-1"
+    blocked = {"api_base", "api_key", "arbitrary_extra"}
+    assert not (blocked & set(search_kwargs.keys()))
 
 
 def test_rag_call_types_are_registered():

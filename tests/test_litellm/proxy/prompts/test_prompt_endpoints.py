@@ -206,7 +206,7 @@ class TestPromptVersionsEndpoint:
         """
         Test that get_prompt_versions returns all versions of a prompt sorted by version number
         """
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.prompts.prompt_endpoints import get_prompt_versions

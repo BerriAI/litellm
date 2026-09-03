@@ -1,11 +1,12 @@
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from typing import (
     TYPE_CHECKING,
-    Any,
     Final,
     TypeAlias,
     cast,
 )
+
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -20,6 +21,7 @@ from litellm.llms.anthropic.experimental_pass_through.context_management import 
 )
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
+    local_model_name,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -37,6 +39,11 @@ ANTHROPIC_ONLY_REQUEST_KEYS: Final[frozenset[str]] = frozenset({"output_config"}
 _AnthropicMessages: TypeAlias = "list[dict[str, object]]"
 _AnthropicSystem: TypeAlias = "str | list[dict[str, object]] | None"
 _ContextManagementSpec: TypeAlias = "dict[str, object] | list[dict[str, object]] | None"
+
+
+class _CompletionKwargs(TypedDict, total=False, extra_items=object):
+    model: str
+    custom_llm_provider: str
 
 
 def _messages_have_compaction_block(messages: _AnthropicMessages) -> bool:
@@ -312,7 +319,7 @@ ANTHROPIC_ADAPTER: Final = AnthropicAdapter()
 class LiteLLMMessagesToCompletionTransformationHandler:
     @staticmethod
     def _route_openai_thinking_to_responses_api_if_needed(
-        completion_kwargs: dict[str, Any],
+        completion_kwargs: _CompletionKwargs,
         *,
         thinking: Mapping[str, object] | None,
     ) -> None:
@@ -352,9 +359,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         except Exception:
             pass
 
-        if isinstance(model, str) and model and not model.startswith("responses/"):
-            # Prefix model with "responses/" to route to OpenAI Responses API
-            completion_kwargs["model"] = f"responses/{model}"
+        if isinstance(model, str) and model and "responses/" not in model:
+            local_model: Final = model.removeprefix(f"{custom_llm_provider}/")
+            completion_kwargs["model"] = f"{custom_llm_provider}/responses/{local_model}"
 
         auto_summary: Final = is_reasoning_auto_summary_enabled()
 
@@ -377,7 +384,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
     @staticmethod
     def _normalize_reasoning_effort(
-        completion_kwargs: dict[str, Any],
+        completion_kwargs: _CompletionKwargs,
     ) -> None:
         """
         Normalize reasoning_effort values based on target model capabilities.
@@ -393,7 +400,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if reasoning_effort is None:
             return
 
-        model: Final = cast(str, completion_kwargs.get("model", ""))
+        model: Final = completion_kwargs.get("model", "")
         custom_llm_provider: Final = completion_kwargs.get("custom_llm_provider")
 
         if isinstance(reasoning_effort, str):
@@ -417,19 +424,19 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         max_tokens: int,
         messages: _AnthropicMessages,
         model: str,
-        metadata: dict | None = None,
+        metadata: dict[str, object] | None = None,
         stop_sequences: list[str] | None = None,
         stream: bool | None = False,
         system: _AnthropicSystem = None,
         temperature: float | None = None,
-        thinking: dict | None = None,
-        tool_choice: dict | None = None,
-        tools: list[dict] | None = None,
+        thinking: dict[str, object] | None = None,
+        tool_choice: dict[str, object] | None = None,
+        tools: list[dict[str, object]] | None = None,
         top_k: int | None = None,
         top_p: float | None = None,
-        output_format: dict | None = None,
+        output_format: dict[str, object] | None = None,
         extra_kwargs: Mapping[str, object] | None = None,
-    ) -> tuple[dict[str, Any], dict[str, str]]:
+    ) -> tuple[_CompletionKwargs, dict[str, str]]:
         """Prepare kwargs for litellm.completion/acompletion.
 
         Returns:
@@ -478,15 +485,19 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if "output_config" in extra_kwargs:
             request_data["output_config"] = extra_kwargs["output_config"]
 
+        custom_llm_provider: Final = extra_kwargs.get("custom_llm_provider")
         (
             openai_request,
             tool_name_mapping,
-        ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(request_data)
+        ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
+            request_data,
+            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+        )
 
         if openai_request is None:
             raise ValueError("Failed to translate request to OpenAI format")
 
-        completion_kwargs: Final[dict[str, Any]] = dict(openai_request)
+        completion_kwargs: Final[_CompletionKwargs] = {**openai_request}
 
         if stream:
             completion_kwargs["stream"] = stream
@@ -520,6 +531,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             if key not in excluded_keys and key not in completion_kwargs and value is not None:
                 completion_kwargs[key] = value
 
+        explicit_prompt_cache_key: Final = extra_kwargs.get("prompt_cache_key")
+        if explicit_prompt_cache_key is not None:
+            completion_kwargs["prompt_cache_key"] = explicit_prompt_cache_key
+
         # Normalize reasoning_effort based on model capabilities
         # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
         # Must run BEFORE _route_openai_thinking, which prepends "responses/"
@@ -538,17 +553,17 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         max_tokens: int,
         messages: _AnthropicMessages,
         model: str,
-        metadata: dict | None = None,
+        metadata: dict[str, object] | None = None,
         stop_sequences: list[str] | None = None,
         stream: bool | None = False,
         system: str | None = None,
         temperature: float | None = None,
-        thinking: dict | None = None,
-        tool_choice: dict | None = None,
+        thinking: dict[str, object] | None = None,
+        tool_choice: dict[str, object] | None = None,
         tools: list[dict[str, object]] | None = None,
         top_k: int | None = None,
         top_p: float | None = None,
-        output_format: dict | None = None,
+        output_format: dict[str, object] | None = None,
         **kwargs,
     ) -> AnthropicMessagesResponse | AsyncIterator[bytes] | Iterator[bytes]:
         """Handle non-Anthropic models asynchronously using the adapter"""
@@ -602,7 +617,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
-                model=model,
+                model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=True,
@@ -625,17 +640,17 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         max_tokens: int,
         messages: _AnthropicMessages,
         model: str,
-        metadata: dict | None = None,
+        metadata: dict[str, object] | None = None,
         stop_sequences: list[str] | None = None,
         stream: bool | None = False,
         system: str | None = None,
         temperature: float | None = None,
-        thinking: dict | None = None,
-        tool_choice: dict | None = None,
+        thinking: dict[str, object] | None = None,
+        tool_choice: dict[str, object] | None = None,
         tools: list[dict[str, object]] | None = None,
         top_k: int | None = None,
         top_p: float | None = None,
-        output_format: dict | None = None,
+        output_format: dict[str, object] | None = None,
         _is_async: bool = False,
         **kwargs,
     ) -> (
@@ -736,7 +751,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
-                model=model,
+                model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=False,

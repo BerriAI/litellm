@@ -2,8 +2,6 @@
 Tests for access group management endpoints.
 """
 
-import os
-import sys
 import types
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -21,7 +19,6 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 
-sys.path.insert(0, os.path.abspath("../../../"))
 
 
 def _make_access_group_record(

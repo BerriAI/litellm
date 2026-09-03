@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
@@ -136,6 +137,49 @@ func resourceKey() *schema.Resource {
 				Type:     schema.TypeFloat,
 				Computed: true,
 			},
+			"budget_id": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"enforced_params": {
+				Type:     schema.TypeList,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"allowed_routes": {
+				Type:     schema.TypeList,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"allowed_passthrough_routes": {
+				Type:     schema.TypeList,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"rpm_limit_type": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "One of 'guaranteed_throughput', 'best_effort_throughput' or 'dynamic'",
+			},
+			"tpm_limit_type": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "One of 'guaranteed_throughput', 'best_effort_throughput' or 'dynamic'",
+			},
+			"prompts": {
+				Type:     schema.TypeList,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"organization_id": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"project_id": {
+				Type:     schema.TypeString,
+				Optional: true,
+				ForceNew: true,
+			},
 		},
 	}
 }
@@ -145,6 +189,14 @@ func resourceKeyCreate(ctx context.Context, d *schema.ResourceData, m interface{
 
 	key := &Key{}
 	mapResourceDataToKey(d, key)
+	// A config-supplied key value becomes the key itself; when absent the
+	// proxy generates one. Write-only attributes are invisible to d.Get in
+	// real Terraform runs, so read the raw config first.
+	if raw, err := d.GetRawConfigAt(cty.GetAttrPath("key")); err == nil && !raw.IsNull() && raw.Type() == cty.String && raw.AsString() != "" {
+		key.Key = raw.AsString()
+	} else if v := d.Get("key").(string); v != "" {
+		key.Key = v
+	}
 
 	createdKey, err := c.CreateKey(key)
 	if err != nil {
@@ -239,6 +291,15 @@ func mapResourceDataToKey(d *schema.ResourceData, key *Key) {
 	key.Guardrails = expandStringList(d.Get("guardrails").([]interface{}))
 	key.Blocked = d.Get("blocked").(bool)
 	key.Tags = expandStringList(d.Get("tags").([]interface{}))
+	key.BudgetID = d.Get("budget_id").(string)
+	key.EnforcedParams = expandStringList(d.Get("enforced_params").([]interface{}))
+	key.AllowedRoutes = expandStringList(d.Get("allowed_routes").([]interface{}))
+	key.AllowedPassthroughRoutes = expandStringList(d.Get("allowed_passthrough_routes").([]interface{}))
+	key.RPMLimitType = d.Get("rpm_limit_type").(string)
+	key.TPMLimitType = d.Get("tpm_limit_type").(string)
+	key.Prompts = expandStringList(d.Get("prompts").([]interface{}))
+	key.OrganizationID = d.Get("organization_id").(string)
+	key.ProjectID = d.Get("project_id").(string)
 }
 
 func mapKeyToResourceData(d *schema.ResourceData, key *Key) {
@@ -315,5 +376,32 @@ func mapKeyToResourceData(d *schema.ResourceData, key *Key) {
 	}
 	if key.Spend != 0 {
 		d.Set("spend", key.Spend)
+	}
+	if key.BudgetID != "" {
+		d.Set("budget_id", key.BudgetID)
+	}
+	if len(key.EnforcedParams) > 0 {
+		d.Set("enforced_params", key.EnforcedParams)
+	}
+	if len(key.AllowedRoutes) > 0 {
+		d.Set("allowed_routes", key.AllowedRoutes)
+	}
+	if len(key.AllowedPassthroughRoutes) > 0 {
+		d.Set("allowed_passthrough_routes", key.AllowedPassthroughRoutes)
+	}
+	if key.RPMLimitType != "" {
+		d.Set("rpm_limit_type", key.RPMLimitType)
+	}
+	if key.TPMLimitType != "" {
+		d.Set("tpm_limit_type", key.TPMLimitType)
+	}
+	if len(key.Prompts) > 0 {
+		d.Set("prompts", key.Prompts)
+	}
+	if key.OrganizationID != "" {
+		d.Set("organization_id", key.OrganizationID)
+	}
+	if key.ProjectID != "" {
+		d.Set("project_id", key.ProjectID)
 	}
 }

@@ -359,31 +359,6 @@ async def test_should_hide_unowned_skill_by_default(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_unowned_skill_is_admin_only(monkeypatch):
-    """Pre-isolation skills with no ``created_by`` are admin-only — non-admin
-    callers see the same "not found" they'd see for a missing row, with no
-    opt-out env var that re-opens the cross-tenant access primitive."""
-    table = AsyncMock()
-    table.find_unique.return_value = _skill("litellm_skill_unowned", None)
-    prisma_client = type(
-        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
-    )()
-    monkeypatch.setattr(
-        LiteLLMSkillsHandler,
-        "_get_prisma_client",
-        AsyncMock(return_value=prisma_client),
-    )
-
-    auth = UserAPIKeyAuth(user_id="user-1")
-
-    with pytest.raises(ValueError, match="Skill not found"):
-        await LiteLLMSkillsHandler.get_skill(
-            "litellm_skill_unowned",
-            user_api_key_dict=auth,
-        )
-
-
-@pytest.mark.asyncio
 async def test_list_skills_excludes_unowned_for_non_admin(monkeypatch):
     """Non-admin list queries scope to ``created_by IN owner_scopes``; rows
     with ``created_by IS NULL`` are excluded — admin-only."""

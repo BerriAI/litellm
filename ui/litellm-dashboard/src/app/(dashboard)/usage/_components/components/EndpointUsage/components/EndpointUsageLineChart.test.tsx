@@ -68,8 +68,8 @@ describe("EndpointUsageLineChart", () => {
 
     const legend = container.querySelector(".recharts-legend-wrapper");
     expect(legend).not.toBeNull();
-    expect(legend!.textContent).toContain("/chat/completions");
-    expect(legend!.textContent).toContain("/embeddings");
+    expect(legend!).toHaveTextContent(/\/chat\/completions/);
+    expect(legend!).toHaveTextContent(/\/embeddings/);
   });
 
   it("orders formatted dates oldest to newest on the x axis", () => {
