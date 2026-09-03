@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.cli_keyring import (
     SecretMissing,
     SecretStored,
     SecretStranded,
+    SecretTooLarge,
     SecretVault,
 )
 from litellm.litellm_core_utils.cli_token_utils import (
@@ -147,6 +148,8 @@ def storage_notice(outcome: SecretSave) -> str:
                 f"Your keyring backend keeps nothing it is given, so the credential was stored in {path} "
                 f"(owner-only) instead. For OS keychain storage, run: {KEYRING_ENABLE_HINT}"
             )
+        case SecretTooLarge():
+            return f"Your credential is too large for the OS keychain, so it was stored in {path} (owner-only) instead."
         case CredentialNotSaved(detail=detail):
             return (
                 f"Signed in, but the credential could not be saved to {path}: {detail}. "
