@@ -10,10 +10,11 @@ from .shared.reporting.models import SDK_FUNCTIONS, HarnessCase, Strategy
 from .shared.reporting.orchestration import StrategyRunner, run_strategies
 from .shared.reporting.ui import make_dashboard
 from .strategies.e2e_parity.runner import run as run_e2e
-from .strategies.existing_e2e_test_sdk.runner import run as run_existing
 from .strategies.trace_parity.runner import run as run_trace
-from .strategies.unit_tests.mapping_validator import FunctionReport, build_function_report
-from .strategies.unit_tests.runner import run as run_units
+from .strategies.unit_tests_mapping.mapping_validator import FunctionReport, build_function_report
+from .strategies.unit_tests_mapping.runner import run as run_unit_mapping
+from .strategies.unit_tests_parity.runner import run as run_unit_parity
+from .strategies.unit_tests_rust.runner import run as run_units_rust
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COVERAGE_ROOT = REPO_ROOT / "target" / "rust-python-harness"
@@ -183,10 +184,12 @@ def _resolve_runner(strategy_id: str) -> StrategyRunner:
             return run_e2e
         case "trace_parity":
             return run_trace
-        case "unit_tests":
-            return run_units
-        case "existing_e2e_test_sdk":
-            return run_existing
+        case "unit_tests_mapping":
+            return run_unit_mapping
+        case "unit_tests_parity":
+            return run_unit_parity
+        case "unit_tests_rust":
+            return run_units_rust
         case _:
             raise ValueError(f"Unknown strategy: {strategy_id}")
 

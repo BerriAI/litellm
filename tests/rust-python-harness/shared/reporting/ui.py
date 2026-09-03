@@ -52,7 +52,7 @@ def _format_duration(seconds: float) -> str:
 
 def _rerun_command(nodeid: str) -> str:
     if nodeid.startswith("unit-suite:"):
-        return "uv run python -m tests.rust-python-harness.strategies.unit_tests.runner --plain"
+        return "uv run python -m tests.rust-python-harness.strategies.unit_tests_mapping.runner --plain"
     return f"poetry run pytest {shlex.quote(nodeid)} -q -o consider_namespace_packages=true"
 
 

@@ -9,8 +9,8 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict
 
 from ...shared.parity.ledger import TestLedger, load_ledger
-from .python_runner import enumerate_python_tests
-from .rust_runner import enumerate_rust_tests
+from ...shared.unit_runners.python_runner import enumerate_python_tests
+from ...shared.unit_runners.rust_runner import enumerate_rust_tests
 
 
 class TestMapping(BaseModel):

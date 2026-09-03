@@ -51,3 +51,16 @@ def test_rejects_wrong_backend_and_different_test_results(tmp_path: Path, monkey
     assert wrong.exit_code == 1
     assert not wrong.verified
     assert "backend probe did not select rust" in wrong.problems[0]
+
+
+def test_matches_outcomes_without_a_probe_when_both_backends_fail_identically(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PYTHONPATH", str(HARNESS_ROOT))
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    (tmp_path / "pytest.ini").write_text("[pytest]\n")
+    (tmp_path / "test_backend.py").write_text("def test_fails():\n    assert False\n")
+    spec: Final = BackendSpec(environment_variable="TEST_USE_RUST")
+
+    python: Final = run_python_tests(("test_backend.py",), tmp_path, "python", spec)
+    rust: Final = run_python_tests(("test_backend.py",), tmp_path, "rust", spec)
+
+    assert compare_python_runs(python, rust) == ()

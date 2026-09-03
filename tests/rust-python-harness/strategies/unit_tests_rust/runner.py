@@ -10,35 +10,25 @@ from pydantic import BaseModel, ConfigDict
 
 from ...shared.reporting.models import HarnessCase, HarnessRun, RunStatus
 from ...shared.reporting.pytest_runner import UpdateCallback
-from .mapping_validator import TestMapping, validate_mapping
-from .python_runner import BackendSpec, compare_python_runs, run_python_tests
-from .rust_runner import run_rust_tests
+from ...shared.unit_runners.rust_runner import run_rust_tests
 
 
-class UnitSuite(BaseModel):
+class RustSuite(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    python_selectors: tuple[str, ...]
     cargo_manifest: str
     cargo_package: str
     cargo_filter: str
-    backend: BackendSpec
-    mappings: tuple[TestMapping, ...] = ()
 
 
-def run_suite(suite: UnitSuite, repo_root: Path, pytest_args: Sequence[str] = ()) -> tuple[str, ...]:
-    if not suite.python_selectors or not suite.cargo_filter:
-        return ("unit suites must select Python tests and a focused Cargo filter",)
-    python: Final = run_python_tests(suite.python_selectors, repo_root, "python", suite.backend, pytest_args)
-    rust_python: Final = run_python_tests(suite.python_selectors, repo_root, "rust", suite.backend, pytest_args)
+def run_suite(suite: RustSuite, repo_root: Path) -> tuple[str, ...]:
+    if not suite.cargo_filter:
+        return ("rust suites must configure a focused Cargo filter",)
     inventory: Final = run_rust_tests(
         repo_root / suite.cargo_manifest, suite.cargo_package, suite.cargo_filter, collect_only=True
     )
-    mapping: Final = validate_mapping(python.tests, inventory.tests, suite.mappings)
     rust: Final = run_rust_tests(repo_root / suite.cargo_manifest, suite.cargo_package, suite.cargo_filter)
     return (
-        *compare_python_runs(python, rust_python),
-        *mapping.problems,
         *(("native Rust tests did not all pass",) if set(inventory.tests) != set(rust.tests) else ()),
         *((inventory.output,) if inventory.exit_code else ()),
         *((rust.output,) if rust.exit_code else ()),
@@ -57,13 +47,13 @@ def run(
         if case.unit_suite is None:
             result.finalize()
             continue
-        nodeid: Final = f"unit-suite:{case.unit_suite}"
+        nodeid: Final = f"rust-suite:{case.unit_suite}"
         result.collected.add(nodeid)
         result.status = RunStatus.RUNNING
         on_update(report)
         try:
-            suite: Final = UnitSuite.model_validate_json((repo_root / case.unit_suite).read_text())
-            problems: Final = run_suite(suite, repo_root, pytest_args)
+            suite: Final = RustSuite.model_validate_json((repo_root / case.unit_suite).read_text())
+            problems: Final = run_suite(suite, repo_root)
         except (OSError, ValueError) as error:
             result.record(nodeid, RunStatus.ERROR)
             report.failures.append((nodeid, str(error)))
@@ -84,7 +74,7 @@ def run(
 def main(argv: Sequence[str] | None = None) -> int:
     from ...cli import main as harness_main
 
-    return harness_main(argv, strategy_id="unit_tests")
+    return harness_main(argv, strategy_id="unit_tests_rust")
 
 
 if __name__ == "__main__":

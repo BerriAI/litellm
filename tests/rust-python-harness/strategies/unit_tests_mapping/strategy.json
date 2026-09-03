@@ -1,8 +1,8 @@
 {
   "order": 30,
-  "id": "unit_tests",
-  "label": "Unit tests",
-  "description": "Validate Python/Rust test mappings and compare isolated Python runs alongside native Cargo tests.",
+  "id": "unit_tests_mapping",
+  "label": "Unit test mapping",
+  "description": "Validate Python/Rust unit-test mappings against collected test inventories.",
   "functions": {
     "ocr": {
       "coverage": "planned",

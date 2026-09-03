@@ -32,7 +32,7 @@ class BackendSpec(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     environment_variable: str
-    probe: str
+    probe: str = ""
 
 
 def ocr_backend() -> Backend:
@@ -47,7 +47,7 @@ def ocr_backend() -> Backend:
 
 
 class ResultPlugin:
-    def __init__(self, backend: Backend, probe: Callable[[], object]) -> None:
+    def __init__(self, backend: Backend, probe: Callable[[], object] | None) -> None:
         self.backend: Final = backend
         self.probe: Final = probe
         self.tests: tuple[str, ...] = ()
@@ -55,7 +55,7 @@ class ResultPlugin:
         self.problems: tuple[str, ...] = ()
 
     def verify(self) -> None:
-        if self.probe() != self.backend:
+        if self.probe is not None and self.probe() != self.backend:
             raise RuntimeError(f"backend probe did not select {self.backend}")
 
     def pytest_collection_finish(self, session: pytest.Session) -> None:
@@ -91,8 +91,7 @@ def run_python_tests(
             __name__,
             "--backend",
             backend,
-            "--probe",
-            spec.probe,
+            *(("--probe", spec.probe) if spec.probe else ()),
             "--output",
             str(output),
             "--",
@@ -136,36 +135,26 @@ def compare_python_runs(python: PythonReport, rust: PythonReport) -> tuple[str, 
         *(("Python/Rust test inventories differ",) if python.tests != rust.tests else ()),
         *(("Python/Rust test outcomes differ",) if sorted(python.outcomes) != sorted(rust.outcomes) else ()),
         *(("no Python tests collected",) if not python.tests else ()),
-        *(
-            ("Python tests did not all pass",)
-            if set(python.tests)
-            != {node for node, phase, status in python.outcomes if phase == "call" and status == "passed"}
-            else ()
-        ),
-        *(
-            ("Rust-enabled Python tests did not all pass",)
-            if set(rust.tests)
-            != {node for node, phase, status in rust.outcomes if phase == "call" and status == "passed"}
-            else ()
-        ),
-        *(("Python test run failed",) if python.exit_code else ()),
-        *(("Rust-enabled Python test run failed",) if rust.exit_code else ()),
-        *python.problems,
-        *rust.problems,
+        *(("Python/Rust exit codes differ",) if python.exit_code != rust.exit_code else ()),
     )
+
+
+def _load_probe(reference: str) -> Callable[[], object] | None:
+    if not reference:
+        return None
+    module, name = reference.rsplit(":", 1)
+    return cast(Callable[[], object], getattr(importlib.import_module(module), name))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser: Final = argparse.ArgumentParser()
     parser.add_argument("--backend", required=True, choices=("python", "rust"))
-    parser.add_argument("--probe", required=True)
+    parser.add_argument("--probe", default="")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("pytest_args", nargs=argparse.REMAINDER)
     args: Final = parser.parse_args(argv)
     try:
-        module, name = args.probe.rsplit(":", 1)
-        probe: Final = cast(Callable[[], object], getattr(importlib.import_module(module), name))
-        plugin: Final = ResultPlugin(args.backend, probe)
+        plugin: Final = ResultPlugin(args.backend, _load_probe(args.probe))
         plugin.verify()
         code: Final = int(
             pytest.main(["-o", "consider_namespace_packages=true", *args.pytest_args[1:]], plugins=[plugin])

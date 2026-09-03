@@ -19,16 +19,21 @@ tests/rust-python-harness/
 │   │   ├── sdk/
 │   │   └── gateway/
 │   │
-│   └── unit_tests/
-│       ├── runner.py
-│       ├── mapping_validator.py
-│       ├── python_runner.py
-│       └── rust_runner.py
+│   ├── unit_tests_mapping/
+│   │   ├── runner.py
+│   │   └── mapping_validator.py
+│   │
+│   ├── unit_tests_parity/
+│   │   └── runner.py
+│   │
+│   └── unit_tests_rust/
+│       └── runner.py
 │
 └── shared/
     ├── parity/
     ├── tracing/
-    └── reporting/
+    ├── reporting/
+    └── unit_runners/
 ```
 
 - Run locally only; no CI integration
@@ -36,9 +41,10 @@ tests/rust-python-harness/
 - `e2e_parity/` compares SDK objects, exceptions, callbacks, and streams, or gateway HTTP responses
 - `trace_parity/` compares mapped operations, call counts, and required execution ordering
 - E2E and trace runners share orchestration across `sdk/` and `gateway/`; surface-specific execution lives in those folders
-- `unit_tests/runner.py` combines mapping validation, Python test runs, and native Rust test runs
-- `mapping_validator.py` matches Python/Rust tests by agreed names or annotations and reports missing or ambiguous counterparts
-- `python_runner.py` runs existing Python tests with Rust disabled and enabled in separate processes, verifies backend selection, and compares results
-- `rust_runner.py` runs Cargo tests; native Rust unit tests stay beside their implementation
-- `shared/` contains reusable parity, tracing, and reporting machinery
+- `unit_tests_mapping/runner.py` validates Python/Rust test mappings against collected test inventories without running the selected tests
+- `unit_tests_mapping/mapping_validator.py` matches Python/Rust tests by agreed names or annotations and reports missing or ambiguous counterparts
+- `unit_tests_parity/runner.py` runs existing Python unit tests with `LITELLM_RUST=0` and `LITELLM_RUST=1` in separate processes and requires matching outcomes, including failures
+- `unit_tests_rust/runner.py` runs Cargo tests; native Rust unit tests stay beside their implementation
+- `shared/` contains reusable parity, tracing, reporting, and unit-runner machinery
 - Keep fixtures with their owning API and existing Python tests in their current locations
+- Each strategy folder carries an `AGENTS.md` one-liner stating what it should be doing

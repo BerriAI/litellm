@@ -1,0 +1,32 @@
+{
+  "order": 32,
+  "id": "unit_tests_rust",
+  "label": "Unit test Rust",
+  "description": "Run the focused native Cargo test suite for each mapped API.",
+  "functions": {
+    "ocr": {
+      "coverage": "planned",
+      "selectors": []
+    },
+    "messages": {
+      "coverage": "planned",
+      "selectors": []
+    },
+    "chat_completions": {
+      "coverage": "planned",
+      "selectors": []
+    },
+    "responses": {
+      "coverage": "planned",
+      "selectors": []
+    },
+    "count_tokens": {
+      "coverage": "planned",
+      "selectors": []
+    },
+    "transcription": {
+      "coverage": "planned",
+      "selectors": []
+    }
+  }
+}

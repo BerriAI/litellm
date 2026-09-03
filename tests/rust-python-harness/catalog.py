@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from .shared.reporting.models import Coverage, HarnessCase, SDK_FUNCTIONS, Strategy
 
 STRATEGIES_ROOT: Final = Path(__file__).parent / "strategies"
+UNIT_STRATEGY_IDS: Final = frozenset({"unit_tests_mapping", "unit_tests_parity", "unit_tests_rust"})
 
 
 class CaseSpec(BaseModel):
@@ -55,10 +56,10 @@ def _load_strategy(source: Path) -> Strategy:
             raise ValueError(f"{source}: {case.coverage.value} case {case.key} cannot configure tests")
         if any(not selector.strip() for selector in case.selectors):
             raise ValueError(f"{source}: empty selector in {case.key}")
-        if data.id == "unit_tests" and case.selectors:
-            raise ValueError(f"{source}: unit_tests must configure unit_suite instead of pytest selectors")
-        if data.id != "unit_tests" and case.unit_suite:
-            raise ValueError(f"{source}: unit_suite is only valid for unit_tests")
+        if data.id in UNIT_STRATEGY_IDS and case.selectors:
+            raise ValueError(f"{source}: {data.id} must configure unit_suite instead of pytest selectors")
+        if data.id not in UNIT_STRATEGY_IDS and case.unit_suite:
+            raise ValueError(f"{source}: unit_suite is only valid for {sorted(UNIT_STRATEGY_IDS)}")
     return Strategy(data.order, data.id, data.label, data.description, source.parent, cases)
 
 

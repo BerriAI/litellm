@@ -1,0 +1,32 @@
+{
+  "order": 31,
+  "id": "unit_tests_parity",
+  "label": "Unit test parity",
+  "description": "Run the existing litellm Python unit tests with LITELLM_RUST disabled and enabled in separate processes and require the two runs to match, including on failures.",
+  "functions": {
+    "ocr": {
+      "coverage": "planned",
+      "selectors": []
+    },
+    "messages": {
+      "coverage": "planned",
+      "selectors": []
+    },
+    "chat_completions": {
+      "coverage": "planned",
+      "selectors": []
+    },
+    "responses": {
+      "coverage": "planned",
+      "selectors": []
+    },
+    "count_tokens": {
+      "coverage": "planned",
+      "selectors": []
+    },
+    "transcription": {
+      "coverage": "planned",
+      "selectors": []
+    }
+  }
+}

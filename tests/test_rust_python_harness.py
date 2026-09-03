@@ -17,7 +17,7 @@ runner = importlib.import_module("tests.rust-python-harness.shared.reporting.pyt
 ui = importlib.import_module("tests.rust-python-harness.shared.reporting.ui")
 ledger_module = importlib.import_module("tests.rust-python-harness.shared.parity.ledger")
 mapping_validator = importlib.import_module(
-    "tests.rust-python-harness.strategies.unit_tests.mapping_validator"
+    "tests.rust-python-harness.strategies.unit_tests_mapping.mapping_validator"
 )
 
 load_catalog = catalog.load_catalog
@@ -70,14 +70,15 @@ def _manifest() -> dict[str, object]:
     }
 
 
-def test_should_load_the_four_harness_strategies_in_order() -> None:
+def test_should_load_the_five_harness_strategies_in_order() -> None:
     strategies = load_catalog()
 
     assert [strategy.id for strategy in strategies] == [
         "e2e_parity",
         "trace_parity",
-        "unit_tests",
-        "existing_e2e_test_sdk",
+        "unit_tests_mapping",
+        "unit_tests_parity",
+        "unit_tests_rust",
     ]
     assert all(
         tuple(case.sdk_function for case in strategy.cases) == SDK_FUNCTIONS
@@ -159,7 +160,7 @@ def test_should_treat_an_all_planned_filtered_run_as_success(tmp_path: Path) -> 
     assert next(iter(run.results.values())).status is RunStatus.PLANNED
 
 
-@pytest.mark.parametrize("strategy_id", ("e2e_parity", "existing_e2e_test_sdk"))
+@pytest.mark.parametrize("strategy_id", ("e2e_parity", "trace_parity"))
 def test_should_run_namespace_package_relative_imports(tmp_path: Path, strategy_id: str) -> None:
     package: Final = tmp_path / "manual_suite" / "relative-tests"
     package.mkdir(parents=True)
@@ -293,8 +294,8 @@ def test_should_report_confidence_for_each_sdk_section() -> None:
     }
 
     assert scores["responses"].verified_strategies == 1
-    assert scores["responses"].required_strategies == 4
-    assert scores["responses"].percentage == 25
+    assert scores["responses"].required_strategies == 5
+    assert scores["responses"].percentage == 20
     assert scores["responses"].level.value == "MEDIUM"
     assert scores["count_tokens"].percentage == 0
     assert scores["count_tokens"].level.value == "LOW"
@@ -331,7 +332,10 @@ def test_should_scope_validate_ledger_to_the_requested_function(
     assert "ocr" not in captured.out
 
 
-@pytest.mark.parametrize("strategy_id", (None, "e2e_parity", "trace_parity", "unit_tests", "existing_e2e_test_sdk"))
+@pytest.mark.parametrize(
+    "strategy_id",
+    (None, "e2e_parity", "trace_parity", "unit_tests_mapping", "unit_tests_parity", "unit_tests_rust"),
+)
 def test_should_validate_chat_completions_ledger_from_each_runner(
     strategy_id: str | None, capsys: pytest.CaptureFixture[str]
 ) -> None:
