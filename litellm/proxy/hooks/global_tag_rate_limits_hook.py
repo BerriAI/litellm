@@ -66,30 +66,33 @@ but inherits the same ContextVar-held ancestor context, not a separate one
 having its own success callback release the outer call's still-pending
 reservations early.
 
-`Router.abatch_completion`'s comma-separated `model` fans this one admission
-out into several real, independent LLM calls below this hook entirely (it
-never re-runs `async_pre_call_hook` per branch the way
-`model_based_tag_rate_limits_hook`'s per-Router-hop admission does). Every
-branch shares the one `litellm_logging_obj` this same request already
-carries (attached in `common_request_processing.py` before Router ever
-sees the request, then threaded unchanged through every branch's own
-`**kwargs`), so `Logging.should_run_logging`'s per-event-type dedup fires
-this hook's own success/failure callback at most once for a success and at
-most once for a failure across the *whole* dispatch, never once per
-branch -- confirmed live against the real dispatch, including with a real,
-shared `litellm_logging_obj` attached the way production actually does it.
-Reserving one unit per model and expecting each to release on its own
-branch's event (an earlier version of this hook did exactly that) is
-therefore not just occasionally racy: it guarantees every batch of width
-more than 2 leaks the surplus for the safety TTL, every single call. This
-hook instead reserves exactly one unit for the whole non-racing dispatch,
-same as the racing `abatch_completion_fastest_response` variant below,
-and releases it on whichever single event fires first -- a second event
-firing (the mixed success-and-failure case) finds nothing left and is a
-safe no-op. That undercounts the dispatch's real, brief concurrent
-provider load, the same accepted tradeoff already made for
-`abatch_completion_fastest_response`, whose cancelled losers never fire a
-terminal event at all.
+`Router.abatch_completion`/`abatch_completion_fastest_response`'s
+comma-separated `model` fans this one admission out into several real,
+independent LLM calls below this hook entirely (it never re-runs
+`async_pre_call_hook` per branch the way `model_based_tag_rate_limits_hook`'s
+per-Router-hop admission does), and every one of those branches genuinely
+runs concurrently -- confirmed live: N branches sharing an identical mock
+delay complete in that one delay's time, not N times it -- so admission
+reserves one unit per real branch (see `_batch_branch_count`) to keep the
+cap honest about that real concurrent load, independent of how many
+terminal events survive to release it.
+
+Every branch shares the identical `litellm_logging_obj`/`model_call_details`
+the proxy attached before the dispatch, and `Logging.should_run_logging`
+gates each event type (`async_success`, `async_failure`) on that same
+shared dict's own `has_logged_{event_type}` flag -- confirmed live against
+the real pipeline (`common_processing_pre_call_logic` -> `route_request` ->
+`abatch_completion`, not a hand-built `abatch_completion` call with its own
+fresh kwargs, which never shares that flag): at most one success event and
+at most one failure event ever fire for the whole dispatch, never one per
+branch (the racing `abatch_completion_fastest_response` variant cancels
+every losing branch instead, which never fires a terminal event at all
+either way). Since there is only ever one admission's own reservations
+pending under one call_id, releasing everything pending on whichever
+terminal event fires is exactly right -- it may release the whole batch's
+units before every real branch has actually finished, which is an accepted
+tradeoff: there is no per-branch completion signal available to wait for
+instead.
 """
 
 import asyncio
@@ -178,6 +181,32 @@ def _individual_model_names(model: str | None, call_type: str) -> tuple[str, ...
     return tuple(m.strip() for m in model.split(","))
 
 
+def _batch_branch_count(data: Mapping[str, object], call_type: str) -> int:
+    """`Router.abatch_completion`/`abatch_completion_fastest_response` both
+    fan a comma-separated `model` out into one real, concurrently-running
+    provider call per branch -- confirmed live: three branches with the
+    identical mock delay complete in that one delay's time, not three times
+    it. `abatch_completion`'s own nested `messages: list[list[...]]` mode
+    ("N requests to M models") multiplies that further, one branch per
+    (message, model) pair. This is real simultaneous provider load
+    admission must reserve against, independent of how many terminal
+    events later survive to release it (see `_release_pending_for_call_id`'s
+    own docstring for why release doesn't need to match this count)."""
+    if call_type != "acompletion":
+        return 1
+    model_field: Final = data.get("model")
+    if not isinstance(model_field, str) or "," not in model_field:
+        return 1
+    model_count: Final = len(model_field.split(","))
+    messages_field: Final = data.get("messages")
+    message_list_count: Final = (
+        len(messages_field)
+        if isinstance(messages_field, list) and messages_field and all(isinstance(m, list) for m in messages_field)
+        else 1
+    )
+    return model_count * message_list_count
+
+
 def _hash_tag(entry: TagRateLimitEntry, unit: _LimitUnit, tag_value: str, key_hash: str | None) -> str:
     """
     Global-hook equivalent of `model_based_tag_rate_limits_hook._hash_tag`,
@@ -249,6 +278,12 @@ class _GlobalTagRateLimitStash:
     # an earlier attempt must still get its accounting at success time even
     # though the request ultimately serves from a later attempt's model.
     admitted_models: frozenset[str] = field(default_factory=frozenset)
+    # One entry per reserved unit, not one entry per distinct key: a batch
+    # dispatch (see _batch_branch_count) reserves and appends
+    # batch_branch_count entries per matching policy, and a terminal event
+    # releases every entry pending for this call_id at once (see
+    # _release_pending_for_call_id) -- there is never more than one
+    # admission's own reservations pending here.
     pending_concurrency_keys: list[tuple[str, _PartitionKey]] = field(default_factory=list)  # mutable-ok: queue
     # "requests" keys already charged for this call_id -- veria-ai finding:
     # ProxyBaseLLMRequestProcessing._pre_call_with_fallbacks reruns the whole
@@ -666,6 +701,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
             already_reserved_concurrency_keys: Final = frozenset(
                 key for key, _partition_key in stash.pending_concurrency_keys
             )
+            batch_branch_count: Final = _batch_branch_count(data, call_type)
             failing_index, values = await self._atomic_check_and_increment(
                 tuple(
                     (
@@ -675,20 +711,18 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                         # A key already charged/reserved for this call_id (an
                         # earlier _pre_call_with_fallbacks attempt for the
                         # same logical request) renews at zero net cost
-                        # instead of charging or reserving a second unit --
-                        # folded into this same all-or-nothing batch so a
-                        # rollback here (some other check in the batch
-                        # rejecting) refunds that zero-cost renewal as a
-                        # genuine no-op, same reasoning as
-                        # model_based_tag_rate_limits_hook's identical fix
-                        # for its own per-hop retries.
+                        # instead of charging or reserving a second unit.
+                        # Otherwise a concurrency check reserves one unit per
+                        # real concurrent branch this dispatch fans out into
+                        # (see _batch_branch_count), not just one for the
+                        # whole dispatch.
                         0.0
                         if renewal_allowed
                         and (
                             (check.unit == "requests" and check.key in stash.charged_request_keys)
                             or (check.unit == "concurrency" and check.key in already_reserved_concurrency_keys)
                         )
-                        else 1.0,
+                        else (float(batch_branch_count) if check.unit == "concurrency" else 1.0),
                         self._ttl_for(check.unit, check.entry),
                         check.unit == "concurrency",
                     )
@@ -705,11 +739,14 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
             # already_reserved_concurrency_keys: that key's own check just
             # renewed at zero net cost above, so re-adding it here would
             # make release (which decrements once per queued entry) decrement
-            # twice for a counter that was only ever incremented once.
+            # twice for a counter that was only ever incremented once. One
+            # entry per reserved unit (batch_branch_count of them, ordinarily
+            # 1) -- see pending_concurrency_keys's own docstring for why.
             concurrency_reservations: Final = tuple(
                 (check.key, _partition_key(check.entry))
                 for check in atomic_checks
                 if check.unit == "concurrency" and check.key not in already_reserved_concurrency_keys
+                for _ in range(batch_branch_count)
             )
             if concurrency_reservations:
                 stash.pending_concurrency_keys.extend(concurrency_reservations)  # mutable-ok: see field's own docstring
@@ -737,15 +774,17 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
 
     async def _release_pending_for_call_id(self, request_kwargs: Mapping[str, object]) -> None:
         """Releases every reservation still pending for this call_id at once.
-        Every reservation is fungible under one call_id, and at most one
-        success and one failure callback ever fires for the whole call_id
-        (see the module docstring's explanation of `Logging.should_run_logging`'s
-        per-event-type dedup across a batch dispatch's shared logging
-        object) -- releasing everything still pending here is therefore
-        always correct, never a still-genuinely-running branch's share,
-        whether this fires from a disconnect, a chain-exhausted failure, or
-        a terminal callback that already ran once for this call_id.
-        """
+        There is never more than one admission's own reservations pending
+        under one call_id (renewal reuses the same entries instead of
+        stacking a second admission's worth -- see charged_request_keys),
+        so releasing everything here is always exactly right, whichever of
+        success, failure, disconnect, or chain-exhausted-failure triggers
+        it. A terminal event releasing the whole batch as soon as it fires,
+        even while other real branches are still genuinely running, is an
+        accepted tradeoff: litellm's own has_logged_{event_type} gating (or,
+        for the racing abatch_completion_fastest_response variant,
+        cancellation of every losing branch) means no per-branch completion
+        signal ever reaches this hook to wait for instead."""
         stash: Final = _stash_for_call(_call_id_from_kwargs(request_kwargs))
         if stash is None or not stash.pending_concurrency_keys:
             return
