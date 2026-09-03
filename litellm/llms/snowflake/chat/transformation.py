@@ -112,16 +112,18 @@ def _convert_image_url_to_anthropic(block: Mapping[str, object]) -> dict[str, ob
 
     image: Final = convert_to_anthropic_image_obj(openai_image_url=image_url_value, format=image_format)
     cache_control: Final = block.get("cache_control")
-    converted: Final[dict[str, object]] = {
+    converted: Final[dict[str, object]] = {  # mutable-ok: JSON wire block
         "type": "image",
-        "source": {
+        "source": {  # mutable-ok: JSON wire source
             "type": "base64",
             "media_type": image["media_type"],
             "data": image["data"],
         },
     }
     return (
-        {**converted, "cache_control": cache_control} if cache_control is not None else converted
+        {**converted, "cache_control": cache_control}
+        if cache_control is not None
+        else converted  # mutable-ok: JSON wire block
     )  # mutable-ok: JSON wire block
 
 
@@ -154,7 +156,9 @@ def _convert_tool_result_content_to_anthropic(content: object, tool_call_id: str
 
 def _clean_input_schema(schema: object) -> object:  # mutable-ok: JSON schema copy
     return (
-        {key: value for key, value in schema.items() if key != "$schema"} if isinstance(schema, Mapping) else schema
+        {key: value for key, value in schema.items() if key != "$schema"}
+        if isinstance(schema, Mapping)
+        else schema  # mutable-ok: JSON schema copy
     )  # mutable-ok: JSON schema copy
 
 
@@ -252,7 +256,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 anthropic_tools.append(anthropic_tool)
             else:
                 anthropic_tools.append(
-                    {**tool, "input_schema": _clean_input_schema(tool["input_schema"])}
+                    {**tool, "input_schema": _clean_input_schema(tool["input_schema"])}  # mutable-ok: JSON wire tool
                     if "input_schema" in tool
                     else tool
                 )
@@ -281,13 +285,15 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
             if role == "system":
                 if isinstance(content, str) and content:
-                    system_parts.append({"type": "text", "text": content})
+                    system_parts.append({"type": "text", "text": content})  # mutable-ok: JSON wire system block
                 elif isinstance(content, list):
                     system_parts.extend(
-                        {
+                        {  # mutable-ok: JSON wire system block
                             "type": "text",
                             "text": block.get("text", ""),
-                            **({"cache_control": block["cache_control"]} if "cache_control" in block else {}),
+                            **(
+                                {"cache_control": block["cache_control"]} if "cache_control" in block else {}
+                            ),  # mutable-ok: JSON wire block
                         }
                         for block in content
                         if isinstance(block, Mapping) and block.get("type") == "text"
@@ -343,11 +349,11 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                     conversation[-1]["content"].append(tool_result_block)
                 else:
                     conversation.append(
-                        {"role": "user", "content": [tool_result_block]}
+                        {"role": "user", "content": [tool_result_block]}  # mutable-ok: JSON wire message
                     )  # mutable-ok: JSON wire message
             else:
                 conversation.append(  # mutable-ok: JSON wire message
-                    {
+                    {  # mutable-ok: JSON wire message
                         "role": role,
                         "content": _convert_image_url_blocks_to_anthropic(content),
                     }  # mutable-ok: JSON wire message
@@ -454,7 +460,9 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             }
         )
         if system is not None:
-            body["system"] = normalize_cache_control_in_anthropic_payload({"system": system})["system"]
+            body["system"] = normalize_cache_control_in_anthropic_payload(  # mutable-ok: JSON wire payload
+                {"system": system}  # mutable-ok: JSON wire payload
+            )["system"]
 
         if "max_tokens" not in body:
             body["max_tokens"] = 4096  # reasonable default; Anthropic API max varies by model
