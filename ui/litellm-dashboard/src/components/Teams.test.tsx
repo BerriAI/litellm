@@ -1643,7 +1643,7 @@ describe("Teams - the create form keeps the organization and models picks while 
     const user = userEvent.setup();
     const orgAdminOrgs = ORGS.map((org) => ({ ...org, members: [{ user_id: "user-123", user_role: "org_admin" }] }));
     mockUseOrganizations.mockReturnValue({ data: orgAdminOrgs });
-    vi.mocked(teamCreateCall).mockResolvedValue({
+    const createdTeam = {
       team_id: "new-team-1",
       team_alias: "Recovered Team",
       models: [],
@@ -1651,7 +1651,8 @@ describe("Teams - the create form keeps the organization and models picks while 
       keys: [],
       members_with_roles: [],
       spend: 0,
-    });
+    };
+    vi.mocked(teamCreateCall).mockResolvedValue(createdTeam);
     renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Internal User" />);
     await openCreateModal();
 
