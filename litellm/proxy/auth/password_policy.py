@@ -151,8 +151,7 @@ async def validate_password_not_breached(
         return
     raise ProxyException(
         message=(
-            "This password appears in known data breaches and cannot be used. "
-            "Please choose a different password."
+            "This password appears in known data breaches and cannot be used. Please choose a different password."
         ),
         type=ProxyErrorTypes.validation_error,
         param="password",
