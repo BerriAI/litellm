@@ -1,4 +1,5 @@
 use super::*;
+use crate::Error;
 use serde_json::json;
 
 fn messages(value: Value) -> Vec<ChatMessage> {
@@ -23,7 +24,7 @@ fn transform(msgs: Value, opts: Value) -> Value {
         .body
 }
 
-fn transform_response(body: Value) -> CoreResult<ChatCompletionsResponse> {
+fn transform_response(body: Value) -> Result<ChatCompletionsResponse, Error> {
     BEDROCK_CHAT_COMPLETIONS_CONFIG.transform_response(
         "anthropic.claude-sonnet-4-5-v1:0",
         ProviderChatResponseData { body },
@@ -478,25 +479,22 @@ fn declines_a_response_carrying_a_tool_use_block() {
         "usage": {"inputTokens": 1, "outputTokens": 1}
     }))
     .expect_err("tool use block");
-    assert_eq!(
-        err,
-        CoreError::Unsupported("non-text response content block")
-    );
+    assert_eq!(err, Error::Unsupported("non-text response content block"));
 }
 
 #[test]
 fn errors_on_a_response_missing_required_fields() {
     assert_eq!(
         transform_response(json!("nope")).expect_err("not an object"),
-        CoreError::InvalidResponse("converse response is not an object".to_string())
+        Error::InvalidResponse("converse response is not an object".to_string())
     );
     assert_eq!(
         transform_response(json!({"usage": {}})).expect_err("no output"),
-        CoreError::MissingField("output.message.content")
+        Error::MissingField("output.message.content")
     );
     assert_eq!(
         transform_response(json!({"output": {"message": {"content": []}}})).expect_err("no usage"),
-        CoreError::MissingField("usage")
+        Error::MissingField("usage")
     );
 }
 
