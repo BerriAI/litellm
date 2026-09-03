@@ -24,6 +24,7 @@ from litellm.proxy.auth.auth_utils import (
     is_invalid_virtual_key_error,
     mark_invalid_virtual_key_error,
 )
+from litellm.proxy.common_utils.openai_error_payload import openai_error_param
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -54,7 +55,7 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
         return ProxyException(
             message=getattr(e, "detail", f"Authentication Error({e})"),
             type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
         )
     if isinstance(e, ProxyException):
@@ -63,13 +64,13 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
         return ProxyException(
             message=PrismaDBExceptionHandler.database_unavailable_message(e),
             type=ProxyErrorTypes.no_db_connection,
-            param="None",
+            param=None,
             code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     return ProxyException(
         message="Authentication Error, " + str(e),
         type=ProxyErrorTypes.auth_error,
-        param=getattr(e, "param", "None"),
+        param=openai_error_param(e),
         code=status.HTTP_401_UNAUTHORIZED,
     )
 

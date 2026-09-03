@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 import time
 from collections.abc import Mapping, Sequence
@@ -30,6 +31,7 @@ from litellm.proxy.auth.handle_jwt import (
     JWTAuthManager,
     JWTHandler,
     NoMatchingJWTPublicKeyError,
+    jwks_unavailable_exception,
 )
 
 
@@ -6734,3 +6736,13 @@ async def test_sync_user_role_and_teams_singular_claim_only_recognized_under_fla
     }
     assert mock_patch.call_args.kwargs["teams_ids_to_add_user_to"] == []
     assert user.teams == []
+
+
+def test_jwks_unavailable_exception_is_openai_shaped():
+    """An unreachable JWKS endpoint must answer with a real `type` string and a
+    JSON null `param`, never the literal string "None"."""
+    body = json.loads(json.dumps({"error": jwks_unavailable_exception(JWKSUnreachableError("jwks down")).to_dict()}))
+
+    assert body["error"]["type"] == ProxyErrorTypes.auth_provider_unavailable.value
+    assert body["error"]["param"] is None
+    assert body["error"]["code"] == "503"

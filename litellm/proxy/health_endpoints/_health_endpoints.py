@@ -40,6 +40,7 @@ from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.openai_error_payload import openai_error_param
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
 from litellm.proxy.health_check import (
@@ -529,7 +530,7 @@ async def health_services_endpoint(
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({e})"),
                 type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
+                param=openai_error_param(e),
                 code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
@@ -537,7 +538,7 @@ async def health_services_endpoint(
         raise ProxyException(
             message="Authentication Error, " + str(e),
             type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
+            param=openai_error_param(e),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
