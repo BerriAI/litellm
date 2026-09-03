@@ -1,9 +1,45 @@
 """
 Pass-Through Endpoint Message Handler for Unified Guardrails
 
-This module provides a handler for passthrough endpoint requests.
-It uses the field targeting configuration from litellm_logging_obj
-to extract specific fields for guardrail processing.
+Architecture overview
+---------------------
+LiteLLM supports two code-paths for requests:
+
+1. **Standard routes** (``/chat/completions``, ``/v1/messages``, …)
+   These go through ``OpenAIChatCompletionsHandler`` which extracts
+   ``additional_provider_specific_params`` (e.g. ``secrets.config.mode: block``)
+   and forwards them into the guardrail hook before dispatch.
+
+2. **Provider-native passthrough routes** (``/v1beta/models/…:generateContent``,
+   ``/model/…/converse``, …).
+   These bypass the standard request pipeline.  This module handles guardrail
+   translation for those routes so that guardrails still run with the correct
+   parameters.
+
+Dispatch chain
+--------------
+The top-level dispatcher is ``LlmPassthroughRouteHandler``.
+
+* For **bedrock** it delegates to ``BedrockPassthroughGuardrailHandler``
+  (which knows how to walk the Converse message schema).
+* For **every other provider** (gemini, vertex_ai, anthropic-native, …) it
+  delegates to ``PassThroughEndpointHandler`` — the generic fallback defined
+  in this file.  The generic handler scans the whole request / response
+  payload and forwards guardrail params unchanged, so ``mode: block`` is
+  honoured on all providers, not just bedrock.
+
+  Prior to the fix for issue #37638, the dispatcher silently returned the
+  original data for unknown providers instead of delegating, which meant
+  ``mode: block`` was silently downgraded to the guardrail's built-in default
+  (usually ``redact``).
+
+Adding support for a new provider
+----------------------------------
+If a provider uses a non-standard message schema that needs special treatment
+(e.g. a deeply nested content block format), register a dedicated handler in
+``_get_provider_handlers()`` following the bedrock pattern.  For providers
+that use a flat JSON payload the generic ``PassThroughEndpointHandler`` is
+already sufficient — no new code is needed.
 """
 
 from typing import TYPE_CHECKING, Any, Final, Optional
@@ -22,10 +58,27 @@ if TYPE_CHECKING:
 
 class PassThroughEndpointHandler(BaseTranslation):
     """
-    Handler for processing passthrough endpoint requests with guardrails.
+    Generic guardrail handler for provider-native passthrough routes.
 
-    Uses passthrough_guardrails_config from litellm_logging_obj
-    to determine which fields to extract for guardrail processing.
+    This handler is the *fallback* for any passthrough provider that does not
+    have its own dedicated handler (everything except bedrock-Converse).  It:
+
+    * Reads the optional ``passthrough_guardrails_config`` from
+      ``litellm_logging_obj`` to discover any JSON-path field-targeting rules.
+    * If field-targeting rules are present, it extracts only those fields from
+      the payload and runs the guardrail on them.
+    * If no targeting rules are present, it serialises the entire
+      (non-internal) request / response payload and runs the guardrail on that.
+
+    This approach is intentionally provider-agnostic: because it works on the
+    raw JSON dict it handles Gemini ``generateContent``, Vertex AI, Anthropic
+    native messages, and any future provider without requiring provider-specific
+    schema knowledge.
+
+    Note: this handler does *not* write guardrailed text back into the payload
+    (i.e. it is detection / blocking only, not redaction).  Redaction on
+    provider-native routes would require knowing the provider's exact content
+    schema, which is left to dedicated handlers.
     """
 
     def _get_guardrail_settings(
@@ -192,12 +245,29 @@ class PassThroughEndpointHandler(BaseTranslation):
         return response
 
 
+# -------------------------------------------------------------------------
+# Provider-specific handler registry
+# -------------------------------------------------------------------------
+# Maps custom_llm_provider strings to their dedicated guardrail translation
+# handler class.  Only providers that need *schema-aware* translation (i.e.
+# they have a structured message format different from a flat JSON payload)
+# require a dedicated entry here.
+#
+# Currently only "bedrock" is registered because the Bedrock Converse API
+# uses a deeply nested content-block schema that requires special extraction
+# and write-back logic.
+#
+# All other providers (gemini, vertex_ai, anthropic-native, …) are served by
+# the generic ``PassThroughEndpointHandler`` fallback defined below.
+# -------------------------------------------------------------------------
 _PROVIDER_HANDLERS: dict[str, type[BaseTranslation]] = {}
 
 
 def _get_provider_handlers() -> dict[str, type[BaseTranslation]]:
+    """Return the registry of provider-specific guardrail handlers (lazy-init)."""
     global _PROVIDER_HANDLERS
     if not _PROVIDER_HANDLERS:
+        # Import is deferred to avoid a circular-import at module load time.
         from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
             BedrockPassthroughGuardrailHandler,
         )
@@ -206,12 +276,37 @@ def _get_provider_handlers() -> dict[str, type[BaseTranslation]]:
     return _PROVIDER_HANDLERS
 
 
+def _generic_passthrough_handler() -> BaseTranslation:
+    """
+    Generic fallback used for all provider-native passthrough routes that do
+    not have a dedicated handler (e.g. Gemini generateContent, Vertex AI).
+
+    This ensures guardrail params — including ``additional_provider_specific_params``
+    such as ``secrets.config.mode: block`` — are forwarded and honoured on
+    every passthrough provider, not just bedrock.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/37638
+    """
+    return PassThroughEndpointHandler()
+
+
 class LlmPassthroughRouteHandler(BaseTranslation):
     """
-    Dispatcher for allm_passthrough_route guardrail translation.
+    Top-level dispatcher for ``CallTypes.allm_passthrough_route`` guardrail
+    translation.
 
-    Routes to a per-provider handler based on data["custom_llm_provider"].
-    Unknown providers are skipped with a debug log.
+    Decision tree
+    -------------
+    1. Look up ``data["custom_llm_provider"]`` in the provider handler registry.
+    2. If a dedicated handler exists (currently only ``bedrock``), delegate to it.
+    3. Otherwise, delegate to ``PassThroughEndpointHandler`` — the generic
+       fallback — which scans the full payload and correctly forwards guardrail
+       params including ``additional_provider_specific_params``.
+
+    Before the fix for issue #37638 step 3 was missing: unknown providers
+    would receive a silent early-return, causing ``mode=block`` to be
+    downgraded to the guardrail's default mode (``redact``) without any
+    warning or error.
     """
 
     async def process_input_messages(
@@ -223,11 +318,21 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         provider: Final = data.get("custom_llm_provider")
         handler_cls: Final = _get_provider_handlers().get(provider or "")
         if handler_cls is None:
+            # No provider-specific handler registered (e.g. gemini, vertex_ai).
+            # Fall back to the generic handler so that guardrail params —
+            # including additional_provider_specific_params.secrets.config.mode
+            # — are forwarded and blocking guardrails are honoured.
+            # See: https://github.com/BerriAI/litellm/issues/37638
             verbose_proxy_logger.debug(
-                "LlmPassthroughRouteHandler: no handler for provider=%s, skipping guardrail",
+                "LlmPassthroughRouteHandler: no dedicated handler for provider=%s, "
+                "delegating to generic PassThroughEndpointHandler",
                 provider,
             )
-            return data
+            return await _generic_passthrough_handler().process_input_messages(
+                data=data,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=litellm_logging_obj,
+            )
         return await handler_cls().process_input_messages(
             data=data,
             guardrail_to_apply=guardrail_to_apply,
@@ -245,11 +350,22 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         provider: Final = (request_data or {}).get("custom_llm_provider")
         handler_cls: Final = _get_provider_handlers().get(provider or "")
         if handler_cls is None:
+            # No provider-specific handler registered (e.g. gemini, vertex_ai).
+            # Fall back to the generic handler so blocking guardrails are
+            # honoured on response payloads too.
+            # See: https://github.com/BerriAI/litellm/issues/37638
             verbose_proxy_logger.debug(
-                "LlmPassthroughRouteHandler: no handler for provider=%s, skipping guardrail",
+                "LlmPassthroughRouteHandler: no dedicated handler for provider=%s, "
+                "delegating to generic PassThroughEndpointHandler",
                 provider,
             )
-            return response
+            return await _generic_passthrough_handler().process_output_response(
+                response=response,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=litellm_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+            )
         return await handler_cls().process_output_response(
             response=response,
             guardrail_to_apply=guardrail_to_apply,
