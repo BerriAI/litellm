@@ -31,6 +31,9 @@ const buildSettingsResponse = (overrides?: Partial<Record<string, unknown>>) => 
         disable_team_admin_delete_team_user: {
           description: "Disable team admin delete team user",
         },
+        disable_team_admin_add_team_user: {
+          description: "Disable team admin add team user",
+        },
         require_auth_for_public_ai_hub: {
           description: "Require authentication for public AI Hub",
         },
@@ -39,6 +42,7 @@ const buildSettingsResponse = (overrides?: Partial<Record<string, unknown>>) => 
     values: {
       disable_model_add_for_internal_users: false,
       disable_team_admin_delete_team_user: false,
+      disable_team_admin_add_team_user: false,
       require_auth_for_public_ai_hub: false,
     },
   },
@@ -66,6 +70,7 @@ describe("UISettings", () => {
     expect(screen.getByText("UI Settings")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Disable model add for internal users" })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Disable team admin delete team user" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Disable team admin add team user" })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Require authentication for public AI Hub" })).toBeInTheDocument();
   });
 
@@ -119,6 +124,35 @@ describe("UISettings", () => {
 
     expect(mutateMock).toHaveBeenCalledWith(
       { disable_team_admin_delete_team_user: true },
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onError: expect.any(Function),
+      }),
+    );
+    expect(toast.success).toHaveBeenCalledWith("UI settings updated successfully");
+  });
+
+  it("should toggle disable team admin add team user setting and call update", () => {
+    const mutateMock = vi.fn((_settings, options) => {
+      options?.onSuccess?.();
+    });
+
+    mockUseUpdateUISettings.mockReturnValue({
+      mutate: mutateMock,
+      isPending: false,
+      error: null,
+    });
+
+    render(<UISettings />);
+
+    const toggle = screen.getByRole("switch", { name: "Disable team admin add team user" });
+
+    act(() => {
+      fireEvent.click(toggle);
+    });
+
+    expect(mutateMock).toHaveBeenCalledWith(
+      { disable_team_admin_add_team_user: true },
       expect.objectContaining({
         onSuccess: expect.any(Function),
         onError: expect.any(Function),
