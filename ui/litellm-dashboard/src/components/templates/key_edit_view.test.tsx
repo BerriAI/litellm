@@ -1435,6 +1435,39 @@ describe("KeyEditView", () => {
       expect(await screen.findByText("Engineering")).toBeInTheDocument();
     });
 
+    it("should initialize organization from a key list row that only carries org_id", async () => {
+      const keyFromList = {
+        ...MOCK_KEY_DATA,
+        organization_id: null,
+        org_id: "org-1",
+      };
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyFromList}
+          teams={[
+            { team_id: "team-a", team_alias: "Alpha", organization_id: "org-1" },
+            { team_id: "team-b", team_alias: "Beta", organization_id: "org-2" },
+          ]}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
+      });
+
+      await userEvent.click(screen.getByLabelText("Team ID"));
+
+      expect(await screen.findByRole("option", { name: /Alpha/ })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: /Beta/ })).not.toBeInTheDocument();
+    });
+
     it("should initialize organization from keyData", async () => {
       const keyWithOrg = {
         ...MOCK_KEY_DATA,

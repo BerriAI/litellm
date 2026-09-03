@@ -28,6 +28,7 @@ import { routerSettingsEditorValue, routerSettingsUpdate } from "../common_compo
 import { estimateTooltips, withNormalizedEstimates } from "./estimatedOutputTokens";
 import {
   currentValuePlaceholder,
+  keyOrganizationId,
   keyTypeFromRoutes,
   modelSentinelOptions,
   parseAllowedRoutes,
@@ -105,7 +106,7 @@ export function KeyEditView({
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
       : [],
   );
-  const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(keyData.organization_id || null);
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(keyOrganizationId(keyData));
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(keyData.auto_rotate || false);
   const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "");
   const [neverExpire, setNeverExpire] = useState<boolean>(!keyData.expires);
