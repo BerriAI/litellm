@@ -6,8 +6,6 @@ This test verifies the fix for the bug where passing a dict containing 'self',
     TypeError: LiteLLM_Params.__init__() got multiple values for argument 'self'
 """
 
-import pytest
-
 from litellm.types.router import GenericLiteLLMParams, LiteLLM_Params
 
 
@@ -90,3 +88,43 @@ class TestLiteLLMParamsReservedKeys:
         params = LiteLLM_Params(**params_dict)
         assert params.model == "gpt-4"
         assert params.api_key == "test-key"
+
+
+class TestLiteLLMParamsNumericCoercion:
+    """Numeric router params coming from os.environ/ substitution arrive as str.
+
+    They are used arithmetically (summed / divided in simple_shuffle, compared as
+    rate limits), so they must be coerced back to numbers or requests 500 at runtime.
+    """
+
+    def test_weight_string_coerced_to_int(self):
+        """weight is an undeclared extra field, so pydantic never coerced it before."""
+        params = LiteLLM_Params(model="gpt-4", weight="100")
+        assert params.get("weight") == 100
+        assert isinstance(params.get("weight"), int)
+        assert params.model_dump()["weight"] == 100
+
+    def test_weight_float_string_coerced_to_float(self):
+        params = LiteLLM_Params(model="gpt-4", weight="0.5")
+        assert params.get("weight") == 0.5
+        assert isinstance(params.get("weight"), float)
+
+    def test_rpm_tpm_order_string_coerced(self):
+        params = LiteLLM_Params(model="gpt-4", rpm="7", tpm="5", order="2")
+        assert params.rpm == 7 and isinstance(params.rpm, int)
+        assert params.tpm == 5 and isinstance(params.tpm, int)
+        assert params.get("order") == 2 and isinstance(params.get("order"), int)
+
+    def test_unresolved_os_environ_placeholder_left_untouched(self):
+        """If substitution has not run yet the raw placeholder must not raise."""
+        params = LiteLLM_Params(model="gpt-4", weight="os.environ/A_WEIGHT")
+        assert params.get("weight") == "os.environ/A_WEIGHT"
+
+    def test_simple_shuffle_sum_no_longer_raises(self):
+        """Regression for #36095: env-var weights crashed simple_shuffle's sum()."""
+        healthy_deployments = [
+            {"litellm_params": LiteLLM_Params(model="a", weight="100").model_dump()},
+            {"litellm_params": LiteLLM_Params(model="b", weight="0").model_dump()},
+        ]
+        weights = [m["litellm_params"].get("weight", 0) for m in healthy_deployments]
+        assert sum(weights) == 100
