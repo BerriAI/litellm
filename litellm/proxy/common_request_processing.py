@@ -1494,8 +1494,9 @@ def _timing_values(
 
 
 class ProxyBaseLLMRequestProcessing:
-    def __init__(self, data: dict):
+    def __init__(self, data: dict, failure_call_type: str | None = None):
         self.data = data
+        self._failure_call_type = failure_call_type
 
     @staticmethod
     def _merge_passthrough_streaming_headers(
@@ -1816,6 +1817,7 @@ class ProxyBaseLLMRequestProcessing:
         model: str | None = None,
         llm_router: Router | None = None,
     ) -> tuple[dict, LiteLLMLoggingObj]:
+        self._failure_call_type = route_type
         start_time: Final = datetime.now()  # start before calling guardrail hooks
 
         self.data = await add_litellm_data_to_request(
@@ -2260,6 +2262,7 @@ class ProxyBaseLLMRequestProcessing:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
+        self._failure_call_type = route_type
         requested_model_from_client: Final[str | None] = (
             self.data.get("model") if isinstance(self.data.get("model"), str) else None
         )
@@ -3301,6 +3304,8 @@ class ProxyBaseLLMRequestProcessing:
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
         _log_llm_api_exception(e)
         # Allow callbacks to transform the error response
+        if self._failure_call_type:
+            self.data["call_type"] = self._failure_call_type
         transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
