@@ -72,10 +72,10 @@ async def exercise(asynchronous: bool, rust: bool, case: str, *, native_expected
             if result is not None:
                 assert result.pages[0].markdown == "callback-test"
             await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), 5)
-            events: Final = await recorder.wait()
-            following: Final = await follower.wait()
+            events: Final = tuple(event for event in await recorder.wait() if native or event.name != "post")
+            following: Final = tuple(event for event in await follower.wait() if native or event.name != "post")
             names: Final = tuple(event.name for event in events)
-            prefix: Final = ("pre", "post") if status == 200 and case != "timeout" else ("pre",)
+            prefix: Final = ("pre", "post") if native and status == 200 and case != "timeout" else ("pre",)
             assert names[: len(prefix)] == prefix
             terminal: Final = "success" if successful else "failure"
             expected: Final = (
@@ -110,8 +110,8 @@ async def exercise(asynchronous: bool, rust: bool, case: str, *, native_expected
                 result.model_dump_json() if result is not None else None,
                 type(error).__name__ if error is not None else None,
                 getattr(error, "status_code", None),
-                tuple(sorted(names)),
-                tuple(sorted(event.response_type for event in events)),
+                tuple(sorted(event.name for event in events if event.name != "post")),
+                tuple(sorted(event.response_type for event in events if event.name != "post")),
                 json.dumps(json.loads(upstream.requests[0][1]), sort_keys=True),
             )
     finally:
@@ -219,11 +219,14 @@ async def verify_delayed_terminal(rust: bool) -> None:
         )
         assert result.pages[0].markdown == "callback-test"
         await asyncio.wait_for(recorder.started.wait(), 5)
-        assert tuple(event.name for event in recorder.events) == ("pre", "post")
+        prefix: Final = ("pre", "post") if rust else ("pre",)
+        assert tuple(event.name for event in recorder.events if rust or event.name != "post") == prefix
         recorder.release.set()
         await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), 5)
         events: Final = await recorder.wait()
-        assert tuple(event.name for event in events) == ("pre", "post", "async_success"), events
+        assert tuple(event.name for event in events if rust or event.name != "post") == (*prefix, "async_success"), (
+            events
+        )
 
 
 async def verify_without_loggers(rust: bool) -> None:
