@@ -1900,7 +1900,9 @@ def test_convert_mcp_to_llm_format_carries_key_and_team_guardrails(key_metadata,
     }
     request_obj = proxy_logging._create_mcp_request_object_from_kwargs(kwargs)
 
-    with patch("litellm.proxy.proxy_server.premium_user", True):
+    with patch(  # test-quality-ok: the key-guardrail premium gate reads this proxy_server module global and has no injection seam
+        "litellm.proxy.proxy_server.premium_user", True
+    ):
         synthetic = proxy_logging._convert_mcp_to_llm_format(request_obj, kwargs)
 
     assert guardrail.should_run_guardrail(synthetic, GuardrailEventHooks.pre_mcp_call) is expected_to_run
