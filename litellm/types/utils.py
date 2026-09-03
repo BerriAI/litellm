@@ -2543,6 +2543,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         )
         super().__init__(created=created, data=_data, usage=_usage)
 
+        self.background = kwargs.get("background", None)
         self.quality = kwargs.get("quality", None)
         self.output_format = kwargs.get("output_format", None)
         self.size = kwargs.get("size", None)
@@ -3611,6 +3612,7 @@ all_litellm_params = (
         "litellm_system_prompt",
         "provider_specific_header",
         "prompt_version",
+        "prompt_environment",
         "api_base",
         "force_timeout",
         "logger_fn",

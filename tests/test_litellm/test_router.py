@@ -35,6 +35,7 @@ from litellm.router import (
     _anthropic_stream_should_drop_pre_content_ping,
     _is_retriable_anthropic_status,
 )
+from litellm.types.router import DeploymentTypedDict
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -9783,11 +9784,12 @@ def test_model_group_info_intersects_supported_reasoning_efforts():
     assert result.supported_reasoning_efforts == ("minimal", "low", "medium", "high")
 
 
-def test_model_group_info_reasoning_efforts_ignore_a_deployment_off_the_map():
+def test_model_group_info_reasoning_efforts_are_unknown_when_any_deployment_is_off_the_map():
     """The router fills every ModelInfo key, so a deployment absent from the model map arrives with
     supports_reasoning None rather than with the key missing. Its synthesized entry carries no mode,
     which is what separates it from a mapped non-reasoning model, and nothing being known about it is
-    no reason to drop the levels the rest of the group agrees on."""
+    no evidence that the unknown deployment accepts levels its mapped sibling supports. The group
+    therefore reports unknown instead of advertising a value routing might send to either one."""
     router = litellm.Router(
         model_list=[
             {
@@ -9821,7 +9823,7 @@ def test_model_group_info_reasoning_efforts_ignore_a_deployment_off_the_map():
         )
 
     assert result is not None
-    assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high", "max")
+    assert result.supported_reasoning_efforts is None
 
 
 
@@ -9958,11 +9960,11 @@ def test_model_group_info_survives_a_junk_typed_operator_effort_value():
     assert result.supported_reasoning_efforts == ("none", "minimal", "low", "medium", "high")
 
 
-def test_model_group_info_reasoning_efforts_ignore_a_mode_the_operator_declared():
+def test_model_group_info_reasoning_efforts_are_unknown_for_an_operator_declared_mode():
     """A deployment is registered in the cost map under its own id with whatever model_info the
     operator wrote, so a mode they set themselves reads back exactly like one the map supplied. Only
-    a mode the map supplied marks the deployment as known, or an off-map deployment carrying any
-    mode empties the group it sits in."""
+    a mode the map supplied marks the deployment as known. An off-map deployment carrying an
+    operator mode remains unknown and must keep the whole group's level support unknown."""
     from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
     mapped_model = "openai/gpt-5.6-sol"
@@ -9993,7 +9995,7 @@ def test_model_group_info_reasoning_efforts_ignore_a_mode_the_operator_declared(
     )
 
     assert result is not None
-    assert result.supported_reasoning_efforts == expected
+    assert result.supported_reasoning_efforts is None
 
 
 class TestAddDeploymentApiBaseProviderResolution:
@@ -12252,6 +12254,120 @@ class TestTierParamsTheTargetAccepts:
         assert accepted == {"reasoning_effort": "max"}
 
 
+class TestRequestReasoningEffortOverride:
+    def test_drop_effort_from_nested_carrier_preserves_other_nested_values(self):
+        params: dict[str, object] = {"output_config": {"effort": "high", "format": "json"}}
+
+        litellm.Router._pop_effort_from_nested_carrier(params, "output_config")
+
+        assert params == {"output_config": {"format": "json"}}
+
+    @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+    def test_is_classifier_internal_call_recognizes_both_metadata_carriers(self, metadata_key):
+        kwargs = {metadata_key: {"internal_call_origin": "autorouter_classifier"}}
+
+        assert litellm.Router._is_classifier_internal_call(kwargs) is True
+        assert litellm.Router._is_classifier_internal_call({metadata_key: {}}) is False
+
+    def test_removes_every_deployment_native_effort_carrier_without_mutating_shared_config(self):
+        extra_body: dict[str, object] = {
+            "reasoning_effort": "high",
+            "thinking": {"type": "enabled"},
+            "output_config": {"effort": "high", "format": "json"},
+            "reasoning": {"effort": "high", "summary": "detailed"},
+            "provider_option": True,
+        }
+        deployment_params: dict[str, object] = {
+            "model": "bedrock/converse/anthropic.claude-3-7-sonnet",
+            "thinking": {"type": "enabled", "budget_tokens": 2048},
+            "output_config": {"effort": "high", "format": {"type": "json_schema"}},
+            "reasoning": {"effort": "high", "summary": "auto"},
+            "extra_body": extra_body,
+        }
+
+        sanitized = litellm.Router._deployment_params_with_request_reasoning_override(
+            deployment_params, {"reasoning_effort": "low"}
+        )
+
+        assert sanitized == {
+            "model": "bedrock/converse/anthropic.claude-3-7-sonnet",
+            "output_config": {"format": {"type": "json_schema"}},
+            "reasoning": {"summary": "auto"},
+            "extra_body": {
+                "output_config": {"format": "json"},
+                "reasoning": {"summary": "detailed"},
+                "provider_option": True,
+            },
+        }
+        assert deployment_params["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+        assert deployment_params["output_config"] == {"effort": "high", "format": {"type": "json_schema"}}
+        assert extra_body["reasoning_effort"] == "high"
+
+    @pytest.mark.parametrize("request_kwargs", [{}, {"reasoning_effort": None}])
+    def test_omitted_override_preserves_deployment_defaults(self, request_kwargs):
+        deployment_params = {
+            "model": "deepseek/deepseek-reasoner",
+            "thinking": {"type": "enabled"},
+            "output_config": {"effort": "high"},
+        }
+
+        assert (
+            litellm.Router._deployment_params_with_request_reasoning_override(deployment_params, request_kwargs)
+            == deployment_params
+        )
+
+    @pytest.mark.asyncio
+    async def test_280_concurrent_overrides_never_mutate_or_leak_through_shared_deployment_params(self):
+        deployment_params = {
+            "model": "fireworks_ai/accounts/fireworks/models/kimi-k2-thinking",
+            "thinking": {"type": "enabled"},
+            "output_config": {"effort": "high", "format": "json"},
+            "extra_body": {"reasoning_effort": "high", "tenant": "shared"},
+        }
+        efforts = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+        results = await asyncio.gather(
+            *(
+                asyncio.to_thread(
+                    litellm.Router._deployment_params_with_request_reasoning_override,
+                    deployment_params,
+                    {"reasoning_effort": efforts[index % len(efforts)]},
+                )
+                for index in range(280)
+            )
+        )
+
+        assert all("thinking" not in result for result in results)
+        assert all(result["output_config"] == {"format": "json"} for result in results)
+        assert all(result["extra_body"] == {"tenant": "shared"} for result in results)
+        assert deployment_params["thinking"] == {"type": "enabled"}
+        assert deployment_params["output_config"] == {"effort": "high", "format": "json"}
+        assert deployment_params["extra_body"] == {"reasoning_effort": "high", "tenant": "shared"}
+
+    @pytest.mark.parametrize(
+        ("metadata", "should_drop"),
+        [({"internal_call_origin": "autorouter_classifier"}, True), ({}, False)],
+        ids=["classifier", "ordinary-request"],
+    )
+    def test_only_classifier_calls_drop_effort_for_an_unsupported_fallback(self, metadata, should_drop):
+        router = litellm.Router(model_list=[])
+        body: dict[str, object] = {"model": "classifier", "reasoning_effort": "low"}
+        kwargs: dict[str, object] = {
+            "reasoning_effort": "low",
+            "metadata": metadata,
+            "proxy_server_request": {"body": body},
+        }
+        deployment: DeploymentTypedDict = {
+            "model_name": "fallback",
+            "litellm_params": {"model": "openai/gpt-4o-mini"},
+        }
+
+        router._drop_unsupported_classifier_reasoning_effort(deployment, "fallback", kwargs)
+
+        assert ("reasoning_effort" not in kwargs) is should_drop
+        assert ("reasoning_effort" not in body) is should_drop
+
+
 class TestPreRoutingTierDrivesFallbacks:
     """#38832: a complexity/auto router picks a tier behind the router name, but fallback
     lookup stayed on the router name, so the tier's configured chain never ran and a
@@ -12437,3 +12553,33 @@ async def test_prompt_management_factory_marks_injection_for_every_deployment(mo
     bucket = captured.get("litellm_metadata") or captured["metadata"]
     assert captured["model_info"]["id"] == "provisional-dep"
     assert bucket["litellm_gateway_injected_cache"] == ""
+
+
+def test_get_configured_mode_reads_deployment_model_info():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "my-tts",
+                "litellm_params": {"model": "openai/some-unmapped-mode-model"},
+                "model_info": {"mode": "audio_speech"},
+            }
+        ]
+    )
+
+    assert router.get_configured_mode("my-tts") == "audio_speech"
+
+
+@pytest.mark.parametrize("model_info", [{}, {"mode": ""}, {"mode": "   "}, {"mode": 123}])
+def test_get_configured_mode_returns_none_for_unset_blank_or_unknown(model_info):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "plain-model",
+                "litellm_params": {"model": "openai/some-unmapped-mode-model"},
+                "model_info": model_info,
+            }
+        ]
+    )
+
+    assert router.get_configured_mode("plain-model") is None
+    assert router.get_configured_mode("unknown-model") is None

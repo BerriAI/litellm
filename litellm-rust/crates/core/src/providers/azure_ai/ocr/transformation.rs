@@ -14,7 +14,7 @@ const AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT_ENV: &str = "AZURE_DOCUMENT_INTELLIGE
 const AZURE_DOCUMENT_INTELLIGENCE_API_VERSION: &str = "2024-11-30";
 const AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI: i64 = 96;
 
-const AZURE_DOCUMENT_INTELLIGENCE_SUPPORTED_OCR_PARAMS: &[&str] = &["pages"];
+const AZURE_DOCUMENT_INTELLIGENCE_SUPPORTED_OCR_PARAMS: &[&str] = &["pages", "features"];
 
 pub struct AzureAiOcrConfig;
 pub struct AzureDocumentIntelligenceOcrConfig;
@@ -192,6 +192,46 @@ fn normalize_pages_param(pages: &Value) -> Result<Option<String>, Error> {
     }
 }
 
+fn feature_token_is_valid(token: &str) -> bool {
+    let Some((first, rest)) = token.as_bytes().split_first() else {
+        return false;
+    };
+    first.is_ascii_alphabetic() && rest.iter().all(u8::is_ascii_alphanumeric)
+}
+
+fn invalid_features_error(features: &Value) -> Error {
+    Error::InvalidRequest(format!(
+        "Invalid `features` for Azure Document Intelligence: {features:?}. Expected a list of feature names or a comma-separated string like 'keyValuePairs' or 'keyValuePairs,languages'."
+    ))
+}
+
+fn normalize_features_param(features: &Value) -> Result<Option<String>, Error> {
+    let normalized = match features {
+        Value::String(value) => value
+            .split(',')
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join(","),
+        Value::Array(values) if values.is_empty() => return Ok(None),
+        Value::Array(values) => values
+            .iter()
+            .map(Value::as_str)
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| invalid_features_error(features))?
+            .into_iter()
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join(","),
+        _ => return Err(invalid_features_error(features)),
+    };
+
+    if normalized.split(',').all(feature_token_is_valid) {
+        Ok(Some(normalized))
+    } else {
+        Err(invalid_features_error(features))
+    }
+}
+
 pub fn complete_document_intelligence_url(
     api_base: Option<&str>,
     model: &str,
@@ -210,6 +250,13 @@ pub fn complete_document_intelligence_url(
         && let Some(normalized) = normalize_pages_param(pages)?
     {
         url.push_str("&pages=");
+        url.push_str(&normalized);
+    }
+
+    if let Some(features) = optional_params.get("features")
+        && let Some(normalized) = normalize_features_param(features)?
+    {
+        url.push_str("&features=");
         url.push_str(&normalized);
     }
 
@@ -472,6 +519,103 @@ mod tests {
         assert_eq!(
             url,
             "https://example.cognitiveservices.azure.com/documentintelligence/documentModels/prebuilt-layout:analyze?api-version=2024-11-30&pages=1,3"
+        );
+    }
+
+    #[test]
+    fn document_intelligence_url_normalizes_features() {
+        let params = serde_json::Map::from_iter([(
+            "features".to_string(),
+            json!("keyValuePairs, languages"),
+        )]);
+        let url = complete_document_intelligence_url(
+            Some("https://example.cognitiveservices.azure.com"),
+            "prebuilt-layout",
+            &params,
+            &|_| None,
+        )
+        .expect("url builds");
+
+        assert_eq!(
+            url,
+            "https://example.cognitiveservices.azure.com/documentintelligence/documentModels/prebuilt-layout:analyze?api-version=2024-11-30&features=keyValuePairs,languages"
+        );
+    }
+
+    #[test]
+    fn document_intelligence_url_combines_pages_and_feature_list() {
+        let params = serde_json::Map::from_iter([
+            ("pages".to_string(), json!([0, 1, 2])),
+            (
+                "features".to_string(),
+                json!([" keyValuePairs ", "languages"]),
+            ),
+        ]);
+        let url = complete_document_intelligence_url(
+            Some("https://example.cognitiveservices.azure.com"),
+            "prebuilt-layout",
+            &params,
+            &|_| None,
+        )
+        .expect("url builds");
+
+        assert_eq!(
+            url,
+            "https://example.cognitiveservices.azure.com/documentintelligence/documentModels/prebuilt-layout:analyze?api-version=2024-11-30&pages=1,2,3&features=keyValuePairs,languages"
+        );
+    }
+
+    #[test]
+    fn document_intelligence_url_omits_empty_feature_list() {
+        let params = serde_json::Map::from_iter([("features".to_string(), json!([]))]);
+        let url = complete_document_intelligence_url(
+            Some("https://example.cognitiveservices.azure.com"),
+            "prebuilt-layout",
+            &params,
+            &|_| None,
+        )
+        .expect("url builds");
+
+        assert_eq!(
+            url,
+            "https://example.cognitiveservices.azure.com/documentintelligence/documentModels/prebuilt-layout:analyze?api-version=2024-11-30"
+        );
+    }
+
+    #[test]
+    fn document_intelligence_url_rejects_invalid_features() {
+        for features in [
+            json!("keyValuePairs&pages=9"),
+            json!(""),
+            json!(["keyValuePairs", 1]),
+            json!({"feature": "keyValuePairs"}),
+        ] {
+            let params = serde_json::Map::from_iter([("features".to_string(), features.clone())]);
+            let error = complete_document_intelligence_url(
+                Some("https://example.cognitiveservices.azure.com"),
+                "prebuilt-layout",
+                &params,
+                &|_| None,
+            )
+            .expect_err("invalid features must fail");
+
+            assert!(
+                matches!(error, Error::InvalidRequest(message) if message.contains("Invalid `features`")),
+                "features={features:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn document_intelligence_maps_features() {
+        let params = Map::from_iter([
+            ("features".to_string(), json!(["keyValuePairs"])),
+            ("unsupported".to_string(), json!(true)),
+        ]);
+
+        assert_eq!(
+            AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG.map_ocr_params(&params),
+            Map::from_iter([("features".to_string(), json!(["keyValuePairs"]))])
         );
     }
 

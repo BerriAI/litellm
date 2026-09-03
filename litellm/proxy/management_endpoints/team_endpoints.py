@@ -4318,6 +4318,8 @@ async def _resolve_team_access_group_resources(
                     access_group_id=group.access_group_id,
                     access_group_name=group.access_group_name,
                     models=tuple(group.access_model_names or ()),
+                    mcp_server_ids=tuple(group.access_mcp_server_ids or ()),
+                    agent_ids=tuple(group.access_agent_ids or ()),
                 )
                 for group in resolved_groups
             ),

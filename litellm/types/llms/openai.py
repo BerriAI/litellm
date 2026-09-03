@@ -66,6 +66,7 @@ from pydantic import (
     ConfigDict,
     Discriminator,
     Field,
+    NonNegativeInt,
     PrivateAttr,
     SerializerFunctionWrapHandler,
     field_serializer,
@@ -1319,6 +1320,18 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
         return v
 
     model_config = {"extra": "allow"}
+
+
+class WebSearchToolUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    num_requests: NonNegativeInt
+
+
+class ResponsesToolUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    web_search: WebSearchToolUsage | None = None
 
 
 ResponsesAPIStatus = Literal["completed", "failed", "in_progress", "cancelled", "queued", "incomplete"]

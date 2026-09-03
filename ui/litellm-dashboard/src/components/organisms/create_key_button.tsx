@@ -334,7 +334,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     const fetchPrompts = async () => {
       try {
         const response = await getPromptsList(accessToken);
-        setPromptsList(response.prompts.map((prompt) => prompt.prompt_id));
+        setPromptsList(Array.from(new Set(response.prompts.map((prompt) => prompt.prompt_id))));
       } catch (error) {
         console.error("Failed to fetch prompts:", error);
       }
@@ -587,9 +587,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
   };
 
-  const changeOrganization = (write: FieldWrite) => (orgId: string) => {
-    write(orgId);
-    setSelectedOrganizationId(orgId || null);
+  const changeOrganization = (write: FieldWrite) => (orgId: string | null) => {
+    write(orgId ?? undefined);
+    setSelectedOrganizationId(orgId);
     // Clear team and project when org changes
     setSelectedCreateKeyTeam(null);
     setSelectedProjectId(null);

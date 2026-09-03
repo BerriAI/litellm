@@ -1,0 +1,440 @@
+from __future__ import annotations
+
+import base64
+import binascii
+from collections.abc import Mapping
+from typing import Annotated, Final, Literal, cast
+
+from hypothesis import strategies as st
+from hypothesis.strategies import SearchStrategy
+from pydantic import Field, field_validator, model_validator
+from typing_extensions import Self
+
+from ......shared.parity.fixture_models import FixtureModel, JsonObject
+from ......shared.parity.fixtures.media import structured_pdf_data_uri
+from ......shared.parity.fixtures.recording import UpstreamEndpoint
+from .base import OcrSdkInputBase
+from .common import (
+    OcrFixtureClient,
+    OcrRecordingTarget,
+    image_data_document,
+    invoke_with_api_key,
+)
+
+
+def _validate_reducto_source(source: str) -> str:
+    if source.startswith("reducto://"):
+        return source
+    if not source.startswith("data:"):
+        raise ValueError("Reducto documents require a reducto:// id or base64 data URI")
+    try:
+        header, encoded = source.split(",", 1)
+    except ValueError as error:
+        raise ValueError("invalid Reducto data URI") from error
+    if ";base64" not in header:
+        raise ValueError("Reducto data URIs must be base64 encoded")
+    try:
+        base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ValueError("invalid Reducto base64 payload") from error
+    return source
+
+
+class ReductoImageUrlDocument(FixtureModel):
+    type: Literal["image_url"]
+    image_url: str
+
+    @field_validator("image_url")
+    @classmethod
+    def validate_image_url(cls, value: str) -> str:
+        return _validate_reducto_source(value)
+
+
+class ReductoDocumentUrlDocument(FixtureModel):
+    type: Literal["document_url"]
+    document_url: str
+
+    @field_validator("document_url")
+    @classmethod
+    def validate_document_url(cls, value: str) -> str:
+        return _validate_reducto_source(value)
+
+
+ReductoDocument = Annotated[
+    ReductoImageUrlDocument | ReductoDocumentUrlDocument,
+    Field(discriminator="type"),
+]
+
+ReductoTableOutputFormat = Literal["html", "json", "md", "jsonbbox", "dynamic", "csv"]
+ReductoReturnImage = Literal["figure", "table", "page"]
+ReductoFormattingInclude = Literal[
+    "change_tracking",
+    "highlight",
+    "comments",
+    "hyperlinks",
+    "signatures",
+    "ignore_watermarks",
+]
+ReductoBlockType = Literal[
+    "Header",
+    "Footer",
+    "Title",
+    "Section Header",
+    "Page Number",
+    "List Item",
+    "Figure",
+    "Table",
+    "Key Value",
+    "Text",
+    "Comment",
+    "Signature",
+]
+_REDUCTO_FILTER_BLOCK_GROUPS: Final[tuple[tuple[ReductoBlockType, ...], ...]] = (
+    (),
+    ("Header",),
+    ("Header", "Footer", "Page Number"),
+    ("Figure", "Table", "Key Value"),
+)
+_REDUCTO_RETURN_IMAGE_GROUPS: Final[tuple[tuple[ReductoReturnImage, ...], ...]] = (
+    (),
+    ("figure",),
+    ("table",),
+    ("page",),
+    ("figure", "table"),
+)
+
+
+class ReductoFormatting(FixtureModel):
+    add_page_markers: bool = False
+    table_output_format: ReductoTableOutputFormat = "dynamic"
+    merge_tables: bool = False
+    include: list[ReductoFormattingInclude] = Field(default_factory=list)
+
+    @field_validator("include")
+    @classmethod
+    def validate_unique_include(cls, value: list[ReductoFormattingInclude]) -> list[ReductoFormattingInclude]:
+        if len(value) != len(set(value)):
+            raise ValueError("formatting.include entries must be unique")
+        return value
+
+
+class ReductoChunking(FixtureModel):
+    chunk_mode: Literal["variable", "section", "page", "disabled", "block", "page_sections"] = "disabled"
+    chunk_size: int | None = None
+    chunk_overlap: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_chunking(self) -> Self:
+        if self.chunk_size is not None and self.chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        if self.chunk_size is not None and self.chunk_overlap >= self.chunk_size:
+            raise ValueError("chunk_overlap must be less than chunk_size")
+        return self
+
+
+class ReductoRetrieval(FixtureModel):
+    chunking: ReductoChunking = Field(default_factory=ReductoChunking)
+    filter_blocks: list[ReductoBlockType] = Field(default_factory=list)
+    embedding_optimized: bool = False
+
+    @field_validator("filter_blocks")
+    @classmethod
+    def validate_unique_blocks(cls, value: list[ReductoBlockType]) -> list[ReductoBlockType]:
+        if len(value) != len(set(value)):
+            raise ValueError("retrieval.filter_blocks entries must be unique")
+        return value
+
+
+class ReductoPageRange(FixtureModel):
+    start: int | None = Field(default=None, ge=1)
+    end: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_range(self) -> Self:
+        if self.start is not None and self.end is not None and self.end < self.start:
+            raise ValueError("page range end must be greater than or equal to start")
+        return self
+
+
+class ReductoTenantThrottling(FixtureModel):
+    tenant_id: str = Field(min_length=1, max_length=256)
+    max_share: float = Field(default=0.5, gt=0, le=1)
+
+
+class ReductoHybridVpcSettings(FixtureModel):
+    environment: str | None = None
+
+
+ReductoPageSelection = ReductoPageRange | list[ReductoPageRange] | list[int] | list[str]
+ReductoV3Model = Literal["reducto/parse-v3", "parse-v3"]
+ReductoLegacyModel = Literal["reducto/parse-legacy", "parse-legacy"]
+_ReductoV3Route = Literal["qualified", "image", "unqualified"]
+_ReductoLegacyRoute = Literal["qualified", "unqualified"]
+
+REDUCTO_V3_MODELS: Final[tuple[Literal["reducto/parse-v3"], ...]] = ("reducto/parse-v3",)
+REDUCTO_LEGACY_MODELS: Final[tuple[Literal["reducto/parse-legacy"], ...]] = ("reducto/parse-legacy",)
+
+
+class ReductoSettings(FixtureModel):
+    model: Literal["r-1"] | None = None
+    ocr_system: Literal["standard", "legacy"] = "standard"
+    extraction_mode: Literal["ocr", "hybrid", "metadata"] = "hybrid"
+    force_url_result: bool = False
+    force_file_extension: str | None = None
+    return_ocr_data: bool = False
+    return_images: list[ReductoReturnImage] = Field(default_factory=list)
+    embed_pdf_metadata: bool = False
+    embed_pdf_metadata_dpi: int = Field(default=100, ge=50, le=250)
+    persist_results: bool = False
+    tenant_throttling: ReductoTenantThrottling | None = None
+    timeout: float | None = Field(default=None, gt=0)
+    page_range: ReductoPageSelection | None = None
+    document_password: str | None = None
+    hybrid_vpc: ReductoHybridVpcSettings = Field(default_factory=ReductoHybridVpcSettings)
+
+    @field_validator("return_images")
+    @classmethod
+    def validate_unique_images(cls, value: list[ReductoReturnImage]) -> list[ReductoReturnImage]:
+        if len(value) != len(set(value)):
+            raise ValueError("settings.return_images entries must be unique")
+        return value
+
+
+class ReductoParseV3SdkInput(OcrSdkInputBase):
+    contract: Literal["reducto_v3"] = "reducto_v3"
+    model: ReductoV3Model
+    document: ReductoDocument
+    custom_llm_provider: Literal["reducto"] | None = None
+    formatting: ReductoFormatting = Field(default_factory=ReductoFormatting)
+    retrieval: ReductoRetrieval = Field(default_factory=ReductoRetrieval)
+    settings: ReductoSettings = Field(default_factory=ReductoSettings)
+
+    @model_validator(mode="after")
+    def validate_provider_routing(self) -> Self:
+        if self.model == "parse-v3" and self.custom_llm_provider != "reducto":
+            raise ValueError("unqualified Reducto models require custom_llm_provider='reducto'")
+        return self
+
+
+class ReductoParseLegacySdkInput(OcrSdkInputBase):
+    contract: Literal["reducto_legacy"] = "reducto_legacy"
+    model: ReductoLegacyModel
+    document: ReductoDocument
+    custom_llm_provider: Literal["reducto"] | None = None
+    enhance: JsonObject | None = None
+
+    @model_validator(mode="after")
+    def validate_provider_routing(self) -> Self:
+        if self.model == "parse-legacy" and self.custom_llm_provider != "reducto":
+            raise ValueError("unqualified Reducto models require custom_llm_provider='reducto'")
+        return self
+
+
+_REDUCTO_PROVIDER_REJECTED_DOCUMENT: Final = ReductoDocumentUrlDocument(
+    type="document_url",
+    document_url="reducto://invalid-document-for-parity",
+)
+REDUCTO_V3_PROVIDER_REJECTED_INPUTS: Final[tuple[ReductoParseV3SdkInput, ...]] = (
+    ReductoParseV3SdkInput(
+        model="reducto/parse-v3",
+        document=_REDUCTO_PROVIDER_REJECTED_DOCUMENT,
+    ),
+)
+REDUCTO_LEGACY_PROVIDER_REJECTED_INPUTS: Final[tuple[ReductoParseLegacySdkInput, ...]] = (
+    ReductoParseLegacySdkInput(
+        model="reducto/parse-legacy",
+        document=_REDUCTO_PROVIDER_REJECTED_DOCUMENT,
+    ),
+)
+
+
+_REDUCTO_API_BASE: Final = "https://platform.reducto.ai"
+
+
+def _formatting_strategy() -> SearchStrategy[ReductoFormatting]:
+    values: Final = st.one_of(
+        st.sampled_from(("dynamic", "html", "md", "json", "csv", "jsonbbox")).map(
+            lambda value: {"table_output_format": value}
+        ),
+        st.sampled_from((False, True)).map(lambda value: {"add_page_markers": value}),
+        st.sampled_from((False, True)).map(lambda value: {"merge_tables": value}),
+        st.sampled_from(
+            (
+                (),
+                ("hyperlinks",),
+                ("change_tracking", "highlight", "comments"),
+                ("signatures", "ignore_watermarks"),
+            )
+        )
+        .map(list)
+        .map(lambda value: {"include": value}),
+    )
+    return values.map(ReductoFormatting.model_validate)
+
+
+def _chunking_strategy() -> SearchStrategy[ReductoChunking]:
+    return st.one_of(
+        st.sampled_from(("disabled", "section", "page", "block", "page_sections")).map(
+            lambda mode: ReductoChunking(chunk_mode=mode)
+        ),
+        st.just(ReductoChunking(chunk_mode="variable")),
+        st.sampled_from((250, 1000, 1500)).map(lambda size: ReductoChunking(chunk_mode="variable", chunk_size=size)),
+        st.sampled_from((32, 128)).map(
+            lambda overlap: ReductoChunking(chunk_mode="variable", chunk_size=1000, chunk_overlap=overlap)
+        ),
+    )
+
+
+def _retrieval_strategy() -> SearchStrategy[ReductoRetrieval]:
+    filter_blocks: Final = cast(
+        SearchStrategy[list[ReductoBlockType]],
+        st.sampled_from(_REDUCTO_FILTER_BLOCK_GROUPS).map(list),
+    )
+    return st.one_of(
+        _chunking_strategy().map(lambda chunking: ReductoRetrieval(chunking=chunking)),
+        filter_blocks.map(lambda selected_blocks: ReductoRetrieval(filter_blocks=selected_blocks)),
+        st.sampled_from((False, True)).map(
+            lambda optimized: ReductoRetrieval(
+                chunking=ReductoChunking(chunk_mode="variable"),
+                embedding_optimized=optimized,
+            )
+        ),
+    )
+
+
+def _settings_strategy() -> SearchStrategy[ReductoSettings]:
+    # force_url_result stays model-compatible but is not recorded until the
+    # response transform follows and downloads result.url.
+    return_images: Final[SearchStrategy[list[ReductoReturnImage]]] = st.sampled_from(_REDUCTO_RETURN_IMAGE_GROUPS).map(
+        list
+    )
+    page_ranges: Final = st.one_of(
+        st.just(ReductoPageRange(start=1, end=1)),
+        st.just(ReductoPageRange(start=1, end=3)),
+        st.sampled_from(
+            (
+                (
+                    ReductoPageRange(start=1, end=2),
+                    ReductoPageRange(start=4, end=5),
+                ),
+            )
+        ).map(list),
+    )
+    return st.one_of(
+        st.just(ReductoSettings(model="r-1")),
+        st.sampled_from(("standard", "legacy")).map(lambda value: ReductoSettings(ocr_system=value)),
+        st.sampled_from(("hybrid", "ocr", "metadata")).map(lambda value: ReductoSettings(extraction_mode=value)),
+        st.just(ReductoSettings(return_ocr_data=True)),
+        return_images.map(lambda selected_images: ReductoSettings(return_images=selected_images)),
+        st.just(ReductoSettings(embed_pdf_metadata=True)),
+        st.sampled_from((50, 100, 250)).map(
+            lambda dpi: ReductoSettings(embed_pdf_metadata=True, embed_pdf_metadata_dpi=dpi)
+        ),
+        st.just(ReductoSettings(timeout=300.0)),
+        page_ranges.map(lambda page_range: ReductoSettings(page_range=page_range)),
+    )
+
+
+def _reducto_v3_baseline(
+    route: _ReductoV3Route,
+    document: ReductoDocument,
+    inline_image_data_uri: str,
+) -> ReductoParseV3SdkInput:
+    if route == "image":
+        inline_image: Final = ReductoImageUrlDocument.model_validate(
+            image_data_document(inline_image_data_uri).model_dump(mode="json")
+        )
+        return ReductoParseV3SdkInput(model="reducto/parse-v3", document=inline_image)
+    if route == "unqualified":
+        return ReductoParseV3SdkInput(
+            model="parse-v3",
+            custom_llm_provider="reducto",
+            document=document,
+        )
+    return ReductoParseV3SdkInput(model="reducto/parse-v3", document=document)
+
+
+def reducto_v3_input_strategy(
+    inline_image_data_uri: str,
+    document: ReductoDocument | None = None,
+) -> SearchStrategy[ReductoParseV3SdkInput]:
+    selected_document: Final = document or ReductoDocumentUrlDocument(
+        type="document_url", document_url="reducto://fixture-document.pdf"
+    )
+    baseline_routes: Final[tuple[_ReductoV3Route, ...]] = ("qualified", "image", "unqualified")
+    return st.one_of(
+        st.sampled_from(baseline_routes).map(
+            lambda route: _reducto_v3_baseline(route, selected_document, inline_image_data_uri)
+        ),
+        _formatting_strategy().map(
+            lambda formatting: ReductoParseV3SdkInput(
+                model="reducto/parse-v3",
+                document=selected_document,
+                formatting=formatting,
+            )
+        ),
+        _retrieval_strategy().map(
+            lambda retrieval: ReductoParseV3SdkInput(
+                model="reducto/parse-v3",
+                document=selected_document,
+                retrieval=retrieval,
+            )
+        ),
+        _settings_strategy().map(
+            lambda settings: ReductoParseV3SdkInput(
+                model="reducto/parse-v3",
+                document=selected_document,
+                settings=settings,
+            )
+        ),
+    )
+
+
+def _reducto_legacy_input(
+    route: _ReductoLegacyRoute,
+    document: ReductoDocument,
+) -> ReductoParseLegacySdkInput:
+    if route == "unqualified":
+        return ReductoParseLegacySdkInput(
+            model="parse-legacy",
+            custom_llm_provider="reducto",
+            document=document,
+        )
+    return ReductoParseLegacySdkInput(model="reducto/parse-legacy", document=document)
+
+
+def reducto_legacy_input_strategy(
+    document: ReductoDocument | None = None,
+) -> SearchStrategy[ReductoParseLegacySdkInput]:
+    selected_document: Final = document or ReductoDocumentUrlDocument(
+        type="document_url", document_url="reducto://fixture-document.pdf"
+    )
+    routes: Final[tuple[_ReductoLegacyRoute, ...]] = ("qualified", "unqualified")
+    return st.sampled_from(routes).map(lambda route: _reducto_legacy_input(route, selected_document))
+
+
+def reducto_recording_targets(
+    environ: Mapping[str, str], client: OcrFixtureClient, inline_image_data_uri: str
+) -> tuple[OcrRecordingTarget, ...]:
+    api_key: Final = environ.get("REDUCTO_API_KEY")
+    if not api_key:
+        return ()
+    base_url: Final = environ.get("REDUCTO_API_BASE", _REDUCTO_API_BASE).rstrip("/")
+    document: Final = ReductoDocumentUrlDocument(type="document_url", document_url=structured_pdf_data_uri())
+    invocation: Final = invoke_with_api_key(client, api_key)
+    return (
+        OcrRecordingTarget(
+            name="reducto-v3",
+            upstream=UpstreamEndpoint(base_url=base_url),
+            strategy=cast(SearchStrategy[OcrSdkInputBase], reducto_v3_input_strategy(inline_image_data_uri, document)),
+            invocation=invocation,
+            required_inputs=REDUCTO_V3_PROVIDER_REJECTED_INPUTS,
+        ),
+        OcrRecordingTarget(
+            name="reducto-legacy",
+            upstream=UpstreamEndpoint(base_url=base_url),
+            strategy=cast(SearchStrategy[OcrSdkInputBase], reducto_legacy_input_strategy(document)),
+            invocation=invocation,
+            required_inputs=REDUCTO_LEGACY_PROVIDER_REJECTED_INPUTS,
+        ),
+    )
