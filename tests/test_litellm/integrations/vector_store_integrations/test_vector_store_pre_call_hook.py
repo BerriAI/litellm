@@ -12,6 +12,15 @@ from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook i
     VectorStorePreCallHook,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import (
+    CallTypes,
+    Choices,
+    Delta,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+)
 from litellm.types.vector_stores import (
     VectorStoreResultContent,
     VectorStoreSearchResponse,
@@ -34,6 +43,18 @@ def _search_response(text: str) -> VectorStoreSearchResponse:
             )
         ],
     )
+
+
+def _first_message(response: ModelResponse) -> Message:
+    choice = response.choices[0]
+    assert isinstance(choice, Choices)
+    return choice.message
+
+
+@dataclass(frozen=True)
+class ExplodingRegistry:
+    async def pop_vector_stores_to_run_with_db_fallback(self, **kwargs: object) -> list[LiteLLM_ManagedVectorStore]:
+        raise RuntimeError("the registry blew up")
 
 
 @dataclass
@@ -285,3 +306,181 @@ def test_the_default_runtime_follows_the_proxy_globals(monkeypatch: pytest.Monke
 
     assert runtime.llm_router() is router
     assert runtime.prisma_client() is prisma
+
+
+@pytest.mark.asyncio
+async def test_a_failing_vector_store_is_reported_back_to_the_caller(
+    registry_with: RegisterStores,
+) -> None:
+    """Regression (LIT-6809): a silently dropped store left the caller with an un-augmented answer and no signal."""
+    registry_with("vs-broken", "vs-healthy")
+    logging_obj = FakeLoggingObj({})
+
+    await _run_hook(
+        VectorStorePreCallHook(
+            proxy_runtime=FakeProxyRuntime(router=RecordingRouter(failing_vector_store_ids=frozenset({"vs-broken"})))
+        ),
+        ["vs-broken", "vs-healthy"],
+        logging_obj,
+    )
+
+    response = ModelResponse(choices=[Choices(message=Message(content="an answer"))])
+    await VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=None)).async_post_call_success_deployment_hook(
+        request_data={"litellm_logging_obj": logging_obj},
+        response=response,
+        call_type=CallTypes.acompletion,
+    )
+
+    provider_specific_fields = _first_message(response).provider_specific_fields or {}
+    assert provider_specific_fields["vector_store_search_failures"] == (
+        {
+            "vector_store_id": "vs-broken",
+            "custom_llm_provider": "bedrock",
+            "error": "litellm.BadRequestError: no healthy deployments for vs-broken",
+        },
+    )
+    assert len(provider_specific_fields["search_results"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_healthy_vector_store_alone_reports_no_failures(registry_with: RegisterStores) -> None:
+    registry_with("vs-healthy")
+    logging_obj = FakeLoggingObj({})
+
+    await _run_hook(
+        VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=RecordingRouter())),
+        ["vs-healthy"],
+        logging_obj,
+    )
+
+    response = ModelResponse(choices=[Choices(message=Message(content="an answer"))])
+    await VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=None)).async_post_call_success_deployment_hook(
+        request_data={"litellm_logging_obj": logging_obj},
+        response=response,
+        call_type=CallTypes.acompletion,
+    )
+
+    assert "vector_store_search_failures" not in (_first_message(response).provider_specific_fields or {})
+
+
+@pytest.mark.asyncio
+async def test_a_failing_vector_store_is_reported_on_the_streaming_chunk(registry_with: RegisterStores) -> None:
+    registry_with("vs-broken")
+    logging_obj = FakeLoggingObj({})
+
+    await _run_hook(
+        VectorStorePreCallHook(
+            proxy_runtime=FakeProxyRuntime(router=RecordingRouter(failing_vector_store_ids=frozenset({"vs-broken"})))
+        ),
+        ["vs-broken"],
+        logging_obj,
+    )
+
+    chunk = ModelResponseStream(choices=[StreamingChoices(delta=Delta(content="an answer"))])
+    await VectorStorePreCallHook(
+        proxy_runtime=FakeProxyRuntime(router=None)
+    ).async_post_call_streaming_deployment_hook(
+        request_data=logging_obj.model_call_details,
+        response_chunk=chunk,
+        call_type=CallTypes.acompletion,
+    )
+
+    assert (chunk.choices[0].delta.provider_specific_fields or {})["vector_store_search_failures"] == (
+        {
+            "vector_store_id": "vs-broken",
+            "custom_llm_provider": "bedrock",
+            "error": "litellm.BadRequestError: no healthy deployments for vs-broken",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_error_mode_fails_the_request_instead_of_answering_without_the_knowledge_base(
+    registry_with: RegisterStores,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (LIT-6809): opting in must turn an ungrounded answer into a 400 the caller can act on."""
+    registry_with("vs-broken", "vs-healthy")
+    monkeypatch.setattr(litellm, "vector_store_search_failure_mode", "error")
+
+    with pytest.raises(litellm.VectorStoreSearchError) as raised:
+        await _run_hook(
+            VectorStorePreCallHook(
+                proxy_runtime=FakeProxyRuntime(
+                    router=RecordingRouter(failing_vector_store_ids=frozenset({"vs-broken"}))
+                )
+            ),
+            ["vs-broken", "vs-healthy"],
+            FakeLoggingObj({}),
+        )
+
+    assert raised.value.status_code == 400
+    assert raised.value.failures == (
+        {
+            "vector_store_id": "vs-broken",
+            "custom_llm_provider": "bedrock",
+            "error": "litellm.BadRequestError: no healthy deployments for vs-broken",
+        },
+    )
+    assert "vs-broken: litellm.BadRequestError: no healthy deployments for vs-broken" in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_error_mode_leaves_a_fully_healthy_request_alone(
+    registry_with: RegisterStores,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_with("vs-healthy")
+    monkeypatch.setattr(litellm, "vector_store_search_failure_mode", "error")
+
+    _, messages, _ = await _run_hook(
+        VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=RecordingRouter())),
+        ["vs-healthy"],
+        FakeLoggingObj({}),
+    )
+
+    assert messages[0]["content"] == "Context:\n\ncontext from vs-healthy\n\n"
+
+
+@pytest.mark.asyncio
+async def test_error_mode_does_not_swallow_the_raise_in_the_hooks_own_catch_all(
+    registry_with: RegisterStores,
+    monkeypatch: pytest.MonkeyPatch,
+    warnings: list[logging.LogRecord],
+) -> None:
+    """Regression (LIT-6809): the catch-all around the hook must not turn the opted-in failure back into a 200."""
+    registry_with("vs-broken")
+    monkeypatch.setattr(litellm, "vector_store_search_failure_mode", "error")
+
+    with pytest.raises(litellm.VectorStoreSearchError):
+        await _run_hook(
+            VectorStorePreCallHook(
+                proxy_runtime=FakeProxyRuntime(
+                    router=RecordingRouter(failing_vector_store_ids=frozenset({"vs-broken"}))
+                )
+            ),
+            ["vs-broken"],
+            FakeLoggingObj({}),
+        )
+
+    assert [record.levelname for record in warnings] == ["WARNING"]
+
+
+@pytest.mark.asyncio
+async def test_a_crash_outside_the_search_names_the_requested_vector_stores(
+    monkeypatch: pytest.MonkeyPatch,
+    warnings: list[logging.LogRecord],
+) -> None:
+    """Regression (LIT-6809): the catch-all logged no store id, so an operator could not tell which store broke."""
+    monkeypatch.setattr(litellm, "vector_store_registry", ExplodingRegistry())
+
+    _, messages, _ = await _run_hook(
+        VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=None)),
+        ["vs-one", "vs-two"],
+        FakeLoggingObj({}),
+    )
+
+    assert messages == [{"role": "user", "content": "what is litellm?"}]
+    assert [record.getMessage() for record in warnings] == [
+        "Error in VectorStorePreCallHook for vector_store_ids=('vs-one', 'vs-two'): the registry blew up"
+    ]
