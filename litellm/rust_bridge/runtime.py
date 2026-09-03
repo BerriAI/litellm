@@ -5,7 +5,15 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Final, Generic, NoReturn, TypeAlias, TypeVar, cast
 
-from litellm.exceptions import APIError
+from litellm.exceptions import (
+    APIError,
+    AuthenticationError,
+    BadRequestError,
+    NotFoundError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+)
 from litellm.rust_bridge.bindings import native_exception_types
 
 NativeT = TypeVar("NativeT")
@@ -91,7 +99,7 @@ def attempt(
     except declined as error:
         return RustDeclined(reason=_decline_reason(error))
     except upstream as error:
-        _raise_upstream(error, context)
+        raise_upstream(error, context)
     return RustHandled(adapt(value))
 
 
@@ -112,7 +120,7 @@ async def aattempt(
     except declined as error:
         return RustDeclined(reason=_decline_reason(error))
     except upstream as error:
-        _raise_upstream(error, context)
+        raise_upstream(error, context)
     return RustHandled(adapt(value))
 
 
@@ -124,7 +132,7 @@ def call(operation: Callable[[], ResultT], context: BridgeErrorContext) -> Resul
     try:
         return operation()
     except upstream as error:
-        _raise_upstream(error, context)
+        raise_upstream(error, context)
 
 
 async def acall(operation: Callable[[], Awaitable[ResultT]], context: BridgeErrorContext) -> ResultT:
@@ -135,7 +143,7 @@ async def acall(operation: Callable[[], Awaitable[ResultT]], context: BridgeErro
     try:
         return await operation()
     except upstream as error:
-        _raise_upstream(error, context)
+        raise_upstream(error, context)
 
 
 def _decline_reason(error: BaseException) -> str:
@@ -158,18 +166,57 @@ def _required_reason(result: RustDeclined | RustUnavailable) -> str:
             return f"declined the request: {reason}"
 
 
-def _raise_upstream(error: BaseException, context: BridgeErrorContext) -> NoReturn:
+def raise_upstream(error: BaseException, context: BridgeErrorContext) -> NoReturn:
     args: Final = cast(tuple[object, ...], error.args)
     status_value: Final = args[0] if args else 0
     message_value: Final = args[1] if len(args) > 1 else str(error)
     status: Final = status_value if isinstance(status_value, int) else 0
     message: Final = message_value if isinstance(message_value, str) else str(message_value)
-    raise APIError(
-        status_code=status or 500,
-        message=f"litellm rust {context.route}: {message}",
-        llm_provider=context.provider,
-        model=context.model,
-    ) from error
+    prefixed: Final = f"litellm rust {context.route}: {message}"
+    match status:
+        case 401 | 403:
+            raise AuthenticationError(
+                message=prefixed,
+                llm_provider=context.provider,
+                model=context.model,
+            ) from error
+        case 404:
+            raise NotFoundError(
+                message=prefixed,
+                model=context.model,
+                llm_provider=context.provider,
+            ) from error
+        case 408:
+            raise Timeout(
+                message=prefixed,
+                model=context.model,
+                llm_provider=context.provider,
+            ) from error
+        case 429:
+            raise RateLimitError(
+                message=prefixed,
+                llm_provider=context.provider,
+                model=context.model,
+            ) from error
+        case _ if 400 <= status < 500:
+            raise BadRequestError(
+                message=prefixed,
+                model=context.model,
+                llm_provider=context.provider,
+            ) from error
+        case _ if status >= 500:
+            raise ServiceUnavailableError(
+                message=prefixed,
+                llm_provider=context.provider,
+                model=context.model,
+            ) from error
+        case _:
+            raise APIError(
+                status_code=status or 500,
+                message=prefixed,
+                llm_provider=context.provider,
+                model=context.model,
+            ) from error
 
 
 def identity(value: ResultT) -> ResultT:

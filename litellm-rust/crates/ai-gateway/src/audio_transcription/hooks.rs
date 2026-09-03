@@ -277,6 +277,7 @@ fn core_error_kind(error: &Error) -> &'static str {
         Error::Http { .. } => "HttpError",
         Error::InvalidResponse(_) => "InvalidResponse",
         Error::Network(_) => "NetworkError",
+        Error::Timeout(_) => "TimeoutError",
         Error::Routing(_) => "RoutingError",
         Error::Unsupported(_) => "UnsupportedRequest",
     }
