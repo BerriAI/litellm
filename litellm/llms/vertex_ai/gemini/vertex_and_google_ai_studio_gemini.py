@@ -2,6 +2,7 @@
 ## httpx client for vertex ai calls
 ## Initial implementation - covers gemini + image gen calls
 import json
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
@@ -106,6 +107,17 @@ if TYPE_CHECKING:
 else:
     LoggingClass = Any
     StreamingChoices = Any
+
+
+GEMINI_MAJOR_VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(r"gemini-(\d+)")
+
+GEMINI_ROLLING_LATEST_ALIASES: Final[frozenset[str]] = frozenset(
+    {
+        "gemini-flash-latest",
+        "gemini-flash-lite-latest",
+        "gemini-pro-latest",
+    }
+)
 
 
 class VertexAIBaseConfig:
@@ -259,20 +271,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _is_gemini_3_or_newer(model: str) -> bool:
         """
-        Check if the model is Gemini 3 Pro or newer.
+        Check if the model is Gemini 3 or newer, e.g. gemini-3-pro-preview,
+        gemini-3.1-flash, gemini-3.5-flash, and every later major version.
 
-        Gemini 3 models include:
-        - gemini-3-pro-preview
-        - gemini-3-flash
-        - gemini-3-flash-preview (Gemini 3 Flash)
-        - gemini-3.1-pro-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview
-        - gemini-3.5-flash
-        - Any future Gemini 3.x models
+        The major version is read off the model name, so Gemini 4 and beyond
+        satisfy this without a code change. Names carrying no version at all are
+        matched against GEMINI_ROLLING_LATEST_ALIASES, which always resolve to
+        the newest release of their tier.
         """
-        # Check for Gemini 3 models
-        if "gemini-3" in model:
-            return True
-        return False
+        major_version: Final = GEMINI_MAJOR_VERSION_PATTERN.search(model)
+        if major_version is not None:
+            return int(major_version.group(1)) >= 3
+        return model.split("/")[-1] in GEMINI_ROLLING_LATEST_ALIASES
+
+    @staticmethod
+    def _is_gemini_3_flash_or_newer(model: str | None) -> bool:
+        """
+        Check if the model is a Gemini 3 or newer Flash, the tier that accepts
+        the MINIMAL thinking level. Flash-Lite counts, Pro does not.
+        """
+        if not model:
+            return False
+        return VertexGeminiConfig._is_gemini_3_or_newer(model) and "flash" in model.lower()
 
     @staticmethod
     def _forward_gemini_function_call_id(model: str) -> bool:
@@ -858,10 +878,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Returns:
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
-        # Check if this is gemini-3-flash which supports MINIMAL thinking level
-        # Covers gemini-3-flash, gemini-3-flash-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview,
-        # gemini-3.5-flash, and any future 3.x-flash variants.
-        is_gemini3flash: Final = model and ("flash" in model.lower() and "gemini-3" in model.lower())
+        is_gemini3flash: Final = VertexGeminiConfig._is_gemini_3_flash_or_newer(model)
         is_gemini31pro: Final = model and ("gemini-3.1-pro-preview" in model.lower())
         if reasoning_effort == "minimal":
             if is_gemini3flash:
@@ -955,7 +972,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     params["includeThoughts"] = True
                     # Follow provider defaults unless explicitly opted into legacy behavior.
                     if litellm.enable_gemini_default_thinking_level_low is True:
-                        is_gemini3flash: Final = "gemini-3" in model.lower() and "flash" in model.lower()
+                        is_gemini3flash: Final = VertexGeminiConfig._is_gemini_3_flash_or_newer(model)
                         params["thinkingLevel"] = "minimal" if is_gemini3flash else "low"
             else:
                 # Thinking disabled
