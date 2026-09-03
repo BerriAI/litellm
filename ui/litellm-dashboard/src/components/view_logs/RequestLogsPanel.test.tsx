@@ -328,6 +328,19 @@ describe("RequestLogsPanel", () => {
       expect(drawer()).toHaveAttribute("data-log-id", "chatcmpl-old");
     });
 
+    it("opens the exact request_id row when another log in the page carries that id as its litellm_call_id", async () => {
+      respondWith([
+        logEntry({ request_id: "chatcmpl-other", litellm_call_id: "victim-req" }),
+        logEntry({ request_id: "victim-req", litellm_call_id: "victim-call" }),
+      ]);
+      renderPanel("?log_id=victim-req");
+
+      await waitFor(() => {
+        expect(drawer()).toHaveTextContent("open");
+      });
+      expect(drawer()).toHaveAttribute("data-log-id", "victim-req");
+    });
+
     it("closing the drawer removes ?log_id= from the URL and closes the drawer", async () => {
       const user = userEvent.setup();
       respondWith([logEntry({ request_id: "req-1" })]);
