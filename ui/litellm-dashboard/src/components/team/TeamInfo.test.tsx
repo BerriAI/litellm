@@ -1494,6 +1494,35 @@ describe("TeamInfoView", () => {
     });
   });
 
+  describe("team member settings", () => {
+    it("should populate Default Key Duration from the team's stored metadata", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ metadata: { team_member_key_duration: "30d" } }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
+      });
+
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+      await user.click(await screen.findByRole("button", { name: /team member settings/i }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/^Default Key Duration/)).toHaveValue("30d");
+      });
+    });
+  });
+
   describe("guardrails dropdown grouping", () => {
     const guardrail = (name: string, defaultOn: boolean) => ({
       guardrail_name: name,
