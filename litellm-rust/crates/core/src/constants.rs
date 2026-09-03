@@ -32,6 +32,18 @@ pub(crate) const CHAT_COMPLETIONS_CONNECT_TIMEOUT_SECS: u64 = 10;
 
 pub(crate) const AUDIO_TRANSCRIPTION_TIMEOUT_SECS: u64 = 600;
 
+/// Idle connections retained per host in the shared provider clients.
+/// reqwest defaults to `usize::MAX`, so a burst of concurrent calls to one
+/// provider host leaves every connection idle in the pool until its timeout;
+/// this bounds file descriptors while keeping enough warm connections for
+/// TLS-handshake-free reuse.
+pub(crate) const PROVIDER_POOL_MAX_IDLE_PER_HOST: usize = 64;
+
+/// TCP keep-alive probe interval for provider sockets. Detects half-open
+/// peers (NAT/LB reaping, vanished upstreams) during long-lived streaming
+/// responses that otherwise sit silent for the whole request timeout.
+pub(crate) const PROVIDER_TCP_KEEPALIVE_SECS: u64 = 60;
+
 /// `object` field every non-streaming chat completion response carries.
 pub const CHAT_COMPLETION_OBJECT: &str = "chat.completion";
 
