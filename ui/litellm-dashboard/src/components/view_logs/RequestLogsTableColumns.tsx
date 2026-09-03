@@ -13,7 +13,7 @@ import { AgentBadge, AgentIcon, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } fr
 
 export interface RequestLogsTableColumnsDeps {
   onKeyHashClick: (keyHash: string) => void;
-  onSessionClick: (sessionId: string) => void;
+  onSessionClick: (log: LogEntry) => void;
 }
 
 const readMetaString = (metadata: Record<string, unknown> | undefined, key: string): string | undefined => {
@@ -61,7 +61,7 @@ export const getRequestLogsTableColumns = ({
       const isAgent = AGENT_CALL_TYPES.includes(log.call_type);
       const sessionLlmCount = log.session_llm_count ?? (isMcp || isAgent ? 0 : sessionCount);
       const sessionAgentCount = log.session_agent_count ?? (isAgent ? sessionCount : 0);
-      const sessionMcpCount = log.session_mcp_count ?? (isMcp ? sessionCount : 0);
+      const sessionMcpCount = log.mcp_tool_call_count ?? (isMcp ? sessionCount : 0);
 
       if (sessionCount <= 1) {
         if (isMcp) return <McpBadge />;
@@ -115,7 +115,7 @@ export const getRequestLogsTableColumns = ({
     header: "Session ID",
     size: 120,
     enableSorting: false,
-    cell: ({ row }) => <IdCell value={row.original.session_id} onClick={onSessionClick} />,
+    cell: ({ row }) => <IdCell value={row.original.session_id} onClick={() => onSessionClick(row.original)} />,
   },
   {
     id: "request_id",

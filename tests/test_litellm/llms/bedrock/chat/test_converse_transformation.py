@@ -979,6 +979,34 @@ def test_config_blocks_do_not_leak_into_inference_config():
     assert data["serviceTier"] == {"type": "priority"}
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-opus-4-8",
+        "us.anthropic.claude-opus-4-8",
+        "amazon.nova-pro-v1:0",
+        "us.meta.llama4-maverick-17b-instruct-v1:0",
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdef123456",
+        "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.amazon.nova-pro-v1:0",
+    ],
+)
+def test_client_metadata_stripped_from_converse_request(model):
+    data = AmazonConverseConfig()._transform_request_helper(
+        model=model,
+        system_content_blocks=[],
+        optional_params={
+            "maxTokens": 16,
+            "anthropic_beta": ["computer-use-2025-01-24"],
+            "client_metadata": {"originator": "codex_cli_rs"},
+        },
+        messages=None,
+    )
+
+    fields = data["additionalModelRequestFields"]
+    assert "client_metadata" not in fields
+    assert fields["anthropic_beta"] == ["computer-use-2025-01-24"]
+
+
 def test_parallel_tool_calls_config_kept_for_sonnet_5(monkeypatch):
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
@@ -6345,6 +6373,82 @@ def test_adaptive_thinking_passes_through_on_46_plus_converse(model):
     )
 
     assert optional_params.get("thinking") == {"type": "adaptive"}
+
+
+@pytest.mark.parametrize(
+    "model,budget_tokens,expected_effort",
+    [
+        ("anthropic.claude-opus-4-8", 4096, "high"),
+        ("us.anthropic.claude-opus-4-8", 2000, "low"),
+        ("global.anthropic.claude-opus-4-8", 12000, "xhigh"),
+        ("us.anthropic.claude-opus-4-7", 3000, "medium"),
+        ("anthropic.claude-fable-5", 4096, "high"),
+    ],
+)
+def test_legacy_thinking_translated_to_adaptive_on_adaptive_only_converse(model, budget_tokens, expected_effort):
+    """Adaptive-only models (4.7+, 5 families) reject thinking={type: enabled}
+    with a 400 on Bedrock Converse, so the legacy shape from callers like Claude
+    Code must be upgraded to thinking={type: adaptive} + output_config.effort
+    derived from budget_tokens, matching the /v1/messages passthrough."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": budget_tokens}, "max_tokens": 64000},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    request = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["additionalModelRequestFields"]["thinking"] == {"type": "adaptive"}
+    assert request["additionalModelRequestFields"]["output_config"] == {"effort": expected_effort}
+
+
+def test_legacy_thinking_translation_keeps_caller_output_config_effort_converse():
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "output_config": {"effort": "low"},
+            "thinking": {"type": "enabled", "budget_tokens": 12000},
+            "max_tokens": 64000,
+        },
+        optional_params={},
+        model="anthropic.claude-opus-4-8",
+        drop_params=False,
+    )
+
+    assert optional_params["thinking"] == {"type": "adaptive"}
+    assert optional_params["output_config"] == {"effort": "low"}
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.anthropic.claude-opus-4-6",
+        "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    ],
+)
+def test_legacy_thinking_forwarded_verbatim_when_model_accepts_it_converse(model):
+    """The 4.6 family and pre-adaptive models accept thinking={type: enabled}
+    natively, so the caller's budget_tokens cap must keep applying."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 4096}, "max_tokens": 8192},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+    assert "output_config" not in optional_params
 
 
 def test_adaptive_thinking_dropped_when_max_tokens_too_small_converse():

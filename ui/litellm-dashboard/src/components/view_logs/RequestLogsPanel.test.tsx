@@ -138,46 +138,54 @@ describe("RequestLogsPanel", () => {
     respondWith([]);
   });
 
-  describe("conversation rows come from the server", () => {
-    it("renders every returned row, even two that share a session id, instead of collapsing them client-side", async () => {
-      const mcpCall: Partial<LogEntry> = {
-        request_id: "req-mcp",
-        call_type: "call_mcp_tool",
-        session_id: "sess-1",
-        session_total_count: 3,
-      };
-      const llmCall: Partial<LogEntry> = {
-        request_id: "req-llm",
-        call_type: "acompletion",
-        session_id: "sess-1",
-        session_total_count: 3,
-      };
-      respondWith([logEntry(mcpCall), logEntry(llmCall), logEntry({ request_id: "req-solo" })]);
+  describe("server-grouped session pagination (#38060)", () => {
+    it("requests session-grouped pages of 10 rows by default", async () => {
+      renderPanel();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.params?.group_by_session).toBe(true);
+      expect(lastCall()?.page_size).toBe(10);
+    });
+
+    it("renders every row the server returns without client-side collapsing", async () => {
+      respondWith([
+        logEntry({ request_id: "req-a", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-b", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-c", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+      ]);
+      renderPanel();
+
+      await waitFor(() => expect(row("req-a")).not.toBeNull());
+      expect(row("req-b")).not.toBeNull();
+      expect(row("req-c")).not.toBeNull();
+    });
+
+    it("shows the session's call count on the server-picked representative row", async () => {
+      respondWith([
+        logEntry({
+          request_id: "req-llm",
+          call_type: "acompletion",
+          session_id: "sess-1",
+          session_total_count: 3,
+          session_llm_count: 2,
+          mcp_tool_call_count: 1,
+        }),
+      ]);
       renderPanel();
 
       await waitFor(() => expect(row("req-llm")).not.toBeNull());
-      expect(row("req-mcp")).not.toBeNull();
-      expect(row("req-solo")).not.toBeNull();
+      expect(within(row("req-llm") as HTMLElement).getByText("3")).toBeInTheDocument();
     });
 
-    it("shows the server's session call count and composition rather than what the loaded page contains", async () => {
-      const user = userEvent.setup();
-      const representativeCall: Partial<LogEntry> = {
-        request_id: "req-rep",
-        call_type: "acompletion",
-        session_id: "sess-big",
-        session_total_count: 120,
-        session_llm_count: 100,
-        session_mcp_count: 20,
-        session_agent_count: 0,
-      };
-      respondWith([logEntry(representativeCall)]);
+    it("leaves single-call rows untouched", async () => {
+      respondWith([
+        logEntry({ request_id: "req-solo-a", session_id: "sess-a", session_total_count: 1 }),
+        logEntry({ request_id: "req-solo-b" }),
+      ]);
       renderPanel();
 
-      await waitFor(() => expect(row("req-rep")).not.toBeNull());
-      const badge = within(row("req-rep") as HTMLElement).getByText("120");
-      await user.hover(badge);
-      expect(await screen.findByText("100 LLM • 20 MCP")).toBeInTheDocument();
+      await waitFor(() => expect(row("req-solo-a")).not.toBeNull());
+      expect(row("req-solo-b")).not.toBeNull();
     });
   });
 
@@ -294,6 +302,7 @@ describe("RequestLogsPanel", () => {
       if (!byIdCall) throw new Error("expected a by-id uiSpendLogsCall");
       expect(byIdCall.page).toBe(1);
       expect(byIdCall.page_size).toBe(1);
+      expect(byIdCall.params?.group_by_session).toBeUndefined();
     });
 
     it("closing the drawer removes ?log_id= from the URL and closes the drawer", async () => {

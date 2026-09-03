@@ -10,6 +10,7 @@ import type { KeyResponse } from "../key_team_helpers/key_list";
 import { keyInfoV1Call, uiSpendLogsCall } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import type { LogEntry } from "./columns";
+import { LOGS_PAGE_SIZE_OPTIONS } from "./constants";
 import {
   DEFAULT_LOGS_SORTING,
   formatLogsWindow,
@@ -23,7 +24,7 @@ import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LiveTailBanner, LogsTableToolbar } from "./LogsTableToolbar";
 import { RequestLogsTable } from "./RequestLogsTable";
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = LOGS_PAGE_SIZE_OPTIONS[0];
 const DEFAULT_INTERVAL = { value: 24, unit: "hours" };
 
 interface RequestLogsPanelProps {
@@ -150,7 +151,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   const isDrawerOpen = displayLog !== null || displaySessionId !== null;
 
-  const rows = filteredLogs.data;
+  const rows: LogEntry[] = filteredLogs.data;
 
   const searchTerm = useMemo(() => {
     const entry = columnFilters.find((filter) => filter.id === LOG_FILTER_IDS.REQUEST_ID);
@@ -209,13 +210,12 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   );
 
   const handleSessionClick = useCallback(
-    (sessionId: string) => {
-      if (!sessionId) return;
-      const log = rows.find((candidate) => candidate.session_id === sessionId) ?? null;
+    (log: LogEntry) => {
+      if (!log.session_id) return;
       setSelectedLog(log);
-      openSession(sessionId, log?.request_id ?? null);
+      openSession(log.session_id, log.request_id);
     },
-    [rows, openSession],
+    [openSession],
   );
 
   const handleSelectLog = useCallback(

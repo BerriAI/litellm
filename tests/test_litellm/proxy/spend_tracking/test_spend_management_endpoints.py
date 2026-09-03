@@ -156,51 +156,6 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
     return where
 
 
-_MCP_CALL_TYPES = frozenset({"call_mcp_tool", "list_mcp_tools"})
-_AGENT_CALL_TYPES = frozenset({"asend_message"})
-
-
-def _conversation_key(log):
-    return log.get("session_id") or log["request_id"]
-
-
-def _collapse_conversations(logs):
-    keys = tuple(dict.fromkeys(_conversation_key(log) for log in logs))
-    return [
-        next(
-            (log for log in logs if _conversation_key(log) == key and log.get("call_type") not in _MCP_CALL_TYPES),
-            next(log for log in logs if _conversation_key(log) == key),
-        )
-        for key in keys
-    ]
-
-
-def _session_stats_rows(logs, session_ids, api_keys):
-    grouped = {
-        session_id: [log for log in logs if log.get("session_id") == session_id and log.get("api_key") in api_keys]
-        for session_id in session_ids
-    }
-    return [
-        {
-            "session_id": session_id,
-            "session_total_count": len(session_logs),
-            "session_llm_count": sum(
-                1 for log in session_logs if log.get("call_type") not in _MCP_CALL_TYPES | _AGENT_CALL_TYPES
-            ),
-            "session_agent_count": sum(1 for log in session_logs if log.get("call_type") in _AGENT_CALL_TYPES),
-            "session_models": sorted({log["model"] for log in session_logs if log.get("model")}),
-            "session_total_spend": sum(log.get("spend") or 0 for log in session_logs),
-            "mcp_tool_call_count": sum(1 for log in session_logs if log.get("call_type") in _MCP_CALL_TYPES),
-            "mcp_tool_call_spend": sum(
-                log.get("spend") or 0 for log in session_logs if log.get("call_type") in _MCP_CALL_TYPES
-            ),
-            "session_cache_hit_count": sum(1 for log in session_logs if str(log.get("cache_hit")).lower() == "true"),
-        }
-        for session_id, session_logs in grouped.items()
-        if session_logs
-    ]
-
-
 def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=None, query_observer=None):
     """
     Create a MockPrismaClient for /spend/logs/ui endpoint tests.
@@ -230,17 +185,13 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
         async def query_raw(self, sql_query, *params):
             if query_observer is not None:
                 query_observer(sql_query, params)
-            if "session_total_count" in sql_query:
-                return _session_stats_rows(mock_spend_logs, params[0], params[1])
             if "mcp_tool_call_count" in sql_query:
                 return []
             filtered = filter_fn(_reconstruct_ui_where_from_sql(sql_query, params))
+            total = len(filtered)
             if "COUNT(*)" in sql_query:
-                bounded = filtered[: params[-1]]
-                return [{"total_count": len(bounded), "group_count": len(_collapse_conversations(bounded))}]
-            if "ROW_NUMBER()" in sql_query:
-                conversations = _collapse_conversations(filtered[: params[-3]])
-                return conversations[params[-1] : params[-1] + params[-2]]
+                cap_plus_one = params[-1]
+                return [{"total_count": min(total, cap_plus_one)}]
             page_size = params[-2] if len(params) >= 2 else 50
             skip = params[-1] if len(params) >= 1 else 0
             return [row for row in filtered[skip : skip + page_size]]
@@ -676,10 +627,10 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
 @pytest.mark.parametrize(
     "session_id_query,expected_request_ids",
     [
-        ("session-filter-demo-1", {"req1"}),
+        ("session-filter-demo-1", {"req1", "req2"}),
         ("session-filter-demo-2", {"req3"}),
-        ("session-filter", {"req1", "req3"}),
-        ("demo", {"req1", "req3"}),
+        ("session-filter", {"req1", "req2", "req3"}),
+        ("demo", {"req1", "req2", "req3"}),
         ("no-such-session", set()),
     ],
 )
@@ -737,145 +688,6 @@ async def test_ui_view_spend_logs_with_session_id(
     assert data["total"] == len(expected_request_ids)
     assert {log["request_id"] for log in data["data"]} == expected_request_ids
     assert all(session_id_query in log["session_id"] for log in data["data"])
-
-
-def _conversation_log(request_id, session_id, call_type, model, start_time):
-    return {
-        "id": f"log-{request_id}",
-        "request_id": request_id,
-        "api_key": "sk-test-key",
-        "user": "test_user_1",
-        "session_id": session_id,
-        "call_type": call_type,
-        "spend": 0.01,
-        "startTime": start_time.isoformat(),
-        "model": model,
-    }
-
-
-def _conversation_logs():
-    base = datetime.datetime(2026, 9, 1, tzinfo=timezone.utc)
-    big_session = [
-        _conversation_log(
-            f"big-{i}",
-            "session-big",
-            "call_mcp_tool" if i % 6 == 0 else "acompletion",
-            "gpt-5.6" if i % 2 else "claude-sonnet-5",
-            base + datetime.timedelta(minutes=i),
-        )
-        for i in range(120)
-    ]
-    mid_session = [
-        _conversation_log(
-            f"mid-{i}", "session-mid", "acompletion", "gpt-5.4-nano", base + datetime.timedelta(hours=3, minutes=i)
-        )
-        for i in range(72)
-    ]
-    singles = [
-        _conversation_log(
-            f"single-{i}", None, "acompletion", "claude-haiku-4-5", base + datetime.timedelta(hours=5, minutes=i)
-        )
-        for i in range(3)
-    ]
-    return big_session + mid_session + singles
-
-
-def _get_spend_logs_page(client, route, page, page_size):
-    start_date, end_date = _default_date_range()
-    response = client.get(
-        route,
-        params={"page": page, "page_size": page_size, "start_date": start_date, "end_date": end_date},
-        headers={"Authorization": "Bearer sk-test"},
-    )
-    assert response.status_code == 200
-    return response.json()
-
-
-@pytest.mark.asyncio
-async def test_ui_view_spend_logs_paginates_by_conversation(client, monkeypatch):
-    logs = _conversation_logs()
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.prisma_client",
-        make_ui_spend_logs_mock_prisma(logs, lambda where: logs),
-    )
-
-    first_page = _get_spend_logs_page(client, "/spend/logs/ui", page=1, page_size=2)
-    second_page = _get_spend_logs_page(client, "/spend/logs/ui", page=2, page_size=2)
-
-    assert first_page["total"] == 5
-    assert first_page["total_pages"] == 3
-    assert [row["session_id"] for row in first_page["data"]] == ["session-big", "session-mid"]
-    assert [row["session_id"] for row in second_page["data"]] == [None, None]
-    first_ids = {row["request_id"] for row in first_page["data"]}
-    assert first_ids.isdisjoint({row["request_id"] for row in second_page["data"]})
-
-    big_row, mid_row = first_page["data"]
-    assert big_row["call_type"] == "acompletion"
-    assert big_row["session_total_count"] == 120
-    assert big_row["session_llm_count"] == 100
-    assert big_row["session_mcp_count"] == 20
-    assert big_row["session_agent_count"] == 0
-    assert big_row["session_total_count"] == (
-        big_row["session_llm_count"] + big_row["session_agent_count"] + big_row["session_mcp_count"]
-    )
-    assert big_row["session_models"] == ["claude-sonnet-5", "gpt-5.6"]
-    assert mid_row["session_total_count"] == 72
-    assert mid_row["session_models"] == ["gpt-5.4-nano"]
-    assert second_page["data"][0]["session_total_count"] == 1
-    assert "session_models" not in second_page["data"][0]
-
-
-@pytest.mark.asyncio
-async def test_ui_view_spend_logs_v2_keeps_one_row_per_call(client, monkeypatch):
-    logs = _conversation_logs()
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.prisma_client",
-        make_ui_spend_logs_mock_prisma(logs, lambda where: logs),
-    )
-    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
-    )
-
-    try:
-        data = _get_spend_logs_page(client, "/spend/logs/v2", page=1, page_size=50)
-    finally:
-        app.dependency_overrides.pop(ps.user_api_key_auth, None)
-
-    assert data["total"] == 195
-    assert data["total_pages"] == 4
-    assert [row["request_id"] for row in data["data"]] == [log["request_id"] for log in logs[:50]]
-    assert "session_total_count" not in data["data"][0]
-
-
-@pytest.mark.asyncio
-async def test_ui_view_spend_logs_request_id_lookup_returns_that_call_not_its_conversation(client, monkeypatch):
-    logs = _conversation_logs()
-
-    def filter_by_request_id(where):
-        if "request_id" not in where:
-            return logs
-        return [log for log in logs if log["request_id"] == where["request_id"]]
-
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.prisma_client",
-        make_ui_spend_logs_mock_prisma(logs, filter_by_request_id),
-    )
-
-    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
-    try:
-        response = client.get(
-            "/spend/logs/ui",
-            params={"request_id": "big-7"},
-            headers={"Authorization": "Bearer sk-test"},
-        )
-    finally:
-        app.dependency_overrides.pop(ps.user_api_key_auth, None)
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["total"] == 1
-    assert [row["request_id"] for row in data["data"]] == ["big-7"]
-    assert data["data"][0]["session_total_count"] == 120
 
 
 # Mock spend logs with distinct values for sorting tests.
@@ -967,7 +779,7 @@ async def test_ui_view_spend_logs_sort_by_and_sort_order(
 
     async def mock_query_raw(sql_query, *params):
         if "COUNT(*)" in sql_query:
-            return [{"total_count": len(base_logs), "group_count": len(base_logs)}]
+            return [{"total_count": len(base_logs)}]
         # Endpoint uses raw SQL with ORDER BY startTime DESC; mock returns sorted data
         order = (
             {"startTime": "desc"}
@@ -1112,7 +924,7 @@ async def test_ui_view_spend_logs_sort_by_request_duration_ms(client, monkeypatc
 
     async def mock_query_raw(sql_query, *params):
         if "COUNT(*)" in sql_query:
-            return [{"total_count": len(base_logs), "group_count": len(base_logs)}]
+            return [{"total_count": len(base_logs)}]
         reverse = "DESC" in sql_query
         sorted_logs = sorted(
             base_logs, key=lambda x: x.get("request_duration_ms", 0), reverse=reverse
@@ -1207,7 +1019,7 @@ async def test_ui_view_spend_logs_sort_by_model(
 
     async def mock_query_raw(sql_query, *params):
         if "COUNT(*)" in sql_query:
-            return [{"total_count": len(base_logs), "group_count": len(base_logs)}]
+            return [{"total_count": len(base_logs)}]
         assert "model" in sql_query
         # model is non-nullable in the schema, so NULLS LAST should NOT be
         # appended — only ttft_ms gets that clause. This guards against
@@ -1320,7 +1132,7 @@ async def test_ui_view_spend_logs_sort_by_ttft_ms(client, monkeypatch):
 
     async def mock_query_raw(sql_query, *params):
         if "COUNT(*)" in sql_query:
-            return [{"total_count": len(base_logs), "group_count": len(base_logs)}]
+            return [{"total_count": len(base_logs)}]
         # Endpoint must compute TTFT inline and use NULLS LAST.
         assert "completionStartTime" in sql_query
         assert "NULLS LAST" in sql_query
@@ -4147,18 +3959,18 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
     ]
 
     mock_prisma = MagicMock()
+    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock()
     mock_prisma.db.query_raw = AsyncMock(
         return_value=[
             {
                 "session_id": session_id,
+                "api_key": api_key,
                 "session_total_count": 2,
-                "session_llm_count": 1,
-                "session_agent_count": 0,
-                "session_models": ["gpt-5.6"],
                 "session_total_spend": 15.0,
                 "mcp_tool_call_count": 1,
                 "mcp_tool_call_spend": 10.0,
-                "session_cache_hit_count": 0,
+                "session_llm_count": 1,
+                "session_agent_count": 0,
             }
         ]
     )
@@ -4183,6 +3995,8 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
     assert rows[0]["mcp_tool_call_spend"] == 10.0
     assert rows[1]["mcp_tool_call_count"] == 1
     assert rows[1]["mcp_tool_call_spend"] == 10.0
+    assert rows[0]["session_llm_count"] == 1
+    assert rows[0]["session_agent_count"] == 0
 
     # Every row in the session carries the full session spend, not just its own
     assert rows[0]["session_total_spend"] == 15.0
@@ -4190,17 +4004,126 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
 
     # Row without a session_id defaults to 1
     assert rows[2]["session_total_count"] == 1
-    assert "session_models" not in rows[2]
 
-    assert rows[0]["session_llm_count"] == 1
-    assert rows[0]["session_mcp_count"] == 1
-    assert rows[0]["session_agent_count"] == 0
-    assert rows[0]["session_models"] == ["gpt-5.6"]
-
+    # The count is folded into the single aggregate query; no separate group_by call.
     mock_prisma.db.litellm_spendlogs.group_by.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_key_split_session_gets_per_key_aggregates():
+    """
+    Two keys reusing one session id are separate rows under grouped pagination,
+    and each row must carry ITS key's totals, never the combined session's:
+    the aggregate query and its lookup are keyed by (session_id, api_key).
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    session_id = "sess-shared"
+    dict_rows = [
+        {"request_id": "req-a", "session_id": session_id, "call_type": "completion", "api_key": "key-a"},
+        {"request_id": "req-b", "session_id": session_id, "call_type": "completion", "api_key": "key-b"},
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "api_key": "key-a",
+                "session_total_count": 2,
+                "session_total_spend": 0.2,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+                "session_cache_hit_count": 1,
+                "session_llm_count": 2,
+                "session_agent_count": 0,
+            },
+            {
+                "session_id": session_id,
+                "api_key": "key-b",
+                "session_total_count": 1,
+                "session_total_spend": 0.7,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+                "session_cache_hit_count": 0,
+                "session_llm_count": 1,
+                "session_agent_count": 0,
+            },
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=2,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    rows = result["data"]
+    assert [(r["session_total_count"], r["session_total_spend"]) for r in rows] == [(2, 0.2), (1, 0.7)]
+    assert [r["session_cache_hit_count"] for r in rows] == [1, 0]
+    assert [r["session_llm_count"] for r in rows] == [2, 1]
+
+    aggregate_sql = mock_prisma.db.query_raw.mock_calls[0][1][0]
+    assert "GROUP BY session_id, api_key" in aggregate_sql
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_empty_api_key_keeps_session_aggregates():
+    """
+    The spend-log schema defaults api_key to an empty string, which is a real
+    group value and not a missing one: a multi-call session logged under an
+    empty key must keep its count and spend instead of degrading to a plain
+    single-call row.
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    session_id = "sess-keyless"
+    dict_rows = [
+        {"request_id": "req-1", "session_id": session_id, "call_type": "completion", "api_key": ""},
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "api_key": "",
+                "session_total_count": 3,
+                "session_total_spend": 0.09,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+                "session_cache_hit_count": 0,
+                "session_llm_count": 3,
+                "session_agent_count": 0,
+            }
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=1,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    row = result["data"][0]
+    assert row["session_total_count"] == 3
+    assert row["session_total_spend"] == 0.09
+
+    # The empty key must reach the aggregate's authorized-keys filter too.
     _, call_args, _ = mock_prisma.db.query_raw.mock_calls[0]
-    assert "session_total_count" in call_args[0]
-    assert call_args[1] == [session_id]
+    assert call_args[2] == [""]
 
 
 @pytest.mark.asyncio
@@ -4230,14 +4153,11 @@ async def test_build_ui_spend_logs_response_sums_multi_round_session_spend():
         return_value=[
             {
                 "session_id": session_id,
+                "api_key": api_key,
                 "session_total_count": 3,
-                "session_llm_count": 3,
-                "session_agent_count": 0,
-                "session_models": ["gpt-5.6"],
                 "session_total_spend": 0.06,
                 "mcp_tool_call_count": 0,
                 "mcp_tool_call_spend": 0.0,
-                "session_cache_hit_count": 0,
             }
         ]
     )
@@ -4287,10 +4207,8 @@ async def test_build_ui_spend_logs_response_session_cache_hit_count():
         return_value=[
             {
                 "session_id": session_id,
+                "api_key": api_key,
                 "session_total_count": 2,
-                "session_llm_count": 2,
-                "session_agent_count": 0,
-                "session_models": ["gpt-5.6"],
                 "session_total_spend": 0.05,
                 "mcp_tool_call_count": 0,
                 "mcp_tool_call_spend": 0.0,
@@ -5124,7 +5042,7 @@ async def test_ui_view_spend_logs_rehydrates_metadata_jsonb_text(client, monkeyp
         return 1
 
     async def mock_query_raw(sql_query, *params):
-        return [{**raw_row, "total_count": 1, "group_count": 1}]
+        return [{**raw_row, "total_count": 1}]
 
     class MockPrismaClient:
         def __init__(self):
@@ -5210,7 +5128,7 @@ async def test_ui_view_spend_logs_metadata_invalid_json_falls_back_to_empty_dict
         return 1
 
     async def mock_query_raw(sql_query, *params):
-        return [{**raw_row, "total_count": 1, "group_count": 1}]
+        return [{**raw_row, "total_count": 1}]
 
     class MockPrismaClient:
         def __init__(self):

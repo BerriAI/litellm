@@ -134,13 +134,19 @@ describe("row action cells", () => {
     expect(deps.onKeyHashClick).toHaveBeenCalledWith("sk-hash-9");
   });
 
-  it("reports the session id from the session cell", async () => {
+  it("reports the clicked row from the session cell, so two rows sharing a session id stay distinguishable", async () => {
     const user = userEvent.setup();
     const deps = { onKeyHashClick: vi.fn(), onSessionClick: vi.fn() };
-    renderRows([logEntry({ request_id: "req-sess", session_id: "sess-42" })], deps);
+    renderRows(
+      [
+        logEntry({ request_id: "req-key-a", session_id: "sess-42", api_key: "key-a" }),
+        logEntry({ request_id: "req-key-b", session_id: "sess-42", api_key: "key-b" }),
+      ],
+      deps,
+    );
 
-    await user.click(screen.getByText("sess-42"));
-    expect(deps.onSessionClick).toHaveBeenCalledWith("sess-42");
+    await user.click(screen.getAllByText("sess-42")[1]);
+    expect(deps.onSessionClick).toHaveBeenCalledWith(expect.objectContaining({ request_id: "req-key-b" }));
   });
 });
 

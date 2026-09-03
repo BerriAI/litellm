@@ -11,6 +11,7 @@ the JSON-serialized payloads. ``_llm_call`` just applies both tables.
 
 import json
 from collections.abc import Callable
+from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
@@ -24,6 +25,9 @@ from litellm.integrations.otel.model.payloads import (
     LLMRequestParams,
     LLMUsage,
 )
+
+LANGFUSE_OBSERVATION_INPUT: Final = "langfuse.observation.input"
+LANGFUSE_OBSERVATION_OUTPUT: Final = "langfuse.observation.output"
 
 
 class LangfuseMapper:
@@ -56,8 +60,8 @@ class LangfuseMapper:
         "langfuse.observation.model.parameters": lambda d: json_if(
             collect(LangfuseMapper._MODEL_PARAMS, d.request_params)
         ),
-        "langfuse.observation.input": lambda d: serialize_messages(d.messages_in),
-        "langfuse.observation.output": lambda d: serialize_messages(output_messages(d)),
+        LANGFUSE_OBSERVATION_INPUT: lambda d: serialize_messages(d.messages_in),
+        LANGFUSE_OBSERVATION_OUTPUT: lambda d: serialize_messages(output_messages(d)),
         "langfuse.observation.usage_details": lambda d: json_if(collect(LangfuseMapper._USAGE_FIELDS, d.usage)),
         "langfuse.observation.cost_details": lambda d: (
             json.dumps({"total": d.response_cost}) if d.response_cost is not None else None

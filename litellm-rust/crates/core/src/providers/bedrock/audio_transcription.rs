@@ -6,7 +6,7 @@ use crate::audio_transcription::transformation::{
 use crate::audio_transcription::types::{
     AudioTranscriptionRequestData, AudioTranscriptionResponseData,
 };
-use crate::error::{CoreError, CoreResult, json_type_name};
+use crate::error::{Error, json_type_name};
 
 pub use super::aws_base::{aws_auth_config, bedrock_model_id_and_region, resolve_bedrock_region};
 use super::constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE};
@@ -18,8 +18,8 @@ pub static BEDROCK_AUDIO_TRANSCRIPTION_CONFIG: BedrockAudioTranscriptionConfig =
 
 pub struct BedrockAudioTranscriptionConfig;
 
-fn audio_fields(audio: Value) -> CoreResult<(String, String)> {
-    let object = audio.as_object().ok_or_else(|| CoreError::InvalidType {
+fn audio_fields(audio: Value) -> Result<(String, String), Error> {
+    let object = audio.as_object().ok_or_else(|| Error::InvalidType {
         expected: "object",
         actual: json_type_name(&audio),
     })?;
@@ -27,13 +27,13 @@ fn audio_fields(audio: Value) -> CoreResult<(String, String)> {
         .get("data")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or(CoreError::MissingField("audio.data"))?;
+        .ok_or(Error::MissingField("audio.data"))?;
     let format = object
         .get("format")
         .and_then(Value::as_str)
         .filter(|value| matches!(*value, "wav" | "mp3" | "flac" | "ogg"))
         .ok_or_else(|| {
-            CoreError::InvalidRequest("audio.format must be wav, mp3, flac, or ogg".to_string())
+            Error::InvalidRequest("audio.format must be wav, mp3, flac, or ogg".to_string())
         })?;
     Ok((data.to_string(), format.to_string()))
 }
@@ -46,16 +46,18 @@ fn optional_string<'a>(params: &'a Map<String, Value>, key: &str) -> Option<&'a 
 }
 
 impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn supported_transcription_params(&self) -> &'static [&'static str] {
         SUPPORTED_PARAMS
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_transcription_request(
         &self,
         _model: &str,
         audio: Value,
         optional_params: Map<String, Value>,
-    ) -> CoreResult<AudioTranscriptionRequestData> {
+    ) -> Result<AudioTranscriptionRequestData, Error> {
         let (data, format) = audio_fields(audio)?;
         let mut instruction = "Transcribe the audio. Respond with only the transcript.".to_string();
         if let Some(language) = optional_string(&optional_params, "language") {
@@ -83,18 +85,19 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
         })
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_transcription_response(
         &self,
         _model: &str,
         response_json: Value,
-    ) -> CoreResult<AudioTranscriptionResponseData> {
+    ) -> Result<AudioTranscriptionResponseData, Error> {
         let content = response_json
             .get("output")
             .and_then(|value| value.get("message"))
             .and_then(|value| value.get("content"))
             .and_then(Value::as_array)
             .ok_or_else(|| {
-                CoreError::InvalidResponse("Bedrock response has no output content".to_string())
+                Error::InvalidResponse("Bedrock response has no output content".to_string())
             })?;
         let mut text = String::new();
         for block in content {
@@ -111,7 +114,7 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String> {
+    ) -> Result<String, Error> {
         let (model_id, model_region) = bedrock_model_id_and_region(model);
         let region = resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup);
         let endpoint = optional_params
@@ -133,7 +136,7 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<AudioTranscriptionAuth> {
+    ) -> Result<AudioTranscriptionAuth, Error> {
         let (_, model_region) = bedrock_model_id_and_region(model);
         Ok(AudioTranscriptionAuth::AwsSigV4 {
             region: resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup),

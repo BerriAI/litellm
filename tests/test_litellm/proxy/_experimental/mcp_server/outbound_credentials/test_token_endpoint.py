@@ -7,6 +7,7 @@ cache's hit/single-flight behavior. Each assertion fails under a real mutation o
 """
 
 import asyncio
+import gc
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -357,6 +358,110 @@ async def test_cache_invalidate_only_evicts_the_named_key():
 
     assert isinstance(kept, Ok) and kept.ok == "tok-1"
     assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_cache_invalidate_mid_compute_is_not_overwritten_by_that_compute():
+    """A bearer minted before an invalidation must never be served after it.
+
+    The compute is suspended at the token endpoint when the invalidation lands, so its write is
+    the one that would resurrect the evicted bearer for the rest of its TTL. The caller it was
+    minted for still gets it; the *cache* is what the invalidation is about.
+    """
+    cache = ExchangedTokenCache()
+    mint_started, release_mint = asyncio.Event(), asyncio.Event()
+
+    async def slow_mint():
+        mint_started.set()
+        await release_mint.wait()
+        return _ok_token("bearer-minted-before-invalidation")
+
+    async def re_mint():
+        return _ok_token("bearer-minted-after-invalidation")
+
+    in_flight = asyncio.create_task(cache.get_or_compute("slot", slow_mint, fingerprint="fp"))
+    await mint_started.wait()
+
+    assert not in_flight.done()
+    cache.invalidate("slot")
+    release_mint.set()
+
+    raced = await in_flight
+    assert isinstance(raced, Ok) and raced.ok == "bearer-minted-before-invalidation"
+
+    after = await cache.get_or_compute("slot", re_mint, fingerprint="fp")
+    assert isinstance(after, Ok) and after.ok == "bearer-minted-after-invalidation"
+
+
+@pytest.mark.asyncio
+async def test_cache_invalidate_mid_compute_survives_garbage_collection():
+    """The record of an invalidation must outlive a collection cycle taken mid-compute.
+
+    Per-key state is held weakly so idle keys do not accumulate. If the state a compute checks
+    before writing were collectible while that compute is suspended, the check would read as
+    "nothing was invalidated" and the stale write would land; the running compute has to pin it.
+    """
+    cache = ExchangedTokenCache()
+    mint_started, release_mint = asyncio.Event(), asyncio.Event()
+
+    async def slow_mint():
+        mint_started.set()
+        await release_mint.wait()
+        return _ok_token("bearer-minted-before-invalidation")
+
+    async def re_mint():
+        return _ok_token("bearer-minted-after-invalidation")
+
+    in_flight = asyncio.create_task(cache.get_or_compute("slot", slow_mint, fingerprint="fp"))
+    await mint_started.wait()
+
+    assert not in_flight.done()
+    cache.invalidate("slot")
+    gc.collect()
+    release_mint.set()
+    await in_flight
+
+    after = await cache.get_or_compute("slot", re_mint, fingerprint="fp")
+    assert isinstance(after, Ok) and after.ok == "bearer-minted-after-invalidation"
+
+
+@pytest.mark.asyncio
+async def test_cache_stores_a_compute_that_started_after_the_invalidation():
+    """Only the mint that predates the invalidation loses its write.
+
+    A caller queued behind the single-flight lock computes after the eviction, so its token is
+    fresh and must be cached; otherwise the fix would trade one stale bearer for re-minting on
+    every subsequent resolution.
+    """
+    cache = ExchangedTokenCache()
+    mint_started, release_mint = asyncio.Event(), asyncio.Event()
+
+    async def slow_mint():
+        mint_started.set()
+        await release_mint.wait()
+        return _ok_token("bearer-minted-before-invalidation")
+
+    async def re_mint():
+        return _ok_token("bearer-minted-after-invalidation")
+
+    async def must_not_run():
+        pytest.fail("the mint that followed the invalidation should have been cached")
+
+    in_flight = asyncio.create_task(cache.get_or_compute("slot", slow_mint, fingerprint="fp"))
+    await mint_started.wait()
+    queued = asyncio.create_task(cache.get_or_compute("slot", re_mint, fingerprint="fp"))
+    await asyncio.sleep(0)
+
+    assert not queued.done()
+    cache.invalidate("slot")
+    release_mint.set()
+
+    raced, fresh = await asyncio.gather(in_flight, queued)
+    assert isinstance(raced, Ok) and raced.ok == "bearer-minted-before-invalidation"
+    assert isinstance(fresh, Ok) and fresh.ok == "bearer-minted-after-invalidation"
+
+    served = await cache.get_or_compute("slot", must_not_run, fingerprint="fp")
+    assert isinstance(served, Ok) and served.ok == "bearer-minted-after-invalidation"
 
 
 @pytest.mark.asyncio
