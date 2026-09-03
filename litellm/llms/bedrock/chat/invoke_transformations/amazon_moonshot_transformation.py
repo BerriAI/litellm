@@ -21,6 +21,8 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.types.utils import ModelResponse
 
@@ -200,7 +202,7 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> "ModelResponse":

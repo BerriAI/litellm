@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, cast
 from urllib.parse import urlsplit
 
@@ -15,8 +16,10 @@ from litellm.integrations.otel.model.metadata import (
 )
 from litellm.integrations.otel.model.semconv import (
     GenAIOperation,
+    GenAIOutputType,
     MCPMethod,
     resolve_operation,
+    resolve_output_type,
     resolve_provider,
 )
 from litellm.integrations.otel.model.utils import (
@@ -60,6 +63,31 @@ if TYPE_CHECKING:
 # --- typed sub-structures ---------------------------------------------------- #
 
 
+def _cache_token_value(*values: object) -> int | None:
+    explicit_zero = False
+    invalid_before_zero = False
+    for raw_value in values:
+        if raw_value is None:
+            continue
+        if isinstance(raw_value, bool):
+            parsed = None
+        else:
+            try:
+                parsed = as_int(raw_value)
+            except (OverflowError, ValueError):
+                parsed = None
+        if parsed is None:
+            if not explicit_zero:
+                invalid_before_zero = True
+        elif parsed > 0:
+            return parsed
+        elif parsed == 0:
+            explicit_zero = True
+        elif not explicit_zero:
+            invalid_before_zero = True
+    return 0 if explicit_zero and not invalid_before_zero else None
+
+
 @dataclass(frozen=True)
 class LLMRequestParams:
     temperature: float | None = None
@@ -93,6 +121,35 @@ class LLMUsage:
     input_tokens: int | None = None
     output_tokens: int | None = None
     total_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+
+    @classmethod
+    def from_standard_logging_payload(cls, payload: StandardLoggingPayload) -> LLMUsage:
+        # Cache token counts only exist on the raw provider usage object under metadata
+        metadata: Final[Mapping[str, object]] = payload.get("metadata") or {}
+        raw_usage: Final = metadata.get("usage_object")
+        usage_object: Final[Mapping[str, object]] = raw_usage if isinstance(raw_usage, Mapping) else {}
+        raw_details: Final = usage_object.get("prompt_tokens_details")
+        prompt_details: Final[Mapping[str, object]] = (
+            raw_details if isinstance(raw_details, Mapping) else MappingProxyType({})
+        )
+        return cls(
+            input_tokens=as_int(payload.get("prompt_tokens")),
+            output_tokens=as_int(payload.get("completion_tokens")),
+            total_tokens=as_int(payload.get("total_tokens")),
+            cache_creation_input_tokens=_cache_token_value(
+                usage_object.get("cache_creation_input_tokens"),
+                prompt_details.get("cache_write_tokens"),
+                prompt_details.get("cache_creation_tokens"),
+                prompt_details.get("cache_creation_input_tokens"),
+            ),
+            cache_read_input_tokens=_cache_token_value(
+                usage_object.get("cache_read_input_tokens"),
+                prompt_details.get("cached_tokens"),
+                usage_object.get("prompt_cache_hit_tokens"),
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -188,6 +245,15 @@ class GuardrailSpanData:
     guardrail_id: str | None = None
     policy_template: str | None = None
     detection_method: str | None = None
+    # Provider-reported billable usage counters (JSON-serialized) and the USD cost
+    # priced from them by the provider hook (``guardrail_usage`` /
+    # ``guardrail_cost`` on ``StandardLoggingGuardrailInformation``).
+    usage_json: str | None = None
+    cost: float | None = None
+    # Whether ``cost`` participates in the request's billed spend (absent means
+    # billed, the default; False means report-only). Mirrors
+    # ``guardrail_cost_in_spend`` so trace consumers can avoid double-counting.
+    cost_in_spend: bool | None = None
     # Set when the guardrail intervened/blocked or failed, so the emitter marks
     # the span ERROR — a blocking guardrail is an error outcome for that span.
     error: SpanError | None = None
@@ -207,6 +273,8 @@ class GuardrailSpanData:
         get: Final = cast(Mapping[str, object], entry).get
         status: Final = as_str(get("guardrail_status"))
         response: Final = get("guardrail_response")
+        usage: Final = get("guardrail_usage")
+        in_spend: Final = get("guardrail_cost_in_spend")
         error: Final = (
             SpanError(error_type=status, message=as_str(get("guardrail_action")))
             if status in cls._ERROR_STATUSES
@@ -229,6 +297,9 @@ class GuardrailSpanData:
             guardrail_id=as_str(get("guardrail_id")),
             policy_template=as_str(get("policy_template")),
             detection_method=as_str(get("detection_method")),
+            usage_json=_json_or_none(usage) if usage is not None else None,
+            cost=as_float(get("guardrail_cost")),
+            cost_in_spend=in_spend if isinstance(in_spend, bool) else None,
             error=error,
         )
 
@@ -310,6 +381,11 @@ class LLMCallSpanData:
     choices_out: tuple[Mapping[str, object], ...] = ()
     system_fingerprint: str | None = None
     time_to_first_chunk_seconds: float | None = None
+    # The requested output modality, set only on the routes that pin one (image
+    # generation, speech, transcription, OCR), and the litellm route itself, which
+    # keeps routes the convention folds into one operation distinguishable.
+    output_type: GenAIOutputType | None = None
+    call_type: str | None = None
 
     @classmethod
     def from_standard_logging_payload(
@@ -334,18 +410,15 @@ class LLMCallSpanData:
         # otherwise the content-bearing mappers receive empty sequences and emit
         # no prompt/response text.
         finish_reasons: Final = _finish_reasons(choices_out)
+        call_type: Final = as_str(payload.get("call_type"))
         return cls(
-            operation=resolve_operation(as_str(payload.get("call_type"))),
+            operation=resolve_operation(call_type),
             provider=resolve_provider(as_str(payload.get("custom_llm_provider"))),
             request_model=context.request_model,
             response_model=context.response_model,
             response_id=as_str(response.get("id")),
             request_params=LLMRequestParams.from_model_parameters(params),
-            usage=LLMUsage(
-                input_tokens=as_int(payload.get("prompt_tokens")),
-                output_tokens=as_int(payload.get("completion_tokens")),
-                total_tokens=as_int(payload.get("total_tokens")),
-            ),
+            usage=LLMUsage.from_standard_logging_payload(payload),
             finish_reasons=finish_reasons,
             error=_parse_error(payload),
             response_cost=as_float(payload.get("response_cost")),
@@ -358,10 +431,40 @@ class LLMCallSpanData:
             choices_out=choices_out if capture_content else (),
             system_fingerprint=as_str(response.get("system_fingerprint")),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds,
+            output_type=resolve_output_type(call_type),
+            call_type=call_type or None,
         )
 
 
 # --- the MCP tool-call model ------------------------------------------------- #
+
+
+def _upstream_address_port(resource: str | None) -> tuple[str | None, int | None]:
+    """Split a redacted MCP server origin into ``server.address`` / ``server.port``.
+
+    ``mcp_server_resource`` is a scheme + host + port origin with userinfo, path,
+    query and fragment already stripped. The port falls back to the scheme default
+    when the origin omits it, because a consumer that keys a downstream dependency
+    off the address renders a missing port as ``0``.
+
+    The origin is rebuilt without its IPv6 brackets upstream, so reading the port can
+    raise on an address the host check still admits: a zone-scoped ``fe80::1%25eth0``
+    leaves a truthy hostname of ``fe80`` behind. Both halves are read inside the guard
+    so an unparseable origin yields no address rather than propagating out of span
+    construction, matching how the redactor guards the same split.
+    """
+    if not resource:
+        return None, None
+    try:
+        parsed: Final = urlsplit(resource)
+        hostname: Final = parsed.hostname
+        port: Final = parsed.port
+    except ValueError:
+        return None, None
+    if not hostname:
+        return None, None
+    default_port: Final = 443 if parsed.scheme == "https" else 80 if parsed.scheme == "http" else None
+    return hostname, port or default_port
 
 
 @dataclass(frozen=True)
@@ -378,6 +481,8 @@ class MCPToolCallSpanData:
     method: str
     tool_name: str
     server_name: str | None
+    server_address: str | None
+    server_port: int | None
     session_id: str | None
     arguments_json: str | None
     result_json: str | None
@@ -390,11 +495,14 @@ class MCPToolCallSpanData:
         cls, payload: StandardLoggingPayload, capture_content: bool = False
     ) -> MCPToolCallSpanData:
         meta: Final = _mcp_tool_call_metadata(cast(Mapping[str, object], payload))
+        address, port = _upstream_address_port(as_str(meta.get("mcp_server_resource")) or None)
         return cls(
             operation=resolve_operation(as_str(payload.get("call_type"))),
             method=MCPMethod.TOOLS_CALL.value,
             tool_name=as_str(meta.get("name")) or "",
             server_name=as_str(meta.get("mcp_server_name")),
+            server_address=address,
+            server_port=port,
             session_id=as_str(meta.get("mcp_session_id")),
             arguments_json=(
                 _json_or_none(meta.get("arguments")) if capture_content and meta.get("arguments") is not None else None

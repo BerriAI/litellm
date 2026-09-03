@@ -1,5 +1,4 @@
 import os
-import sys
 
 import pytest
 
@@ -10,18 +9,9 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
 from litellm.types.llms.openai import FileSearchTool, WebSearchOptions
 from litellm.types.utils import ModelResponse, StandardBuiltInToolsParams
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
-
-# Test basic web search cost calculations
 def test_web_search_cost_low():
     web_search_options = WebSearchOptions(search_context_size="low")
     model_info = litellm.get_model_info("gpt-4o-search-preview")
@@ -339,7 +329,7 @@ def test_get_cost_for_vertex_ai_gemini_web_search(model, custom_llm_provider):
     for url_citation annotations, not usage.prompt_tokens_details.web_search_requests.
     This causes Vertex AI grounding costs to not be tracked.
     """
-    from litellm.types.utils import PromptTokensDetailsWrapper, Usage, Choices, Message
+    from litellm.types.utils import Choices, Message, PromptTokensDetailsWrapper, Usage
 
     # Create a realistic ModelResponse like what Vertex AI returns
     response = ModelResponse(
@@ -383,12 +373,12 @@ def test_get_cost_for_vertex_ai_gemini_web_search(model, custom_llm_provider):
     assert cost == 0.035, f"Expected $0.035 grounding cost, got ${cost}"
 
 
-def test_azure_assistant_features_integrated_cost_tracking():
+def test_azure_assistant_features_integrated_cost_tracking(monkeypatch):
     """
     Test integrated cost tracking for Azure assistant features.
     """
     # Force use of local model cost map for CI/CD consistency
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "azure/gpt-4o"
@@ -522,6 +512,95 @@ def test_gemini_3x_web_search_billed_per_query(model, local_model_cost_map):
     )
 
 
+@pytest.mark.parametrize(
+    "model,custom_llm_provider",
+    [
+        ("gemini/gemini-2.5-flash", "gemini"),
+        ("vertex_ai/gemini-2.5-flash", "vertex_ai"),
+    ],
+)
+def test_gemini_2x_maps_grounding_billed_at_maps_rate(model, custom_llm_provider, local_model_cost_map):
+    """
+    Grounding with Google Maps is its own SKU: a Maps-only grounded prompt on Gemini 2.x bills the
+    $0.025 Maps per-prompt fee, not the $0.035 Google Search fee it was previously conflated with,
+    and not $0 as on Vertex AI where webSearchQueries is never populated for Maps.
+    Regression for https://github.com/BerriAI/litellm/issues/35906
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    model_info = litellm.get_model_info(model)
+    expected_cost = model_info["google_maps_grounding_cost_per_query"]
+    assert expected_cost == pytest.approx(0.025)
+
+    usage = Usage(
+        prompt_tokens=15,
+        completion_tokens=100,
+        total_tokens=115,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=15, google_maps_grounding_requests=1),
+    )
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=None,
+        custom_llm_provider=custom_llm_provider,
+        standard_built_in_tools_params=None,
+    )
+    assert cost == pytest.approx(expected_cost)
+
+
+def test_gemini_3x_maps_grounding_billed_per_query(local_model_cost_map):
+    """Gemini 3.x bills Maps grounding per executed query: N queries cost N * $0.014."""
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    model = "vertex_ai/gemini-3.5-flash"
+    model_info = litellm.get_model_info(model)
+    assert model_info["web_search_billing_unit"] == "per_query"
+    expected_cost = model_info["google_maps_grounding_cost_per_query"] * 2
+
+    usage = Usage(
+        prompt_tokens=15,
+        completion_tokens=100,
+        total_tokens=115,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=15, google_maps_grounding_requests=2),
+    )
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=None,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+    assert cost == pytest.approx(expected_cost)
+    assert cost == pytest.approx(0.028)
+
+
+def test_gemini_combined_search_and_maps_costs_are_additive(local_model_cost_map):
+    """A prompt grounded with both Google Search and Google Maps pays both fees."""
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    model = "gemini/gemini-3.5-flash"
+    model_info = litellm.get_model_info(model)
+    search_rate = model_info["search_context_cost_per_query"]["search_context_size_medium"]
+    maps_rate = model_info["google_maps_grounding_cost_per_query"]
+
+    usage = Usage(
+        prompt_tokens=15,
+        completion_tokens=100,
+        total_tokens=115,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=15, web_search_requests=2, google_maps_grounding_requests=1
+        ),
+    )
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=None,
+        custom_llm_provider="gemini",
+        standard_built_in_tools_params=None,
+    )
+    assert cost == pytest.approx(search_rate * 2 + maps_rate)
+
+
 def test_gemini_2x_web_search_still_billed_per_prompt(local_model_cost_map):
     """
     Gemini 2.x bills web search per grounded prompt: multiple internal queries are one flat
@@ -602,5 +681,250 @@ def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
     )
 
 
+def _openai_responses_with_web_search_calls(model, num_calls):
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from openai.types.responses.response_function_web_search import (
+        ActionSearch,
+        ResponseFunctionWebSearch,
+    )
+
+    output = [
+        ResponseFunctionWebSearch(
+            id=f"ws_{i}",
+            type="web_search_call",
+            status="completed",
+            action=ActionSearch(type="search", query="latest news"),
+        )
+        for i in range(num_calls)
+    ]
+    return ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        model=model,
+        object="response",
+        output=output,
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+    )
+
+
+def test_openai_responses_web_search_priced_per_call(local_model_cost_map):
+    """
+    Regression for LIT-5013 bug 1: OpenAI reasoning models (gpt-5 family, o-series, deep-research)
+    carry supports_web_search but had no search_context_cost_per_query, so get_cost_for_web_search_request
+    (no openai branch) returned None and the default fallback billed web search as $0. gpt-5-nano now
+    prices at $0.01 per call, and two web_search_call items in the Responses output must bill 2 x $0.01.
+    """
+    from litellm.types.utils import Usage
+
+    model = "gpt-5-nano"
+    per_call = litellm.get_model_info(model)["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+    assert per_call == 0.01
+
+    response = _openai_responses_with_web_search_calls(model, num_calls=2)
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=response,
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(2 * per_call), (
+        f"gpt-5-nano web search must bill 2 x ${per_call}, got ${cost}"
+    )
+
+
+def test_openai_responses_web_search_multiplied_by_call_count(local_model_cost_map):
+    """
+    Regression for LIT-5013 bug 2: web_search_call detection was binary, so a Responses output with
+    multiple web searches was charged once. gpt-4o-search-preview carries per-call pricing; N calls
+    must bill N times, and a single call must still bill exactly once.
+    """
+    from litellm.types.utils import Usage
+
+    model = "gpt-4o-search-preview"
+    per_call = litellm.get_model_info(model)["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+    usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+    for num_calls in (1, 3):
+        response = _openai_responses_with_web_search_calls(model, num_calls=num_calls)
+        cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+            model=model,
+            response_object=response,
+            usage=usage,
+            custom_llm_provider="openai",
+            standard_built_in_tools_params=None,
+        )
+        assert cost == pytest.approx(num_calls * per_call), (
+            f"{num_calls} web searches must bill {num_calls} x ${per_call}, got ${cost}"
+        )
+
+
+def test_web_search_call_count_reads_dict_output_items(local_model_cost_map):
+    """
+    Regression: output items that fail OpenAI SDK validation (e.g. xAI web_search_call
+    items without an "action" field) stay plain dicts in the output union. The per-call
+    counter must read their "type" key like the detection gate does, instead of flooring
+    a multi-search response to a single billable search.
+    """
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import Usage
+
+    model = "gpt-4o-search-preview"
+    per_call = litellm.get_model_info(model)["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+
+    response = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_1",
+            "created_at": 1754900000,
+            "model": model,
+            "object": "response",
+            "status": "completed",
+            "output": [
+                {"type": "web_search_call", "id": f"ws_{i}", "status": "completed"}
+                for i in range(3)
+            ],
+        }
+    )
+    assert all(isinstance(item, dict) for item in response.output)
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=response,
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(3 * per_call), (
+        f"3 dict-shaped web searches must bill 3 x ${per_call}, got ${cost}"
+    )
+
+
+def test_dated_search_preview_entries_carry_search_pricing(local_model_cost_map):
+    """
+    Regression for the live QA finding: OpenAI resolves gpt-4o-search-preview requests to the
+    dated id gpt-4o-search-preview-2025-03-11, whose cost map entry lacked
+    search_context_cost_per_query, so the default chat path silently billed the $0.035 search
+    fee as $0. Dated entries must price identically to their undated siblings.
+    """
+    from litellm.types.utils import Usage
+
+    for dated, undated in (
+        ("gpt-4o-search-preview-2025-03-11", "gpt-4o-search-preview"),
+        ("gpt-4o-mini-search-preview-2025-03-11", "gpt-4o-mini-search-preview"),
+    ):
+        assert (
+            litellm.get_model_info(dated)["search_context_cost_per_query"]
+            == litellm.get_model_info(undated)["search_context_cost_per_query"]
+        )
+
+    response = ModelResponse(
+        model="gpt-4o-search-preview-2025-03-11",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": "headlines",
+                    "annotations": [
+                        {
+                            "type": "url_citation",
+                            "url_citation": {
+                                "url": "https://example.com",
+                                "title": "t",
+                                "start_index": 0,
+                                "end_index": 1,
+                            },
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-4o-search-preview-2025-03-11",
+        response_object=response,
+        usage=Usage(prompt_tokens=14, completion_tokens=825, total_tokens=839),
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+    assert cost == pytest.approx(0.035), (
+        f"dated search-preview id must bill the $0.035 search fee, got ${cost}"
+    )
+
+
 # Note: File search integration test removed due to complex annotation detection logic
 # The unit tests in test_azure_assistant_cost_tracking.py provide comprehensive coverage
+
+
+def test_response_includes_output_type_reads_dict_output_items():
+    """
+    Regression: output items that fail OpenAI SDK validation (e.g. xAI web_search_call
+    items without an "action" field) stay plain dicts in the output union. The gate must
+    read their "type" key instead of returning False and skipping the web search fee.
+    """
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    response = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_1",
+            "created_at": 1754900000,
+            "model": "grok-4",
+            "object": "response",
+            "status": "completed",
+            "output": [{"type": "web_search_call", "id": "ws_1", "status": "completed"}],
+        }
+    )
+
+    assert isinstance(response.output[0], dict)
+    assert StandardBuiltInToolCostTracking.response_includes_output_type(
+        response_object=response, output_type="web_search_call"
+    )
+    assert not StandardBuiltInToolCostTracking.response_includes_output_type(
+        response_object=response, output_type="file_search_call"
+    )
+
+
+def test_web_search_gate_reads_server_side_tool_usage_details_without_citations():
+    """
+    Regression: xAI chat responses bridged from the Responses API only carry
+    usage.server_side_tool_usage_details; a searched answer with no url_citation
+    annotations must still be billed for its web search calls.
+    """
+    from litellm.llms.xai.cost_calculator import _DEFAULT_WEB_SEARCH_COST_PER_CALL
+    from litellm.types.utils import Usage
+
+    usage = Usage(
+        prompt_tokens=10,
+        completion_tokens=20,
+        total_tokens=30,
+        server_side_tool_usage_details={"web_search_calls": 3},
+    )
+    response = ModelResponse(model="xai/grok-4.5")
+
+    assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        response_object=response, usage=usage
+    )
+    assert not StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        response_object=response,
+        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="xai/grok-4.5",
+        response_object=response,
+        usage=usage,
+        custom_llm_provider="xai",
+        standard_built_in_tools_params=None,
+    )
+    assert cost == 3 * _DEFAULT_WEB_SEARCH_COST_PER_CALL

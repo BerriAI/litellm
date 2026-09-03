@@ -1,6 +1,7 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
 import copy
+from collections.abc import Sequence
 from typing import Any, Final
 
 import litellm
@@ -51,20 +52,20 @@ def _get_models_from_access_groups(
     model_access_groups: dict[str, list[str]],
     all_models: list[str],
     include_model_access_groups: bool | None = False,
+    proxy_model_list: Sequence[str] | None = None,
 ) -> list[str]:
-    idx_to_remove: Final = []
-    new_models: Final = []
-    for idx, model in enumerate(all_models):
-        if model in model_access_groups:
-            if not include_model_access_groups:  # remove access group, unless requested - e.g. when creating a key
-                idx_to_remove.append(idx)
-            new_models.extend(model_access_groups[model])
-
-    for idx in sorted(idx_to_remove, reverse=True):
-        all_models.pop(idx)
-
-    all_models.extend(new_models)
-    return all_models
+    # a grant naming both a deployed model and an access group means both at runtime
+    # (_check_model_access_helper unions them), so listings must keep the literal too
+    deployed_model_names: Final = frozenset(proxy_model_list or ())
+    kept_models: Final = [
+        model
+        for model in all_models
+        if model not in model_access_groups or include_model_access_groups or model in deployed_model_names
+    ]
+    member_models: Final = [
+        member for model in all_models if model in model_access_groups for member in model_access_groups[model]
+    ]
+    return kept_models + member_models
 
 
 async def get_mcp_server_ids(
@@ -127,6 +128,7 @@ def get_key_models(
         model_access_groups=model_access_groups,
         all_models=all_models,
         include_model_access_groups=include_model_access_groups,
+        proxy_model_list=proxy_model_list,
     )
 
     # deduplicate while preserving order
@@ -168,6 +170,7 @@ def get_team_models(
         model_access_groups=model_access_groups,
         all_models=list(all_models_set),
         include_model_access_groups=include_model_access_groups,
+        proxy_model_list=proxy_model_list,
     )
 
     # deduplicate while preserving order
@@ -178,8 +181,8 @@ def get_team_models(
 
 
 def get_complete_model_list(
-    key_models: list[str],
-    team_models: list[str],
+    key_models: Sequence[str],
+    team_models: Sequence[str],
     proxy_model_list: list[str],
     user_model: str | None,
     infer_model_from_keys: bool | None,
@@ -203,7 +206,7 @@ def get_complete_model_list(
 
     def append_unique(models):
         for model in models:
-            if model not in unique_models:
+            if model not in unique_models and model != SpecialModelNames.no_default_models.value:
                 unique_models.append(model)
 
     if key_models:

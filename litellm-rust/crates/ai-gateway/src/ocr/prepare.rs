@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use litellm_core::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
+use super::common_utils::ocr_provider_config;
 use super::hooks::OcrLifecycleHooks;
 use super::types::{OcrRequest, PreparedOcrRequest};
 use crate::integrations::custom_guardrail::CustomGuardrailRunner;
@@ -13,6 +14,7 @@ pub(crate) struct PreparedOcrCall {
     pub(crate) hooks: OcrLifecycleHooks,
 }
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
     let call_id = request
         .litellm_call_id
@@ -25,9 +27,25 @@ pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
         });
     let model = provider_info.model.to_string();
     let custom_llm_provider = provider_info.custom_llm_provider.to_string();
+    let config = ocr_provider_config(&custom_llm_provider, &model)
+        .ok_or_else(|| litellm_core::Error::InvalidProvider(custom_llm_provider.clone()));
+    let optional_params = match &config {
+        Ok(config) => {
+            let supported = config.supported_ocr_params();
+            config.map_ocr_params(
+                &request
+                    .optional_params
+                    .into_iter()
+                    .filter(|(name, _)| supported.contains(&name.as_str()))
+                    .collect(),
+            )
+        }
+        Err(_) => request.optional_params,
+    };
 
     PreparedOcrCall {
         request: PreparedOcrRequest {
+            config,
             model,
             custom_llm_provider,
             litellm_call_id: call_id,
@@ -35,7 +53,7 @@ pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
             api_key: request.api_key.map(str::to_string),
             api_base: request.api_base.map(str::to_string),
             extra_headers: request.extra_headers,
-            optional_params: request.optional_params,
+            optional_params,
             timeout: request.timeout,
         },
         hooks: OcrLifecycleHooks::new(

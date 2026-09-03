@@ -6,14 +6,11 @@ All Bedrock HTTP calls are mocked; no real AWS calls are made.
 
 import json
 import logging
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm.exceptions import ModifyResponseException
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
@@ -56,7 +53,7 @@ def _patched(guardrail: BedrockGuardrail, http_response):
 
 
 def test_init_rejects_both_identifier_and_checks():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Bedrock guardrail accepts either'):
         BedrockGuardrail(guardrailIdentifier="gid", checks=CONTENT_FILTER_CHECKS)
 
 
@@ -304,7 +301,7 @@ async def test_truncated_pii_ignored_when_pii_check_not_configured():
 
 @pytest.mark.asyncio
 async def test_checks_with_guardrail_version_rejected():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Bedrock guardrail accepts either'):
         BedrockGuardrail(checks=CONTENT_FILTER_CHECKS, guardrailVersion="DRAFT")
 
 

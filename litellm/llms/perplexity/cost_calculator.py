@@ -21,14 +21,19 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
     ## USE PRE-CALCULATED COST FROM PERPLEXITY IF AVAILABLE
-    ## Perplexity returns accurate cost in usage.cost.total_cost including request fees
+    ## Perplexity returns accurate cost in usage.cost.total_cost including request fees.
+    ## By the time it reaches here, ResponseAPIUsage.parse_cost has already flattened
+    ## that dict down to a float, so both shapes must be accepted.
     cost_info: Final = getattr(usage, "cost", None)
-    if cost_info is not None and isinstance(cost_info, dict):
-        total_cost: Final = cost_info.get("total_cost")
-        if total_cost is not None:
-            # Return total cost as completion_cost (prompt_cost=0) since Perplexity
-            # doesn't break down by input/output in their cost object
-            return (0.0, float(total_cost))
+    total_cost: float | None = None
+    if isinstance(cost_info, dict):
+        total_cost = cost_info.get("total_cost")
+    elif isinstance(cost_info, (int, float)) and not isinstance(cost_info, bool):
+        total_cost = float(cost_info)
+    if total_cost is not None:
+        # Return total cost as completion_cost (prompt_cost=0) since Perplexity
+        # doesn't break down by input/output in their cost object
+        return (0.0, float(total_cost))
 
     ## FALLBACK: Calculate cost manually if Perplexity doesn't provide it
     ## GET MODEL INFO

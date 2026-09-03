@@ -174,46 +174,89 @@ _RPC_REPLY = {
 
 _AGENT_A_HEADERS = {"x-agent-token": "token-for-a", "x-tenant": "tenant-a"}
 _AGENT_B_HEADERS = {"x-agent-token": "token-for-b", "x-tenant": "tenant-b"}
-_UPSTREAM_SESSION_COOKIE = "a2a_session=only-agent-a-may-hold-this; Path=/"
+
+
+_LANGGRAPH_TASK_REPLY = {
+    "jsonrpc": "2.0",
+    "id": "reply",
+    "result": {
+        "kind": "task",
+        "id": "run-1:task-1",
+        "contextId": "thread-1",
+        "history": [
+            {
+                "kind": "message",
+                "role": "user",
+                "parts": [{"kind": "text", "text": "hi"}],
+                "messageId": "m-user",
+                "taskId": "run-1:task-1",
+                "contextId": "thread-1",
+            },
+            {
+                "kind": "message",
+                "role": "agent",
+                "parts": [{"kind": "text", "text": "langgraph echo: hi"}],
+                "messageId": "m-agent",
+                "taskId": "run-1:task-1",
+                "contextId": "thread-1",
+            },
+        ],
+        "status": {"state": "completed", "timestamp": "2026-08-24T00:00:00+00:00"},
+        "artifacts": [
+            {
+                "artifactId": "art-1",
+                "name": "Assistant Response",
+                "parts": [{"kind": "text", "text": "langgraph echo: hi"}],
+            }
+        ],
+    },
+}
+
+
+_LOWERCASE_BINDING_CARD = {
+    "name": "langgraph-agent",
+    "version": "1.0.0",
+    "capabilities": {"streaming": True},
+    "defaultInputModes": ["text/plain"],
+    "defaultOutputModes": ["text/plain"],
+    "skills": [],
+    "supportedInterfaces": [
+        {"url": "http://127.0.0.1:9/", "protocolBinding": "jsonrpc", "protocolVersion": "1.0"}
+    ],
+}
 
 
 class _RequestRecorder:
-    """Records the headers httpx put on the wire, per outbound request.
+    """Records the headers httpx put on the wire, per outbound request."""
 
-    ``cookie_from_tenant`` makes that tenant's agent answer with a Set-Cookie, standing in
-    for an upstream that issues a session cookie.
-    """
-
-    def __init__(self, cookie_from_tenant: str | None = None):
+    def __init__(self, card=_AGENT_CARD, rpc_reply=_RPC_REPLY):
+        self.card = card
+        self.rpc_reply = rpc_reply
         self.card_requests = []
         self.rpc_requests = []
         self.client = None
-        self.cookie_from_tenant = cookie_from_tenant
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         headers = {k.lower(): v for k, v in request.headers.items()}
         if request.method == "GET":
             self.card_requests.append(headers)
-            return httpx.Response(200, json=_AGENT_CARD)
+            return httpx.Response(200, json=self.card)
         self.rpc_requests.append(headers)
-        if self.cookie_from_tenant is not None and headers.get("x-tenant") == self.cookie_from_tenant:
-            return httpx.Response(200, json=_RPC_REPLY, headers={"set-cookie": _UPSTREAM_SESSION_COOKIE})
-        return httpx.Response(200, json=_RPC_REPLY)
+        return httpx.Response(200, json=self.rpc_reply)
 
 
 def _a2a_client_cache_key(timeout: float) -> str:
     return "async_httpx_client" + f"timeout_{timeout}" + httpxSpecialProvider.A2AProvider
 
 
-async def _seed_shared_a2a_client(cookie_from_tenant: str | None = None) -> _RequestRecorder:
+async def _seed_shared_a2a_client(card=_AGENT_CARD, rpc_reply=_RPC_REPLY) -> _RequestRecorder:
     """Put the one A2A client the cache will hand out behind a mock transport.
 
     Seeding has to happen on the test's own event loop, because the client cache keys on
     it. The injected client is a real httpx.AsyncClient, so the merge of per-request
-    headers over client defaults, and httpx's own cookie handling, which is what these
-    tests are about, stay real.
+    headers over client defaults, which is what these tests are about, stays real.
     """
-    recorder = _RequestRecorder(cookie_from_tenant=cookie_from_tenant)
+    recorder = _RequestRecorder(card=card, rpc_reply=rpc_reply)
     handler = AsyncHTTPHandler(timeout=DEFAULT_A2A_AGENT_TIMEOUT)
     owned_client = handler.client
     handler.client = httpx.AsyncClient(transport=httpx.MockTransport(recorder))
@@ -321,6 +364,25 @@ async def test_streaming_send_carries_only_its_own_caller_headers(isolated_clien
 
 
 @pytest.mark.asyncio
+async def test_lowercase_protocol_binding_card_round_trips_the_langgraph_dialect(isolated_client_cache):
+    """LangGraph Platform serves cards with protocolBinding "jsonrpc" and answers in the
+    A2A 0.3 JSON dialect ("kind"-discriminated) while declaring protocolVersion "1.0".
+    Without binding normalization client creation raises ValueError("no compatible
+    transports found."); without the version downgrade the SDK's strict v1 transport
+    rejects the reply with 'Message type "lf.a2a.v1.Task" has no field named "kind"'."""
+    await _seed_shared_a2a_client(card=_LOWERCASE_BINDING_CARD, rpc_reply=_LANGGRAPH_TASK_REPLY)
+
+    a2a_client = await create_a2a_client(base_url="http://127.0.0.1:9")
+    response = await _send_message(a2a_client, _send_request("lc"))
+
+    assert type(response.root.result).__name__ == "Task"
+    assert response.root.result.artifacts[0].parts[0].root.text == "langgraph echo: hi"
+    interface = a2a_client._litellm_agent_card.supported_interfaces[0]
+    assert interface.protocol_binding == "JSONRPC"
+    assert interface.protocol_version == "0.3"
+
+
+@pytest.mark.asyncio
 async def test_agent_card_fetch_carries_the_callers_headers(isolated_client_cache):
     """Agent cards can sit behind the same auth as the agent, so the card fetch must stay
     authenticated once the headers stop living on the client."""
@@ -333,17 +395,21 @@ async def test_agent_card_fetch_carries_the_callers_headers(isolated_client_cach
 
 
 @pytest.mark.asyncio
-async def test_one_agents_session_cookie_never_reaches_another_agent(isolated_client_cache):
-    """One pooled client is also one httpx cookie jar. httpx stores every Set-Cookie on the
-    client and replays it on any later request to a matching domain, so an agent's session
-    cookie would ride along on a different agent's call to the same host."""
-    recorder = await _seed_shared_a2a_client(cookie_from_tenant="tenant-a")
+async def test_the_pooled_a2a_client_arrives_with_cookie_persistence_disabled(isolated_client_cache):
+    """create_a2a_client takes its client from the shared builder rather than building one,
+    and the builder is what refuses to persist cookies. This pins the join between those
+    two facts, so the A2A path cannot quietly start acquiring a client that keeps a jar.
 
-    client_a = await create_a2a_client(base_url="http://127.0.0.1:9", extra_headers=_AGENT_A_HEADERS)
-    await _send_message(client_a, _send_request("a"))
-    client_b = await create_a2a_client(base_url="http://127.0.0.1:9", extra_headers=_AGENT_B_HEADERS)
-    await _send_message(client_b, _send_request("b"))
+    test_callers_with_different_headers_reuse_one_pooled_client pins the other half, that
+    create_a2a_client hands back exactly this cached client."""
+    handler = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.A2AProvider,
+        params={"timeout": DEFAULT_A2A_AGENT_TIMEOUT},
+    )
+    request = httpx.Request("GET", "https://agent-a.example.com/")
+    handler.client.cookies.extract_cookies(
+        httpx.Response(200, headers={"set-cookie": "SESSION=only-agent-a-may-hold-this"}, request=request)
+    )
 
-    assert dict(recorder.client.cookies) == {}, "the shared client kept an agent's session cookie"
-    assert "cookie" not in recorder.card_requests[-1]
-    assert "cookie" not in recorder.rpc_requests[-1]
+    assert dict(handler.client.cookies) == {}, "the pooled A2A client kept an upstream's cookie"
+    await handler.close()

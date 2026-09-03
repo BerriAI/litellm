@@ -6,11 +6,9 @@ count actual model entries, not reserved meta keys) and the extraction of the
 
 import json
 import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
@@ -258,14 +256,12 @@ def test_get_model_cost_map_stamps_loaded_at(monkeypatch):
     from litellm.litellm_core_utils import get_model_cost_map as module
 
     monkeypatch.setattr(module._cost_map_source_info, "loaded_at", None)
-    monkeypatch.setattr(
-        module.GetModelCostMap,
-        "fetch_remote_model_cost_map",
-        staticmethod(lambda url, timeout=5: _load_root_cost_map()),
+    client, _calls = _mock_client(
+        [httpx.Response(200, content=_real_map_bytes())], client_cls=httpx.Client
     )
 
     before = datetime.now(timezone.utc)
-    module.get_model_cost_map(url="https://example.invalid/cost_map.json")
+    module.get_model_cost_map(url="https://example.invalid/cost_map.json", client=client)
     loaded_at = module.get_model_cost_map_loaded_at()
 
     assert loaded_at is not None
@@ -310,7 +306,7 @@ def _unset_local_cost_map_env(monkeypatch):
     monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
 
 
-def _mock_client(outcomes):
+def _mock_client(outcomes, client_cls=httpx.AsyncClient):
     """httpx client over a MockTransport serving one outcome per request; an exception instance is raised."""
     calls = {"count": 0}
 
@@ -322,7 +318,7 @@ def _mock_client(outcomes):
             raise outcome
         return outcome
 
-    return httpx.AsyncClient(transport=httpx.MockTransport(handler)), calls
+    return client_cls(transport=httpx.MockTransport(handler)), calls
 
 
 @pytest.mark.asyncio
@@ -452,3 +448,97 @@ async def test_refetch_respects_local_env_override(monkeypatch):
     )
     assert isinstance(result, ModelCostMapReloaded)
     assert len(result.model_cost_map) > 100
+
+
+# ---------------------------------------------------------------------------
+# get_model_cost_map: the boot-time load retries transient failures like a reload does
+# ---------------------------------------------------------------------------
+
+from litellm.litellm_core_utils.get_model_cost_map import (
+    get_model_cost_map,
+    get_model_cost_map_source_info,
+)
+
+
+class _SyncSleepRecorder:
+    """Injected in place of time.sleep so the boot path's waits are asserted without delay."""
+
+    def __init__(self):
+        self.waits = []
+
+    def __call__(self, seconds: float) -> None:
+        self.waits.append(seconds)
+
+
+def test_boot_load_retries_transient_failures_instead_of_falling_back():
+    """A refused connection then a 503 at pod boot used to pin the process to the bundled
+    backup for its lifetime; both are transient and must be retried before giving up."""
+    client, calls = _mock_client(
+        [
+            httpx.ConnectError("connection refused"),
+            httpx.Response(503),
+            httpx.Response(200, content=_real_map_bytes()),
+        ],
+        client_cls=httpx.Client,
+    )
+    sleeper = _SyncSleepRecorder()
+
+    cost_map = get_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
+
+    assert calls["count"] == 3
+    assert len(sleeper.waits) == 2
+    assert 2.0 <= sleeper.waits[0] < 3.0
+    assert 4.0 <= sleeper.waits[1] < 5.0
+    source = get_model_cost_map_source_info()
+    assert source["source"] == "remote"
+    assert source["fallback_reason"] is None
+    assert cost_map.keys() >= _load_root_cost_map().keys() - {"sample_spec", FALLBACK_GENERALIZATIONS_KEY}
+
+
+def test_boot_load_honors_retry_after_then_falls_back_after_max_attempts():
+    """An outage longer than the retry budget still ends on the bundled backup, and the
+    recorded fallback reason says how many attempts were spent so operators can tell."""
+    client, calls = _mock_client(
+        [httpx.Response(429, headers={"Retry-After": "7"})], client_cls=httpx.Client
+    )
+    sleeper = _SyncSleepRecorder()
+
+    cost_map = get_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
+
+    assert calls["count"] == 3
+    assert sleeper.waits == [7.0, 7.0]
+    source = get_model_cost_map_source_info()
+    assert source["source"] == "local"
+    assert "after 3 attempts" in source["fallback_reason"]
+    assert len(cost_map) > 100
+
+
+def test_boot_load_does_not_retry_permanent_failures():
+    """A 404 or a malformed URL cannot heal by waiting: one attempt, no sleeps, backup."""
+    client, calls = _mock_client([httpx.Response(404)], client_cls=httpx.Client)
+    sleeper = _SyncSleepRecorder()
+
+    get_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
+    assert calls["count"] == 1
+    assert sleeper.waits == []
+    assert get_model_cost_map_source_info()["source"] == "local"
+
+    get_model_cost_map(url="not a url", sleep=sleeper, rng=random.Random(0))
+    assert sleeper.waits == []
+    assert get_model_cost_map_source_info()["source"] == "local"
+
+
+def test_boot_load_respects_local_env_override(monkeypatch):
+    """LITELLM_LOCAL_MODEL_COST_MAP=True still short-circuits to the backup with zero HTTP."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    def _fail(request):
+        raise AssertionError("no HTTP request should be made when local map is forced")
+
+    cost_map = get_model_cost_map(
+        url=_URL,
+        sleep=_SyncSleepRecorder(),
+        client=httpx.Client(transport=httpx.MockTransport(_fail)),
+    )
+    assert len(cost_map) > 100
+    assert get_model_cost_map_source_info()["is_env_forced"] is True

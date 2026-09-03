@@ -128,6 +128,20 @@ def test_v1_model_info_no_model_list_error(client, auth_as, null_router, path):
     assert "LLM Model List not loaded" in response.text
 
 
+
+def test_get_proxy_model_info_surfaces_supports_parallel_function_calling(local_model_cost_map):
+    """``GET /v1/model/info`` enriches each deployment through ``_get_proxy_model_info``; a registry
+    entry declaring parallel function calling must land in ``model_info`` instead of null."""
+    enriched = proxy_server._get_proxy_model_info(
+        model={
+            "model_name": "glm-5.3-flash",
+            "litellm_params": {"model": "together_ai/zai-org/GLM-5.3-Flash"},
+            "model_info": {"id": "glm-deployment", "db_model": False},
+        }
+    )
+    assert enriched["model_info"]["supports_parallel_function_calling"] is True
+
+
 def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):
     from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
     from litellm.proxy.auth import model_checks

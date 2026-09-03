@@ -1,8 +1,9 @@
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { PaginationState } from "@tanstack/react-table";
-import { Card, Flex, Input } from "antd";
-import { KeyIcon, SearchIcon } from "lucide-react";
+import { KeyIcon, SearchIcon, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { ProjectKeysTable } from "./ProjectKeysTable";
 
 interface ProjectKeysSectionProps {
@@ -28,33 +29,41 @@ export function ProjectKeysSection({ projectId }: ProjectKeysSectionProps) {
   const totalCount = data?.total_count ?? 0;
 
   return (
-    <Card
-      title={
-        <Flex align="center" gap={8}>
-          <KeyIcon size={16} />
+    <Card className="h-full">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <KeyIcon className="size-4" />
           Keys
-        </Flex>
-      }
-      style={{ height: "100%" }}
-    >
-      <Flex justify="flex-start" align="center" style={{ marginBottom: 12 }}>
-        <Input
-          prefix={<SearchIcon size={14} />}
-          placeholder="Filter by key name..."
-          style={{ maxWidth: 220 }}
-          value={keyAlias}
-          onChange={(e) => setKeyAlias(e.target.value)}
-          allowClear
-          size="small"
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="mb-3 flex items-center">
+          <InputGroup className="max-w-[220px]">
+            <InputGroupAddon>
+              <SearchIcon className="size-3.5 text-muted-foreground" />
+            </InputGroupAddon>
+            <InputGroupInput
+              placeholder="Filter by key name..."
+              value={keyAlias}
+              onChange={(e) => setKeyAlias(e.target.value)}
+            />
+            {keyAlias && (
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton size="icon-xs" aria-label="Clear key filter" onClick={() => setKeyAlias("")}>
+                  <X />
+                </InputGroupButton>
+              </InputGroupAddon>
+            )}
+          </InputGroup>
+        </div>
+        <ProjectKeysTable
+          keys={keys}
+          totalCount={totalCount}
+          isLoading={isLoading}
+          pagination={pagination}
+          onPaginationChange={setPagination}
         />
-      </Flex>
-      <ProjectKeysTable
-        keys={keys}
-        totalCount={totalCount}
-        isLoading={isLoading}
-        pagination={pagination}
-        onPaginationChange={setPagination}
-      />
+      </CardContent>
     </Card>
   );
 }

@@ -8,12 +8,19 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     convert_url_to_base64,
 )
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionFileObject
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionFileObject, ChatCompletionImageObject
 from litellm.types.llms.vertex_ai import ContentType, PartType
 from litellm.utils import supports_reasoning
 
 from ...vertex_ai.gemini.transformation import _gemini_convert_messages_with_history
 from ...vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+
+def _image_url_fields(img_element: ChatCompletionImageObject) -> tuple[str | None, str | None, str | None]:
+    image_value: Final = img_element.get("image_url")
+    if isinstance(image_value, dict):
+        return image_value.get("url"), image_value.get("format"), image_value.get("detail")
+    return image_value, None, None
 
 
 class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
@@ -118,16 +125,8 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                 _parts: list[PartType] = []
                 for element in _message_content:
                     if element.get("type") == "image_url":
-                        img_element = element
-                        _image_url: str | None = None
-                        format: str | None = None
-                        detail: str | None = None
-                        if isinstance(img_element.get("image_url"), dict):
-                            _image_url = img_element["image_url"].get("url")
-                            format = img_element["image_url"].get("format")
-                            detail = img_element["image_url"].get("detail")
-                        else:
-                            _image_url = img_element.get("image_url")
+                        img_element = cast(ChatCompletionImageObject, element)  # cast-ok: runtime type tag checked
+                        _image_url, format, detail = _image_url_fields(img_element)
                         if _image_url and "https://" in _image_url:
                             image_obj = convert_to_anthropic_image_obj(_image_url, format=format)
                             converted_image_url = convert_generic_image_chunk_to_openai_image_obj(image_obj)

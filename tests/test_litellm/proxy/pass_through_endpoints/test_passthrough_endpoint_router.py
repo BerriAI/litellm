@@ -172,3 +172,212 @@ def test_returns_none_when_no_router_and_no_env():
     passthrough_router = _passthrough_router(None)
 
     assert passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) is None
+
+
+def _vertex_credential(name: str, values: dict) -> CredentialItem:
+    return CredentialItem(credential_name=name, credential_values=values, credential_info={})
+
+
+def _vertex_deployment(model_name: str, model: str, **litellm_params) -> dict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": model, "use_in_pass_through": True, **litellm_params},
+    }
+
+
+def test_vertex_deployment_resolves_via_named_credential():
+    CredentialAccessor.upsert_credentials(
+        [
+            _vertex_credential(
+                "cred_gcp",
+                {
+                    "vertex_project": "proj-db",
+                    "vertex_location": "global",
+                    "vertex_credentials": '{"type": "service_account"}',
+                },
+            )
+        ]
+    )
+    llm_router = litellm.Router(
+        model_list=[
+            _vertex_deployment(
+                "gemini-live", "vertex_ai/gemini-live-2.5-flash", litellm_credential_name="cred_gcp"
+            )
+        ]
+    )
+    passthrough_router = _passthrough_router(llm_router)
+
+    resolved = passthrough_router.get_vertex_credentials_from_router_deployments(model=None)
+
+    assert resolved is not None
+    assert resolved.vertex_project == "proj-db"
+    assert resolved.vertex_location == "global"
+    assert resolved.vertex_credentials == '{"type": "service_account"}'
+
+
+def test_vertex_deployment_resolves_from_inline_litellm_params():
+    llm_router = litellm.Router(
+        model_list=[
+            _vertex_deployment(
+                "gemini-live",
+                "vertex_ai/gemini-live-2.5-flash",
+                vertex_project="proj-inline",
+                vertex_location="us-east4",
+                vertex_credentials='{"type": "service_account", "project_id": "proj-inline"}',
+            )
+        ]
+    )
+    passthrough_router = _passthrough_router(llm_router)
+
+    resolved = passthrough_router.get_vertex_credentials_from_router_deployments(model=None)
+
+    assert resolved is not None
+    assert resolved.vertex_project == "proj-inline"
+    assert resolved.vertex_location == "us-east4"
+    assert resolved.vertex_credentials == '{"type": "service_account", "project_id": "proj-inline"}'
+
+
+def _two_vertex_deployments_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            _vertex_deployment(
+                "gemini-flash",
+                "vertex_ai/gemini-2.5-flash",
+                vertex_project="proj-first",
+                vertex_location="us-central1",
+            ),
+            _vertex_deployment(
+                "gemini-live",
+                "vertex_ai/gemini-live-2.5-flash",
+                vertex_project="proj-live",
+                vertex_location="global",
+            ),
+        ]
+    )
+
+
+def test_vertex_model_hint_prefers_matching_deployment():
+    passthrough_router = _passthrough_router(_two_vertex_deployments_router())
+
+    by_alias = passthrough_router.get_vertex_credentials_from_router_deployments(model="gemini-live")
+    by_upstream_id = passthrough_router.get_vertex_credentials_from_router_deployments(
+        model="gemini-live-2.5-flash"
+    )
+
+    assert by_alias is not None and by_alias.vertex_project == "proj-live"
+    assert by_upstream_id is not None and by_upstream_id.vertex_project == "proj-live"
+
+
+def test_vertex_without_usable_hint_refuses_to_guess_between_projects():
+    passthrough_router = _passthrough_router(_two_vertex_deployments_router())
+
+    assert passthrough_router.get_vertex_credentials_from_router_deployments(model="unknown-model") is None
+    assert passthrough_router.get_vertex_credentials_from_router_deployments(model=None) is None
+
+
+def test_vertex_without_hint_falls_back_when_deployments_share_a_target():
+    llm_router = litellm.Router(
+        model_list=[
+            _vertex_deployment(
+                "gemini-flash", "vertex_ai/gemini-2.5-flash", vertex_project="proj-one", vertex_location="global"
+            ),
+            _vertex_deployment(
+                "gemini-live", "vertex_ai/gemini-live-2.5-flash", vertex_project="proj-one", vertex_location="global"
+            ),
+        ]
+    )
+    passthrough_router = _passthrough_router(llm_router)
+
+    resolved = passthrough_router.get_vertex_credentials_from_router_deployments(model=None)
+
+    assert resolved is not None and resolved.vertex_project == "proj-one"
+
+
+def test_vertex_without_hint_refuses_to_guess_between_service_accounts():
+    llm_router = litellm.Router(
+        model_list=[
+            _vertex_deployment(
+                "gemini-flash",
+                "vertex_ai/gemini-2.5-flash",
+                vertex_project="proj-one",
+                vertex_location="global",
+                vertex_credentials='{"client_email": "flash@proj-one.iam"}',
+            ),
+            _vertex_deployment(
+                "gemini-live",
+                "vertex_ai/gemini-live-2.5-flash",
+                vertex_project="proj-one",
+                vertex_location="global",
+                vertex_credentials='{"client_email": "live@proj-one.iam"}',
+            ),
+        ]
+    )
+    passthrough_router = _passthrough_router(llm_router)
+
+    assert passthrough_router.get_vertex_credentials_from_router_deployments(model=None) is None
+
+
+def test_vertex_named_credential_keeps_dict_service_account():
+    service_account = {"type": "service_account", "client_email": "live@proj-db.iam"}
+    CredentialAccessor.upsert_credentials(
+        [
+            _vertex_credential(
+                "cred_gcp_dict",
+                {
+                    "vertex_project": "proj-db",
+                    "vertex_location": "global",
+                    "vertex_credentials": service_account,
+                },
+            )
+        ]
+    )
+    llm_router = litellm.Router(
+        model_list=[
+            _vertex_deployment(
+                "gemini-live", "vertex_ai/gemini-live-2.5-flash", litellm_credential_name="cred_gcp_dict"
+            )
+        ]
+    )
+    passthrough_router = _passthrough_router(llm_router)
+
+    resolved = passthrough_router.get_vertex_credentials_from_router_deployments(model=None)
+
+    assert resolved is not None
+    assert resolved.vertex_credentials == service_account
+
+
+def test_no_flagged_vertex_deployment_returns_none():
+    llm_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-live",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-live-2.5-flash",
+                    "vertex_project": "proj-unflagged",
+                    "vertex_location": "global",
+                },
+            },
+            _flagged_deployment("openai/gpt-4o", api_key="sk-flagged"),
+        ]
+    )
+    passthrough_router = _passthrough_router(llm_router)
+
+    assert passthrough_router.get_vertex_credentials_from_router_deployments(model=None) is None
+    assert _passthrough_router(None).get_vertex_credentials_from_router_deployments(model=None) is None
+
+
+def test_vertex_deployment_with_deleted_credential_is_skipped(monkeypatch):
+    CredentialAccessor.upsert_credentials(
+        [_vertex_credential("cred_gone", {"vertex_project": "proj-db", "vertex_location": "global"})]
+    )
+    llm_router = litellm.Router(
+        model_list=[
+            _vertex_deployment(
+                "gemini-live", "vertex_ai/gemini-live-2.5-flash", litellm_credential_name="cred_gone"
+            )
+        ]
+    )
+    passthrough_router = _passthrough_router(llm_router)
+    monkeypatch.setattr(litellm, "credential_list", [])
+
+    assert passthrough_router.get_vertex_credentials_from_router_deployments(model=None) is None

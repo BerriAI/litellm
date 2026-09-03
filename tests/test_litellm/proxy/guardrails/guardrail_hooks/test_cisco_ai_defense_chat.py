@@ -44,7 +44,6 @@ from tests.test_litellm.proxy.guardrails.guardrail_hooks._cisco_ai_defense_test_
 
 def test_cisco_ai_defense_config_via_init_v2_chat(monkeypatch):
     monkeypatch.setenv("CISCO_AI_DEFENSE_API_KEY", "test-key")
-    litellm.set_verbose = True
     litellm.guardrail_name_config_map = {}
 
     init_guardrails_v2(
