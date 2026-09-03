@@ -151,7 +151,9 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             verbose_proxy_logger.debug("Vertex AI Live API model info for '%s': %s", model, model_info)
 
             # Check if pricing info is available
-            if not model_info or not model_info.get("input_cost_per_token"):
+            if not model_info or (
+                not model_info.get("input_cost_per_token") and not model_info.get("output_cost_per_token")
+            ):
                 verbose_proxy_logger.error("No pricing info found for %s in local model pricing database", model)
                 return 0.0
 
