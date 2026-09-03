@@ -939,8 +939,6 @@ async def make_agent_public(
             if agent is None:
                 raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
-        # get_config() re-applies the DB's litellm_settings over the in-memory
-        # globals, so read it before deriving the new list and assign the global after
         config: Final = await proxy_config.get_config()
 
         current_public_agent_groups: Final = list(litellm.public_agent_groups or [])
