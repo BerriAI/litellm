@@ -1,38 +1,69 @@
 from __future__ import annotations
 
-import pytest
+from pathlib import Path
 
-from .mapping_validator import TestMapping as Mapping, validate_mapping
+from .mapping_validator import MappingSuite, TestMapping as MappingPair, audit_mapping
 
 
-def test_matches_names_and_explicit_annotations() -> None:
-    report = validate_mapping(
-        ("tests/test_api.py::test_decode", "tests/test_api.py::test_error"),
-        ("api::test_decode", "api::preserves_error"),
-        (Mapping(python="tests/test_api.py::test_error", rust="api::preserves_error"),),
+def _write_inventory(tmp_path: Path) -> None:
+    (tmp_path / "test_api.py").write_text(
+        "def test_decode():\n    pass\n\ndef test_unmapped():\n    pass\n",
+        encoding="utf-8",
     )
-    assert report.problems == ()
-    assert {(pair.python, pair.rust) for pair in report.pairs} == {
-        ("tests/test_api.py::test_decode", "api::test_decode"),
-        ("tests/test_api.py::test_error", "api::preserves_error"),
-    }
+    (tmp_path / "lib.rs").write_text(
+        "#[test]\nfn decodes() {}\n\n#[test]\nfn rust_only() {}\n",
+        encoding="utf-8",
+    )
 
 
-@pytest.mark.parametrize(
-    ("python", "rust", "message"),
-    (
-        (("test_decode",), (), "missing Rust counterpart"),
-        ((), ("test_decode",), "missing Python counterpart"),
-        (("test_decode",), ("one::test_decode", "two::test_decode"), "ambiguous Rust counterparts"),
-        (("one::test_decode", "two::test_decode"), ("test_decode",), "ambiguous Python counterparts"),
-    ),
-)
-def test_reports_missing_and_ambiguous_counterparts(
-    python: tuple[str, ...], rust: tuple[str, ...], message: str
-) -> None:
-    assert any(message in problem for problem in validate_mapping(python, rust).problems)
+def _suite(*mappings: MappingPair) -> MappingSuite:
+    return MappingSuite(
+        python_scope=("test_api.py",),
+        unit_parity_scope=("test_api.py",),
+        rust_scope=("lib.rs",),
+        cargo_manifest="Cargo.toml",
+        cargo_filter="api",
+        mappings=mappings,
+    )
 
 
-def test_rejects_stale_annotations_even_when_names_match() -> None:
-    report = validate_mapping(("test_decode",), ("test_decode",), (Mapping(python="test_decode", rust="removed"),))
-    assert "missing Rust counterpart: removed" in report.problems
+def test_derives_mapping_status_from_live_inventories(tmp_path: Path) -> None:
+    _write_inventory(tmp_path)
+    suite = _suite(MappingPair(python="test_api.py::test_decode", rust="lib.rs::decodes"))
+
+    report = audit_mapping(suite, tmp_path)
+
+    assert report.is_valid
+    assert report.mapped_python_tests == ("test_api.py::test_decode",)
+    assert report.unmapped_python_tests == ("test_api.py::test_unmapped",)
+    assert report.rust_only_tests == ("lib.rs::rust_only",)
+    assert report.percentage == 50.0
+
+
+def test_reports_stale_and_duplicate_mappings(tmp_path: Path) -> None:
+    _write_inventory(tmp_path)
+    suite = _suite(
+        MappingPair(python="test_api.py::removed", rust="lib.rs::removed"),
+        MappingPair(python="test_api.py::removed", rust="lib.rs::decodes"),
+    )
+
+    report = audit_mapping(suite, tmp_path)
+
+    assert not report.is_valid
+    assert report.missing_python_tests == ("test_api.py::removed",)
+    assert report.missing_rust_tests == ("lib.rs::removed",)
+    assert report.duplicate_python_mappings == ("test_api.py::removed",)
+
+
+def test_allows_multiple_python_tests_to_map_to_one_rust_test(tmp_path: Path) -> None:
+    _write_inventory(tmp_path)
+    suite = _suite(
+        MappingPair(python="test_api.py::test_decode", rust="lib.rs::decodes"),
+        MappingPair(python="test_api.py::test_unmapped", rust="lib.rs::decodes"),
+    )
+
+    report = audit_mapping(suite, tmp_path)
+
+    assert report.is_valid
+    assert report.mapped_count == 2
+    assert report.unmapped_python_tests == ()

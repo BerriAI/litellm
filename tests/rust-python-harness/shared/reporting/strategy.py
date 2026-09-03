@@ -55,16 +55,16 @@ CaseSpec: TypeAlias = RunnableCaseSpec | UnavailableCaseSpec
 
 @dataclass(frozen=True, slots=True)
 class CaseDefinition:
-    surface: Surface
     sdk_function: SdkFunction
     spec: CaseSpec
+    surface: Surface | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class CheckReport:
-    sdk_function: str
-    lines: tuple[str, ...]
-    passed: bool
+class RunnerArgumentDefinition:
+    option: str
+    help: str
+    metavar: str = "ARG"
 
 
 class StrategyRunner(Protocol):
@@ -75,12 +75,6 @@ class StrategyRunner(Protocol):
         on_update: UpdateCallback,
         runner_args: Sequence[str] = (),
     ) -> tuple[int, HarnessRun]: ...
-
-
-class StrategyChecker(Protocol):
-    def __call__(
-        self, sdk_functions: frozenset[str], repo_root: Path
-    ) -> tuple[CheckReport, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,4 +88,5 @@ class StrategyDefinition:
     cases: tuple[CaseDefinition, ...]
     run: StrategyRunner
     render: StrategyRenderer
-    check: StrategyChecker | None = None
+    surfaces: tuple[Surface, ...] = ()
+    runner_argument: RunnerArgumentDefinition | None = None

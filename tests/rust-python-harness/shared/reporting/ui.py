@@ -20,10 +20,7 @@ if TYPE_CHECKING:
 
 class HarnessOutputFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        return not (
-            record.name == "LiteLLM"
-            and record.getMessage().startswith("OCR cost:")
-        )
+        return not (record.name == "LiteLLM" and record.getMessage().startswith("OCR cost:"))
 
 
 _HARNESS_OUTPUT_FILTER: Final = HarnessOutputFilter()
@@ -208,7 +205,7 @@ class RichDashboard(AbstractContextManager["RichDashboard"]):
         if self._live_active:
             self.live.stop()
             self._live_active = False
-        self.console.print(final_report(run, exit_code, self.strategies), markup=False)
+        print(final_report(run, exit_code, self.strategies), flush=True)  # noqa: T201  # CLI output
 
 
 class PlainDashboard(AbstractContextManager["PlainDashboard"]):
@@ -237,11 +234,7 @@ class PlainDashboard(AbstractContextManager["PlainDashboard"]):
     def _update_result(self, key: str, status: RunStatus, completed: int, total: int) -> None:
         state: Final = (status, completed)
         previous: Final = self._seen.get(key)
-        should_print: Final = (
-            previous is None
-            or previous[0] is not status
-            or (completed > 0 and completed % 25 == 0)
-        )
+        should_print: Final = previous is None or previous[0] is not status or (completed > 0 and completed % 25 == 0)
         self._seen[key] = state
         if should_print:
             progress: Final = f" {completed}/{total}" if total else ""
@@ -255,14 +248,5 @@ class PlainDashboard(AbstractContextManager["PlainDashboard"]):
         )
 
 
-def make_dashboard(
-    strategies: Sequence[Strategy],
-    plain: bool = False,
-) -> RichDashboard | PlainDashboard:
-    interactive_terminal: Final = sys.stdout.isatty() and not os.environ.get("CI") and os.environ.get("TERM") != "dumb"
-    if not plain and interactive_terminal:
-        try:
-            return RichDashboard(strategies)
-        except ImportError:
-            pass
+def make_dashboard(strategies: Sequence[Strategy]) -> PlainDashboard:
     return PlainDashboard(strategies)

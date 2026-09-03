@@ -18,7 +18,7 @@ class StrategyRenderer(Protocol):
 
 
 def render_case_outcome(result: CaseResult) -> str:
-    prefix: Final = f"- {result.case.surface}/{result.case.sdk_function}: {result.status.value}"
+    prefix: Final = f"- {result.case.display_name}: {result.status.value}"
     spec: Final = result.case.spec
     match spec.disposition:
         case CaseDisposition.RUNNABLE:

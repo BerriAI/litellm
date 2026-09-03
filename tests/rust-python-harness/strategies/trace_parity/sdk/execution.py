@@ -119,26 +119,32 @@ def collect_trace(
     return events
 
 
-def execute_trace(
-    case: TraceCase, mode: TraceMode, surface: Surface
-) -> TraceComparisonArtifact | TraceExecutionFailure:
+def _failure_message(result: tuple[FunctionTraceEvent, ...] | TraceExecutionFailure) -> str | None:
+    if isinstance(result, tuple):
+        return None
+    return f"{result.engine}: {result.message}"
+
+
+def execute_trace(case: TraceCase, mode: TraceMode, surface: Surface) -> TraceComparisonArtifact:
     asynchronous: Final = mode == "async"
     python_trace: Final = collect_trace(case.route, "python", asynchronous=asynchronous)
-    if isinstance(python_trace, TraceExecutionFailure):
-        return python_trace
     rust_trace: Final = collect_trace(case.route, "rust", asynchronous=asynchronous)
-    if isinstance(rust_trace, TraceExecutionFailure):
-        return rust_trace
-    python: Final = pipeline_steps("python", python_trace, case.steps)
-    rust: Final = pipeline_steps("rust", rust_trace, case.steps)
+    python_error: Final = _failure_message(python_trace)
+    rust_error: Final = _failure_message(rust_trace)
+    python_events: Final = python_trace if isinstance(python_trace, tuple) else ()
+    rust_events: Final = rust_trace if isinstance(rust_trace, tuple) else ()
+    python: Final = pipeline_steps("python", python_events, case.steps)
+    rust: Final = pipeline_steps("rust", rust_events, case.steps)
     return TraceComparisonArtifact.from_traces(
         surface=surface,
         sdk_function=case.route.route,
         mode=mode,
         python=python,
         rust=rust,
-        python_issues=pipeline_issues("python", python, case.steps, case.edges),
-        rust_issues=pipeline_issues("rust", rust, case.steps, case.edges),
+        python_issues=() if python_error else pipeline_issues("python", python, case.steps, case.edges),
+        rust_issues=() if rust_error else pipeline_issues("rust", rust, case.steps, case.edges),
         requires_matching_steps=case.matching_steps,
         requires_exact_trace=case.exact,
+        python_error=python_error,
+        rust_error=rust_error,
     )

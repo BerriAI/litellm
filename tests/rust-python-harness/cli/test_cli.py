@@ -8,35 +8,49 @@ from typing import Final
 
 import pytest
 
-from ..shared.reporting.models import SDK_FUNCTIONS, SURFACES, CaseDisposition, HarnessCase, HarnessRun, RunStatus, Strategy
+from ..shared.reporting.models import (
+    SDK_FUNCTIONS,
+    SURFACES,
+    CaseDisposition,
+    HarnessCase,
+    HarnessRun,
+    RunStatus,
+    Strategy,
+)
 from ..shared.reporting.strategy import NotImplementedCaseSpec, SkippedCaseSpec, StrategyDefinition
-from ..shared.reporting.ui import final_report
+from ..shared.reporting.ui import PlainDashboard, final_report, make_dashboard
+from ..strategies.unit_tests_mapping.mappings import MAPPING_SUITES
+from ..strategies.unit_tests_parity import UNIT_PARITY_SUITES
+from ..strategies.unit_tests_rust import RUST_SUITES
 from . import main
 from .catalog import STRATEGIES_ROOT, load_catalog
-from .commands import REPO_ROOT
-from .selection import pick_values, select
+from .commands import REPO_ROOT, select_cases
+
 
 def _strategy_source(
     *,
     strategy_id: str = "example",
-    drop: tuple[str, str] | None = None,
-    duplicate: tuple[str, str] | None = None,
-    incompatible: tuple[str, str] | None = None,
+    surfaces: tuple[str, ...] = (),
+    drop: tuple[str | None, str] | None = None,
+    duplicate: tuple[str | None, str] | None = None,
+    incompatible: tuple[str | None, str] | None = None,
 ) -> str:
     cells: Final = tuple(
         (surface, function)
-        for surface in SURFACES
+        for surface in (surfaces or (None,))
         for function in SDK_FUNCTIONS
         if (surface, function) != drop
     )
     definitions: Final = tuple(
         (
-            f"strategy.CaseDefinition({surface!r}, {function!r}, "
-            "strategy.ModuleCaseSpec(coverage=models.Coverage.COMPLETE, module='tests.example'))"
+            f"strategy.CaseDefinition({function!r}, "
+            "strategy.ModuleCaseSpec(coverage=models.Coverage.COMPLETE, module='tests.example'), "
+            f"surface={surface!r})"
             if (surface, function) == incompatible
             else (
-                f"strategy.CaseDefinition({surface!r}, {function!r}, "
-                "strategy.NotImplementedCaseSpec(reason='Not implemented yet'))"
+                f"strategy.CaseDefinition({function!r}, "
+                "strategy.NotImplementedCaseSpec(reason='Not implemented yet'), "
+                f"surface={surface!r})"
             )
         )
         for surface, function in (*cells, *((duplicate,) if duplicate is not None else ()))
@@ -49,12 +63,13 @@ def _strategy_source(
         "runner = importlib.import_module('tests.rust-python-harness.strategies.trace_parity.runner')\n"
         "rendering = importlib.import_module('tests.rust-python-harness.shared.reporting.rendering')\n"
         "def render(results):\n"
-        "    return (rendering.ReportSection('Example outcomes', tuple(rendering.render_case_outcome(r) for r in results)),)\n"
+        "    return (rendering.ReportSection('Example outcomes', "
+        "tuple(rendering.render_case_outcome(r) for r in results)),)\n"
         f"CASES = ({','.join(definitions)},)\n"
         "STRATEGY = strategy.StrategyDefinition("
         f"id={strategy_id!r}, order=1, label='Example strategy', description='Example description', "
         "directory=Path(__file__).parent, runnable_spec=strategy.SuiteCaseSpec, cases=CASES, "
-        "run=runner.run_trace_cases, render=render)\n"
+        f"run=runner.run_trace_cases, render=render, surfaces={surfaces!r})\n"
     )
 
 
@@ -70,8 +85,8 @@ def _write_strategy_folder(
     return folder
 
 
-def test_should_load_the_five_harness_strategies_in_order() -> None:
-    strategies = load_catalog()
+def test_should_load_surface_aware_and_function_only_strategies() -> None:
+    strategies: Final = load_catalog()
 
     assert [strategy.id for strategy in strategies] == [
         "e2e_parity",
@@ -80,24 +95,53 @@ def test_should_load_the_five_harness_strategies_in_order() -> None:
         "unit_tests_parity",
         "unit_tests_rust",
     ]
-    assert all(
-        tuple((case.surface, case.sdk_function) for case in strategy.cases)
-        == tuple((surface, function) for surface in SURFACES for function in SDK_FUNCTIONS)
-        for strategy in strategies
-    )
+    for strategy in strategies:
+        expected: Final = tuple(
+            (surface, function) for surface in (strategy.definition.surfaces or (None,)) for function in SDK_FUNCTIONS
+        )
+        assert tuple((case.surface, case.sdk_function) for case in strategy.cases) == expected
+
+
+def test_unit_strategies_use_function_only_cases() -> None:
+    strategies: Final = {
+        strategy.id: strategy
+        for strategy in load_catalog()
+        if strategy.id in {"unit_tests_mapping", "unit_tests_parity", "unit_tests_rust"}
+    }
+
+    for sdk_function in SDK_FUNCTIONS:
+        cases: Final = tuple(
+            case for strategy in strategies.values() for case in strategy.cases if case.sdk_function == sdk_function
+        )
+        assert len(cases) == 3
+        assert all(case.surface is None for case in cases)
+        expected_mapping: Final = (
+            CaseDisposition.RUNNABLE if sdk_function in MAPPING_SUITES else CaseDisposition.NOT_IMPLEMENTED
+        )
+        assert cases[0].spec.disposition is expected_mapping
+        expected_parity: Final = (
+            CaseDisposition.RUNNABLE if sdk_function in UNIT_PARITY_SUITES else CaseDisposition.NOT_IMPLEMENTED
+        )
+        expected_rust: Final = (
+            CaseDisposition.RUNNABLE if sdk_function in RUST_SUITES else CaseDisposition.NOT_IMPLEMENTED
+        )
+        assert cases[1].spec.disposition is expected_parity
+        assert cases[2].spec.disposition is expected_rust
+
+
+def test_raw_dashboard_is_always_the_default() -> None:
+    assert isinstance(make_dashboard(load_catalog()), PlainDashboard)
 
 
 def test_every_strategy_folder_complies() -> None:
-    strategies = load_catalog()
-
-    folders = {
-        path.name
-        for path in STRATEGIES_ROOT.iterdir()
-        if path.is_dir() and (path / "__init__.py").exists()
+    strategies: Final = load_catalog()
+    folders: Final = {
+        path.name for path in STRATEGIES_ROOT.iterdir() if path.is_dir() and (path / "__init__.py").exists()
     }
+
     assert folders == {strategy.id for strategy in strategies}
     for strategy in strategies:
-        definition = strategy.definition
+        definition: Final = strategy.definition
         assert isinstance(definition, StrategyDefinition)
         assert definition.directory == strategy.directory
         assert not (strategy.directory / "strategy.json").exists()
@@ -107,17 +151,29 @@ def test_every_strategy_folder_complies() -> None:
                 assert isinstance(case.spec, definition.runnable_spec)
 
 
-def test_should_reject_a_registry_missing_a_matrix_cell(tmp_path: Path) -> None:
-    _write_strategy_folder(tmp_path, init_source=_strategy_source(drop=("sdk", "count_tokens")))
+@pytest.mark.parametrize("surfaces", ((), SURFACES))
+def test_should_reject_a_registry_missing_a_declared_matrix_cell(tmp_path: Path, surfaces: tuple[str, ...]) -> None:
+    surface: Final = surfaces[0] if surfaces else None
+    _write_strategy_folder(
+        tmp_path,
+        init_source=_strategy_source(surfaces=surfaces, drop=(surface, "count_tokens")),
+    )
 
-    with pytest.raises(ValueError, match="must exactly match the harness matrix"):
+    with pytest.raises(ValueError, match="must exactly match its declared matrix"):
         load_catalog(tmp_path)
 
 
 def test_should_reject_a_duplicate_matrix_cell(tmp_path: Path) -> None:
-    _write_strategy_folder(tmp_path, init_source=_strategy_source(duplicate=("sdk", "ocr")))
+    _write_strategy_folder(tmp_path, init_source=_strategy_source(duplicate=(None, "ocr")))
 
     with pytest.raises(ValueError, match="duplicate strategy cases"):
+        load_catalog(tmp_path)
+
+
+def test_should_reject_invalid_declared_surfaces(tmp_path: Path) -> None:
+    _write_strategy_folder(tmp_path, init_source=_strategy_source(surfaces=("sdk", "sdk")))
+
+    with pytest.raises(ValueError, match="invalid strategy surfaces"):
         load_catalog(tmp_path)
 
 
@@ -138,7 +194,7 @@ def test_should_reject_a_strategy_id_that_differs_from_its_folder(tmp_path: Path
 
 
 def test_should_reject_a_runnable_case_incompatible_with_the_strategy(tmp_path: Path) -> None:
-    _write_strategy_folder(tmp_path, init_source=_strategy_source(incompatible=("sdk", "ocr")))
+    _write_strategy_folder(tmp_path, init_source=_strategy_source(incompatible=(None, "ocr")))
 
     with pytest.raises(ValueError, match="runnable cases do not match SuiteCaseSpec"):
         load_catalog(tmp_path)
@@ -152,43 +208,14 @@ def test_should_reject_an_unavailable_case_with_a_blank_reason(
         case_type(reason=" ")
 
 
-def test_should_filter_the_catalog_by_strategy_and_sdk_function() -> None:
-    strategies = load_catalog()
+def test_should_select_functions_and_surfaces() -> None:
+    strategy: Final = next(strategy for strategy in load_catalog() if strategy.id == "e2e_parity")
 
-    cases = select(strategies, {"e2e_parity"}, {"messages"})
-
-    assert tuple(case.key for case in cases) == (
+    assert tuple(case.key for case in select_cases((strategy,), {"messages"})) == (
         "e2e_parity:messages",
         "e2e_parity:gateway:messages",
     )
-
-
-def test_should_filter_the_catalog_by_surface() -> None:
-    strategies = load_catalog()
-
-    cases = select(strategies, set(), set(), "gateway")
-
-    assert len(cases) == len(strategies) * len(SDK_FUNCTIONS)
-    assert all(case.surface == "gateway" for case in cases)
-    assert select(strategies, {"e2e_parity"}, set(), "sdk")[0].surface == "sdk"
-
-
-def test_every_matrix_cell_can_be_selected_exactly() -> None:
-    strategies: Final = load_catalog()
-    selections: Final = tuple(
-        tuple((case.surface, case.sdk_function) for case in select(strategies, {strategy.id}, {sdk_function}, surface))
-        for strategy in strategies
-        for surface in SURFACES
-        for sdk_function in SDK_FUNCTIONS
-    )
-    expected: Final = tuple(
-        ((surface, sdk_function),)
-        for _strategy in strategies
-        for surface in SURFACES
-        for sdk_function in SDK_FUNCTIONS
-    )
-
-    assert selections == expected
+    assert tuple(case.display_name for case in select_cases((strategy,), {"ocr"}, "gateway")) == ("gateway/ocr",)
 
 
 def _assert_unavailable_cell(strategy: Strategy, case: HarnessCase, section_title: str) -> None:
@@ -198,9 +225,7 @@ def _assert_unavailable_cell(strategy: Strategy, case: HarnessCase, section_titl
     exit_code, run = strategy.definition.run((case,), REPO_ROOT, lambda _: None)
     result: Final = run.results[case.key]
     expected: Final = (
-        RunStatus.NOT_IMPLEMENTED
-        if spec.disposition is CaseDisposition.NOT_IMPLEMENTED
-        else RunStatus.SKIPPED
+        RunStatus.NOT_IMPLEMENTED if spec.disposition is CaseDisposition.NOT_IMPLEMENTED else RunStatus.SKIPPED
     )
     report: Final = final_report(run, exit_code, (scoped,))
 
@@ -211,8 +236,7 @@ def _assert_unavailable_cell(strategy: Strategy, case: HarnessCase, section_titl
     assert f"Status: {'INCOMPLETE' if expected is RunStatus.NOT_IMPLEMENTED else 'SKIPPED'}" in report
 
 
-def test_every_unavailable_matrix_cell_finishes_and_explains_itself() -> None:
-    strategies: Final = load_catalog()
+def test_every_unavailable_case_finishes_and_explains_itself() -> None:
     section_titles: Final = {
         "e2e_parity": "End-to-end parity outcomes",
         "trace_parity": "Trace comparisons",
@@ -220,10 +244,9 @@ def test_every_unavailable_matrix_cell_finishes_and_explains_itself() -> None:
         "unit_tests_parity": "Python backend parity outcomes",
         "unit_tests_rust": "Native Rust unit-test outcomes",
     }
-
     unavailable: Final = tuple(
         (strategy, case)
-        for strategy in strategies
+        for strategy in load_catalog()
         for case in strategy.cases
         if case.spec.disposition is not CaseDisposition.RUNNABLE
     )
@@ -232,104 +255,158 @@ def test_every_unavailable_matrix_cell_finishes_and_explains_itself() -> None:
         _assert_unavailable_cell(strategy, case, section_titles[strategy.id])
 
 
-def test_should_reject_an_unknown_strategy() -> None:
-    with pytest.raises(ValueError, match="Unknown strategy"):
-        select(load_catalog(), {"not-real"}, set())
-
-
-def test_should_reject_an_empty_selection() -> None:
-    with pytest.raises(ValueError, match="matched no harness cases"):
-        select((), set(), set())
-
-
-def test_should_pick_multiple_interactive_filters() -> None:
-    answers = iter(["nope", "1, 3"])
-
-    selected = pick_values(
-        "Examples",
-        (("one", "One"), ("two", "Two"), ("three", "Three")),
-        input_fn=lambda _: next(answers),
-    )
-
-    assert selected == {"one", "three"}
-
-
-def test_list_honors_strategy_and_function_filters(
+@pytest.mark.parametrize(
+    ("strategy_id", "present", "absent"),
+    (
+        ("e2e_parity", "--surface", "--pytest-arg"),
+        ("trace_parity", "--surface", "--pytest-arg"),
+        ("unit_tests_parity", "--pytest-arg", "--surface"),
+        ("unit_tests_mapping", "--function", "--surface"),
+        ("unit_tests_rust", "--function", "--surface"),
+    ),
+)
+def test_strategy_help_only_lists_supported_options(
+    strategy_id: str,
+    present: str,
+    absent: str,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    exit_code = main(["list", "--strategy", "e2e_parity", "--function", "ocr"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "e2e_parity" in captured.out
-    assert "trace_parity" not in captured.out
-    assert "messages" not in captured.out
-
-
-def test_list_describes_an_unavailable_case(capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code: Final = main(
-        ["list", "--strategy", "e2e_parity", "--surface", "sdk", "--function", "messages"]
-    )
-
+    exit_code: Final = main(["run", strategy_id, "--help"])
     captured: Final = capsys.readouterr()
+
     assert exit_code == 0
-    assert "sdk/messages" in captured.out
-    assert "not_implemented" in captured.out
-    assert "no standalone end-to-end parity case is registered" in captured.out
+    assert present in captured.out
+    assert absent not in captured.out
 
 
-def test_run_reports_not_implemented_cells_as_incomplete(capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code = main(["run", "--strategy", "trace_parity", "--surface", "gateway", "--plain"])
+def test_run_help_lists_all_and_every_strategy(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code: Final = main(["run", "--help"])
+    captured: Final = capsys.readouterr()
 
-    captured = capsys.readouterr()
     assert exit_code == 0
-    assert "Rust <-> Python parity report" in captured.out
+    for command in (
+        "all",
+        "e2e_parity",
+        "trace_parity",
+        "unit_tests_mapping",
+        "unit_tests_parity",
+        "unit_tests_rust",
+    ):
+        assert command in captured.out
+
+
+@pytest.mark.parametrize(
+    "argv",
+    (
+        ("list",),
+        ("check",),
+        ("run", "--strategy", "unit_tests_parity"),
+        ("run", "unit_tests_parity", "--surface", "sdk"),
+        ("run", "unit_tests_parity", "--plain"),
+        ("run", "unit_tests_parity", "--runner-arg=-x"),
+        ("run", "all", "--pytest-arg=-x"),
+    ),
+)
+def test_removed_commands_and_options_are_rejected(argv: tuple[str, ...], capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code: Final = main(argv)
+    captured: Final = capsys.readouterr()
+
+    assert exit_code == 2
+    assert captured.err
+
+
+def test_strategy_command_forwards_repeated_filters_and_runner_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cli: Final = importlib.import_module("tests.rust-python-harness.cli")
+    captured: list[tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = []
+
+    def capture_run(
+        strategies: Sequence[Strategy],
+        cases: Sequence[HarnessCase],
+        runner_args: Sequence[str] = (),
+    ) -> int:
+        captured.append(
+            (
+                tuple(strategy.id for strategy in strategies),
+                tuple(case.display_name for case in cases),
+                tuple(runner_args),
+            )
+        )
+        return 0
+
+    monkeypatch.setattr(cli, "run_command", capture_run)
+
+    assert (
+        main(
+            [
+                "run",
+                "unit_tests_parity",
+                "--function",
+                "ocr",
+                "--function",
+                "messages",
+                "--pytest-arg=-x",
+            ]
+        )
+        == 0
+    )
+    assert captured == [
+        (("unit_tests_parity",), ("ocr", "messages"), ("-x",)),
+    ]
+
+
+def test_omitted_surface_selects_every_strategy_surface(monkeypatch: pytest.MonkeyPatch) -> None:
+    cli: Final = importlib.import_module("tests.rust-python-harness.cli")
+    selected: list[str] = []
+
+    def capture_run(
+        strategies: Sequence[Strategy],
+        cases: Sequence[HarnessCase],
+        runner_args: Sequence[str] = (),
+    ) -> int:
+        del strategies, runner_args
+        selected.extend(case.display_name for case in cases)
+        return 0
+
+    monkeypatch.setattr(cli, "run_command", capture_run)
+
+    assert main(["run", "e2e_parity", "--function", "ocr"]) == 0
+    assert selected == ["sdk/ocr", "gateway/ocr"]
+
+
+def test_run_all_selects_every_declared_case_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    cli: Final = importlib.import_module("tests.rust-python-harness.cli")
+    selected: list[HarnessCase] = []
+
+    def capture_run(
+        strategies: Sequence[Strategy],
+        cases: Sequence[HarnessCase],
+        runner_args: Sequence[str] = (),
+    ) -> int:
+        del strategies, runner_args
+        selected.extend(cases)
+        return 0
+
+    monkeypatch.setattr(cli, "run_command", capture_run)
+
+    assert main(["run", "all", "--function", "ocr"]) == 0
+    assert len(selected) == 7
+    assert sum(case.surface is None for case in selected) == 3
+    assert sum(case.surface is not None for case in selected) == 4
+
+
+def test_run_reports_not_implemented_surface_as_incomplete(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code: Final = main(["run", "trace_parity", "--surface", "gateway"])
+    captured: Final = capsys.readouterr()
+
+    assert exit_code == 0
     assert "Status: INCOMPLETE" in captured.out
     assert "Cases: 6 selected, 6 not implemented, 0 skipped" in captured.out
-    assert "Exit code: 0" in captured.out
     assert "Trace: NOT IMPLEMENTED" in captured.out
     assert "No gateway OCR trace-parity case is registered." in captured.out
-    assert "Port confidence" not in captured.out
-    assert "Slowest tests" not in captured.out
-    assert "Strategy × API" not in captured.out
-    assert "╭" not in captured.out
-    assert "✓" not in captured.out
-
-
-def test_run_reports_skipped_only_cells_as_skipped(capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code: Final = main(["run", "--strategy", "unit_tests_rust", "--surface", "gateway", "--plain"])
-
-    captured: Final = capsys.readouterr()
-    assert exit_code == 0
-    assert "Status: SKIPPED" in captured.out
-    assert "Cases: 6 selected, 0 not implemented, 6 skipped" in captured.out
-    assert "Native Rust unit tests are not gateway execution." in captured.out
-
-
-def test_run_rejects_an_unknown_strategy(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with pytest.raises(SystemExit) as excinfo:
-        main(["run", "--strategy", "not-real"])
-
-    captured: Final = capsys.readouterr()
-    assert excinfo.value.code == 2
-    assert "invalid choice: 'not-real'" in captured.err
-    assert "e2e_parity" in captured.err
-
-
-def test_run_help_lists_every_strategy(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with pytest.raises(SystemExit) as excinfo:
-        main(["run", "--help"])
-
-    captured: Final = capsys.readouterr()
-    assert excinfo.value.code == 0
-    assert (
-        "--strategy {e2e_parity,trace_parity,unit_tests_mapping,unit_tests_parity,unit_tests_rust}"
-        in captured.out
-    )
 
 
 def test_keyboard_interrupt_exits_cleanly(
@@ -343,9 +420,9 @@ def test_keyboard_interrupt_exits_cleanly(
 
     monkeypatch.setattr(cli, "load_catalog", interrupt)
 
-    exit_code: Final = main(["list"])
-
+    exit_code: Final = main(["run", "all"])
     captured: Final = capsys.readouterr()
+
     assert exit_code == 130
     assert captured.out == ""
     assert captured.err == "\nInterrupted\n"
@@ -364,54 +441,14 @@ def test_runner_interrupt_skips_the_completion_report(
         runner_args: Sequence[str] = (),
     ) -> tuple[int, HarnessRun]:
         del repo_root, on_update, runner_args
-        run: Final = HarnessRun.from_cases(
-            case for strategy in strategies for case in strategy.cases
-        )
+        run: Final = HarnessRun.from_cases(case for strategy in strategies for case in strategy.cases)
         return 130, run
 
     monkeypatch.setattr(commands, "run_strategies", interrupt_run)
 
-    exit_code: Final = main(
-        ["run", "--strategy", "trace_parity", "--surface", "gateway", "--plain"]
-    )
-
+    exit_code: Final = main(["run", "trace_parity", "--surface", "gateway"])
     captured: Final = capsys.readouterr()
+
     assert exit_code == 130
     assert "Rust <-> Python parity report" not in captured.out
     assert captured.err == "Interrupted\n"
-
-
-def test_should_validate_the_chat_completions_ledger_through_check(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    exit_code = main(
-        ["check", "--strategy", "unit_tests_mapping", "--function", "chat_completions"]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "chat_completions" in captured.out
-    assert "no ledger yet" in captured.out
-    assert "ocr" not in captured.out
-
-
-def test_check_scopes_the_ledger_report_to_the_requested_function(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    exit_code = main(["check", "--strategy", "unit_tests_mapping", "--function", "messages"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "messages" in captured.out
-    assert "no ledger yet" in captured.out
-    assert "ocr" not in captured.out
-
-
-def test_check_reports_strategies_without_a_check(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    exit_code = main(["check", "--strategy", "trace_parity"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "trace_parity: no check defined" in captured.out

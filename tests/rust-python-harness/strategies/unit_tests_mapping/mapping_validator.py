@@ -1,173 +1,151 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from ...shared.parity.ledger import TestLedger, load_ledger
 from ...shared.unit_runners.python_runner import enumerate_python_tests
 from ...shared.unit_runners.rust_runner import enumerate_rust_tests
 
 
-class TestMapping(BaseModel):
+class _MappingModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+
+class TestMapping(_MappingModel):
     python: str
     rust: str
+
+    @field_validator("python", "rust")
+    @classmethod
+    def validate_nodeid(cls, value: str) -> str:
+        stripped: Final = value.strip()
+        if "::" not in stripped:
+            raise ValueError("must be a source path and test name separated by '::'")
+        return stripped
+
+
+class UnitParityExclusionSpec(_MappingModel):
+    nodeid: str
+    reason: str
+
+    @field_validator("nodeid", "reason")
+    @classmethod
+    def validate_fields(cls, value: str) -> str:
+        stripped: Final = value.strip()
+        if not stripped:
+            raise ValueError("must be a non-empty string")
+        return stripped
+
+
+class MappingSuite(_MappingModel):
+    python_scope: tuple[str, ...]
+    unit_parity_scope: tuple[str, ...]
+    unit_parity_exclusions: tuple[UnitParityExclusionSpec, ...] = ()
+    rust_scope: tuple[str, ...]
+    cargo_manifest: str
+    cargo_filter: str
+    cargo_package: str | None = None
+    mappings: tuple[TestMapping, ...]
+
+    @field_validator("python_scope", "unit_parity_scope", "rust_scope")
+    @classmethod
+    def validate_scope(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        stripped: Final = tuple(item.strip() for item in value)
+        if any(not item for item in stripped):
+            raise ValueError("must contain only non-empty source paths")
+        return stripped
+
+    @field_validator("cargo_manifest", "cargo_filter")
+    @classmethod
+    def validate_cargo_fields(cls, value: str) -> str:
+        stripped: Final = value.strip()
+        if not stripped:
+            raise ValueError("must be a non-empty string")
+        return stripped
+
+    @model_validator(mode="after")
+    def validate_unit_parity_scope(self) -> MappingSuite:
+        unknown: Final = frozenset(self.unit_parity_scope) - frozenset(self.python_scope)
+        if unknown:
+            raise ValueError(f"unit_parity_scope must be contained in python_scope: {sorted(unknown)}")
+        return self
 
 
 @dataclass(frozen=True, slots=True)
 class MappingReport:
-    pairs: tuple[TestMapping, ...]
-    problems: tuple[str, ...]
-
-
-def _name(node: str) -> str:
-    return node.rsplit("::", 1)[-1].split("[", 1)[0]
-
-
-def validate_mapping(
-    python_tests: Sequence[str],
-    rust_tests: Sequence[str],
-    annotations: Sequence[TestMapping] = (),
-) -> MappingReport:
-    explicit_problems: Final = (
-        *(f"missing Python counterpart: {pair.python}" for pair in annotations if pair.python not in python_tests),
-        *(f"missing Rust counterpart: {pair.rust}" for pair in annotations if pair.rust not in rust_tests),
-        *(
-            f"ambiguous Python annotation: {name}"
-            for name, count in Counter(p.python for p in annotations).items()
-            if count > 1
-        ),
-        *(
-            f"ambiguous Rust annotation: {name}"
-            for name, count in Counter(p.rust for p in annotations).items()
-            if count > 1
-        ),
-    )
-    explicit_python: Final = {pair.python for pair in annotations}
-    candidates: Final = {
-        python: tuple(rust for rust in rust_tests if _name(python) == _name(rust))
-        for python in python_tests
-        if python not in explicit_python
-    }
-    pairs: Final = (
-        *annotations,
-        *(TestMapping(python=python, rust=matches[0]) for python, matches in candidates.items() if len(matches) == 1),
-    )
-    problems: Final = (
-        *explicit_problems,
-        *(f"missing Rust counterpart: {python}" for python, matches in candidates.items() if not matches),
-        *(
-            f"ambiguous Rust counterparts: {python}: {matches}"
-            for python, matches in candidates.items()
-            if len(matches) > 1
-        ),
-        *(
-            f"ambiguous Python counterparts: {rust}"
-            for rust, count in Counter(pair.rust for pair in pairs).items()
-            if count > 1
-        ),
-        *(f"missing Python counterpart: {rust}" for rust in rust_tests if rust not in {pair.rust for pair in pairs}),
-        *(("no Python tests collected",) if not python_tests else ()),
-        *(("no Rust tests collected",) if not rust_tests else ()),
-    )
-    return MappingReport(pairs, problems)
-
-
-REPO_ROOT = Path(__file__).resolve().parents[4]
-LEDGER_ROOT = Path(__file__).parent / "ledgers"
-
-
-def ledger_path_for(sdk_function: str) -> Path:
-    return LEDGER_ROOT / sdk_function / f"{sdk_function}_test_ledger.json"
-
-
-@dataclass(frozen=True, slots=True)
-class AuditReport:
+    python_tests: tuple[str, ...]
+    rust_tests: tuple[str, ...]
+    mapped_python_tests: tuple[str, ...]
+    unmapped_python_tests: tuple[str, ...]
+    rust_only_tests: tuple[str, ...]
     missing_python_tests: tuple[str, ...]
-    stale_python_tests: tuple[str, ...]
     missing_rust_tests: tuple[str, ...]
-    stale_rust_tests: tuple[str, ...]
+    duplicate_python_mappings: tuple[str, ...]
+    invalid_unit_parity_exclusions: tuple[str, ...]
 
     @property
-    def is_clean(self) -> bool:
+    def mapped_count(self) -> int:
+        return len(self.mapped_python_tests)
+
+    @property
+    def total_count(self) -> int:
+        return len(self.python_tests)
+
+    @property
+    def percentage(self) -> float:
+        return 0.0 if not self.total_count else round(100.0 * self.mapped_count / self.total_count, 1)
+
+    @property
+    def is_valid(self) -> bool:
         return not (
             self.missing_python_tests
-            or self.stale_python_tests
             or self.missing_rust_tests
-            or self.stale_rust_tests
+            or self.duplicate_python_mappings
+            or self.invalid_unit_parity_exclusions
         )
 
 
-def _ledger_python_tests_by_file(ledger: TestLedger) -> dict[str, set[str]]:
-    grouping: dict[str, set[str]] = {path: set() for path in ledger.python_scope}
-    for entry in ledger.entries:
-        grouping.setdefault(entry.python_file, set()).add(entry.python_test)
-    return grouping
-
-
-def _ledger_rust_tests_by_file(ledger: TestLedger) -> dict[str, set[str]]:
-    grouping: dict[str, set[str]] = {path: set() for path in ledger.rust_scope}
-    for entry in ledger.entries:
-        if entry.status == "mapped":
-            grouping.setdefault(entry.rust_file, set()).add(entry.rust_test)
-    for rust_only in ledger.rust_only_tests:
-        grouping.setdefault(rust_only.rust_file, set()).add(rust_only.rust_test)
-    return grouping
-
-
-def audit_ledger(ledger: TestLedger, repo_root: Path = REPO_ROOT) -> AuditReport:
-    missing_python: list[str] = []
-    stale_python: list[str] = []
-    for python_file, ledger_tests in _ledger_python_tests_by_file(ledger).items():
-        actual_tests = enumerate_python_tests(repo_root, python_file)
-        for missing in sorted(ledger_tests - actual_tests):
-            missing_python.append(f"{python_file}:{missing}")
-        for stale in sorted(actual_tests - ledger_tests):
-            stale_python.append(f"{python_file}:{stale}")
-
-    missing_rust: list[str] = []
-    stale_rust: list[str] = []
-    for rust_file, ledger_tests in _ledger_rust_tests_by_file(ledger).items():
-        actual_tests = enumerate_rust_tests(repo_root, rust_file)
-        for missing in sorted(ledger_tests - actual_tests):
-            missing_rust.append(f"{rust_file}:{missing}")
-        for stale in sorted(actual_tests - ledger_tests):
-            stale_rust.append(f"{rust_file}:{stale}")
-
-    return AuditReport(
-        missing_python_tests=tuple(missing_python),
-        stale_python_tests=tuple(stale_python),
-        missing_rust_tests=tuple(missing_rust),
-        stale_rust_tests=tuple(stale_rust),
+def _python_inventory(suite: MappingSuite, repo_root: Path) -> frozenset[str]:
+    return frozenset(
+        f"{source}::{test}" for source in suite.python_scope for test in enumerate_python_tests(repo_root, source)
     )
 
 
-@dataclass(frozen=True, slots=True)
-class FunctionReport:
-    sdk_function: str
-    ledger: TestLedger | None
-    audit: AuditReport | None
-
-    @property
-    def has_ledger(self) -> bool:
-        return self.ledger is not None
-
-    @property
-    def is_clean(self) -> bool:
-        return self.audit is None or self.audit.is_clean
+def _rust_inventory(suite: MappingSuite, repo_root: Path) -> frozenset[str]:
+    return frozenset(
+        f"{source}::{test}" for source in suite.rust_scope for test in enumerate_rust_tests(repo_root, source)
+    )
 
 
-def build_function_report(sdk_function: str, repo_root: Path = REPO_ROOT) -> FunctionReport:
-    path = ledger_path_for(sdk_function)
-    if not path.exists():
-        return FunctionReport(sdk_function=sdk_function, ledger=None, audit=None)
-    ledger = load_ledger(path)
-    return FunctionReport(
-        sdk_function=sdk_function, ledger=ledger, audit=audit_ledger(ledger, repo_root)
+def audit_mapping(suite: MappingSuite, repo_root: Path) -> MappingReport:
+    python_tests: Final = _python_inventory(suite, repo_root)
+    unit_parity_tests: Final = frozenset(
+        f"{source}::{test}" for source in suite.unit_parity_scope for test in enumerate_python_tests(repo_root, source)
+    )
+    rust_tests: Final = _rust_inventory(suite, repo_root)
+    mapped_python: Final = frozenset(mapping.python for mapping in suite.mappings)
+    mapped_rust: Final = frozenset(mapping.rust for mapping in suite.mappings)
+    duplicate_python: Final = tuple(
+        sorted(nodeid for nodeid, count in Counter(mapping.python for mapping in suite.mappings).items() if count > 1)
+    )
+    return MappingReport(
+        python_tests=tuple(sorted(python_tests)),
+        rust_tests=tuple(sorted(rust_tests)),
+        mapped_python_tests=tuple(sorted(python_tests & mapped_python)),
+        unmapped_python_tests=tuple(sorted(python_tests - mapped_python)),
+        rust_only_tests=tuple(sorted(rust_tests - mapped_rust)),
+        missing_python_tests=tuple(sorted(mapped_python - python_tests)),
+        missing_rust_tests=tuple(sorted(mapped_rust - rust_tests)),
+        duplicate_python_mappings=duplicate_python,
+        invalid_unit_parity_exclusions=tuple(
+            sorted(
+                exclusion.nodeid
+                for exclusion in suite.unit_parity_exclusions
+                if exclusion.nodeid not in unit_parity_tests
+            )
+        ),
     )

@@ -53,15 +53,19 @@ class HarnessCase:
     strategy_label: str
     sdk_function: SdkFunction
     spec: CaseSpec
-    surface: Surface = "sdk"
+    surface: Surface | None = None
 
     @property
     def key(self) -> str:
         return (
             f"{self.strategy_id}:{self.sdk_function}"
-            if self.surface == "sdk"
+            if self.surface in {None, "sdk"}
             else f"{self.strategy_id}:gateway:{self.sdk_function}"
         )
+
+    @property
+    def display_name(self) -> str:
+        return self.sdk_function if self.surface is None else f"{self.surface}/{self.sdk_function}"
 
     @property
     def coverage(self) -> Coverage | None:

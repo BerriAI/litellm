@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Final
 
-from ...shared.reporting.models import Coverage
+from ...shared.reporting.models import SURFACES, Coverage
 from ...shared.reporting.strategy import (
     CaseDefinition,
     ModuleCaseSpec,
@@ -13,7 +13,6 @@ from .runner import run_e2e_cases
 
 CASES: Final[tuple[CaseDefinition, ...]] = (
     CaseDefinition(
-        "sdk",
         "ocr",
         ModuleCaseSpec(
             coverage=Coverage.PARTIAL,
@@ -23,69 +22,70 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
                 "and Reducto lacks a Rust contract."
             ),
         ),
+        surface="sdk",
     ),
     CaseDefinition(
-        "sdk",
         "messages",
         NotImplementedCaseSpec(
             reason="Bridge unit tests exist, but no standalone end-to-end parity case is registered."
         ),
+        surface="sdk",
     ),
     CaseDefinition(
-        "sdk",
         "responses",
         NotImplementedCaseSpec(
             reason="Bridge unit tests exist, but no standalone end-to-end parity case is registered."
         ),
+        surface="sdk",
     ),
     CaseDefinition(
-        "sdk",
         "count_tokens",
         NotImplementedCaseSpec(reason="No Rust count_tokens parity test is present yet."),
+        surface="sdk",
     ),
     CaseDefinition(
-        "sdk",
         "chat_completions",
         NotImplementedCaseSpec(
             reason="Bridge unit tests exist, but no standalone end-to-end parity case is registered."
         ),
+        surface="sdk",
     ),
     CaseDefinition(
-        "sdk",
         "transcription",
         NotImplementedCaseSpec(
             reason="Bridge unit tests exist, but no standalone end-to-end parity case is registered."
         ),
+        surface="sdk",
     ),
     CaseDefinition(
-        "gateway",
         "ocr",
         NotImplementedCaseSpec(reason="No gateway end-to-end OCR parity case is registered."),
+        surface="gateway",
     ),
     CaseDefinition(
-        "gateway",
         "messages",
         NotImplementedCaseSpec(reason="No gateway end-to-end Messages parity case is registered."),
+        surface="gateway",
     ),
     CaseDefinition(
-        "gateway",
         "responses",
         NotImplementedCaseSpec(reason="No gateway end-to-end Responses parity case is registered."),
+        surface="gateway",
     ),
     CaseDefinition(
-        "gateway",
         "count_tokens",
         NotImplementedCaseSpec(reason="No gateway end-to-end token-count parity case is registered."),
+        surface="gateway",
     ),
     CaseDefinition(
-        "gateway",
         "chat_completions",
         NotImplementedCaseSpec(reason="No gateway end-to-end chat parity case is registered."),
+        surface="gateway",
     ),
     CaseDefinition(
-        "gateway",
         "transcription",
         NotImplementedCaseSpec(reason="No gateway end-to-end transcription parity case is registered."),
+        surface="gateway",
     ),
 )
 
@@ -99,4 +99,5 @@ STRATEGY: Final = StrategyDefinition(
     cases=CASES,
     run=run_e2e_cases,
     render=render_e2e_results,
+    surfaces=SURFACES,
 )

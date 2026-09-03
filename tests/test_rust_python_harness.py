@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 from typing import Final
 
 import pytest
@@ -8,16 +9,14 @@ import pytest
 models = importlib.import_module("tests.rust-python-harness.shared.reporting.models")
 strategy_module = importlib.import_module("tests.rust-python-harness.shared.reporting.strategy")
 ui = importlib.import_module("tests.rust-python-harness.shared.reporting.ui")
-ledger_module = importlib.import_module("tests.rust-python-harness.shared.parity.ledger")
-mapping_validator = importlib.import_module(
-    "tests.rust-python-harness.strategies.unit_tests_mapping.mapping_validator"
-)
+mapping_validator = importlib.import_module("tests.rust-python-harness.strategies.unit_tests_mapping.mapping_validator")
+mappings = importlib.import_module("tests.rust-python-harness.strategies.unit_tests_mapping.mappings")
+cli = importlib.import_module("tests.rust-python-harness.cli")
 
-load_ledger = ledger_module.load_ledger
-ledger_path_for = mapping_validator.ledger_path_for
-REPO_ROOT = mapping_validator.REPO_ROOT
-audit_ledger = mapping_validator.audit_ledger
-build_function_report = mapping_validator.build_function_report
+audit_mapping = mapping_validator.audit_mapping
+MAPPING_SUITES = mappings.MAPPING_SUITES
+OCR_MAPPING = mappings.OCR_MAPPING
+REPO_ROOT = Path(__file__).resolve().parents[1]
 CaseResult = models.CaseResult
 Coverage = models.Coverage
 HarnessCase = models.HarnessCase
@@ -114,33 +113,26 @@ def test_should_format_developer_facing_run_context() -> None:
     assert _format_duration(1.25) == "1.2s"
 
 
-def test_should_report_no_ledger_for_a_function_without_one() -> None:
-    report = build_function_report("messages", repo_root=REPO_ROOT)
-
-    assert report.has_ledger is False
-    assert report.is_clean is True
+def test_should_leave_functions_without_mapping_contracts_unimplemented() -> None:
+    assert "messages" not in MAPPING_SUITES
 
 
-def test_should_report_ocr_ledger_stats_and_a_clean_audit() -> None:
-    ledger = load_ledger(ledger_path_for("ocr"))
+def test_should_derive_ocr_mapping_status_from_live_tests() -> None:
+    report = audit_mapping(OCR_MAPPING, repo_root=REPO_ROOT)
 
-    report = build_function_report("ocr", repo_root=REPO_ROOT)
-
-    assert report.has_ledger is True
-    assert report.ledger.mapped_count == ledger.mapped_count
-    assert report.ledger.total_count == ledger.total_count
-    assert report.is_clean is True
-
-
-def test_should_have_every_python_and_rust_ocr_test_accounted_for_in_the_ledger() -> None:
-    ledger = load_ledger(ledger_path_for("ocr"))
-
-    report = audit_ledger(ledger, repo_root=REPO_ROOT)
-
-    assert report.is_clean, (
-        "\nOCR test-parity ledger is out of sync with the live test files.\n"
-        f"Ledger references a Python test that no longer exists: {list(report.missing_python_tests)}\n"
-        f"Python test exists but is not tracked in the ledger: {list(report.stale_python_tests)}\n"
-        f"Ledger references a Rust test that no longer exists: {list(report.missing_rust_tests)}\n"
-        f"Rust test exists but is not tracked in the ledger: {list(report.stale_rust_tests)}\n"
+    assert report.is_valid, (
+        f"Missing Python tests: {list(report.missing_python_tests)}\n"
+        f"Missing Rust tests: {list(report.missing_rust_tests)}\n"
+        f"Duplicate Python mappings: {list(report.duplicate_python_mappings)}\n"
+        f"Invalid parity exclusions: {list(report.invalid_unit_parity_exclusions)}"
     )
+    assert report.mapped_count == len(OCR_MAPPING.mappings)
+    assert report.total_count == report.mapped_count + len(report.unmapped_python_tests)
+
+
+def test_strategy_subcommand_accepts_function_filter(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code: Final = cli.main(["run", "unit_tests_mapping", "--function", "messages"])
+
+    captured: Final = capsys.readouterr()
+    assert exit_code == 0
+    assert "unit_tests_mapping:messages: not_implemented" in captured.out

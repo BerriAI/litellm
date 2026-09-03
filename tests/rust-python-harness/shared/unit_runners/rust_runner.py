@@ -14,14 +14,13 @@ class RustReport:
     output: str
 
 
-def run_rust_tests(manifest: Path, package: str, test_filter: str, *, collect_only: bool = False) -> RustReport:
+def run_rust_tests(manifest: Path, package: str | None, test_filter: str, *, collect_only: bool = False) -> RustReport:
     command: Final = (
         "cargo",
         "test",
         "--manifest-path",
         str(manifest),
-        "--package",
-        package,
+        *(("--package", package) if package else ()),
         "--lib",
         test_filter,
         "--",
@@ -43,9 +42,7 @@ def run_rust_tests(manifest: Path, package: str, test_filter: str, *, collect_on
     return RustReport(tests, result.returncode, result.stdout + result.stderr)
 
 
-_RUST_TEST_PATTERN = re.compile(
-    r"#\[(?:test|tokio::test)\][^\n]*\n(?:[^\n]*\n)*?\s*(?:async\s+)?fn\s+(\w+)\s*\("
-)
+_RUST_TEST_PATTERN = re.compile(r"#\[(?:test|tokio::test)\][^\n]*\n(?:[^\n]*\n)*?\s*(?:async\s+)?fn\s+(\w+)\s*\(")
 
 
 def enumerate_rust_tests(repo_root: Path, relative_path: str) -> frozenset[str]:

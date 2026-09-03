@@ -50,7 +50,7 @@ def _render_test_results(results: Sequence[CaseResult]) -> tuple[ReportSection, 
 
 def _strategy(name: str, module: str, *, render: StrategyRenderer = _render_test_results) -> Strategy:
     case_definition: Final = CaseDefinition(
-        "sdk", "ocr", ModuleCaseSpec(coverage=Coverage.COMPLETE, module=module)
+        "ocr", ModuleCaseSpec(coverage=Coverage.COMPLETE, module=module)
     )
     definition: Final = StrategyDefinition(
         id=name,
@@ -84,8 +84,8 @@ def test_combines_strategy_reports_and_delegates_rendering() -> None:
     rendered: Final = final_report(report, code, strategies)
     assert "Status: FAILED" in rendered
     assert rendered.count("Test outcomes") == 2
-    assert "- sdk/ocr: failed, 1/1 checks, complete coverage" in rendered
-    assert "- sdk/ocr: passed, 1/1 checks, complete coverage" in rendered
+    assert "- ocr: failed, 1/1 checks, complete coverage" in rendered
+    assert "- ocr: passed, 1/1 checks, complete coverage" in rendered
     assert "Failures (showing 1 of 1)" in rendered
     assert "Port confidence" not in rendered
     assert "Slowest tests" not in rendered

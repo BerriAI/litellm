@@ -1,55 +1,72 @@
 from __future__ import annotations
 
-import json
-import shutil
-from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
-import pytest
-
 from ...shared.reporting.models import Coverage, HarnessCase, RunStatus
 from ...shared.reporting.strategy import SuiteCaseSpec
-from . import STRATEGY
+from .mapping_validator import MappingSuite, TestMapping as MappingPair
+from .runner import MAPPING_REPORT_ARTIFACT, run_mapping_cases
 
 
-@pytest.mark.skipif(shutil.which("cargo") is None, reason="Cargo is required for the mapping unit strategy")
-def test_validates_mappings_without_running_the_selected_tests(
-    tmp_path: Path,
-    cargo_project: Callable[[str, str], Path],
-) -> None:
-    (tmp_path / "pytest.ini").write_text("[pytest]\n")
-    (tmp_path / "backend_probe.py").write_text(
-        "import os\ndef selected():\n    return 'rust' if os.environ['TEST_USE_RUST'] == '1' else 'python'\n"
+def _suite(mapping: MappingPair) -> MappingSuite:
+    return MappingSuite(
+        python_scope=("test_api.py",),
+        unit_parity_scope=("test_api.py",),
+        rust_scope=("lib.rs",),
+        cargo_manifest="Cargo.toml",
+        cargo_filter="api",
+        mappings=(mapping,),
     )
-    (tmp_path / "test_api.py").write_text("def test_decode():\n    assert int('42') == 42\n")
-    cargo_project("mapping-check", '#[test] fn test_decode() { assert_eq!("42".parse::<u8>().unwrap(), 42); }\n')
-    suite: Final = {
-        "python_selectors": ("test_api.py",),
-        "cargo_manifest": "Cargo.toml",
-        "cargo_package": "mapping-check",
-        "cargo_filter": "test_decode",
-        "backend": {"environment_variable": "TEST_USE_RUST", "probe": "backend_probe:selected"},
-    }
-    (tmp_path / "suite.json").write_text(json.dumps(suite))
+
+
+def test_reports_derived_mapping_status_without_running_tests(tmp_path: Path) -> None:
+    (tmp_path / "test_api.py").write_text(
+        "def test_decode():\n    raise AssertionError\n\ndef test_unmapped():\n    pass\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "lib.rs").write_text(
+        "#[test]\nfn decodes() { panic!(); }\n\n#[test]\nfn rust_only() {}\n",
+        encoding="utf-8",
+    )
+    suite: Final = _suite(MappingPair(python="test_api.py::test_decode", rust="lib.rs::decodes"))
     case: Final = HarnessCase(
         strategy_id="unit_tests_mapping",
         strategy_label="Unit test mapping",
         sdk_function="ocr",
-        spec=SuiteCaseSpec(coverage=Coverage.COMPLETE, suite="suite.json"),
+        spec=SuiteCaseSpec(coverage=Coverage.COMPLETE, suite="ocr"),
     )
 
-    (tmp_path / "test_api.py").write_text("def test_decode():\n    assert False\n")
-    passing_code, passing_report = STRATEGY.run((case,), tmp_path, lambda _: None)
+    code, report = run_mapping_cases((case,), tmp_path, lambda _: None, suites={"ocr": suite})
 
-    assert passing_code == 0, passing_report.failures
-    assert passing_report.results[case.key].status is RunStatus.PASSED
-
-    (tmp_path / "suite.json").write_text(
-        json.dumps({**suite, "mappings": [{"python": "test_api.py::test_decode", "rust": "removed"}]})
+    assert code == 0, report.failures
+    assert report.results[case.key].status is RunStatus.PASSED
+    rendered: Final = "\n".join(
+        artifact.body
+        for artifacts in report.results[case.key].artifacts.values()
+        for artifact in artifacts
+        if artifact.kind == MAPPING_REPORT_ARTIFACT
     )
-    failed_code, failed_report = STRATEGY.run((case,), tmp_path, lambda _: None)
+    assert "1/2 python tests mapped to rust (50.0%)" in rendered
+    assert "1 rust-only tests with no python counterpart" in rendered
+    assert "unmapped python test: test_api.py::test_unmapped" in rendered
+    assert "rust-only test: lib.rs::rust_only" in rendered
+    assert "mapping contract is valid" in rendered
 
-    assert failed_code == 1
-    assert failed_report.results[case.key].status is RunStatus.FAILED
-    assert any("missing Rust counterpart: removed" in detail for _, detail in failed_report.failures)
+
+def test_fails_when_a_mapping_target_is_missing(tmp_path: Path) -> None:
+    (tmp_path / "test_api.py").write_text("def test_decode():\n    pass\n", encoding="utf-8")
+    (tmp_path / "lib.rs").write_text("#[test]\nfn removed() {}\n", encoding="utf-8")
+    suite: Final = _suite(MappingPair(python="test_api.py::test_decode", rust="lib.rs::decodes"))
+    case: Final = HarnessCase(
+        strategy_id="unit_tests_mapping",
+        strategy_label="Unit test mapping",
+        sdk_function="ocr",
+        spec=SuiteCaseSpec(coverage=Coverage.COMPLETE, suite="ocr"),
+    )
+
+    code, report = run_mapping_cases((case,), tmp_path, lambda _: None, suites={"ocr": suite})
+
+    assert code == 1
+    assert report.results[case.key].status is RunStatus.FAILED
+    assert any("mapped Rust test does not exist" in detail for _, detail in report.failures)

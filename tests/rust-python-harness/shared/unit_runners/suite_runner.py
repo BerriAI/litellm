@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from time import monotonic
 from typing import TypeVar
 
 from pydantic import BaseModel
 
-from ..reporting.models import HarnessCase, HarnessRun, RunStatus
+from ..reporting.models import HarnessCase, HarnessRun, RunStatus, SdkFunction
 from ..reporting.strategy import SuiteCaseSpec, UpdateCallback
 
 S = TypeVar("S", bound=BaseModel)
 
-SuiteLoader = Callable[[Path], S]
 SuiteExecutor = Callable[[S, Path, Sequence[str]], tuple[str, ...]]
 
 
@@ -28,7 +27,7 @@ def run_suites(
     on_update: UpdateCallback,
     runner_args: Sequence[str] = (),
     *,
-    load: SuiteLoader[S],
+    suites: Mapping[SdkFunction, S],
     execute: SuiteExecutor[S],
 ) -> tuple[int, HarnessRun]:
     report = HarnessRun.from_cases(cases)
@@ -41,8 +40,12 @@ def run_suites(
         result.collected.add(nodeid)
         result.status = RunStatus.RUNNING
         on_update(report)
+        suite = suites.get(case.sdk_function)
+        if suite is None:
+            result.record(nodeid, RunStatus.ERROR)
+            report.failures.append((nodeid, f"no suite registered for {case.sdk_function}"))
+            continue
         try:
-            suite = load(repo_root / spec.suite)
             problems = execute(suite, repo_root, runner_args)
         except (OSError, ValueError) as error:
             result.record(nodeid, RunStatus.ERROR)

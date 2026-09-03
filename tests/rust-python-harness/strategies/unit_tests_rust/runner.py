@@ -12,13 +12,11 @@ class RustSuite(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     cargo_manifest: str
-    cargo_package: str
+    cargo_package: str | None = None
     cargo_filter: str
 
 
-def run_suite(
-    suite: RustSuite, repo_root: Path, pytest_args: Sequence[str] = ()
-) -> tuple[str, ...]:
+def run_suite(suite: RustSuite, repo_root: Path, pytest_args: Sequence[str] = ()) -> tuple[str, ...]:
     del pytest_args
     if not suite.cargo_filter:
         return ("rust suites must configure a focused Cargo filter",)

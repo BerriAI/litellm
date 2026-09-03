@@ -1,55 +1,45 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from functools import partial
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
+from ...shared.reporting.models import SDK_FUNCTIONS, Coverage, SdkFunction
 from ...shared.reporting.strategy import (
     CaseDefinition,
     NotImplementedCaseSpec,
-    SkippedCaseSpec,
     StrategyDefinition,
     SuiteCaseSpec,
 )
 from ...shared.unit_runners.suite_runner import run_suites
+from ..unit_tests_mapping.mappings import MAPPING_SUITES
 from .reporting import render_rust_unit_results
 from .runner import RustSuite, run_suite
 
 
-def _load_suite(path: Path) -> RustSuite:
-    return RustSuite.model_validate_json(path.read_text(encoding="utf-8"))
+RUST_SUITES: Final[Mapping[SdkFunction, RustSuite]] = MappingProxyType(
+    {
+        sdk_function: RustSuite(
+            cargo_manifest=suite.cargo_manifest,
+            cargo_filter=suite.cargo_filter,
+            cargo_package=suite.cargo_package,
+        )
+        for sdk_function, suite in MAPPING_SUITES.items()
+    }
+)
 
 
 CASES: Final[tuple[CaseDefinition, ...]] = (
-    CaseDefinition("sdk", "ocr", NotImplementedCaseSpec(reason="No focused OCR Rust unit suite is registered.")),
-    CaseDefinition(
-        "sdk", "messages", NotImplementedCaseSpec(reason="No focused Messages Rust unit suite is registered.")
-    ),
-    CaseDefinition(
-        "sdk", "responses", NotImplementedCaseSpec(reason="No focused Responses Rust unit suite is registered.")
-    ),
-    CaseDefinition(
-        "sdk", "count_tokens", NotImplementedCaseSpec(reason="No focused token-count Rust unit suite is registered.")
-    ),
-    CaseDefinition(
-        "sdk",
-        "chat_completions",
-        NotImplementedCaseSpec(reason="No focused chat-completions Rust unit suite is registered."),
-    ),
-    CaseDefinition(
-        "sdk", "transcription", NotImplementedCaseSpec(reason="No focused transcription Rust unit suite is registered.")
-    ),
-    CaseDefinition("gateway", "ocr", SkippedCaseSpec(reason="Native Rust unit tests are not gateway execution.")),
-    CaseDefinition("gateway", "messages", SkippedCaseSpec(reason="Native Rust unit tests are not gateway execution.")),
-    CaseDefinition("gateway", "responses", SkippedCaseSpec(reason="Native Rust unit tests are not gateway execution.")),
-    CaseDefinition(
-        "gateway", "count_tokens", SkippedCaseSpec(reason="Native Rust unit tests are not gateway execution.")
-    ),
-    CaseDefinition(
-        "gateway", "chat_completions", SkippedCaseSpec(reason="Native Rust unit tests are not gateway execution.")
-    ),
-    CaseDefinition(
-        "gateway", "transcription", SkippedCaseSpec(reason="Native Rust unit tests are not gateway execution.")
+    *(
+        CaseDefinition(
+            sdk_function,
+            SuiteCaseSpec(coverage=Coverage.COMPLETE, suite=sdk_function)
+            if sdk_function in RUST_SUITES
+            else NotImplementedCaseSpec(reason=f"No focused {sdk_function} Rust unit suite is registered."),
+        )
+        for sdk_function in SDK_FUNCTIONS
     ),
 )
 
@@ -61,6 +51,6 @@ STRATEGY: Final = StrategyDefinition(
     directory=Path(__file__).parent,
     runnable_spec=SuiteCaseSpec,
     cases=CASES,
-    run=partial(run_suites, load=_load_suite, execute=run_suite),
+    run=partial(run_suites, suites=RUST_SUITES, execute=run_suite),
     render=render_rust_unit_results,
 )

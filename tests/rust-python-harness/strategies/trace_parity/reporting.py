@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import sys
 from collections.abc import Sequence
 from typing import Final, Literal
 
@@ -12,6 +14,18 @@ from ...shared.tracing.profiler import FunctionTraceEvent
 from ...shared.tracing.steps import TraceDiff, trace_diff
 
 TRACE_COMPARISON_ARTIFACT: Final = "trace_comparison"
+TRACE_PARITY_HINT: Final = (
+    "rebuild the native bridge with the trace-parity feature, e.g. `uvx maturin develop --features trace-parity`"
+)
+
+_COLORS: Final[dict[str, str]] = {"green": "32", "yellow": "33", "red": "31", "cyan": "36"}
+_RESET: Final = "\033[0m"
+
+
+def _paint(text: str, color: str) -> str:
+    if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
+        return text
+    return f"\033[{_COLORS[color]}m{text}{_RESET}"
 
 
 class TraceEventArtifact(BaseModel):
@@ -36,6 +50,8 @@ class TraceComparisonArtifact(BaseModel):
     rust_issues: tuple[str, ...]
     requires_matching_steps: bool
     requires_exact_trace: bool
+    python_error: str | None = None
+    rust_error: str | None = None
 
     @classmethod
     def from_traces(
@@ -50,6 +66,8 @@ class TraceComparisonArtifact(BaseModel):
         rust_issues: tuple[str, ...],
         requires_matching_steps: bool,
         requires_exact_trace: bool,
+        python_error: str | None = None,
+        rust_error: str | None = None,
     ) -> TraceComparisonArtifact:
         return cls(
             surface=surface,
@@ -61,6 +79,8 @@ class TraceComparisonArtifact(BaseModel):
             rust_issues=rust_issues,
             requires_matching_steps=requires_matching_steps,
             requires_exact_trace=requires_exact_trace,
+            python_error=python_error,
+            rust_error=rust_error,
         )
 
     def python_events(self) -> tuple[FunctionTraceEvent, ...]:
@@ -69,12 +89,16 @@ class TraceComparisonArtifact(BaseModel):
     def rust_events(self) -> tuple[FunctionTraceEvent, ...]:
         return tuple(event.event() for event in self.rust)
 
+    def has_errors(self) -> bool:
+        return self.python_error is not None or self.rust_error is not None
+
     def contract_matches(self) -> bool:
         python: Final = self.python_events()
         rust: Final = self.rust_events()
         diff: Final = trace_diff(python, rust)
         return (
-            not self.python_issues
+            not self.has_errors()
+            and not self.python_issues
             and not self.rust_issues
             and (not self.requires_matching_steps or diff.matches)
             and (not self.requires_exact_trace or python == rust)
@@ -85,12 +109,15 @@ def _trace_lines(
     label: str,
     events: tuple[FunctionTraceEvent, ...],
     exclusive: frozenset[str],
+    color: str,
 ) -> str:
     lines: Final = tuple(
-        f"{'  ' * event.depth}{event.function}{f'  [{label} only]' if event.function in exclusive else ''}"
+        _paint(f"{'  ' * event.depth}{event.function}  [{label} only]", color)
+        if event.function in exclusive
+        else f"{'  ' * event.depth}{event.function}"
         for event in events
     )
-    return f"{label} ({len(events)} steps)\n" + ("\n".join(lines) if lines else "(empty)")
+    return f"{_paint(label, color)} ({len(events)} steps)\n" + ("\n".join(lines) if lines else "(empty)")
 
 
 def _shared_nesting_matches(
@@ -102,14 +129,19 @@ def _shared_nesting_matches(
     return bool(shared) and all(event.depth == rust_depths[event.function] for event in shared)
 
 
-def _contract_line(
-    artifact: TraceComparisonArtifact,
-    python: tuple[FunctionTraceEvent, ...],
-    rust: tuple[FunctionTraceEvent, ...],
-    diff: TraceDiff,
-) -> str:
-    status: Final = "PASS" if artifact.contract_matches() else "FAIL"
-    if python == rust or status == "FAIL":
+def _state_text(state: str, *, good: bool) -> str:
+    return _paint(state, "green" if good else "red")
+
+
+def _contract_line(artifact: TraceComparisonArtifact) -> str:
+    matches: Final = artifact.contract_matches()
+    status: Final = _state_text("PASS" if matches else "FAIL", good=matches)
+    if artifact.python_error or artifact.rust_error:
+        return f"Contract: {status}"
+    python: Final = artifact.python_events()
+    rust: Final = artifact.rust_events()
+    diff: Final = trace_diff(python, rust)
+    if python == rust:
         return f"Contract: {status}"
     if not artifact.requires_matching_steps:
         return f"Contract: {status} (path drift is allowed for this case)"
@@ -118,54 +150,65 @@ def _contract_line(
     return f"Contract: {status}"
 
 
+def _error_lines(artifact: TraceComparisonArtifact) -> tuple[str, ...]:
+    lines: list[str] = []
+    for engine, error in (("Python", artifact.python_error), ("Rust", artifact.rust_error)):
+        if error is None:
+            continue
+        lines.append(_paint(f"{engine} error: {error}", "red"))
+        if "trace-parity feature" in error:
+            lines.append(f"hint: {TRACE_PARITY_HINT}")
+    return tuple(lines)
+
+
 def _render_comparison(artifact: TraceComparisonArtifact) -> str:
     python: Final = artifact.python_events()
     rust: Final = artifact.rust_events()
     diff: Final = trace_diff(python, rust)
     exact_match: Final = python == rust
     shared: Final = frozenset(event.function for event in python) & frozenset(event.function for event in rust)
-    drift_lines: Final = (
-        ("Same steps, order, and nesting",)
-        if exact_match
-        else (
-            f"Shared order: {'MATCH' if diff.shared_order_matches else 'DRIFT' if shared else 'NO SHARED STEPS'}",
-            f"Shared nesting: {'MATCH' if _shared_nesting_matches(python, rust) else 'DRIFT' if shared else 'NO SHARED STEPS'}",
-            f"Python only: {', '.join(diff.python_only) or 'none'}",
-            f"Rust only: {', '.join(diff.rust_only) or 'none'}",
+    if artifact.has_errors():
+        status_lines: Final[tuple[str, ...]] = (*_error_lines(artifact), _contract_line(artifact))
+    else:
+        drift_lines: Final[tuple[str, ...]] = (
+            (_state_text("Same steps, order, and nesting", good=True),)
+            if exact_match
+            else (
+                f"Shared order: {_state_text('MATCH' if diff.shared_order_matches else 'DRIFT' if shared else 'NO SHARED STEPS', good=diff.shared_order_matches)}",
+                f"Shared nesting: {_state_text('MATCH' if _shared_nesting_matches(python, rust) else 'DRIFT' if shared else 'NO SHARED STEPS', good=_shared_nesting_matches(python, rust))}",
+                _paint(f"Python only: {', '.join(diff.python_only) or 'none'}", "cyan"),
+                _paint(f"Rust only: {', '.join(diff.rust_only) or 'none'}", "yellow"),
+            )
         )
-    )
-    issue_lines: Final = tuple(
-        f"{engine} issue: {issue}"
-        for engine, issues in (("Python", artifact.python_issues), ("Rust", artifact.rust_issues))
-        for issue in issues
-    )
+        issue_lines: Final[tuple[str, ...]] = tuple(
+            _paint(f"{engine} issue: {issue}", "red")
+            for engine, issues in (("Python", artifact.python_issues), ("Rust", artifact.rust_issues))
+            for issue in issues
+        )
+        status_lines = (
+            f"Trace: {_state_text('MATCH' if exact_match else 'DRIFT', good=exact_match)}",
+            *drift_lines,
+            *issue_lines,
+            _contract_line(artifact),
+        )
     return "\n\n".join(
         (
-            f"Trace comparison: {artifact.surface}/{artifact.sdk_function} ({artifact.mode})",
-            _trace_lines("python", python, frozenset(diff.python_only)),
-            _trace_lines("rust", rust, frozenset(diff.rust_only)),
-            "\n".join(
-                (
-                    f"Trace: {'MATCH' if exact_match else 'DRIFT'}",
-                    *drift_lines,
-                    *issue_lines,
-                    _contract_line(artifact, python, rust, diff),
-                )
-            ),
+            _trace_lines("python", python, frozenset(diff.python_only), "cyan"),
+            _trace_lines("rust", rust, frozenset(diff.rust_only), "yellow"),
+            "\n".join(status_lines),
         )
     )
 
 
 def _mode(nodeid: str) -> str:
-    return nodeid.rsplit("[", 1)[-1].removesuffix("]") if "[" in nodeid else "unknown mode"
+    if "[" in nodeid:
+        return nodeid.rsplit("[", 1)[-1].removesuffix("]")
+    head, _, tail = nodeid.rpartition(":")
+    return tail if head else "unknown mode"
 
 
-def _unavailable(result: CaseResult, nodeid: str, status: RunStatus) -> str:
-    return (
-        f"Trace comparison: {result.case.surface}/{result.case.sdk_function} ({_mode(nodeid)})\n"
-        "Trace: NOT AVAILABLE\n"
-        f"Test outcome: {status.value}"
-    )
+def _unavailable(status: RunStatus) -> str:
+    return f"Trace: NOT AVAILABLE\nTest outcome: {status.value}"
 
 
 def _render_artifact(body: str) -> str:
@@ -176,39 +219,42 @@ def _render_artifact(body: str) -> str:
     return _render_comparison(artifact)
 
 
-def _node_blocks(result: CaseResult, nodeid: str, status: RunStatus) -> tuple[str, ...]:
+def _mode_section(result: CaseResult, nodeid: str, status: RunStatus) -> str:
     artifacts: Final = tuple(
         artifact for artifact in result.artifacts.get(nodeid, ()) if artifact.kind == TRACE_COMPARISON_ARTIFACT
     )
-    if artifacts:
-        return tuple(_render_artifact(artifact.body) for artifact in artifacts)
-    return (_unavailable(result, nodeid, status),)
+    body: Final = (
+        "\n\n".join(_render_artifact(artifact.body) for artifact in artifacts) if artifacts else _unavailable(status)
+    )
+    return f"{_mode(nodeid)}\n\n{body}"
+
+
+def _case_block(result: CaseResult) -> str:
+    header: Final = f"Trace comparison: {result.case.display_name}"
+    outcomes: Final = tuple(result.outcomes.items()) or (
+        (nodeid, RunStatus.NOT_RUN) for nodeid in sorted(result.collected)
+    )
+    sections: Final = tuple(_mode_section(result, nodeid, status) for nodeid, status in outcomes)
+    return "\n\n".join((header, *sections))
 
 
 def _inert_block(result: CaseResult) -> str | None:
     spec: Final = result.case.spec
     if isinstance(spec, NotImplementedCaseSpec):
         return (
-            f"Trace comparison: {result.case.surface}/{result.case.sdk_function}\n"
+            f"Trace comparison: {result.case.display_name}\n"
             "Trace: NOT IMPLEMENTED\n"
             f"Reason: {spec.reason}"
         )
     if isinstance(spec, SkippedCaseSpec):
         return (
-            f"Trace comparison: {result.case.surface}/{result.case.sdk_function}\n"
-            "Trace: SKIPPED\n"
-            f"Reason: {spec.reason}"
+            f"Trace comparison: {result.case.display_name}\nTrace: SKIPPED\nReason: {spec.reason}"
         )
     return None
 
 
 def render_trace_results(results: Sequence[CaseResult]) -> tuple[ReportSection, ...]:
-    outcome_blocks: Final = tuple(
-        block
-        for result in results
-        for nodeid, status in result.outcomes.items()
-        for block in _node_blocks(result, nodeid, status)
-    )
+    outcome_blocks: Final = tuple(_case_block(result) for result in results if result.outcomes)
     inert_blocks: Final = tuple(block for result in results if (block := _inert_block(result)) is not None)
     blocks: Final = (*outcome_blocks, *inert_blocks)
     visible: Final = blocks or ("No runnable trace comparisons",)

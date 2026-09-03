@@ -11,17 +11,25 @@ from ...shared.unit_runners.python_runner import BackendSpec, compare_python_run
 BACKEND: Final = BackendSpec(environment_variable="LITELLM_RUST")
 
 
+class UnitParityExclusion(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    nodeid: str
+    reason: str
+
+
 class UnitParitySuite(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     python_selectors: tuple[str, ...]
+    exclusions: tuple[UnitParityExclusion, ...] = ()
 
 
-def run_suite(
-    suite: UnitParitySuite, repo_root: Path, pytest_args: Sequence[str] = ()
-) -> tuple[str, ...]:
+def run_suite(suite: UnitParitySuite, repo_root: Path, pytest_args: Sequence[str] = ()) -> tuple[str, ...]:
     if not suite.python_selectors:
         return ("unit parity suites must select Python tests",)
-    python: Final = run_python_tests(suite.python_selectors, repo_root, "python", BACKEND, pytest_args)
-    rust: Final = run_python_tests(suite.python_selectors, repo_root, "rust", BACKEND, pytest_args)
+    deselections: Final = tuple(f"--deselect={exclusion.nodeid}" for exclusion in suite.exclusions)
+    args: Final = (*pytest_args, *deselections)
+    python: Final = run_python_tests(suite.python_selectors, repo_root, "python", BACKEND, args)
+    rust: Final = run_python_tests(suite.python_selectors, repo_root, "rust", BACKEND, args)
     return compare_python_runs(python, rust)

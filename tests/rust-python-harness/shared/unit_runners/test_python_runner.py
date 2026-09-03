@@ -56,3 +56,16 @@ def test_matches_outcomes_without_a_probe_when_both_backends_fail_identically(tm
     rust: Final = run_python_tests(("test_backend.py",), tmp_path, "rust", spec)
 
     assert compare_python_runs(python, rust) == ()
+
+
+def test_reports_worker_output_when_pytest_exits_before_collection(tmp_path: Path) -> None:
+    report: Final = run_python_tests(
+        ("missing.py",),
+        tmp_path,
+        "python",
+        BackendSpec(environment_variable="TEST_USE_RUST"),
+    )
+
+    assert report.exit_code != 0
+    assert report.problems
+    assert "missing.py" in report.problems[0]

@@ -50,16 +50,26 @@ def _load_strategy(name: str, folder: Path, prefix: str | None) -> Strategy:
         raise ValueError(f"{folder}: strategy id {definition.id!r} must match folder name {name!r}")
     if definition.directory.resolve() != folder.resolve():
         raise ValueError(f"{folder}: strategy directory must be {folder}")
+    if len(set(definition.surfaces)) != len(definition.surfaces) or any(
+        surface not in SURFACES for surface in definition.surfaces
+    ):
+        raise ValueError(f"{folder}: invalid strategy surfaces: {definition.surfaces}")
     keys: Final = tuple((case.surface, case.sdk_function) for case in definition.cases)
     duplicates: Final = tuple(sorted(key for key in set(keys) if keys.count(key) > 1))
     if duplicates:
         raise ValueError(f"{folder}: duplicate strategy cases: {duplicates}")
-    expected: Final = frozenset((surface, function) for surface in SURFACES for function in SDK_FUNCTIONS)
+    expected: Final = frozenset(
+        (surface, function)
+        for surface in (definition.surfaces or (None,))
+        for function in SDK_FUNCTIONS
+    )
     actual: Final = frozenset(keys)
     if actual != expected:
         missing: Final = tuple(sorted(expected - actual))
         extra: Final = tuple(sorted(actual - expected))
-        raise ValueError(f"{folder}: strategy cases must exactly match the harness matrix; missing={missing}, extra={extra}")
+        raise ValueError(
+            f"{folder}: strategy cases must exactly match its declared matrix; missing={missing}, extra={extra}"
+        )
     incompatible: Final = tuple(
         (case.surface, case.sdk_function)
         for case in definition.cases

@@ -1,42 +1,71 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from time import monotonic
+from typing import Final
 
-from pydantic import BaseModel, ConfigDict
+from ...shared.reporting.models import HarnessCase, HarnessRun, ResultArtifact, RunStatus, SdkFunction
+from ...shared.reporting.strategy import SuiteCaseSpec, UpdateCallback
+from .mapping_report import mapping_report_lines
+from .mapping_validator import MappingReport, MappingSuite, audit_mapping
+from .mappings import MAPPING_SUITES
 
-from ...shared.unit_runners.python_runner import BackendSpec, run_python_tests
-from ...shared.unit_runners.rust_runner import run_rust_tests
-from .mapping_validator import TestMapping, validate_mapping
-
-
-class UnitSuite(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    python_selectors: tuple[str, ...]
-    cargo_manifest: str
-    cargo_package: str
-    cargo_filter: str
-    backend: BackendSpec
-    mappings: tuple[TestMapping, ...] = ()
+MAPPING_REPORT_ARTIFACT: Final = "mapping_report"
 
 
-def run_suite(
-    suite: UnitSuite, repo_root: Path, pytest_args: Sequence[str] = ()
-) -> tuple[str, ...]:
-    if not suite.python_selectors or not suite.cargo_filter:
-        return ("mapping suites must select Python tests and a focused Cargo filter",)
-    python = run_python_tests(
-        suite.python_selectors, repo_root, "python", suite.backend, (*pytest_args, "--collect-only")
-    )
-    inventory = run_rust_tests(
-        repo_root / suite.cargo_manifest, suite.cargo_package, suite.cargo_filter, collect_only=True
-    )
-    mapping = validate_mapping(python.tests, inventory.tests, suite.mappings)
+def _audit_problems(report: MappingReport) -> tuple[str, ...]:
     return (
-        *mapping.problems,
-        *(("Python test collection failed",) if python.exit_code else ()),
-        *(("Rust test collection failed",) if inventory.exit_code else ()),
-        *python.problems,
-        *((inventory.output,) if inventory.exit_code else ()),
+        *(f"mapped Python test does not exist: {nodeid}" for nodeid in report.missing_python_tests),
+        *(f"mapped Rust test does not exist: {nodeid}" for nodeid in report.missing_rust_tests),
+        *(f"Python test has multiple mappings: {nodeid}" for nodeid in report.duplicate_python_mappings),
+        *(f"unit parity exclusion does not exist: {nodeid}" for nodeid in report.invalid_unit_parity_exclusions),
     )
+
+
+def run_suite(suite: MappingSuite, repo_root: Path, pytest_args: Sequence[str] = ()) -> tuple[str, ...]:
+    del pytest_args
+    return _audit_problems(audit_mapping(suite, repo_root))
+
+
+def run_mapping_cases(
+    cases: Sequence[HarnessCase],
+    repo_root: Path,
+    on_update: UpdateCallback,
+    runner_args: Sequence[str] = (),
+    *,
+    suites: Mapping[SdkFunction, MappingSuite] = MAPPING_SUITES,
+) -> tuple[int, HarnessRun]:
+    del runner_args
+    report: Final = HarnessRun.from_cases(cases)
+    for case in cases:
+        result: Final = report.results[case.key]
+        spec: Final = case.spec
+        if not isinstance(spec, SuiteCaseSpec):
+            continue
+        nodeid: Final = f"suite:{case.strategy_id}:{case.sdk_function}:{spec.suite}"
+        result.collected.add(nodeid)
+        result.status = RunStatus.RUNNING
+        on_update(report)
+        suite: Final = suites.get(case.sdk_function)
+        if suite is None:
+            result.record(nodeid, RunStatus.ERROR)
+            report.failures.append((nodeid, f"no mapping suite registered for {case.sdk_function}"))
+            continue
+        try:
+            audit: Final = audit_mapping(suite, repo_root)
+        except (OSError, ValueError) as error:
+            result.record(nodeid, RunStatus.ERROR)
+            report.failures.append((nodeid, str(error)))
+            continue
+        problems: Final = _audit_problems(audit)
+        artifact: Final = ResultArtifact(MAPPING_REPORT_ARTIFACT, "\n".join(mapping_report_lines(audit)))
+        result.record(nodeid, RunStatus.FAILED if problems else RunStatus.PASSED, artifacts=(artifact,))
+        report.failures.extend((nodeid, problem) for problem in problems)
+        on_update(report)
+    report.finished_at = monotonic()
+    on_update(report)
+    failed: Final = any(
+        result.status in {RunStatus.ERROR, RunStatus.FAILED, RunStatus.MISSING} for result in report.results.values()
+    )
+    return int(failed), report

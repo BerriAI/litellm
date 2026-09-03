@@ -8,6 +8,7 @@ from typing import Final
 
 from ...shared.reporting.models import CaseResult, HarnessCase, HarnessRun, ResultArtifact, RunStatus, Surface
 from ...shared.reporting.strategy import ModuleCaseSpec, UpdateCallback
+from ...shared.native_build import ensure_trace_bridge
 from .reporting import TRACE_COMPARISON_ARTIFACT
 from .sdk.execution import TraceCase, TraceExecutionFailure, TraceMode, execute_trace
 
@@ -23,16 +24,12 @@ def _load_case(reference: str) -> TraceCase | TraceExecutionFailure:
     return case
 
 
-def _record_load_failure(
-    run: HarnessRun,
-    case: HarnessCase,
-    failure: TraceExecutionFailure,
-) -> None:
+def _record_setup_failure(run: HarnessRun, case: HarnessCase, message: str, stage: str) -> None:
     result: Final = run.results[case.key]
-    nodeid: Final = f"trace:{case.surface}:{case.sdk_function}:load"
+    nodeid: Final = f"trace:{case.surface}:{case.sdk_function}:{stage}"
     result.collected.add(nodeid)
     result.record(nodeid, RunStatus.ERROR)
-    run.failures.append((nodeid, failure.message))
+    run.failures.append((nodeid, message))
 
 
 def _run_mode(
@@ -47,11 +44,13 @@ def _run_mode(
     started_at: Final = monotonic()
     comparison: Final = execute_trace(trace_case, mode, surface)
     duration: Final = monotonic() - started_at
-    if isinstance(comparison, TraceExecutionFailure):
-        result.record(nodeid, RunStatus.ERROR, duration)
-        run.failures.append((nodeid, f"{comparison.engine}: {comparison.message}"))
+    artifact: Final = ResultArtifact(TRACE_COMPARISON_ARTIFACT, comparison.model_dump_json())
+    if comparison.has_errors():
+        result.record(nodeid, RunStatus.ERROR, duration, (artifact,))
+        run.failures.append(
+            (nodeid, "\n".join(error for error in (comparison.python_error, comparison.rust_error) if error))
+        )
     else:
-        artifact: Final = ResultArtifact(TRACE_COMPARISON_ARTIFACT, comparison.model_dump_json())
         status: Final = RunStatus.PASSED if comparison.contract_matches() else RunStatus.FAILED
         result.record(nodeid, status, duration, (artifact,))
         if status is RunStatus.FAILED:
@@ -64,19 +63,22 @@ def _run_case(run: HarnessRun, harness_case: HarnessCase, on_update: UpdateCallb
     spec: Final = harness_case.spec
     if not isinstance(spec, ModuleCaseSpec):
         return
+    surface: Final = harness_case.surface
+    if surface is None:
+        return
     trace_case: Final = _load_case(spec.module)
     if isinstance(trace_case, TraceExecutionFailure):
-        _record_load_failure(run, harness_case, trace_case)
+        _record_setup_failure(run, harness_case, trace_case.message, "load")
         on_update(run)
         return
     nodeids: Final[tuple[tuple[TraceMode, str], ...]] = tuple(
-        (mode, f"trace:{harness_case.surface}:{harness_case.sdk_function}:{mode}") for mode in trace_case.modes
+        (mode, f"trace:{surface}:{harness_case.sdk_function}:{mode}") for mode in trace_case.modes
     )
     result.collected.update(nodeid for _, nodeid in nodeids)
     result.status = RunStatus.RUNNING
     on_update(run)
     for mode, nodeid in nodeids:
-        _run_mode(run, result, trace_case, mode, harness_case.surface, nodeid, on_update)
+        _run_mode(run, result, trace_case, mode, surface, nodeid, on_update)
 
 
 def run_trace_cases(
@@ -85,8 +87,15 @@ def run_trace_cases(
     on_update: UpdateCallback,
     runner_args: Sequence[str] = (),
 ) -> tuple[int, HarnessRun]:
-    del repo_root, runner_args
+    del runner_args
     run: Final = HarnessRun.from_cases(cases)
+    bridge_error: Final = ensure_trace_bridge(repo_root)
+    if bridge_error is not None:
+        for harness_case in cases:
+            _record_setup_failure(run, harness_case, bridge_error, "bridge")
+        run.finished_at = monotonic()
+        on_update(run)
+        return 1, run
     for harness_case in cases:
         _run_case(run, harness_case, on_update)
     run.finished_at = monotonic()
