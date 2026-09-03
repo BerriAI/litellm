@@ -1128,7 +1128,10 @@ async def _create_user_if_not_exists(user_id: str, created_via: str = "scim_grou
             user_role=default_role,
         )
 
-        created_user: Final = await new_user(data=new_user_request)
+        created_user: Final = await new_user(
+            data=new_user_request,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
         verbose_proxy_logger.info("Created user %s via %s", user_id, created_via)
         return created_user
 
@@ -1716,6 +1719,7 @@ async def create_user(
 
         created_user: Final = await new_user(
             data=new_user_request,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
         )
 
         scim_user: Final = await ScimTransformations.transform_litellm_user_to_scim_user(user=created_user)

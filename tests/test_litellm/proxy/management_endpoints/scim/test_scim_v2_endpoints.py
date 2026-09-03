@@ -19,6 +19,7 @@ from litellm.proxy._types import (
     NewUserResponse,
     ProxyErrorTypes,
     ProxyException,
+    UserAPIKeyAuth,
 )
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
     SCIMRosterSyncError,
@@ -342,6 +343,7 @@ async def test_create_user_without_groups_defers_to_default_team(mocker: MockerF
     await create_user(user=scim_user)
 
     assert new_user_mock.call_args.kwargs["data"].teams is None
+    assert new_user_mock.call_args.kwargs["user_api_key_dict"] == UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
 
 @pytest.mark.asyncio
@@ -380,6 +382,7 @@ async def test_create_user_if_not_exists_defers_to_default_team(mocker: MockerFi
 
     assert created is not None
     assert new_user_mock.call_args.kwargs["data"].teams is None
+    assert new_user_mock.call_args.kwargs["user_api_key_dict"] == UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
 
 @pytest.mark.asyncio
