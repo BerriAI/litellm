@@ -1,6 +1,7 @@
 import json
 import re
 from collections.abc import Iterable
+from types import MappingProxyType
 from typing import Any, Final, Literal
 
 from fastapi import HTTPException, Request
@@ -208,11 +209,13 @@ async def _team_auth_context(team_id: str, user_api_key_dict: UserAPIKeyAuth) ->
         proxy_logging_obj=proxy_logging_obj,
     )
     return user_api_key_dict.model_copy(
-        update={
-            "team_id": team_id,
-            "team_object_permission": team.object_permission,
-            "team_object_permission_id": team.object_permission_id,
-        }
+        update=MappingProxyType(
+            {
+                "team_id": team_id,
+                "team_object_permission": team.object_permission,
+                "team_object_permission_id": team.object_permission_id,
+            }
+        )
     )
 
 
@@ -221,8 +224,12 @@ async def _vector_store_listing_auth_contexts(
 ) -> tuple[UserAPIKeyAuth, ...]:
     if not is_ui_session_credential(user_api_key_dict):
         return (user_api_key_dict,)
+    session_key_context: Final = user_api_key_dict.model_copy(
+        update=MappingProxyType({"team_id": None, "team_object_permission": None, "team_object_permission_id": None})
+    )
     team_ids: Final = await resolve_ui_session_team_ids(user_api_key_dict)
-    return tuple([await _team_auth_context(team_id, user_api_key_dict) for team_id in team_ids])
+    team_contexts: Final = tuple([await _team_auth_context(team_id, user_api_key_dict) for team_id in team_ids])
+    return (session_key_context, *team_contexts)
 
 
 async def _is_vector_store_granted_to_any(

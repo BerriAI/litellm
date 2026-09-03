@@ -197,20 +197,32 @@ async def test_list_vector_stores_hides_ungranted_stores_from_non_admin_keys():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("user_team_ids", "expected"),
+    ("user_team_ids", "session_key_grants", "expected"),
     [
-        ([], []),
-        (["team_a"], ["vs_team_a"]),
-        (["team_a", "team_granted"], ["vs_team_a", "vs_unscoped"]),
+        ([], None, []),
+        ([], ["vs_unscoped"], ["vs_unscoped"]),
+        (["team_a"], None, ["vs_team_a"]),
+        (["team_a", "team_granted"], None, ["vs_team_a", "vs_unscoped"]),
     ],
 )
-async def test_list_vector_stores_dashboard_session_resolves_real_teams(user_team_ids: list[str], expected: list[str]):
-    """A dashboard session lists through the user's real teams: stores created from the dashboard
-    (team_id litellm-dashboard) are not visible just because every session shares that team id,
-    while stores owned by or granted to one of the user's teams are."""
+async def test_list_vector_stores_dashboard_session_resolves_real_teams(
+    user_team_ids: list[str], session_key_grants: list[str] | None, expected: list[str]
+):
+    """A dashboard session lists through the user's real teams plus the session key's own grants: stores created
+    from the dashboard (team_id litellm-dashboard) are not visible just because every session shares that team id,
+    while stores owned by or granted to one of the user's teams, or granted to the session key itself, are."""
     from litellm.models.team import LiteLLM_TeamTableCachedObj
 
-    alice = UserAPIKeyAuth(team_id="litellm-dashboard", user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER)
+    alice = UserAPIKeyAuth(
+        team_id="litellm-dashboard",
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        object_permission=(
+            LiteLLM_ObjectPermissionTable(object_permission_id="op-4", vector_stores=session_key_grants)
+            if session_key_grants is not None
+            else None
+        ),
+    )
     teams = {
         "team_a": LiteLLM_TeamTableCachedObj(team_id="team_a"),
         "team_granted": LiteLLM_TeamTableCachedObj(
