@@ -467,6 +467,29 @@ def test_handle_db_exception_with_non_db_error():
         PrismaDBExceptionHandler.handle_db_exception(regular_error)
 
 
+def test_is_unique_constraint_violation():
+    """
+    Callers use an insert as an atomic cross-replica claim, so this predicate is what
+    separates "someone else already claimed it" from a database problem that has to
+    fail open. Table-not-found in particular must not read as a claim.
+    """
+    import prisma
+
+    assert (
+        PrismaDBExceptionHandler.is_unique_constraint_violation(
+            prisma.errors.UniqueViolationError({"user_facing_error": {"meta": {}}})
+        )
+        is True
+    )
+    for other in (
+        prisma.errors.TableNotFoundError({"user_facing_error": {"meta": {}}}),
+        prisma.errors.DataError({"user_facing_error": {"meta": {}}}),
+        ClientNotConnectedError(),
+        ValueError("not a prisma error"),
+    ):
+        assert PrismaDBExceptionHandler.is_unique_constraint_violation(other) is False
+
+
 def _permanent_prisma_faults():
     """Every prisma error class that is not a transient outage and not a
     data-layer error, built by enumeration so the list cannot drift out of sync

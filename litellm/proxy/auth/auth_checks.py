@@ -4975,6 +4975,7 @@ async def _virtual_key_max_budget_alert_check(
                 key_alias=valid_token.key_alias,
                 event_group=Litellm_EntityType.KEY,
                 max_budget_alert_emails=alert_email_config,
+                budget_reset_at=valid_token.budget_reset_at,
             )
             asyncio.create_task(
                 proxy_logging_obj.budget_alerts(
@@ -5006,6 +5007,7 @@ async def _virtual_key_max_budget_alert_check(
                     user_email=owner_email,
                     key_alias=valid_token.key_alias,
                     event_group=Litellm_EntityType.KEY,
+                    budget_reset_at=valid_token.budget_reset_at,
                 )
 
                 asyncio.create_task(
