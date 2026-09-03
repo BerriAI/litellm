@@ -18,6 +18,7 @@ import Teams from "./Teams";
 import { chooseSelectOption } from "../../tests/test-utils";
 
 const can = vi.fn();
+const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
   default: (...args: unknown[]) => can(...args),
 }));
@@ -1188,6 +1189,20 @@ describe("Teams - which fields reach the create payload depends on the open sect
     );
   });
 
+  it("prepopulates an editable UUID when the create form opens", async () => {
+    await openCreateModal();
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Generated ID Team" } });
+    toggleAdditionalSettings();
+    const teamIdInput = await screen.findByLabelText("Team ID");
+
+    const generatedTeamId = (teamIdInput as HTMLInputElement).value;
+    expect(generatedTeamId).toMatch(UUID_V4_PATTERN);
+
+    const payload = await submit();
+
+    expect(payload.team_id).toBe(generatedTeamId);
+  });
+
   it("drops a value typed in Additional Settings when that section is closed again before saving", async () => {
     await openCreateModal();
     fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Reclosed Team" } });
@@ -1318,7 +1333,7 @@ describe("Teams - the exact bytes the create call sends", () => {
       tpm_limit: undefined,
       rpm_limit: undefined,
       metadata: undefined,
-      team_id: undefined,
+      team_id: expect.stringMatching(UUID_V4_PATTERN),
       team_member_budget: undefined,
       team_member_key_duration: undefined,
       team_member_rpm_limit: undefined,
@@ -1339,6 +1354,7 @@ describe("Teams - the exact bytes the create call sends", () => {
       team_alias: "Byte Contract Team",
       organization_id: null,
       models: ["no-default-models"],
+      team_id: expect.stringMatching(UUID_V4_PATTERN),
       mcp_tool_permissions: {},
     });
   });
@@ -1459,7 +1475,7 @@ describe("Teams - the exact bytes the create call sends", () => {
       tpm_limit: undefined,
       rpm_limit: undefined,
       metadata: undefined,
-      team_id: undefined,
+      team_id: expect.stringMatching(UUID_V4_PATTERN),
       team_member_budget: undefined,
       team_member_key_duration: undefined,
       team_member_rpm_limit: undefined,

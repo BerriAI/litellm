@@ -19,6 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChevronDown, Plus, Users } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { z } from "zod/v4";
+import { v4 as uuidv4 } from "uuid";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Button as UIButton } from "@/components/ui/button";
@@ -77,7 +78,10 @@ const teamCreateFieldsSchema = z.object({
   tpm_limit: numericInputSchema,
   rpm_limit: numericInputSchema,
   metadata: metadataPairsSchema.optional(),
-  team_id: z.string().optional(),
+  team_id: z
+    .string()
+    .optional()
+    .transform((value) => (value?.trim() ? value : undefined)),
   team_member_budget: z.number().optional(),
   team_member_key_duration: z.string().optional(),
   team_member_rpm_limit: numericInputSchema,
@@ -314,6 +318,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   }, [accessToken, canViewPolicies]);
 
   const openCreateTeamModal = () => {
+    form.setValue("team_id", uuidv4());
     // Org admins must scope a team to an org, so with exactly one we preselect it.
     // Proxy admins can create org-less teams, so the field stays optional regardless of org count.
     if (isOrgAdmin && adminOrgs.length === 1) {
@@ -829,7 +834,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                           control={form.control}
                           name="team_id"
                           label="Team ID"
-                          description="ID of the team you want to create. If not provided, it will be generated automatically."
+                          description="Leave blank to generate an ID when the team is created, or enter a custom ID."
                         >
                           {({ ref, value, ...field }) => <UIInput {...field} ref={ref} value={value ?? ""} />}
                         </FormField>
