@@ -476,7 +476,7 @@ export default function KeyInfoView({
   const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg);
 
   return (
-    <div className="w-full h-full overflow-y-auto p-4">
+    <div className="w-full h-full max-h-[85vh] overflow-y-auto p-4">
       <KeyInfoHeader
         data={{
           keyName: currentKeyData.key_alias || "Virtual Key",
