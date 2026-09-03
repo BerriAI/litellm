@@ -1,3 +1,4 @@
+import { keyActivityLabel } from "@/components/UsagePage/keyActivityLabel";
 import { BreakdownMetrics, DailyData, KeyMetricWithMetadata, TagUsage } from "@/components/UsagePage/types";
 
 export type ExtendedDailyData = DailyData & {
@@ -118,6 +119,7 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
           metadata: {
             key_alias: metrics.metadata.key_alias,
             team_id: metrics.metadata.team_id || null,
+            user_email: metrics.metadata.user_email,
             tags: tagDictionary[key] || [],
           },
         };
@@ -137,7 +139,7 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
   return Object.entries(keySpend)
     .map(([api_key, metrics]) => ({
       api_key,
-      key_alias: metrics.metadata.key_alias || "-", // Using truncated key as alias
+      key_alias: keyActivityLabel(metrics.metadata),
       tags: metrics.metadata.tags || "-",
       spend: metrics.metrics.spend,
     }))
