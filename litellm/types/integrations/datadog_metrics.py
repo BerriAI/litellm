@@ -1,4 +1,6 @@
-from typing_extensions import TypedDict
+from typing import Literal
+
+from typing_extensions import ReadOnly, TypedDict
 
 
 class DatadogMetricPoint(TypedDict):
@@ -16,3 +18,17 @@ class DatadogMetricSeries(TypedDict, total=False):
 
 class DatadogMetricsPayload(TypedDict):
     series: list[DatadogMetricSeries]
+
+
+DatadogDistributionPoint = tuple[int, tuple[float, ...]]
+
+
+class DatadogDistributionSeries(TypedDict):
+    metric: ReadOnly[str]
+    type: ReadOnly[Literal["distribution"]]
+    points: ReadOnly[tuple[DatadogDistributionPoint, ...]]
+    tags: ReadOnly[tuple[str, ...]]
+
+
+class DatadogDistributionPayload(TypedDict):
+    series: ReadOnly[tuple[DatadogDistributionSeries, ...]]
