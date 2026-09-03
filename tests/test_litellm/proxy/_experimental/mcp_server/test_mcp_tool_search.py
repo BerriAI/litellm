@@ -11,6 +11,7 @@ Covers:
 
 import json
 from collections.abc import Sequence
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1229,3 +1230,37 @@ class TestMcpServerToolCallErrorHandling:
 
         assert result.isError is True
         assert "User not allowed to call this tool" in result.content[0].text
+
+
+@pytest.mark.asyncio
+async def test_handle_mcp_tool_call_scoped_denial_names_the_binding_agent() -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy._experimental.mcp_server.tool_search import handle_mcp_tool_call
+
+    agent_bound_key = UserAPIKeyAuth(api_key="test_key", agent_id="agent-123")
+
+    async def resolve(user_api_key_auth, mcp_servers, client_ip=None):
+        if user_api_key_auth.agent_id:
+            return []
+        return [
+            SimpleNamespace(
+                server_id="srv-github", server_name="github", alias=None, short_prefix=None, access_groups=[]
+            )
+        ]
+
+    with patch(  # test-quality-ok: the permission resolver is a module-level function; the suite's only seam
+        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+        new=AsyncMock(side_effect=resolve),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await handle_mcp_tool_call(
+                tool_name="github-create_issue",
+                arguments={},
+                user_api_key_dict=agent_bound_key,
+                mcp_servers=["github"],
+            )
+
+    assert exc_info.value.status_code == 403
+    assert "MCP server 'github'" in exc_info.value.detail["error"]
+    assert "agent 'agent-123'" in exc_info.value.detail["error"]

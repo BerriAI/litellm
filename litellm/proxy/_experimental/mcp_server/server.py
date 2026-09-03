@@ -821,11 +821,7 @@ if MCP_AVAILABLE:
             from mcp.shared.exceptions import McpError
             from mcp.types import INVALID_REQUEST, ErrorData
 
-            detail: Final = e.detail
-            message: Final = (
-                str(detail.get("error")) if isinstance(detail, dict) and detail.get("error") else str(detail)
-            )
-            raise McpError(ErrorData(code=INVALID_REQUEST, message=message)) from e
+            raise McpError(ErrorData(code=INVALID_REQUEST, message=_http_detail_message(e.detail))) from e
         except Exception as e:
             verbose_logger.exception("Error in list_tools endpoint: %s", e)
             # Return empty list instead of failing completely
@@ -1096,6 +1092,7 @@ if MCP_AVAILABLE:
                     mcp_server_auth_headers=mcp_server_auth_headers,
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
+                    client_ip=_client_ip,
                     host_progress_callback=host_progress_callback,
                     **data,  # for logging
                 )
@@ -1129,7 +1126,7 @@ if MCP_AVAILABLE:
             except HTTPException as e:
                 verbose_logger.error("HTTPException in MCP tool call: %s", e)
                 return CallToolResult(
-                    content=[TextContent(text=f"Error: {e.detail}", type="text")],
+                    content=[TextContent(text=f"Error: {_http_detail_message(e.detail)}", type="text")],
                     isError=True,
                 )
             except MCPUpstreamAuthError as e:
@@ -1446,6 +1443,9 @@ if MCP_AVAILABLE:
             return []
 
         return allowed_mcp_servers
+
+    def _http_detail_message(detail: object) -> str:
+        return str(detail.get("error")) if isinstance(detail, dict) and detail.get("error") else str(detail)
 
     def _server_answers_to(server: MCPServer, name: str) -> bool:
         requested: Final = name.lower()
@@ -3148,6 +3148,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
+        client_ip: str | None = None,
         **kwargs: Any,
     ) -> CallToolResult:
         """
@@ -3178,6 +3179,12 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
                 allowed_mcp_servers=allowed_mcp_servers,
             )
+            if mcp_servers and not allowed_mcp_servers:
+                await _raise_denied_scoped_mcp_access(
+                    requested_names=mcp_servers,
+                    user_api_key_auth=user_api_key_auth,
+                    client_ip=client_ip,
+                )
             if not allowed_mcp_servers:
                 raise HTTPException(
                     status_code=403,
