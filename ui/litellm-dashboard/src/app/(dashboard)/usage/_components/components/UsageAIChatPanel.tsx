@@ -1,9 +1,17 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Button, Select, Input, Spin } from "antd";
 import ReactMarkdown from "react-markdown";
+import { Button } from "@/components/ui/button";
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+} from "@/components/ui/combobox";
+import { Textarea } from "@/components/ui/textarea";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { modelHubCall, usageAiChatStream, UsageAiToolCallEvent } from "@/components/networking";
-
-const { TextArea } = Input;
 
 interface ToolCallStep {
   tool_name: string;
@@ -38,23 +46,23 @@ const ToolCallDisplay: React.FC<{ step: ToolCallStep }> = ({ step }) => {
   const filter = args.team_ids || args.tags || args.user_id || "";
 
   return (
-    <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-gray-100 border border-gray-200 text-xs">
+    <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-muted border border-border text-xs">
       <span className="shrink-0 mt-0.5">
         {step.status === "running" ? (
-          <Spin size="small" />
+          <UiLoadingSpinner className="size-3.5" />
         ) : step.status === "error" ? (
-          <span className="text-red-500">✗</span>
+          <span className="text-destructive">✗</span>
         ) : (
-          <span className="text-green-600">✓</span>
+          <span className="text-success">✓</span>
         )}
       </span>
       <div className="min-w-0">
-        <div className="font-medium text-gray-700">
+        <div className="font-medium text-foreground">
           {icon} {step.tool_label}
         </div>
-        {dateRange && <div className="text-gray-500 mt-0.5">{dateRange}</div>}
-        {filter && <div className="text-gray-500 mt-0.5">Filter: {filter}</div>}
-        {step.status === "error" && step.error && <div className="text-red-600 mt-0.5">{step.error}</div>}
+        {dateRange && <div className="text-muted-foreground mt-0.5">{dateRange}</div>}
+        {filter && <div className="text-muted-foreground mt-0.5">Filter: {filter}</div>}
+        {step.status === "error" && step.error && <div className="text-destructive mt-0.5">{step.error}</div>}
       </div>
     </div>
   );
@@ -74,11 +82,11 @@ const MarkdownContent: React.FC<{ content: string }> = ({ content }) => (
       code: ({ children, className }) => {
         const isBlock = className?.includes("language-");
         return isBlock ? (
-          <pre className="bg-gray-100 rounded-sm p-2 my-1 overflow-x-auto text-xs">
+          <pre className="bg-muted rounded-sm p-2 my-1 overflow-x-auto text-xs">
             <code>{children}</code>
           </pre>
         ) : (
-          <code className="px-1 py-0.5 rounded-sm bg-gray-100 text-xs font-mono">{children}</code>
+          <code className="px-1 py-0.5 rounded-sm bg-muted text-xs font-mono">{children}</code>
         );
       },
       table: ({ children }) => (
@@ -87,9 +95,9 @@ const MarkdownContent: React.FC<{ content: string }> = ({ content }) => (
         </div>
       ),
       th: ({ children }) => (
-        <th className="border border-gray-200 px-2 py-1 bg-gray-50 font-medium text-left">{children}</th>
+        <th className="border border-border px-2 py-1 bg-muted font-medium text-left">{children}</th>
       ),
-      td: ({ children }) => <td className="border border-gray-200 px-2 py-1">{children}</td>,
+      td: ({ children }) => <td className="border border-border px-2 py-1">{children}</td>,
     }}
   >
     {content}
@@ -231,52 +239,63 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
   return (
     <div
       data-testid="usage-ai-chat-panel"
-      className={`fixed top-0 right-0 h-full bg-white border-l border-gray-200 shadow-2xl z-50 flex flex-col transition-transform duration-300 ease-in-out ${
+      className={`fixed top-0 right-0 h-full bg-card border-l border-border shadow-2xl z-overlay flex flex-col transition-transform duration-300 ease-in-out ${
         open ? "translate-x-0" : "translate-x-full"
       }`}
       style={{ width: 420 }}
     >
       {/* Header */}
-      <div className="px-5 pt-5 pb-3 border-b border-gray-100 shrink-0">
+      <div className="px-5 pt-5 pb-3 border-b border-border shrink-0">
         <div className="flex items-center justify-between mb-1">
           <div className="flex items-center gap-2">
-            <svg className="w-5 h-5 text-blue-600" viewBox="0 0 16 16" fill="currentColor">
+            <svg className="w-5 h-5 text-info" viewBox="0 0 16 16" fill="currentColor">
               <path d="M8 1l1.5 3.5L13 6l-3.5 1.5L8 11 6.5 7.5 3 6l3.5-1.5L8 1zm4 7l.75 1.75L14.5 10.5l-1.75.75L12 13l-.75-1.75L9.5 10.5l1.75-.75L12 8zM4 9l.75 1.75L6.5 11.5l-1.75.75L4 14l-.75-1.75L1.5 11.5l1.75-.75L4 9z" />
             </svg>
-            <h3 className="text-base font-semibold text-gray-900">Ask AI</h3>
+            <h3 className="text-base font-semibold text-foreground">Ask AI</h3>
           </div>
           <button
             onClick={handleClose}
-            className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded-md hover:bg-gray-100"
+            className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded-md hover:bg-accent"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         </div>
-        <p className="text-xs text-gray-500">Ask about your spend, models, keys, and trends</p>
+        <p className="text-xs text-muted-foreground">Ask about your spend, models, keys, and trends</p>
       </div>
 
       {/* Model selector */}
-      <div className="px-5 py-3 border-b border-gray-100 shrink-0">
-        <Select
-          placeholder="Select a model (optional, defaults to gpt-4o-mini)"
-          value={selectedModel}
-          onChange={(value) => setSelectedModel(value)}
-          loading={isLoadingModels}
-          showSearch
-          allowClear
-          size="small"
-          className="w-full"
-          options={availableModels.map((m) => ({ label: m, value: m }))}
-          filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
-        />
+      <div className="px-5 py-3 border-b border-border shrink-0">
+        <Combobox
+          items={availableModels}
+          value={selectedModel ?? null}
+          onValueChange={(value: string | null) => setSelectedModel(value ?? undefined)}
+        >
+          <ComboboxInput
+            className="w-full"
+            placeholder="Select a model (optional, defaults to gpt-4o-mini)"
+            aria-label="Select a model (optional, defaults to gpt-4o-mini)"
+            aria-busy={isLoadingModels}
+            showClear={selectedModel !== undefined}
+          />
+          <ComboboxContent>
+            <ComboboxEmpty>{isLoadingModels ? "Loading models…" : "No models found"}</ComboboxEmpty>
+            <ComboboxList>
+              {(model: string) => (
+                <ComboboxItem key={model} value={model}>
+                  {model}
+                </ComboboxItem>
+              )}
+            </ComboboxList>
+          </ComboboxContent>
+        </Combobox>
       </div>
 
       {/* Chat messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
+      <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-muted">
         {messages.length === 0 && !streamingContent && !isLoading && (
-          <div className="flex flex-col items-center justify-center h-full text-gray-400">
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
             <svg className="w-8 h-8 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
                 strokeLinecap="round"
@@ -294,7 +313,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
           <div key={idx}>
             {msg.role === "user" ? (
               <div className="flex justify-end">
-                <div className="max-w-[88%] rounded-xl px-3.5 py-2 text-sm leading-relaxed bg-blue-600 text-white">
+                <div className="max-w-[88%] rounded-xl px-3.5 py-2 text-sm leading-relaxed bg-info text-info-foreground">
                   {msg.content}
                 </div>
               </div>
@@ -309,7 +328,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
                   </div>
                 )}
                 {/* Response */}
-                <div className="max-w-[95%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed bg-white border border-gray-200 text-gray-800">
+                <div className="max-w-[95%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed bg-card border border-border text-foreground">
                   <MarkdownContent content={msg.content} />
                 </div>
               </div>
@@ -328,15 +347,15 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
 
         {/* Status / spinner */}
         {isLoading && !streamingContent && (
-          <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-500">
-            <Spin size="small" />
+          <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+            <UiLoadingSpinner className="size-3.5" />
             <span className="italic">{statusMessage || "Thinking..."}</span>
           </div>
         )}
 
         {/* Streaming response */}
         {streamingContent && (
-          <div className="max-w-[95%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed bg-white border border-gray-200 text-gray-800">
+          <div className="max-w-[95%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed bg-card border border-border text-foreground">
             <MarkdownContent content={streamingContent} />
           </div>
         )}
@@ -345,30 +364,31 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
       </div>
 
       {/* Input area */}
-      <div className="px-4 py-3 border-t border-gray-200 bg-white shrink-0">
+      <div className="px-4 py-3 border-t border-border bg-card shrink-0">
         <div className="flex gap-2">
-          <TextArea
+          <Textarea
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Ask about your usage..."
-            autoSize={{ minRows: 1, maxRows: 3 }}
-            className="flex-1"
+            rows={1}
+            className="flex-1 min-h-9 max-h-24"
             disabled={isLoading}
           />
-          <Button type="primary" onClick={handleSend} disabled={!inputText.trim() || isLoading} loading={isLoading}>
+          <Button onClick={handleSend} disabled={!inputText.trim() || isLoading}>
+            {isLoading && <UiLoadingSpinner className="size-4" />}
             Send
           </Button>
         </div>
         <div className="flex justify-between items-center mt-2">
           <button
             onClick={handleClear}
-            className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
             disabled={messages.length === 0}
           >
             Clear chat
           </button>
-          <span className="text-xs text-gray-400">Enter to send</span>
+          <span className="text-xs text-muted-foreground">Enter to send</span>
         </div>
       </div>
     </div>

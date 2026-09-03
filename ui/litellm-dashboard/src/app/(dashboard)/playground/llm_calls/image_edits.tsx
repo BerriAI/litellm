@@ -1,6 +1,6 @@
 import openai from "openai";
 import { getProxyBaseUrl } from "@/components/networking";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 export async function makeOpenAIImageEditsRequest(
   imageFiles: File | File[],
@@ -63,7 +63,7 @@ export async function makeOpenAIImageEditsRequest(
     }
 
     if (results.length > 1) {
-      NotificationManager.success(`Successfully processed ${results.length} images`);
+      toast.success(`Successfully processed ${results.length} images`);
     }
   } catch (error: any) {
     console.error("Error making image edit request:", error);
@@ -78,7 +78,7 @@ export async function makeOpenAIImageEditsRequest(
         errorMessage = error.message;
       }
 
-      NotificationManager.fromBackend(`Image edit failed: ${errorMessage}`);
+      toast.fromError(`Image edit failed: ${errorMessage}`);
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

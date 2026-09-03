@@ -7,7 +7,9 @@ before the upstream model runs; a prompt that trips the policy must be rejected
 with HTTP 400 naming the moderation policy, and the same guardrail must let a
 benign prompt through. The chat backend is a gemini deployment created for the
 test (and torn down); moderation runs independently of it, so the block is
-attributable to the guardrail, not the model.
+attributable to the guardrail, not the model. The same pre_call contract is
+also exercised through /v1/messages (Anthropic format): a flagged prompt is
+rejected with a 400 naming moderation and a benign one passes.
 """
 
 from __future__ import annotations
@@ -68,4 +70,47 @@ class TestOpenAIModerationGuardrail:
         assert allowed.choices, (
             "the same moderation guardrail must let a benign prompt through, but the "
             f"call returned no choices: {allowed}"
+        )
+
+    @pytest.mark.covers(
+        "guardrail.openai_moderations.pre_call.blocks",
+        exercised_on=["messages"],
+    )
+    def test_moderation_blocks_flagged_input_on_messages(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        model = client.create_backend_model(resources, prefix="e2e-moderation-msg-backend")
+
+        name = f"e2e-openai-moderation-msg-{unique_marker()}"
+        guardrail_id = client.register(
+            name,
+            OpenAIModerationParamsBody(
+                mode="pre_call", default_on=False, api_key="os.environ/OPENAI_API_KEY"
+            ),
+        )
+        resources.defer(lambda: client.delete_guardrail(guardrail_id))
+
+        blocked = poll_until_blocked(
+            lambda: client.messages(scoped_key, model, FLAGGED_PROMPT, guardrails=[name])
+        )
+        match blocked:
+            case UnknownApiError(status_code=400, body=body):
+                assert "moderation" in body.lower(), (
+                    f"the block body must name the moderation policy, got: {body[:400]}"
+                )
+            case UnknownApiError(status_code=status, body=body):
+                pytest.fail(
+                    f"expected a 400 moderation block on /v1/messages, got {status}: {body[:400]}"
+                )
+            case _:
+                pytest.fail(
+                    f"openai moderation did not block a flagged /v1/messages prompt; got {blocked}"
+                )
+
+        allowed = unwrap(
+            client.messages(scoped_key, model, BENIGN_PROMPT, guardrails=[name], max_tokens=64)
+        )
+        assert allowed.content or allowed.choices, (
+            "the same moderation guardrail must let a benign /v1/messages prompt through, but "
+            f"the response carried neither content nor choices: {allowed}"
         )

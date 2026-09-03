@@ -16,6 +16,8 @@ export interface ProjectUpdateParams {
   metadata?: Record<string, unknown>;
   model_rpm_limit?: Record<string, number>;
   model_tpm_limit?: Record<string, number>;
+  model_itpm_limit?: Record<string, number>;
+  model_otpm_limit?: Record<string, number>;
 }
 
 // ── Fetch function ───────────────────────────────────────────────────────────

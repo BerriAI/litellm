@@ -6,16 +6,11 @@ Covers:
 """
 
 import io
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -327,3 +322,213 @@ def test_rag_query_stream_returns_event_stream(client_internal_user):
     assert response.headers.get("content-type", "").startswith("text/event-stream")
     assert '"object":"chat.completion.chunk"' in response.text
     assert "data: [DONE]" in response.text
+
+
+def test_rag_query_merges_managed_store_params(client_internal_user):
+    """
+    Regression: /v1/rag/query must consult the managed vector store registry
+    (like the direct /v1/vector_stores/{id}/search endpoint does) so that
+    provider, region, embedding model, etc. don't have to be repeated in
+    retrieval_config. Pre-fix the registry was never read, so managed S3
+    Vectors stores failed with "aws_region_name is required".
+    """
+    import litellm
+    from litellm.types.utils import ModelResponse
+
+    mock_vector_store = {
+        "vector_store_id": "s3-store",
+        "custom_llm_provider": "s3_vectors",
+        "litellm_params": {
+            "aws_region_name": "eu-west-1",
+            "embedding_model": "my-embed",
+            "vector_bucket_name": "bkt",
+        },
+    }
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = mock_vector_store
+
+    mock_response = ModelResponse(
+        id="chatcmpl-test",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="gpt-4o-mini",
+    )
+
+    with patch(  # test-quality-ok: aquery is the endpoint's downstream boundary; the forwarded config is what the test asserts
+        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and grants access so real store resolution runs
+        "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+        new=AsyncMock(return_value=True),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "retrieval_config": {"vector_store_id": "s3-store"},
+            },
+        )
+
+    assert response.status_code == 200, response.json()
+    mock_aquery.assert_awaited_once()
+    forwarded_config = mock_aquery.await_args.kwargs["retrieval_config"]
+    assert forwarded_config["vector_store_id"] == "s3-store"
+    assert forwarded_config["custom_llm_provider"] == "s3_vectors"
+    assert forwarded_config["aws_region_name"] == "eu-west-1"
+    assert forwarded_config["embedding_model"] == "my-embed"
+    assert forwarded_config["vector_bucket_name"] == "bkt"
+
+
+def test_rag_query_store_params_win_over_user_retrieval_config(client_internal_user):
+    """Registry values must win over user-supplied retrieval_config keys so callers cannot override store credentials."""
+    import litellm
+    from litellm.types.utils import ModelResponse
+
+    mock_vector_store = {
+        "vector_store_id": "s3-store",
+        "custom_llm_provider": "s3_vectors",
+        "litellm_params": {"aws_region_name": "eu-west-1"},
+    }
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = mock_vector_store
+
+    mock_response = ModelResponse(
+        id="chatcmpl-test",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="gpt-4o-mini",
+    )
+
+    with patch(  # test-quality-ok: aquery is the endpoint's downstream boundary; the forwarded config is what the test asserts
+        "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and grants access so real store resolution runs
+        "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+        new=AsyncMock(return_value=True),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "retrieval_config": {"vector_store_id": "s3-store", "aws_region_name": "us-east-1"},
+            },
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded_config = mock_aquery.await_args.kwargs["retrieval_config"]
+    assert forwarded_config["aws_region_name"] == "eu-west-1"
+
+
+@pytest.mark.parametrize(
+    "blocked_key",
+    ["embedding_model", "litellm_embedding_model", "litellm_embedding_config", "litellm_credential_name"],
+)
+def test_rag_query_rejects_caller_embedding_selection_params(client_internal_user, blocked_key):
+    """
+    Regression: a caller must not pick the embedding model or credential used at
+    search time. Those resolve through the Router with the proxy's credentials,
+    bypassing the key's model permissions, so they may only come from the
+    managed store's server-side registration.
+    """
+    response = client_internal_user.post(
+        "/v1/rag/query",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "retrieval_config": {"vector_store_id": "s3-store", blocked_key: "attacker-choice"},
+        },
+    )
+
+    assert response.status_code == 400, response.json()
+    assert blocked_key in str(response.json())
+
+
+EICAR = r"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
+INGEST_REQUEST = '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
+
+
+def _multipart_ingest_request(*, filename: str, content: bytes, content_type: str):
+    from starlette.requests import Request
+
+    boundary = "litellmuploadtestboundary"
+    head = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: {content_type}\r\n\r\n"
+    ).encode()
+    tail = (
+        f"\r\n--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="request"\r\n\r\n'
+        f"{INGEST_REQUEST}\r\n"
+        f"--{boundary}--\r\n"
+    ).encode()
+    body = head + content + tail
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/rag/ingest",
+        "headers": [
+            (b"content-type", f"multipart/form-data; boundary={boundary}".encode()),
+            (b"content-length", str(len(body)).encode()),
+        ],
+        "state": {},
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(scope, receive)
+
+
+class TestVectorStoreUploadControls:
+    """End-to-end enforcement of pentest M4 upload controls on /v1/rag/ingest."""
+
+    def test_eicar_upload_blocked_by_malware_scanner(self, client_internal_user):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            files={"file": ("clean_name.txt", io.BytesIO(EICAR.encode()), "text/plain")},
+            data={"request": INGEST_REQUEST},
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"]["reason"] == "malware_detected"
+
+    def test_executable_upload_rejected(self, client_internal_user):
+        elf = b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 40
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            files={"file": ("doc.txt", io.BytesIO(elf), "text/plain")},
+            data={"request": INGEST_REQUEST},
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"]["reason"] == "executable_not_allowed"
+
+    def test_zip_archive_upload_rejected(self, client_internal_user):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            files={"file": ("doc.pdf", io.BytesIO(b"PK\x03\x04\x14\x00\x00\x00payload"), "application/pdf")},
+            data={"request": INGEST_REQUEST},
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"]["reason"] == "archive_not_allowed"
+
+    async def test_clean_text_upload_gets_server_generated_filename(self):
+        from litellm.proxy.rag_endpoints.endpoints import parse_rag_ingest_request
+        from litellm.proxy.rag_endpoints.upload_security import EicarTestMalwareScanner
+
+        request = _multipart_ingest_request(
+            filename="../../etc/passwd",
+            content=b"benign document text\n",
+            content_type="text/plain",
+        )
+        _options, file_data, _url, _file_id = await parse_rag_ingest_request(
+            request, scanner=EicarTestMalwareScanner()
+        )
+        assert file_data is not None
+        server_filename, content_bytes, secured_content_type = file_data
+        assert server_filename != "../../etc/passwd"
+        assert "/" not in server_filename and "\\" not in server_filename
+        assert server_filename.endswith(".txt")
+        assert secured_content_type == "text/plain"
+        assert content_bytes == b"benign document text\n"

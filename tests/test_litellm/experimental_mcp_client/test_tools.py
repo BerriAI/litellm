@@ -1,23 +1,20 @@
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from mcp.types import (
     CallToolRequestParams,
     CallToolResult,
     ListToolsResult,
+    PaginatedRequestParams,
     TextContent,
 )
 from mcp.types import Tool as MCPTool
 
 from litellm.experimental_mcp_client.tools import (
+    list_tools_with_pagination,
     transform_mcp_tool_to_anthropic_tool,
     _get_function_arguments,
     _normalize_mcp_input_schema,
@@ -109,6 +106,134 @@ async def test_load_mcp_tools_openai_format(mock_session, mock_list_tools_result
     assert result[0]["type"] == "function"
     assert result[0]["function"]["name"] == "test_tool"
     mock_session.list_tools.assert_called_once()
+
+
+@pytest.mark.asyncio()
+async def test_load_mcp_tools_follows_pagination(mock_session):
+    mock_session.list_tools.side_effect = [
+        ListToolsResult(
+            tools=[
+                MCPTool(name="tool_a", description="a", inputSchema={}),
+                MCPTool(name="tool_b", description="b", inputSchema={}),
+            ],
+            nextCursor="page-2",
+        ),
+        ListToolsResult(tools=[MCPTool(name="tool_c", description="c", inputSchema={})]),
+    ]
+    result = await load_mcp_tools(mock_session, format="mcp")
+    assert [tool.name for tool in result] == ["tool_a", "tool_b", "tool_c"]
+    assert mock_session.list_tools.call_count == 2
+    second_call_params = mock_session.list_tools.call_args_list[1].kwargs["params"]
+    assert isinstance(second_call_params, PaginatedRequestParams)
+    assert second_call_params.cursor == "page-2"
+
+
+@pytest.mark.asyncio()
+async def test_pagination_walk_stops_at_page_cap(mock_session, monkeypatch):
+    monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_TOOL_LISTING_MAX_PAGES", 2)
+    mock_session.list_tools.side_effect = [
+        ListToolsResult(
+            tools=[MCPTool(name="tool_0", description="0", inputSchema={})],
+            nextCursor="page-2",
+        ),
+        ListToolsResult(
+            tools=[MCPTool(name="tool_1", description="1", inputSchema={})],
+            nextCursor="page-3",
+        ),
+        ListToolsResult(tools=[MCPTool(name="tool_2", description="2", inputSchema={})]),
+    ]
+    result = await list_tools_with_pagination(mock_session)
+    assert [tool.name for tool in result] == ["tool_0", "tool_1"]
+    assert mock_session.list_tools.call_count == 2
+
+
+@pytest.mark.asyncio()
+async def test_pagination_walk_stops_on_repeated_cursor(mock_session):
+    mock_session.list_tools.side_effect = [
+        ListToolsResult(
+            tools=[MCPTool(name="tool_0", description="0", inputSchema={})],
+            nextCursor="same-cursor",
+        ),
+        ListToolsResult(
+            tools=[MCPTool(name="tool_1", description="1", inputSchema={})],
+            nextCursor="same-cursor",
+        ),
+    ]
+    result = await list_tools_with_pagination(mock_session)
+    assert [tool.name for tool in result] == ["tool_0", "tool_1"]
+    assert mock_session.list_tools.call_count == 2
+
+
+@pytest.mark.asyncio()
+async def test_pagination_walk_treats_empty_cursor_as_terminal(mock_session):
+    mock_session.list_tools.side_effect = [
+        ListToolsResult(
+            tools=[MCPTool(name="tool_0", description="0", inputSchema={})],
+            nextCursor="",
+        ),
+    ]
+    result = await list_tools_with_pagination(mock_session)
+    assert [tool.name for tool in result] == ["tool_0"]
+    mock_session.list_tools.assert_called_once()
+
+
+@pytest.mark.asyncio()
+async def test_pagination_walk_stops_at_whole_walk_deadline(mock_session, monkeypatch):
+    import anyio
+
+    from litellm.experimental_mcp_client.tools import list_tools_with_pagination
+
+    monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_CLIENT_TIMEOUT", 0.2)
+    monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_TOOL_LISTING_TIMEOUT", 0.2)
+
+    async def slow_page(params=None):
+        await anyio.sleep(0.15)
+        idx = int(params.cursor) if params is not None else 0
+        return ListToolsResult(
+            tools=[MCPTool(name=f"tool_{idx}", description=str(idx), inputSchema={})],
+            nextCursor=str(idx + 1),
+        )
+
+    mock_session.list_tools = slow_page
+    result = await list_tools_with_pagination(mock_session)
+
+    assert [tool.name for tool in result] == ["tool_0"]
+
+
+@pytest.mark.asyncio()
+async def test_pagination_walk_honors_explicit_deadline_over_globals(mock_session, monkeypatch):
+    import anyio
+
+    from litellm.experimental_mcp_client.tools import list_tools_with_pagination
+
+    monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_CLIENT_TIMEOUT", 0.1)
+    monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_TOOL_LISTING_TIMEOUT", 0.1)
+
+    async def slow_page(params=None):
+        await anyio.sleep(0.15)
+        idx = int(params.cursor) if params is not None else 0
+        tools = [MCPTool(name=f"tool_{idx}", description=str(idx), inputSchema={})]
+        if idx == 0:
+            return ListToolsResult(tools=tools, nextCursor="1")
+        return ListToolsResult(tools=tools)
+
+    mock_session.list_tools = slow_page
+    result = await list_tools_with_pagination(mock_session, listing_deadline=2.0)
+
+    assert [tool.name for tool in result] == ["tool_0", "tool_1"]
+
+
+@pytest.mark.asyncio()
+async def test_load_mcp_tools_openai_format_spans_pages(mock_session):
+    mock_session.list_tools.side_effect = [
+        ListToolsResult(
+            tools=[MCPTool(name="tool_a", description="a", inputSchema={})],
+            nextCursor="page-2",
+        ),
+        ListToolsResult(tools=[MCPTool(name="tool_b", description="b", inputSchema={})]),
+    ]
+    result = await load_mcp_tools(mock_session, format="openai")
+    assert [t["function"]["name"] for t in result] == ["tool_a", "tool_b"]
 
 
 def test_get_function_arguments():

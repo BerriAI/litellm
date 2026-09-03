@@ -44,7 +44,7 @@ describe("AutoRouterConnectionTest", () => {
     renderWithProviders(<AutoRouterConnectionTest accessToken="sk-test" targets={targets} />);
 
     await waitFor(() => expect(screen.getAllByTestId("test-status-success")).toHaveLength(3));
-    expect(screen.queryByTestId("test-status-error")).toBeNull();
+    expect(screen.queryByTestId("test-status-error")).not.toBeInTheDocument();
     expect(screen.getByText("MEDIUM, COMPLEX")).toBeInTheDocument();
   });
 
@@ -60,7 +60,7 @@ describe("AutoRouterConnectionTest", () => {
 
     renderWithProviders(<AutoRouterConnectionTest accessToken="sk-test" targets={targets} />);
 
-    await waitFor(() => expect(screen.getByTestId("test-error-message")).toBeInTheDocument());
+    expect(await screen.findByTestId("test-error-message")).toBeInTheDocument();
     expect(screen.getByTestId("test-error-message")).toHaveTextContent("invalid api key");
     expect(screen.getByTestId("test-error-message")).not.toHaveTextContent("litellm.AuthenticationError");
     expect(screen.getAllByTestId("test-status-success")).toHaveLength(2);

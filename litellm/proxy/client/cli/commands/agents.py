@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final
@@ -7,11 +8,14 @@ from typing import Final
 import click
 import requests
 
-from .auth import get_stored_api_key, login
+from .auth import context_secret_vault, get_stored_api_key, login
+from .cmd_quoting import quote_for_cmd
 
 ANTHROPIC_BASE_URL_ENV: Final = "ANTHROPIC_BASE_URL"
 ANTHROPIC_AUTH_TOKEN_ENV: Final = "ANTHROPIC_AUTH_TOKEN"
 ANTHROPIC_API_KEY_ENV: Final = "ANTHROPIC_API_KEY"
+ENABLE_TOOL_SEARCH_ENV: Final = "ENABLE_TOOL_SEARCH"
+ENABLE_TOOL_SEARCH_VALUE: Final = "true"
 OPENAI_BASE_URL_ENV: Final = "OPENAI_BASE_URL"
 OPENAI_API_KEY_ENV: Final = "OPENAI_API_KEY"
 
@@ -60,7 +64,10 @@ def build_agent_env(
     Anthropic clients (Claude Code) append /v1/messages to ANTHROPIC_BASE_URL,
     so it stays the bare proxy root; OpenAI clients (Codex, OpenCode) expect the
     /v1 suffix on OPENAI_BASE_URL. ANTHROPIC_API_KEY is dropped so a stray
-    Anthropic key cannot win over the bearer token we set.
+    Anthropic key cannot win over the bearer token we set. ENABLE_TOOL_SEARCH
+    defaults to true because Claude Code turns tool search off when
+    ANTHROPIC_BASE_URL is not a first-party Anthropic host; a value already in
+    the environment is left alone.
     """
     env: Final = dict(base_env)
     root: Final = base_url.rstrip("/")
@@ -68,6 +75,8 @@ def build_agent_env(
         env[ANTHROPIC_BASE_URL_ENV] = root
         env[ANTHROPIC_AUTH_TOKEN_ENV] = api_key
         env.pop(ANTHROPIC_API_KEY_ENV, None)
+        if ENABLE_TOOL_SEARCH_ENV not in env:
+            env[ENABLE_TOOL_SEARCH_ENV] = ENABLE_TOOL_SEARCH_VALUE
     if PROFILE_OPENAI in profiles:
         env[OPENAI_BASE_URL_ENV] = root + "/v1"
         env[OPENAI_API_KEY_ENV] = api_key
@@ -142,8 +151,73 @@ def verify_proxy_key(
         )
 
 
-def _exec(path: str, args: Sequence[str], env: Mapping[str, str]) -> None:
-    os.execvpe(path, list(args), dict(env))
+_WINDOWS_SHIM_SUFFIXES: Final[frozenset[str]] = frozenset({".cmd", ".bat"})
+_CMD_LINE_BREAKS: Final = ("\r", "\n")
+
+
+def _windows_command(path: str, args: Sequence[str]) -> str | tuple[str, ...]:
+    """Build what CreateProcess runs, routing batch shims through cmd.exe.
+
+    npm installs Claude Code as `claude.cmd`, which PATHEXT lets shutil.which
+    resolve but CreateProcess refuses to run (WinError 193), so a shim has to go
+    through the command processor. cmd.exe does not follow the C runtime quoting
+    that subprocess would apply to an argument list, and it would split on `&` or
+    `|` in a forwarded argument, so the shim case is emitted as one verbatim
+    command line with every token quoted. Every switch is load-bearing: `/s`
+    makes cmd strip only the outer pair, leaving each token quoted and its
+    metacharacters inert, `/e:on` keeps the command extensions that the percent
+    guard is built out of, `/v:off` keeps `!` from expanding, and `/d` keeps a
+    machine's AutoRun commands out of the launch. argv[0] carries the
+    caller-facing name on POSIX; Windows needs the resolved path there.
+
+    Raises AgentRunError for an argument holding a line break, which cmd would
+    read as the end of the command line and silently drop the rest of.
+    """
+    rest: Final = tuple(args[1:])
+    if os.path.splitext(path)[1].lower() not in _WINDOWS_SHIM_SUFFIXES:
+        return (path, *rest)
+    if any(brk in token for token in rest for brk in _CMD_LINE_BREAKS):
+        raise AgentRunError(
+            f"Cannot pass an argument containing a line break to `{os.path.basename(path)}` on "
+            "Windows: cmd.exe ends the command line there, so the agent would silently lose it."
+        )
+    inner: Final = " ".join(quote_for_cmd(token) for token in (path, *rest))
+    return f'cmd.exe /d /e:on /v:off /s /c "{inner}"'
+
+
+def _spawn_and_wait(command: str | Sequence[str], env: Mapping[str, str]) -> int:
+    return subprocess.run(command, env=dict(env), check=False).returncode
+
+
+def _replace_process(
+    path: str,
+    args: Sequence[str],
+    env: Mapping[str, str],
+    *,
+    execvpe: Callable[..., None] = os.execvpe,
+) -> None:
+    execvpe(path, list(args), dict(env))
+
+
+def _hand_off(
+    path: str,
+    args: Sequence[str],
+    env: Mapping[str, str],
+    *,
+    platform: str = sys.platform,
+    replace: Callable[[str, Sequence[str], Mapping[str, str]], None] = _replace_process,
+    spawn: Callable[[str | Sequence[str], Mapping[str, str]], int] = _spawn_and_wait,
+) -> None:
+    """Replace this process with the agent; on Windows, run it as a child instead.
+
+    os.exec* has no process-replacement semantics on Windows: the C runtime
+    spawns a detached child and terminates the parent, so the shell reclaims the
+    console and the agent's TUI never gets one. Windows therefore waits on the
+    child and exits with its status.
+    """
+    if platform.startswith("win"):
+        raise SystemExit(spawn(_windows_command(path, args), env))
+    replace(path, list(args), dict(env))
 
 
 def _restore_controlling_terminal() -> None:
@@ -175,13 +249,14 @@ def run_agent(
     base_env: Mapping[str, str] | None = None,
     which: Callable[[str], str | None] = shutil.which,
     verify: Callable[[str, str], None] = verify_proxy_key,
-    launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _exec,
+    launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _hand_off,
     reattach_terminal: Callable[[], None] | None = None,
 ) -> None:
     """Validate, wire the environment, and hand off to the agent.
 
-    On success this replaces the current process and never returns. Raises
-    AgentRunError for missing binaries, an unreachable proxy, or a rejected key.
+    On success this never returns: POSIX replaces the current process, Windows
+    waits on the agent and exits with its status. Raises AgentRunError for
+    missing binaries, an unreachable proxy, or a rejected key.
     reattach_terminal, when given, runs just before handoff to restore stdin.
     """
     if not command:
@@ -227,7 +302,7 @@ def resolve_api_key(ctx: click.Context) -> str:
 
     click.echo("No LiteLLM credentials found; starting login...")
     ctx.invoke(login)
-    api_key = get_stored_api_key(expected_base_url=base_url)
+    api_key = get_stored_api_key(expected_base_url=base_url, vault=context_secret_vault(ctx))
     if not api_key:
         raise click.ClickException("Login did not produce an API key; cannot start the agent.")
     return api_key
@@ -277,9 +352,9 @@ def _make_agent_command(binary: str, display_name: str) -> click.Command:
     return _command
 
 
-def agent_commands() -> list[click.Command]:
+def agent_commands() -> tuple[click.Command, ...]:
     """Build one top-level command per known agent, e.g. `lite claude`."""
-    return [_make_agent_command(binary, name) for binary, (name, _profiles) in _KNOWN_AGENTS.items()]
+    return tuple(_make_agent_command(binary, name) for binary, (name, _profiles) in _KNOWN_AGENTS.items())
 
 
 __all__ = [

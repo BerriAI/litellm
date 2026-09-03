@@ -1,0 +1,131 @@
+# Management endpoints deliberately not covered by a Terraform resource or data source.
+#
+# Format: one "METHOD /path" per line, matching the proxy OpenAPI schema exactly;
+# "#" starts a comment. The coverage gate (endpointaudit -coverage-allowlist) fails
+# when a management endpoint is neither covered nor listed here, and also when an
+# entry goes stale (the provider now covers it, or the endpoint left the schema),
+# so this file can only shrink relative to the schema over time.
+#
+# Every entry needs a reason. Endpoints that are analytics, UI helpers, or
+# imperative one-shot operations never get a resource. Entries marked "known gap"
+# are real coverage gaps awaiting a resource; remove them when the resource lands.
+
+# Read-only analytics and spend reporting; observability, not Terraform-managed state
+GET /agent/daily/activity
+GET /customer/daily/activity
+GET /guardrails/usage/detail/{guardrail_id}
+GET /guardrails/usage/logs
+GET /guardrails/usage/overview
+GET /key/spend/report
+GET /organization/daily/activity
+GET /organization/spend/report
+GET /tag/daily/activity
+GET /tag/dau
+GET /tag/distinct
+GET /tag/mau
+GET /tag/summary
+GET /tag/user-agent/per-user-analytics
+GET /tag/wau
+GET /team/daily/activity
+GET /team/daily/activity/aggregated
+GET /team/spend/report
+GET /user/daily/activity
+GET /user/daily/activity/aggregated
+GET /user/spend/report
+
+# Admin UI helper endpoints; serve UI forms and caller-scoped views, not desired state
+GET /budget/settings
+GET /router/fields
+GET /guardrails/ui/add_guardrail_settings
+GET /guardrails/ui/category_yaml/{category_name}
+GET /guardrails/ui/major_airlines
+GET /guardrails/ui/provider_specific_params
+GET /key/aliases
+GET /model/deprecations
+GET /search_tools/ui/available_providers
+GET /team/available
+GET /team/metadata_schema
+GET /team/{team_id}/members/me
+GET /user/available_users
+
+# Imperative one-shot operations: bulk edits, rotation, health probes, test hooks,
+# migrations, and approval workflows; procedural, not declarative state
+GET /cache/ping
+GET /cache/redis/info
+GET /credentials/migrate-encryption/check
+POST /cache/delete
+POST /cache/flushall
+POST /cache/settings/test
+POST /coordination_redis/settings/test
+GET /guardrails/submissions
+GET /guardrails/submissions/{guardrail_id}
+POST /credentials/migrate-encryption
+POST /customer/block
+POST /customer/unblock
+POST /guardrails/apply_guardrail
+POST /guardrails/register
+POST /guardrails/submissions/{guardrail_id}/approve
+POST /guardrails/submissions/{guardrail_id}/reject
+POST /guardrails/test_custom_code
+POST /guardrails/validate_blocked_words_file
+POST /key/bulk_update
+POST /key/health
+POST /key/regenerate
+POST /key/service-account/generate
+POST /key/{key}/regenerate
+POST /key/{key}/reset_spend
+POST /model/block
+POST /model/unblock
+POST /prompts/test
+POST /search_tools/test_connection
+POST /team/bulk_member_add
+POST /team/{team_id}/member/{user_id}/reset_spend
+POST /team/key/bulk_update
+POST /team/permissions_bulk_update
+POST /team/{team_id}/disable_logging
+POST /user/bulk_update
+
+# Alternate method or path for functionality the provider already manages elsewhere
+GET /credentials/by_model/{model_id}
+GET /guardrails/{guardrail_id}
+GET /prompts/{prompt_id}
+GET /prompts/{prompt_id}/versions
+PATCH /guardrails/{guardrail_id}
+PATCH /model/{model_id}/update
+PATCH /prompts/{prompt_id}
+PATCH /team/{team_id}
+POST /team/model/add
+POST /team/model/delete
+
+# Known gaps awaiting a resource or data source; remove the entry when it lands
+GET /credentials                                  # known gap: plural credentials data source
+GET /cache/settings                               # known gap: cache settings resource
+POST /cache/settings                              # known gap: cache settings resource
+GET /coordination_redis/settings                  # known gap: coordination redis settings resource
+POST /coordination_redis/settings                 # known gap: coordination redis settings resource
+GET /router/settings                              # known gap: router settings data source
+GET /router/fields                                # known gap: router settings data source
+GET /config/block_requests_for_models_without_pricing   # known gap: proxy config resource
+PATCH /config/block_requests_for_models_without_pricing # known gap: proxy config resource
+GET /config/cost_discount_config                  # known gap: proxy config resource
+PATCH /config/cost_discount_config                # known gap: proxy config resource
+GET /config/cost_margin_config                    # known gap: proxy config resource
+PATCH /config/cost_margin_config                  # known gap: proxy config resource
+GET /config/pass_through_endpoint                 # known gap: pass-through endpoint resource
+POST /config/pass_through_endpoint                # known gap: pass-through endpoint resource
+DELETE /config/pass_through_endpoint              # known gap: pass-through endpoint resource
+POST /config/pass_through_endpoint/{endpoint_id}  # known gap: pass-through endpoint resource
+GET /config/pass_through_endpoint/team/{team_id}  # known gap: pass-through endpoint resource
+GET /vector_store/list                            # known gap: plural vector stores data source
+GET /jwt/key/mapping/list                         # known gap: plural jwt key mappings data source
+GET /customer/info                                # known gap: litellm_customer resource
+GET /customer/list                                # known gap: litellm_customer resource
+POST /customer/new                                # known gap: litellm_customer resource
+POST /customer/update                             # known gap: litellm_customer resource
+POST /customer/delete                             # known gap: litellm_customer resource
+GET /team/{team_id}/callback                      # known gap: team callback resource
+POST /team/{team_id}/callback                     # known gap: team callback resource
+DELETE /team/{team_id}/callback/{callback_name}   # known gap: team callback resource
+GET /access_group/{access_group}/budget           # known gap: budget attributes on litellm_access_group
+PUT /access_group/{access_group}/budget           # known gap: budget attributes on litellm_access_group
+DELETE /access_group/{access_group}/budget        # known gap: budget attributes on litellm_access_group

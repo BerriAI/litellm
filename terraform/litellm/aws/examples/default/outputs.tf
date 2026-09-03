@@ -13,6 +13,16 @@ output "ecs_cluster" {
   value       = module.litellm.ecs_cluster
 }
 
+output "vpc_id" {
+  description = "VPC the stack runs in, whether module-created or supplied."
+  value       = module.litellm.vpc_id
+}
+
+output "task_security_group_id" {
+  description = "Tasks security group. Allow this inbound on an existing database or Redis."
+  value       = module.litellm.task_security_group_id
+}
+
 output "aurora_writer_endpoint" {
   description = "Aurora writer endpoint."
   value       = module.litellm.aurora_writer_endpoint
