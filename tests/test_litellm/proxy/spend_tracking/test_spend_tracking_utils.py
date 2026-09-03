@@ -2789,6 +2789,7 @@ def test_get_logging_payload_batch_attribution_keeps_verification_token_hash():
     parsed_meta = json.loads(payload["metadata"])
     assert parsed_meta["user_api_key"] == token_hash
     assert parsed_meta["user_api_key_alias"] == "batch-creator"
+    assert parsed_meta["user_api_key_user_email"] == "alice@example.com"
 
 
 def test_get_spend_logs_metadata_provenance_bypass_requires_hash_match():
