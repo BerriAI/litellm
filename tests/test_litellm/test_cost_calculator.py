@@ -1,6 +1,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,6 +20,8 @@ from litellm.cost_calculator import (
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import (
     CacheCreationTokenDetails,
+    ImageObject,
+    ImageResponse,
     ModelInfo,
     ModelResponse,
     PromptTokensDetailsWrapper,
@@ -1086,6 +1089,64 @@ def test_tiered_pricing_only_deployment_selects_router_model_id():
     )
     assert selected is not None
     assert router_model_id in selected
+
+
+@pytest.mark.parametrize("metadata_model_info", [None, {"id": "foo"}, {}, {"output_cost_per_image": 0}])
+def test_completion_cost_image_generation_prefers_litellm_metadata_model_info_price(
+    _local_model_cost_map, metadata_model_info
+):
+    litellm_params = {
+        "litellm_metadata": {"model_info": {"output_cost_per_image": 0.08}},
+        **({} if metadata_model_info is None else {"metadata": {"model_info": metadata_model_info}}),
+    }
+
+    cost = completion_cost(
+        completion_response=ImageResponse(data=[ImageObject(url="https://example.com/img.png")]),
+        model="fal_ai/fal-ai/unlisted-image-model",
+        call_type="image_generation",
+        custom_pricing=True,
+        litellm_logging_obj=SimpleNamespace(litellm_params=litellm_params),
+    )
+
+    assert cost == pytest.approx(0.08)
+
+
+def test_completion_cost_image_generation_ignores_deployment_model_info_without_custom_pricing(
+    _local_model_cost_map,
+):
+    cost = completion_cost(
+        completion_response=ImageResponse(data=[ImageObject(url="https://example.com/img.png")]),
+        model="fal_ai/openai/gpt-image-2",
+        call_type="image_generation",
+        custom_pricing=False,
+        optional_params={"quality": "high", "image_size": {"width": 1024, "height": 1024}},
+        litellm_logging_obj=SimpleNamespace(
+            litellm_params={"litellm_metadata": {"model_info": {"output_cost_per_image": 0.5}}}
+        ),
+    )
+
+    assert cost == pytest.approx(0.211)
+
+
+async def test_router_image_generation_bills_litellm_params_output_cost_per_image():
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "img",
+                "litellm_params": {
+                    "model": "fal_ai/fal-ai/unlisted-image-model",
+                    "api_key": "sk-fake",
+                    "output_cost_per_image": 0.08,
+                },
+            }
+        ]
+    )
+
+    response = await router.aimage_generation(model="img", prompt="x", mock_response="https://example.com/img.png")
+
+    assert response._hidden_params["response_cost"] == pytest.approx(0.08)
 
 
 def test_tiered_pricing_only_deployment_completion_cost_is_nonzero():

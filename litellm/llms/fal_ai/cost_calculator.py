@@ -3,7 +3,8 @@ from types import MappingProxyType
 from typing import Final
 
 import litellm
-from litellm.types.utils import ImageResponse
+from litellm.litellm_core_utils.llm_cost_calc.utils import deployment_pricing, resolve_image_model_info
+from litellm.types.utils import ImageResponse, ModelInfo
 
 FAL_KEYED_PRICING_DEFAULT_QUALITY: Final[str] = "high"
 FAL_TEXT_TO_IMAGE_DEFAULT_SIZE: Final[str] = "1024-x-768"
@@ -55,6 +56,7 @@ def cost_calculator(
     model: str,
     image_response: object,
     optional_params: Mapping[str, object] | None = None,
+    model_info: ModelInfo | None = None,
 ) -> float:
     """
     fal.ai image generation cost calculator
@@ -64,12 +66,19 @@ def cost_calculator(
     # the proxy cost path passes the provider-prefixed model name
     model = model.removeprefix(f"{litellm.LlmProviders.FAL_AI.value}/")
     num_images: Final[int] = len(image_response.data) if image_response.data else 0
+    deployment_prices: Final = deployment_pricing(model_info)
+    deployment_cost_per_image: Final = (
+        None if deployment_prices is None else deployment_prices.get("output_cost_per_image")
+    )
+    if deployment_cost_per_image is not None:
+        return deployment_cost_per_image * num_images
     keyed_cost_per_image: Final = _keyed_cost_per_image(model=model, optional_params=optional_params)
     if keyed_cost_per_image is not None:
         return keyed_cost_per_image * num_images
-    _model_info: Final = litellm.get_model_info(
+    _model_info: Final = resolve_image_model_info(
         model=model,
         custom_llm_provider=litellm.LlmProviders.FAL_AI.value,
+        model_info=deployment_prices,
     )
     output_cost_per_image: Final[float] = _model_info.get("output_cost_per_image") or 0.0
     return output_cost_per_image * num_images
