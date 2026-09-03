@@ -17517,6 +17517,16 @@ def test_generate_key_request_blank_organization_and_project_id_are_unset():
     assert GenerateKeyRequest(organization_id="org-1", project_id="proj-1").project_id == "proj-1"
 
 
+def test_key_request_blank_organization_id_is_unset():
+    from litellm.proxy._types import RegenerateKeyRequest, UpdateKeyRequest
+
+    assert GenerateKeyRequest(organization_id="").organization_id is None
+    assert RegenerateKeyRequest(organization_id="").organization_id is None
+    assert UpdateKeyRequest(key="sk-1", organization_id="").organization_id is None
+    assert GenerateKeyRequest(organization_id="org-1").organization_id == "org-1"
+    assert UpdateKeyRequest(key="sk-1", organization_id="org-1").organization_id == "org-1"
+
+
 def test_key_generation_check_blank_team_id_uses_personal_permissions(monkeypatch):
     """key_generation_check with team_id="" must take the personal-key path instead
     of failing the team lookup with "Unable to find team object" (LIT-3925)."""
