@@ -155,12 +155,15 @@ def is_web_search_tool_chat_completion(tool: Dict[str, Any]) -> bool:
     """
     Check if a tool is a web search tool for Chat Completions API (strict check).
 
-    This is a stricter version that ONLY checks for the exact LiteLLM web search tool name.
+    This is a stricter version that checks for the exact LiteLLM web search tool name,
+    plus the bare conventional ``web_search`` function-tool shape (name only, no schema).
     Use this for Chat Completions API to avoid false positives with user-defined tools.
 
     Detects ONLY:
     - LiteLLM standard: name == "litellm_web_search" (Anthropic format)
     - OpenAI format: type == "function" with function.name == "litellm_web_search"
+    - OpenAI format, bare conventional name: type == "function" with
+      function == {"name": "web_search"} and no other function fields
 
     Args:
         tool: Tool dictionary to check
@@ -173,6 +176,8 @@ def is_web_search_tool_chat_completion(tool: Dict[str, Any]) -> bool:
         True
         >>> is_web_search_tool_chat_completion({"type": "function", "function": {"name": "litellm_web_search"}})
         True
+        >>> is_web_search_tool_chat_completion({"type": "function", "function": {"name": "web_search"}})
+        True
         >>> is_web_search_tool_chat_completion({"name": "web_search"})
         False
         >>> is_web_search_tool_chat_completion({"name": "WebSearch"})
@@ -184,8 +189,12 @@ def is_web_search_tool_chat_completion(tool: Dict[str, Any]) -> bool:
     # Check for OpenAI format: {"type": "function", "function": {"name": "litellm_web_search"}}
     if tool_type == "function" and "function" in tool:
         function_def = tool.get("function", {})
+        if not isinstance(function_def, dict):
+            return False
         function_name = function_def.get("name", "")
         if function_name == LITELLM_WEB_SEARCH_TOOL_NAME:
+            return True
+        if function_name == "web_search" and function_def.keys() == {"name"}:
             return True
 
     # Check for LiteLLM standard tool (Anthropic format)
@@ -223,6 +232,8 @@ def is_web_search_tool(tool: Dict[str, Any]) -> bool:
     Detects:
     - LiteLLM standard: name == "litellm_web_search"
     - OpenAI format: type == "function" with function.name == "litellm_web_search"
+    - OpenAI format, bare conventional name: type == "function" with
+      function == {"name": "web_search"} and no other function fields
     - Anthropic native: type starts with "web_search_" (e.g., "web_search_20250305")
     - Claude Code: name == "web_search" with a type field
     - Custom: name == "WebSearch" (legacy interception marker — only matched
@@ -268,8 +279,12 @@ def is_web_search_tool(tool: Dict[str, Any]) -> bool:
     # Check for OpenAI format: {"type": "function", "function": {"name": "..."}}
     if tool_type == "function" and "function" in tool:
         function_def = tool.get("function", {})
+        if not isinstance(function_def, dict):
+            return False
         function_name = function_def.get("name", "")
         if function_name == LITELLM_WEB_SEARCH_TOOL_NAME:
+            return True
+        if function_name == "web_search" and function_def.keys() == {"name"}:
             return True
 
     # Check for LiteLLM standard tool (Anthropic format)
