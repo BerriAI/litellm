@@ -12428,7 +12428,7 @@ async def _try_provider_token_count(
             code=status_code,
         )
     if result is not None and result.error is True:
-        if litellm.disable_token_counter is True or result.status_code in (401, 403):
+        if litellm.disable_token_counter is True or result.status_code == 401:
             raise ProxyException(
                 message=result.error_message or "Token counting failed",
                 type="token_counting_error",

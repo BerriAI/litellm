@@ -12453,15 +12453,14 @@ def _provider_token_count_error(status_code, message):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("auth_status", [401, 403])
-async def test_try_provider_token_count_raises_proxy_exception_on_provider_auth_error(auth_status, monkeypatch):
-    """LIT-6507: a provider-refused credential (401/403) must surface as a
+async def test_try_provider_token_count_raises_proxy_exception_on_provider_auth_error(monkeypatch):
+    """LIT-6507: a provider-refused credential (401) must surface as a
     ProxyException with that status, not silently fall back to the local
     tokenizer and mask the auth failure behind a 200."""
     from litellm.proxy._types import ProxyException
     from litellm.proxy.proxy_server import _try_provider_token_count
 
-    counter = _StubProviderTokenCounter(_provider_token_count_error(auth_status, "API key is invalid."))
+    counter = _StubProviderTokenCounter(_provider_token_count_error(401, "API key is invalid."))
     monkeypatch.setattr(litellm, "disable_token_counter", False)
     with pytest.raises(ProxyException) as exc_info:
         await _try_provider_token_count(
@@ -12474,15 +12473,18 @@ async def test_try_provider_token_count_raises_proxy_exception_on_provider_auth_
             request_model="claude-auth-test",
         )
 
-    assert exc_info.value.code == str(auth_status)
+    assert exc_info.value.code == "401"
     assert "API key is invalid." in exc_info.value.message
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("non_auth_status", [429, 500])
+@pytest.mark.parametrize("non_auth_status", [403, 429, 500])
 async def test_try_provider_token_count_falls_back_to_local_on_non_auth_error(non_auth_status, monkeypatch):
     """Non-auth provider failures keep the deliberate silent fallback to the
-    local tokenizer (PR #34258): the caller gets None and counts locally."""
+    local tokenizer (PR #34258): the caller gets None and counts locally.
+    403 stays here on purpose: a credential that can invoke the model but is
+    denied the count action (a Bedrock API key without bedrock:CountTokens)
+    must keep its local estimate instead of losing every count-tokens surface."""
     from litellm.proxy.proxy_server import _try_provider_token_count
 
     counter = _StubProviderTokenCounter(_provider_token_count_error(non_auth_status, "provider unavailable"))
