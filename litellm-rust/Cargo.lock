@@ -1481,10 +1481,12 @@ name = "litellm-python-interop"
 version = "0.1.0"
 dependencies = [
  "pyo3",
+ "pyo3-async-runtimes",
  "pythonize",
  "rstest",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
