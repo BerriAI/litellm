@@ -443,7 +443,9 @@ class SAMLAuthHandler:
         last_name: Final = SAMLAuthHandler._attribute_value(
             attributes, "SAML_ATTRIBUTE_LAST_NAME", _LAST_NAME_ATTRIBUTE_CANDIDATES
         )
-        role_value = SAMLAuthHandler._attribute_value(attributes, "SAML_ATTRIBUTE_ROLE", _ROLE_ATTRIBUTE_CANDIDATES)
+        role_values: Final = SAMLAuthHandler._attribute_values(
+            attributes, "SAML_ATTRIBUTE_ROLE", _ROLE_ATTRIBUTE_CANDIDATES
+        )
         team_ids: Final = SAMLAuthHandler._attribute_values(
             attributes, "SAML_ATTRIBUTE_TEAM_IDS", _TEAM_IDS_ATTRIBUTE_CANDIDATES
         )
@@ -464,7 +466,7 @@ class SAMLAuthHandler:
                 picture=None,
                 provider="saml",
                 team_ids=team_ids,
-                user_role=get_litellm_user_role(role_value) if role_value else None,
+                user_role=get_litellm_user_role(role_values),
             )
         except ValidationError as e:
             raise HTTPException(
