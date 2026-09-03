@@ -9,7 +9,7 @@ from litellm.types.utils import ImageResponse
 
 
 @pytest.mark.parametrize("config", [GPTImageGenerationConfig(), AzureGPTImageGenerationConfig()])
-def test_transform_image_generation_response_reports_requested_output_format(config):
+def test_transform_image_generation_response_keeps_provider_echo(config):
     raw_response = httpx.Response(
         status_code=200,
         json={
@@ -35,4 +35,5 @@ def test_transform_image_generation_response_reports_requested_output_format(con
     )
 
     assert image_response.output_format == "jpeg"
+    assert image_response.quality == "low"
     assert image_response.background == "opaque"
