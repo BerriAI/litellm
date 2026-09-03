@@ -177,6 +177,10 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         # Restore original model name for any other processing
         model = original_model
 
+        AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+            model=original_model, optional_params=optional_params, custom_llm_provider="vertex_ai"
+        )
+
         return optional_params
 
     def transform_response(

@@ -3,15 +3,18 @@ Tests for Milvus Vector Store
 """
 
 import json
-import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
+from litellm import Router
+from litellm.llms.milvus.vector_stores.transformation import MilvusVectorStoreConfig
+from litellm.types.utils import EmbeddingResponse
 from litellm.vector_stores import asearch as vector_store_asearch
 from litellm.vector_stores import search as vector_store_search
-
 
 # Mock response from actual Milvus API
 MOCK_MILVUS_SEARCH_RESPONSE = {
@@ -98,7 +101,7 @@ class TestMilvusVectorStore:
         mock_response.json.return_value = MOCK_MILVUS_SEARCH_RESPONSE
         mock_response.text = json.dumps(MOCK_MILVUS_SEARCH_RESPONSE)
 
-        with patch("litellm.embedding") as mock_embedding:
+        with patch("litellm.aembedding", new_callable=AsyncMock) as mock_embedding:
             mock_embedding.return_value = MOCK_EMBEDDING_RESPONSE
 
             with patch(
@@ -147,16 +150,10 @@ class TestMilvusVectorStore:
                 else:
                     # Fallback: check for json kwarg or in args
                     request_data = call_args.kwargs.get("json")
-                    if (
-                        request_data is None
-                        and len(call_args.args) > 0
-                        and isinstance(call_args.args[0], dict)
-                    ):
+                    if request_data is None and len(call_args.args) > 0 and isinstance(call_args.args[0], dict):
                         request_data = call_args.args[0]
 
-                assert (
-                    request_data is not None
-                ), f"Could not extract request data. Call args: {call_args}"
+                assert request_data is not None, f"Could not extract request data. Call args: {call_args}"
                 print("Request data:", json.dumps(request_data, indent=2, default=str))
 
                 # Validate request structure
@@ -213,9 +210,7 @@ class TestMilvusVectorStore:
         with patch("litellm.embedding") as mock_embedding:
             mock_embedding.return_value = MOCK_EMBEDDING_RESPONSE
 
-            with patch(
-                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
-            ) as mock_post:
+            with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
                 mock_post.return_value = mock_response
 
                 # Make the search request
@@ -252,16 +247,10 @@ class TestMilvusVectorStore:
                 else:
                     # Fallback: check for json kwarg or in args
                     request_data = call_args.kwargs.get("json")
-                    if (
-                        request_data is None
-                        and len(call_args.args) > 0
-                        and isinstance(call_args.args[0], dict)
-                    ):
+                    if request_data is None and len(call_args.args) > 0 and isinstance(call_args.args[0], dict):
                         request_data = call_args.args[0]
 
-                assert (
-                    request_data is not None
-                ), f"Could not extract request data. Call args: {call_args}"
+                assert request_data is not None, f"Could not extract request data. Call args: {call_args}"
 
                 # Validate request structure
                 assert "collectionName" in request_data
@@ -316,11 +305,7 @@ class TestMilvusVectorStore:
         if request_data_str:
             return json.loads(request_data_str)
         request_data = call_args.kwargs.get("json")
-        if (
-            request_data is None
-            and len(call_args.args) > 0
-            and isinstance(call_args.args[0], dict)
-        ):
+        if request_data is None and len(call_args.args) > 0 and isinstance(call_args.args[0], dict):
             request_data = call_args.args[0]
         return request_data
 
@@ -334,9 +319,7 @@ class TestMilvusVectorStore:
         with patch("litellm.embedding") as mock_embedding:
             mock_embedding.return_value = MOCK_EMBEDDING_RESPONSE
 
-            with patch(
-                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
-            ) as mock_post:
+            with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
                 mock_post.return_value = mock_response
 
                 vector_store_search(
@@ -375,9 +358,7 @@ class TestMilvusVectorStore:
         with patch("litellm.embedding") as mock_embedding:
             mock_embedding.return_value = MOCK_EMBEDDING_RESPONSE
 
-            with patch(
-                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
-            ) as mock_post:
+            with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
                 mock_post.return_value = mock_response
 
                 vector_store_search(
@@ -413,9 +394,7 @@ class TestMilvusVectorStore:
         with patch("litellm.embedding") as mock_embedding:
             mock_embedding.return_value = MOCK_EMBEDDING_RESPONSE
 
-            with patch(
-                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
-            ) as mock_post:
+            with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
                 mock_post.return_value = mock_response
 
                 vector_store_search(
@@ -492,3 +471,247 @@ if __name__ == "__main__":
     test.test_basic_search_with_mock_sync()
 
     print("\n✅ All mock tests passed!")
+
+
+class RecordingEmbeddingExecutor:
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+
+    def embed(self, model, query, configuration):
+        self.calls.append((model, query, dict(configuration)))
+        return self.response
+
+    async def aembed(self, model, query, configuration):
+        self.calls.append((model, query, dict(configuration)))
+        return self.response
+
+
+ALIAS_QUERY_VECTOR = [0.5, -0.25, 0.125]
+ALIAS_EMBEDDING_RESPONSE = EmbeddingResponse(
+    data=[{"embedding": ALIAS_QUERY_VECTOR, "index": 0, "object": "embedding"}]
+)
+OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
+MILVUS_SEARCH_URL = "https://milvus.example/v2/vectordb/entities/search"
+ALIAS_SEARCH_KWARGS = {
+    "query": "what is machine learning?",
+    "vector_store_id": "book_2",
+    "custom_llm_provider": "milvus",
+    "api_base": "https://milvus.example",
+    "api_key": "mock_milvus_api_key",
+    "litellm_embedding_model": "multilingual-e5-large",
+    "milvus_text_field": "book_intro_text",
+}
+
+
+def _alias_router():
+    return Router(
+        model_list=[
+            {
+                "model_name": "multilingual-e5-large",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "deployment-key",
+                },
+            }
+        ]
+    )
+
+
+def _mock_embedding_route(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post(OPENAI_EMBEDDINGS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": ALIAS_QUERY_VECTOR}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 2, "total_tokens": 2},
+            },
+        )
+    )
+
+
+def _mock_search_route(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post(MILVUS_SEARCH_URL).mock(return_value=httpx.Response(200, json=MOCK_MILVUS_SEARCH_RESPONSE))
+
+
+def _assert_alias_resolved(embedding_route: respx.Route, search_route: respx.Route, response):
+    embedding_request = embedding_route.calls.last.request
+    assert embedding_request.headers["authorization"] == "Bearer deployment-key"
+    embedding_body = json.loads(embedding_request.read())
+    assert embedding_body["model"] == "text-embedding-3-small"
+    assert embedding_body["input"] == ["what is machine learning?"]
+    search_request = search_route.calls.last.request
+    assert search_request.headers["authorization"] == "Bearer mock_milvus_api_key"
+    assert json.loads(search_request.read())["data"] == [ALIAS_QUERY_VECTOR]
+    assert len(response["data"]) == len(MOCK_MILVUS_SEARCH_RESPONSE["data"])
+    assert response["data"][0]["content"][0]["text"] == MOCK_MILVUS_SEARCH_RESPONSE["data"][0]["book_intro_text"]
+
+
+def test_router_search_resolves_bare_embedding_alias_sync(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    embedding_route = _mock_embedding_route(respx_mock)
+    search_route = _mock_search_route(respx_mock)
+
+    response = _alias_router().vector_store_search(**ALIAS_SEARCH_KWARGS)
+
+    _assert_alias_resolved(embedding_route, search_route, response)
+
+
+@pytest.mark.asyncio
+async def test_router_search_resolves_bare_embedding_alias_async(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    embedding_route = _mock_embedding_route(respx_mock)
+    search_route = _mock_search_route(respx_mock)
+
+    response = await _alias_router().avector_store_search(**ALIAS_SEARCH_KWARGS)
+
+    _assert_alias_resolved(embedding_route, search_route, response)
+
+
+def test_sdk_search_with_router_kwarg_resolves_bare_embedding_alias_sync(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    embedding_route = _mock_embedding_route(respx_mock)
+    search_route = _mock_search_route(respx_mock)
+
+    response = litellm.vector_stores.search(router=_alias_router(), **ALIAS_SEARCH_KWARGS)
+
+    _assert_alias_resolved(embedding_route, search_route, response)
+
+
+@pytest.mark.asyncio
+async def test_sdk_search_with_router_kwarg_resolves_bare_embedding_alias_async(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    embedding_route = _mock_embedding_route(respx_mock)
+    search_route = _mock_search_route(respx_mock)
+
+    response = await litellm.vector_stores.asearch(router=_alias_router(), **ALIAS_SEARCH_KWARGS)
+
+    _assert_alias_resolved(embedding_route, search_route, response)
+
+
+def _team_alias_router():
+    return Router(
+        model_list=[
+            {
+                "model_name": "team-a-embedder",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "deployment-key",
+                },
+                "model_info": {"team_id": "team-a", "team_public_model_name": "multilingual-e5-large"},
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_sdk_search_with_router_kwarg_resolves_team_alias_from_request_metadata(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    embedding_route = _mock_embedding_route(respx_mock)
+    search_route = _mock_search_route(respx_mock)
+
+    response = await litellm.vector_stores.asearch(
+        router=_team_alias_router(), metadata={"user_api_key_team_id": "team-a"}, **ALIAS_SEARCH_KWARGS
+    )
+
+    _assert_alias_resolved(embedding_route, search_route, response)
+
+
+@pytest.mark.asyncio
+async def test_sdk_search_with_router_kwarg_rejects_team_alias_without_team_metadata(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    embedding_route = _mock_embedding_route(respx_mock)
+    _mock_search_route(respx_mock)
+
+    with pytest.raises(litellm.APIConnectionError):
+        await litellm.vector_stores.asearch(router=_team_alias_router(), **ALIAS_SEARCH_KWARGS)
+
+    assert embedding_route.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_transform_uses_injected_executor_without_embedding_config(respx_mock: respx.MockRouter):
+    executor = RecordingEmbeddingExecutor(ALIAS_EMBEDDING_RESPONSE)
+    config = MilvusVectorStoreConfig()
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    transform_kwargs = {
+        "vector_store_id": "book_2",
+        "query": ["what is", "milvus?"],
+        "vector_store_search_optional_params": {"limit": 3},
+        "api_base": "https://milvus.example",
+        "litellm_logging_obj": logging_obj,
+        "litellm_params": {"litellm_embedding_model": "multilingual-e5-large", "milvus_db_name": "docs"},
+        "embedding_executor": executor,
+    }
+
+    url, sync_body = config.transform_search_vector_store_request(**transform_kwargs)
+    _, async_body = await config.atransform_search_vector_store_request(**transform_kwargs)
+
+    assert respx_mock.calls.call_count == 0
+    assert executor.calls == [("multilingual-e5-large", "what is milvus?", {})] * 2
+    assert url == MILVUS_SEARCH_URL
+    assert sync_body == async_body
+    assert sync_body == {
+        "collectionName": "book_2",
+        "data": [ALIAS_QUERY_VECTOR],
+        "annsField": "book_intro_vector",
+        "limit": 3,
+        "dbName": "docs",
+    }
+    assert logging_obj.model_call_details["input"] == "what is milvus?"
+    assert logging_obj.model_call_details["embedding_model"] == "multilingual-e5-large"
+
+
+def test_transform_falls_back_to_sdk_embedding_without_executor_or_config(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    embedding_route = _mock_embedding_route(respx_mock)
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+
+    _, body = MilvusVectorStoreConfig().transform_search_vector_store_request(
+        vector_store_id="book_2",
+        query="q",
+        vector_store_search_optional_params={},
+        api_base="https://milvus.example",
+        litellm_logging_obj=logging_obj,
+        litellm_params={"litellm_embedding_model": "openai/text-embedding-3-small"},
+    )
+
+    embedding_request = embedding_route.calls.last.request
+    assert embedding_request.headers["authorization"] == "Bearer env-key"
+    assert json.loads(embedding_request.read())["input"] == ["q"]
+    assert body["data"] == [ALIAS_QUERY_VECTOR]
+
+
+def test_transform_requires_embedding_model():
+    with pytest.raises(ValueError, match="litellm_embedding_model is required"):
+        MilvusVectorStoreConfig().transform_search_vector_store_request(
+            vector_store_id="book_2",
+            query="q",
+            vector_store_search_optional_params={},
+            api_base="https://milvus.example",
+            litellm_logging_obj=MagicMock(),
+            litellm_params={"litellm_embedding_config": {"api_key": "store-key"}},
+            embedding_executor=RecordingEmbeddingExecutor(ALIAS_EMBEDDING_RESPONSE),
+        )

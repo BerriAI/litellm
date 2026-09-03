@@ -7,7 +7,7 @@ import builtins
 import contextvars
 from collections.abc import Coroutine, Mapping
 from functools import partial
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -15,6 +15,11 @@ import litellm
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.vector_store.transformation import (
+    BaseQueryEmbeddingVectorStoreConfig,
+    VectorStoreEmbeddingExecutor,
+    vector_store_request_metadata,
+)
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
@@ -29,10 +34,23 @@ from litellm.types.vector_stores import (
 from litellm.utils import ProviderConfigManager, client
 from litellm.vector_stores.utils import VectorStoreRequestUtils
 
+if TYPE_CHECKING:
+    from litellm.router import Router
+
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
+
+
+def _direct_vector_store_embedding_executor(
+    value: object, router: "Router | None", request_kwargs: Mapping[str, object]
+) -> VectorStoreEmbeddingExecutor:
+    if value is not None and not isinstance(value, VectorStoreEmbeddingExecutor):
+        raise TypeError("Invalid direct vector store embedding executor")
+    return BaseQueryEmbeddingVectorStoreConfig.query_embedding_executor(
+        value, router, vector_store_request_metadata(request_kwargs)
+    )
 
 
 def mock_vector_store_search_response(
@@ -280,12 +298,18 @@ async def asearch(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
+    router: "Router | None" = None,
     **kwargs,
 ) -> VectorStoreSearchResponse:
     """
     Async: Search a vector store for relevant chunks based on a query and file attributes filter.
     """
-    local_vars: Final = locals()
+    embedding_executor: Final = _direct_vector_store_embedding_executor(
+        kwargs.pop("_direct_vector_store_embedding_executor", None), router, kwargs
+    )
+    local_vars: Final = {  # mutable-ok: exception logging requires a sanitized mutable snapshot
+        key: value for key, value in locals().items() if key != "embedding_executor"
+    }
 
     try:
         loop: Final = asyncio.get_event_loop()
@@ -308,6 +332,8 @@ async def asearch(
             extra_body=extra_body,
             timeout=timeout,
             custom_llm_provider=custom_llm_provider,
+            _direct_vector_store_embedding_executor=embedding_executor,
+            router=router,
             **kwargs,
         )
 
@@ -347,6 +373,7 @@ def search(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
+    router: "Router | None" = None,
     **kwargs,
 ) -> VectorStoreSearchResponse | Coroutine[object, object, VectorStoreSearchResponse]:
     """
@@ -363,12 +390,16 @@ def search(
     Returns:
         VectorStoreSearchResponse containing the search results.
     """
-    local_vars: Final = locals()
+    embedding_executor: Final = _direct_vector_store_embedding_executor(
+        kwargs.pop("_direct_vector_store_embedding_executor", None), router, kwargs
+    )
+    local_vars: Final = {  # mutable-ok: exception logging requires a sanitized mutable snapshot
+        key: value for key, value in locals().items() if key != "embedding_executor"
+    }
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("asearch", False) is True
-
         # pull credentials from registry if available
         if litellm.vector_store_registry is not None and vector_store_id is not None:
             try:
@@ -445,11 +476,13 @@ def search(
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
+            embedding_executor=embedding_executor,
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
+            router=router,
         )
 
         return response
