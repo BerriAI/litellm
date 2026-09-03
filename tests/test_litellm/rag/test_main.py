@@ -394,8 +394,9 @@ async def test_aquery_forwards_vector_store_params_to_search_but_not_completion(
     Regression for LIT-6773: the server-trusted vector_store_params (a managed
     store's litellm_params) must reach the search call wholesale, including the
     connection keys the caller allowlist blocks, while the caller's own
-    retrieval_config overrides stay blocked and the completion never inherits
-    the store's connection params.
+    retrieval_config overrides stay blocked, the caller's top-level api_key and
+    api_base stay on the completion only, and the completion never inherits the
+    store's connection params.
     """
     from unittest.mock import AsyncMock
 
@@ -420,6 +421,8 @@ async def test_aquery_forwards_vector_store_params_to_search_but_not_completion(
         await litellm.aquery(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hello"}],
+            api_key="sk-llm-key",
+            api_base="https://llm.example.com",
             retrieval_config={
                 "vector_store_id": "customer_kb",
                 "custom_llm_provider": "milvus",
@@ -445,8 +448,10 @@ async def test_aquery_forwards_vector_store_params_to_search_but_not_completion(
     assert search_kwargs["milvus_text_field"] == "book_intro_text"
     assert search_kwargs["outputFields"] == ["book_intro_text"]
     fake_completion.assert_awaited_once()
-    store_only_keys = {"api_base", "api_key", "milvus_text_field", "outputFields"}
-    assert not (store_only_keys & set(fake_completion.await_args.kwargs))
+    completion_kwargs = fake_completion.await_args.kwargs
+    assert completion_kwargs["api_key"] == "sk-llm-key"
+    assert completion_kwargs["api_base"] == "https://llm.example.com"
+    assert not ({"milvus_text_field", "outputFields"} & set(completion_kwargs))
 
 
 def test_rag_call_types_are_registered():

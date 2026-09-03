@@ -246,7 +246,8 @@ async def _execute_query_pipeline(
 
     # 2. Search vector store
     # Forward allowlisted provider retrieval_config extras (region, embedding
-    # model, bucket, credential refs) to the search call; kwargs win on conflict.
+    # model, bucket, credential refs) to the search call; the managed store's
+    # params win on conflict.
     provider_search_params: Final = MappingProxyType(
         {k: v for k, v in retrieval_config.items() if k in _FORWARDABLE_RETRIEVAL_CONFIG_KEYS}
     )
@@ -257,7 +258,7 @@ async def _execute_query_pipeline(
             if k not in _SEARCH_ARGS_SET_BY_PIPELINE
         }
     )
-    forwarded_search_params: Final = MappingProxyType({**provider_search_params, **store_search_params, **kwargs})
+    forwarded_search_params: Final = MappingProxyType({**provider_search_params, **kwargs, **store_search_params})
     with _suppressed_sub_call_billing():
         search_response: Final = await litellm.vector_stores.asearch(
             vector_store_id=retrieval_config["vector_store_id"],
