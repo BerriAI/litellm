@@ -9,13 +9,17 @@
 # Strategy: ignore everything, then re-include only what the build needs:
 #   - litellm/            (pip install . needs the full package + proxy reader)
 #   - litellm-rust/       (the rust workspace; Cargo.lock + crate sources)
-#   - pyproject.toml / README.md / LICENSE  (packaging metadata for pip install)
+#   - enterprise/         (litellm/proxy/enterprise symlinks into it; maturin walks it)
+#   - pyproject.toml / README.md / LICENSE  (packaging metadata for the wheel build)
+#   - rust-toolchain.toml (the pinned channel every cargo call in the build uses)
 *
 
 # --- re-include the build inputs ---
 !litellm/
 !litellm-rust/
+!enterprise/
 !pyproject.toml
+!rust-toolchain.toml
 !README.md
 !LICENSE
 
