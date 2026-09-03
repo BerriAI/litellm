@@ -1939,6 +1939,41 @@ async def test_apply_guardrail_sends_textless_parts_rows_unflattened(
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_drops_null_tool_calls_but_keeps_real_ones(
+    guardrail: HeadroomGuardrail,
+):
+    real_tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}]
+    history = [
+        {"role": "user", "content": "E" * 5000},
+        {"role": "assistant", "content": None, "tool_calls": real_tool_calls},
+        {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+        {"role": "assistant", "content": "summary", "tool_calls": None, "function_call": None},
+    ]
+    inputs = GenericGuardrailAPIInputs(
+        texts=["E" * 5000],
+        structured_messages=json.loads(json.dumps(history))
+        + [{"role": "assistant", "content": "last turn"}, {"role": "user", "content": "and now?"}],
+    )
+    mock_response = _make_compress_response(json.loads(json.dumps(history)))
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ) as mock_post:
+        await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={"model": "claude-fable-5"},
+            input_type="request",
+        )
+
+    wire_messages = mock_post.call_args.kwargs["json"]["messages"]
+    assert wire_messages[1]["tool_calls"] == real_tool_calls
+    assert wire_messages[3] == {"role": "assistant", "content": "summary", "function_call": None}
+
+
+@pytest.mark.asyncio
 async def test_fail_open_returns_original_parts_shapes():
     guardrail = _make_guardrail(unreachable_fallback="fail_open")
     inputs = GenericGuardrailAPIInputs(
