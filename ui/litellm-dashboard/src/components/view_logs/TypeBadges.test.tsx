@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { LlmBadge, McpBadge, AgentBadge } from "./TypeBadges";
+import { LlmBadge, McpBadge, AgentBadge, BatchBadge } from "./TypeBadges";
 
 describe("TypeBadges", () => {
   describe("LlmBadge", () => {
@@ -41,6 +41,18 @@ describe("TypeBadges", () => {
     it("should render the count when provided", () => {
       render(<AgentBadge count={12} />);
       expect(screen.getByText("12")).toBeInTheDocument();
+    });
+  });
+
+  describe("BatchBadge", () => {
+    it("should render with default 'Batch' text when no count is provided", () => {
+      render(<BatchBadge />);
+      expect(screen.getByText("Batch")).toBeInTheDocument();
+    });
+
+    it("should render the count when provided", () => {
+      render(<BatchBadge count={4} />);
+      expect(screen.getByText("4")).toBeInTheDocument();
     });
   });
 });
