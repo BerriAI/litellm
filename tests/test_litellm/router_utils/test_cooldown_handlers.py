@@ -296,3 +296,84 @@ class TestShouldCooldownBasedOnAllowedFailsPolicy:
         assert set_cache_call[1]["ttl"] == 0.0, (
             "cooldown_time_override=0 should be used as TTL, not the router-level 60.0"
         )
+
+
+class TestRoutingGroupCooldownAlternatives:
+    def _router(self, routing_groups=None):
+        from litellm import Router
+
+        return Router(
+            model_list=[
+                {
+                    "model_name": "solo-member",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+                    "model_info": {"id": "cg-deploy-1"},
+                },
+                {
+                    "model_name": "other-member",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                    "model_info": {"id": "cg-deploy-2"},
+                },
+            ],
+            routing_groups=routing_groups,
+        )
+
+    def test_group_call_429_cools_down_member_with_alternatives(self):
+        from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
+
+        router = self._router(
+            routing_groups=[
+                {
+                    "group_name": "grouped",
+                    "models": ["solo-member", "other-member"],
+                    "routing_strategy": "simple-shuffle",
+                }
+            ]
+        )
+        assert (
+            _should_cooldown_deployment(
+                litellm_router_instance=router,
+                deployment="cg-deploy-1",
+                exception_status=429,
+                original_exception=Exception("rate limited"),
+                requested_model_group="grouped",
+            )
+            is True
+        )
+
+    def test_direct_member_429_keeps_single_deployment_exemption(self):
+        from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
+
+        router = self._router(
+            routing_groups=[
+                {
+                    "group_name": "grouped",
+                    "models": ["solo-member", "other-member"],
+                    "routing_strategy": "simple-shuffle",
+                }
+            ]
+        )
+        assert (
+            _should_cooldown_deployment(
+                litellm_router_instance=router,
+                deployment="cg-deploy-1",
+                exception_status=429,
+                original_exception=Exception("rate limited"),
+                requested_model_group="solo-member",
+            )
+            is False
+        )
+
+    def test_429_without_request_context_keeps_exemption(self):
+        from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
+
+        router = self._router(routing_groups=None)
+        assert (
+            _should_cooldown_deployment(
+                litellm_router_instance=router,
+                deployment="cg-deploy-1",
+                exception_status=429,
+                original_exception=Exception("rate limited"),
+            )
+            is False
+        )

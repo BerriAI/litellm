@@ -1,11 +1,22 @@
 import os
 import sys
+from typing import Final
+
+import pytest
+from pydantic import TypeAdapter
 
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
+import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
+from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+from litellm.utils import get_optional_params
+
+_MAPPED_PARAMS: Final = TypeAdapter(dict[str, object])
+_SUPPORTED_PARAMS: Final = TypeAdapter(list[str])
 
 
 class TestAzureOpenAIConfig:
@@ -54,3 +65,222 @@ def test_map_openai_params_with_preview_api_version():
     assert config.map_openai_params(
         non_default_params, optional_params, model, drop_params, api_version
     )
+
+
+def test_transform_request_hoists_tool_message_image():
+    """Azure builds its request via convert_to_azure_openai_messages without the
+    OpenAIGPTConfig._transform_messages pipeline, so transform_request must hoist
+    tool-message images itself; Azure rejects non-text tool content."""
+    data_uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    messages = [
+        {"role": "user", "content": "read the screenshot"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "image_url", "image_url": {"url": data_uri}}],
+        },
+    ]
+
+    request = AzureOpenAIConfig().transform_request(
+        model="gpt-4o",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    transformed = request["messages"]
+    assert [m.get("role") for m in transformed] == ["user", "assistant", "tool", "user"]
+    assert isinstance(transformed[2]["content"], str)
+    assert transformed[3]["content"] == [
+        {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+        {"type": "image_url", "image_url": {"url": data_uri}},
+    ]
+
+
+def test_transform_request_drops_tool_reference_parts():
+    """Azure's transform_request shares the tool-message sanitizing with OpenAI:
+    tool_reference parts are dropped, a reference-only result keeps its tool
+    message with empty text (#37462 round trip)."""
+    messages = [
+        {"role": "user", "content": "load the WebFetch tool"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "ToolSearch", "arguments": "{}"}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "tool_reference", "tool_name": "WebFetch"}],
+        },
+    ]
+
+    request = AzureOpenAIConfig().transform_request(
+        model="gpt-4o",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][2]["content"] == ""
+
+
+@pytest.mark.parametrize(
+    "model, emitted_key, absent_key",
+    [
+        ("gpt-5-chat", "max_completion_tokens", "max_tokens"),
+        ("gpt-5-chat-latest", "max_completion_tokens", "max_tokens"),
+        ("gpt-5-chat-2025-08-07", "max_completion_tokens", "max_tokens"),
+        ("gpt-5", "max_completion_tokens", "max_tokens"),
+        ("o3-mini", "max_completion_tokens", "max_tokens"),
+        ("gpt-4o", "max_tokens", "max_completion_tokens"),
+    ],
+)
+def test_azure_max_tokens_rename_covers_gpt_5_chat_family(model: str, emitted_key: str, absent_key: str) -> None:
+    """Azure rejects `max_tokens` for the whole gpt-5 name family, gpt-5-chat* included."""
+    mapped: Final = _MAPPED_PARAMS.validate_python(
+        get_optional_params(model=model, custom_llm_provider="azure", max_tokens=5)
+    )
+    assert mapped[emitted_key] == 5
+    assert absent_key not in mapped
+
+
+@pytest.mark.parametrize("model", ["gpt-5-chat", "gpt-5-chat-latest"])
+def test_azure_gpt_5_chat_stays_off_the_reasoning_path(model: str) -> None:
+    """https://github.com/BerriAI/litellm/issues/13781: gpt-5-chat* is a regular chat model."""
+    mapped: Final = _MAPPED_PARAMS.validate_python(
+        get_optional_params(
+            model=model,
+            custom_llm_provider="azure",
+            max_tokens=5,
+            temperature=0.3,
+            presence_penalty=0.1,
+            frequency_penalty=0.2,
+            stop=["stop"],
+            logit_bias={"1": 1},
+        )
+    )
+    supported: Final = _SUPPORTED_PARAMS.validate_python(
+        litellm.get_supported_openai_params(model=model, custom_llm_provider="azure")
+    )
+    assert mapped["temperature"] == 0.3
+    assert mapped["presence_penalty"] == 0.1
+    assert mapped["frequency_penalty"] == 0.2
+    assert mapped["stop"] == ["stop"]
+    assert mapped["logit_bias"] == {"1": 1}
+    assert "reasoning_effort" not in mapped
+    assert "reasoning_effort" not in supported
+
+
+def test_azure_gpt_5_takes_the_reasoning_path() -> None:
+    """Positive control for the predicate split: gpt-5 still drops chat-only params."""
+    mapped: Final = _MAPPED_PARAMS.validate_python(
+        get_optional_params(
+            model="gpt-5",
+            custom_llm_provider="azure",
+            presence_penalty=0.1,
+            logit_bias={"1": 1},
+            drop_params=True,
+        )
+    )
+    supported: Final = _SUPPORTED_PARAMS.validate_python(
+        litellm.get_supported_openai_params(model="gpt-5", custom_llm_provider="azure")
+    )
+    assert "presence_penalty" not in mapped
+    assert "logit_bias" not in mapped
+    assert "reasoning_effort" in supported
+
+
+class TestAzureToolSchemaCombinatorFlattening:
+    """
+    Regression tests for LIT-6510: Azure's chat completions validator rejects
+    tool parameters carrying a top-level anyOf/oneOf/allOf for every model
+    family, so AzureOpenAIConfig.transform_request must flatten them.
+    """
+
+    @staticmethod
+    def _anyof_tool():
+        return {
+            "type": "function",
+            "function": {
+                "name": "automation_update",
+                "description": "Update an automation",
+                "parameters": {
+                    "type": "object",
+                    "anyOf": [
+                        {
+                            "properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}},
+                            "required": ["id", "enabled"],
+                        },
+                        {
+                            "properties": {"id": {"type": "string"}, "schedule": {"type": "string"}},
+                            "required": ["id", "schedule"],
+                        },
+                    ],
+                    "properties": {"id": {"type": "string"}},
+                    "required": ["id"],
+                },
+            },
+        }
+
+    def _transform(self, config, model, tools):
+        return config.transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"tools": tools},
+            litellm_params={"custom_llm_provider": "azure"},
+            headers={},
+        )
+
+    def test_transform_request_flattens_top_level_anyof(self):
+        request = self._transform(AzureOpenAIConfig(), "gpt-4o", [self._anyof_tool()])
+        parameters = request["tools"][0]["function"]["parameters"]
+        assert "anyOf" not in parameters
+        assert parameters["type"] == "object"
+        assert set(parameters["properties"]) == {"id", "enabled", "schedule"}
+        assert parameters["required"] == ["id"]
+        assert request["tools"][0]["function"]["name"] == "automation_update"
+
+    def test_gpt5_config_flattens_via_shared_transform(self):
+        request = self._transform(AzureOpenAIGPT5Config(), "gpt-5.4-mini", [self._anyof_tool()])
+        parameters = request["tools"][0]["function"]["parameters"]
+        assert "anyOf" not in parameters
+        assert set(parameters["properties"]) == {"id", "enabled", "schedule"}
+
+    def test_caller_tool_dict_is_not_mutated(self):
+        tool = self._anyof_tool()
+        self._transform(AzureOpenAIConfig(), "gpt-4o", [tool])
+        assert tool == self._anyof_tool()
+
+    def test_clean_object_schema_passes_through_as_same_object(self):
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+            },
+        }
+        request = self._transform(AzureOpenAIConfig(), "gpt-4o", [tool])
+        assert request["tools"][0] is tool
+
+    def test_non_dict_tool_entries_pass_through_unchanged(self):
+        request = self._transform(AzureOpenAIConfig(), "gpt-4o", ["not-a-tool"])
+        assert request["tools"] == ["not-a-tool"]
+
+    def test_request_without_tools_is_unchanged(self):
+        request = AzureOpenAIConfig().transform_request(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"temperature": 0.2},
+            litellm_params={"custom_llm_provider": "azure"},
+            headers={},
+        )
+        assert "tools" not in request
+        assert request["temperature"] == 0.2

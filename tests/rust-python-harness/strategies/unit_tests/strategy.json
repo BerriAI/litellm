@@ -1,0 +1,32 @@
+{
+  "order": 30,
+  "id": "unit_tests",
+  "label": "Unit tests",
+  "description": "Validate Python/Rust test mappings and compare isolated Python runs alongside native Cargo tests.",
+  "functions": {
+    "ocr": {
+      "coverage": "planned",
+      "selectors": []
+    },
+    "messages": {
+      "coverage": "planned",
+      "selectors": []
+    },
+    "chat_completions": {
+      "coverage": "planned",
+      "selectors": []
+    },
+    "responses": {
+      "coverage": "planned",
+      "selectors": []
+    },
+    "count_tokens": {
+      "coverage": "planned",
+      "selectors": []
+    },
+    "transcription": {
+      "coverage": "planned",
+      "selectors": []
+    }
+  }
+}

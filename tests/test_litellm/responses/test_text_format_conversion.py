@@ -1,13 +1,8 @@
 import json
-import os
-import sys
 
 import pytest
 from pydantic import BaseModel
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.types.llms.openai import (
@@ -158,7 +153,6 @@ class TestTextFormatConversion:
             new=mock_handler,
         ):
             litellm._turn_on_debug()
-            litellm.set_verbose = True
 
             # Call aresponses with text_format parameter
             response = await litellm.aresponses(

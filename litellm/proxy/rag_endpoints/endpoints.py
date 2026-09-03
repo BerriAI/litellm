@@ -7,15 +7,22 @@ Provides:
 """
 
 import base64
-from typing import Any, Final
+import json
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse, StreamingResponse
+from starlette.datastructures import UploadFile
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+    LiteLLM_ManagedVectorStore,
+)
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_utils import is_request_body_safe
@@ -26,12 +33,36 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     get_form_data,
 )
+from litellm.proxy.rag_endpoints.upload_security import (
+    MAX_UPLOAD_SIZE_BYTES,
+    EicarTestMalwareScanner,
+    MalwareScanner,
+    RejectedUpload,
+    validate_upload,
+)
+from litellm.proxy.vector_store_endpoints.endpoints import (
+    build_request_data_from_managed_vector_store,
+    reject_caller_embedding_selection_params,
+)
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
 )
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
 
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
+
 router: Final = APIRouter()
+
+
+def _as_string_keyed_mapping(value: object) -> Mapping[str, object] | None:
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
+def _response_attr(source: object, name: str) -> object:
+    return getattr(source, name, None)
 
 
 def _raise_vector_store_scan_depth_exceeded() -> None:
@@ -42,8 +73,8 @@ def _raise_vector_store_scan_depth_exceeded() -> None:
 
 
 def _append_payload_to_scan_stack(
-    payload_stack: list[tuple[Any, int]],
-    value: Any,
+    payload_stack: list[tuple[object, int]],
+    value: object,
     next_depth: int,
 ) -> None:
     if isinstance(value, dict):
@@ -58,7 +89,7 @@ def _append_payload_to_scan_stack(
         payload_stack.append((value, next_depth))
 
 
-def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
+def _collect_vector_store_ids_from_payload(payload: object) -> set[str]:
     vector_store_ids: Final[set[str]] = set()
     payload_stack: Final = [(payload, 0)]
 
@@ -95,21 +126,30 @@ def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
 
 
 async def _authorize_nested_vector_store_ids(
-    payload: Any,
+    payload: object,
     user_api_key_dict: UserAPIKeyAuth,
-) -> None:
-    for vector_store_id in sorted(_collect_vector_store_ids_from_payload(payload)):
-        await assert_user_can_access_vector_store_id(
-            vector_store_id=vector_store_id,
-            user_api_key_dict=user_api_key_dict,
-        )
+) -> Mapping[str, LiteLLM_ManagedVectorStore]:
+    """Authorize every nested vector store id and return the managed stores it resolved."""
+    return MappingProxyType(
+        {
+            vector_store_id: store
+            for vector_store_id in sorted(_collect_vector_store_ids_from_payload(payload))
+            if (
+                store := await assert_user_can_access_vector_store_id(
+                    vector_store_id=vector_store_id,
+                    user_api_key_dict=user_api_key_dict,
+                )
+            )
+            is not None
+        }
+    )
 
 
 def _build_file_metadata_entry(
-    response: Any,
+    response: object,
     file_data: tuple[str, bytes, str] | None = None,
     file_url: str | None = None,
-) -> dict[str, Any]:
+) -> Mapping[str, str | int | None]:
     """
     Build a file metadata entry for storing in vector_store_metadata.
 
@@ -124,11 +164,11 @@ def _build_file_metadata_entry(
     from datetime import datetime, timezone
 
     # Extract file_id from response
-    file_id = None
-    if hasattr(response, "get"):
-        file_id = response.get("file_id")
-    elif hasattr(response, "file_id"):
-        file_id = response.file_id
+    mapping_response: Final = _as_string_keyed_mapping(response)
+    raw_file_id: Final = (
+        mapping_response.get("file_id") if mapping_response is not None else _response_attr(response, "file_id")
+    )
+    file_id: Final = raw_file_id if isinstance(raw_file_id, str) else None
 
     # Extract file information from file_data tuple
     filename = None
@@ -141,7 +181,7 @@ def _build_file_metadata_entry(
         content_type = file_data[2] if len(file_data) > 2 else None
 
     # Build file metadata entry
-    file_entry: Final = {
+    file_entry: Final[dict[str, str | int | None]] = {
         "file_id": file_id,
         "filename": filename,
         "file_url": file_url,
@@ -158,9 +198,9 @@ def _build_file_metadata_entry(
 
 
 async def _save_vector_store_to_db_from_rag_ingest(
-    response: Any,
-    ingest_options: dict[str, Any],
-    prisma_client,
+    response: object,
+    ingest_options: Mapping[str, dict[str, str | None]],
+    prisma_client: "PrismaClient",
     user_api_key_dict: UserAPIKeyAuth,
     file_data: tuple[str, bytes, str] | None = None,
     file_url: str | None = None,
@@ -186,10 +226,11 @@ async def _save_vector_store_to_db_from_rag_ingest(
     )
 
     # Handle both dict and object responses
-    if hasattr(response, "get"):
-        vector_store_id = response.get("vector_store_id")
+    mapping_response: Final = _as_string_keyed_mapping(response)
+    if mapping_response is not None:
+        vector_store_id = mapping_response.get("vector_store_id")
     elif hasattr(response, "vector_store_id"):
-        vector_store_id = response.vector_store_id
+        vector_store_id = _response_attr(response, "vector_store_id")
     else:
         verbose_proxy_logger.warning("Unable to extract vector_store_id from response type: %s", type(response))
         return
@@ -255,14 +296,13 @@ async def _save_vector_store_to_db_from_rag_ingest(
             verbose_proxy_logger.info("Vector store %s already exists, appending file to metadata", vector_store_id)
 
             # Update existing vector store with new file
-            existing_metadata = existing_vector_store.vector_store_metadata or {}
-            if isinstance(existing_metadata, str):
-                import json
+            stored_metadata: Final = existing_vector_store.vector_store_metadata or {}
+            existing_metadata: dict[str, object] = (
+                json.loads(stored_metadata) if isinstance(stored_metadata, str) else stored_metadata
+            )
 
-                existing_metadata = json.loads(existing_metadata)
-
-            ingested_files: Final = existing_metadata.get("ingested_files", [])
-            ingested_files.append(file_entry)
+            previous_files: Final = existing_metadata.get("ingested_files", [])
+            ingested_files: Final = [*previous_files, file_entry] if isinstance(previous_files, list) else [file_entry]
             existing_metadata["ingested_files"] = ingested_files
 
             # Update the vector store
@@ -283,8 +323,22 @@ async def _save_vector_store_to_db_from_rag_ingest(
         verbose_proxy_logger.exception("Failed to save vector store %s to database: %s", vector_store_id, db_error)
 
 
+def _secure_uploaded_file(
+    file_data: tuple[str, bytes, str],
+    scanner: MalwareScanner,
+) -> tuple[str, bytes, str]:
+    validation: Final = validate_upload(content=file_data[1], scanner=scanner)
+    if isinstance(validation, RejectedUpload):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": validation.message, "reason": validation.reason.value},
+        )
+    return validation.safe_filename, file_data[1], validation.content_type
+
+
 async def parse_rag_ingest_request(
     request: Request,
+    scanner: MalwareScanner,
 ) -> tuple[dict[str, Any], tuple[str, bytes, str] | None, str | None, str | None]:
     """
     Parse RAG ingest request.
@@ -293,15 +347,20 @@ async def parse_rag_ingest_request(
     - Form: file + request JSON in form field
     - JSON body for URL-based ingestion
 
+    Uploaded file bytes are validated against the vector-store upload controls
+    (size limit, format allowlist with content inspection, archive rejection,
+    and the injected malware scanner) and given a server-generated filename
+    before they are returned.
+
     Returns:
         Tuple of (ingest_options, file_data, file_url, file_id)
     """
     headers: Final = _safe_get_request_headers(request)
     content_type = headers.get("content-type", "")
 
-    file_data = None
-    file_url = None
-    file_id = None
+    file_data: tuple[str, bytes, str] | None = None
+    file_url: str | None = None
+    file_id: str | None = None
     ingest_options: dict[str, Any] = {}
 
     if "multipart/form-data" in content_type:
@@ -310,12 +369,12 @@ async def parse_rag_ingest_request(
 
         # Get file
         file_obj = form_data.get("file")
-        if file_obj is not None and hasattr(file_obj, "read"):
-            file_content = await file_obj.read()
-            file_data = (file_obj.filename, file_content, file_obj.content_type)
+        if isinstance(file_obj, UploadFile):
+            file_content = await file_obj.read(MAX_UPLOAD_SIZE_BYTES + 1)
+            file_data = (file_obj.filename or "", file_content, file_obj.content_type or "")
 
         # Parse JSON from 'request' form field (contains full request body as JSON)
-        request_json_str: Final = form_data.get("request")
+        request_json_str: Final[str | bytes | None] = form_data.get("request")
         if request_json_str:
             request_data: Final = orjson.loads(request_json_str)
             ingest_options = request_data.get("ingest_options", {})
@@ -353,6 +412,10 @@ async def parse_rag_ingest_request(
             detail={"error": "Must provide file, file_url, or file_id"},
         )
 
+    secured_file_data: Final[tuple[str, bytes, str] | None] = (
+        _secure_uploaded_file(file_data, scanner) if file_data is not None else None
+    )
+
     if "vector_store" not in ingest_options:
         raise HTTPException(
             status_code=400,
@@ -382,7 +445,7 @@ async def parse_rag_ingest_request(
         "api_key",
         "api_base",
     }
-    vector_store_opts: Final = ingest_options.get("vector_store", {})
+    vector_store_opts: Final[object] = ingest_options.get("vector_store", {})
     if isinstance(vector_store_opts, dict):
         for field in _BLOCKED_VECTOR_STORE_CREDENTIAL_PARAMS:
             if field in vector_store_opts:
@@ -394,7 +457,7 @@ async def parse_rag_ingest_request(
                     },
                 )
 
-    return ingest_options, file_data, file_url, file_id
+    return ingest_options, secured_file_data, file_url, file_id
 
 
 @router.post(
@@ -457,7 +520,9 @@ async def rag_ingest(
 
     try:
         # Parse request
-        ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(request)
+        ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(
+            request, scanner=EicarTestMalwareScanner()
+        )
 
         # INTERNAL_USER_VIEW_ONLY can ingest to existing vector stores only
         if user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value and not ingest_options.get(
@@ -652,13 +717,29 @@ async def rag_query(
                 status_code=400,
                 detail={"error": "retrieval_config must contain 'vector_store_id'"},
             )
-        await _authorize_nested_vector_store_ids(
+        reject_caller_embedding_selection_params(payload=retrieval_config, source="retrieval_config")
+        resolved_stores: Final = await _authorize_nested_vector_store_ids(
             payload=retrieval_config,
             user_api_key_dict=user_api_key_dict,
         )
 
+        # Merge litellm-managed vector store params (provider, region, embedding
+        # model, credentials, ...) from the registry: the same source the direct
+        # /vector_stores/{id}/search endpoint uses. Store-managed keys win on
+        # conflict so callers cannot override the store's provider or credentials.
+        managed_store: Final = resolved_stores.get(retrieval_config["vector_store_id"])
+        store_data: Final = (
+            build_request_data_from_managed_vector_store(managed_store)
+            if managed_store is not None
+            else MappingProxyType({})
+        )
+        merged_retrieval_config: Final = {
+            **retrieval_config,
+            **store_data,
+        }  # mutable-ok: litellm.aquery requires a plain dict payload
+
         # Add litellm data
-        request_data: dict[str, Any] = {}
+        request_data: dict[str, object] = {}
         request_data = await add_litellm_data_to_request(
             data=request_data,
             request=request,
@@ -668,13 +749,18 @@ async def rag_query(
             proxy_config=proxy_config,
         )
 
-        verbose_proxy_logger.debug("RAG Query - model: %s, retrieval_config: %s", model, retrieval_config)
+        verbose_proxy_logger.debug(
+            "RAG Query - model: %s, vector_store_id: %s, custom_llm_provider: %s",
+            model,
+            retrieval_config["vector_store_id"],
+            merged_retrieval_config.get("custom_llm_provider"),
+        )
 
         # Call query
         response: Final = await litellm.aquery(
             model=model,
             messages=messages,
-            retrieval_config=retrieval_config,
+            retrieval_config=merged_retrieval_config,
             rerank=rerank,
             stream=stream,
             router=llm_router,
