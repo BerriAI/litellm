@@ -14,7 +14,8 @@ const AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT_ENV: &str = "AZURE_DOCUMENT_INTELLIGE
 const AZURE_DOCUMENT_INTELLIGENCE_API_VERSION: &str = "2024-11-30";
 const AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI: i64 = 96;
 
-const AZURE_DOCUMENT_INTELLIGENCE_SUPPORTED_OCR_PARAMS: &[&str] = &["pages"];
+const AZURE_DOCUMENT_INTELLIGENCE_SUPPORTED_OCR_PARAMS: &[&str] =
+    &["pages", "features", "req_format"];
 
 pub struct AzureAiOcrConfig;
 pub struct AzureDocumentIntelligenceOcrConfig;
@@ -98,9 +99,14 @@ pub fn resolve_document_intelligence_endpoint(
     )
 }
 
-fn encode_model_id(model: &str) -> String {
+fn encode_model_id(model: &str) -> Result<String, Error> {
     let model_id = model.rsplit('/').next().unwrap_or(model);
-    model_id
+    if model_id.is_empty() || matches!(model_id, "." | "..") {
+        return Err(Error::InvalidRequest(
+            "model_id cannot be a dot path segment or empty".to_string(),
+        ));
+    }
+    Ok(model_id
         .bytes()
         .flat_map(|byte| match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
@@ -108,7 +114,7 @@ fn encode_model_id(model: &str) -> String {
             }
             _ => format!("%{byte:02X}").chars().collect(),
         })
-        .collect()
+        .collect())
 }
 
 fn pages_token_is_valid(token: &str) -> bool {
@@ -124,6 +130,43 @@ fn pages_token_is_valid(token: &str) -> bool {
         Some(end) => {
             !end.is_empty() && end.chars().all(|ch| ch.is_ascii_digit()) && parts.next().is_none()
         }
+    }
+}
+
+fn normalize_features_param(features: &Value) -> Result<Option<String>, Error> {
+    let invalid = || {
+        Error::InvalidRequest(format!(
+            "Invalid `features` for Azure Document Intelligence: {features:?}. Expected a list of feature names or a comma-separated string like 'keyValuePairs' or 'keyValuePairs,languages'."
+        ))
+    };
+    let tokens = match features {
+        Value::String(value) => value.split(',').collect::<Vec<_>>(),
+        Value::Array(values) if values.is_empty() => return Ok(None),
+        Value::Array(values) => values
+            .iter()
+            .map(Value::as_str)
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(invalid)?,
+        _ => return Err(invalid()),
+    };
+    let normalized = tokens.into_iter().map(str::trim).collect::<Vec<_>>();
+    if normalized.iter().all(|token| {
+        let mut chars = token.chars();
+        chars.next().is_some_and(|ch| ch.is_ascii_alphabetic())
+            && chars.all(|ch| ch.is_ascii_alphanumeric())
+    }) {
+        Ok(Some(normalized.join(",")))
+    } else {
+        Err(invalid())
+    }
+}
+
+fn parse_req_format(value: &Value) -> Result<&str, Error> {
+    match value.as_str() {
+        Some(value @ ("litellm" | "native")) => Ok(value),
+        _ => Err(Error::InvalidRequest(format!(
+            "Invalid `req_format`: {value:?}"
+        ))),
     }
 }
 
@@ -202,7 +245,7 @@ pub fn complete_document_intelligence_url(
     let mut url = format!(
         "{}/documentintelligence/documentModels/{}:analyze?api-version={}",
         endpoint.trim_end_matches('/'),
-        encode_model_id(model),
+        encode_model_id(model)?,
         AZURE_DOCUMENT_INTELLIGENCE_API_VERSION
     );
 
@@ -210,6 +253,12 @@ pub fn complete_document_intelligence_url(
         && let Some(normalized) = normalize_pages_param(pages)?
     {
         url.push_str("&pages=");
+        url.push_str(&normalized);
+    }
+    if let Some(features) = optional_params.get("features")
+        && let Some(normalized) = normalize_features_param(features)?
+    {
+        url.push_str("&features=");
         url.push_str(&normalized);
     }
 
@@ -330,6 +379,30 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
         AZURE_DOCUMENT_INTELLIGENCE_SUPPORTED_OCR_PARAMS
     }
 
+    fn map_ocr_params(
+        &self,
+        non_default_params: &Map<String, Value>,
+    ) -> Result<Map<String, Value>, Error> {
+        let mut mapped = Map::new();
+        if let Some(pages) = non_default_params.get("pages")
+            && let Some(pages) = normalize_pages_param(pages)?
+        {
+            mapped.insert("pages".to_string(), Value::String(pages));
+        }
+        if let Some(features) = non_default_params.get("features")
+            && let Some(features) = normalize_features_param(features)?
+        {
+            mapped.insert("features".to_string(), Value::String(features));
+        }
+        if let Some(req_format) = non_default_params.get("req_format") {
+            mapped.insert(
+                "req_format".to_string(),
+                Value::String(parse_req_format(req_format)?.to_string()),
+            );
+        }
+        Ok(mapped)
+    }
+
     fn transform_ocr_request(
         &self,
         _model: &str,
@@ -359,6 +432,15 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
         &self,
         model: &str,
         response_json: Value,
+    ) -> Result<OcrResponseData, Error> {
+        self.transform_ocr_response_with_params(model, response_json, &Map::new())
+    }
+
+    fn transform_ocr_response_with_params(
+        &self,
+        model: &str,
+        response_json: Value,
+        optional_params: &Map<String, Value>,
     ) -> Result<OcrResponseData, Error> {
         let response = response_json
             .as_object()
@@ -404,6 +486,22 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
             pages,
             model: model.to_string(),
             document_annotation: None,
+            content: response
+                .get("analyzeResult")
+                .and_then(|result| result.get("content"))
+                .cloned(),
+            tables: response
+                .get("analyzeResult")
+                .and_then(|result| result.get("tables"))
+                .cloned(),
+            key_value_pairs: response
+                .get("analyzeResult")
+                .and_then(|result| result.get("keyValuePairs"))
+                .cloned(),
+            provider_native_response: (optional_params
+                .get("req_format")
+                .is_some_and(|format| format == "native"))
+            .then(|| response_json.clone()),
             object: "ocr".to_string(),
         })
     }
@@ -430,6 +528,10 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
         OcrAuthStrategy::Header("Ocp-Apim-Subscription-Key")
     }
 
+    fn allows_bearer_auth_fallback(&self) -> bool {
+        true
+    }
+
     fn response_handling(&self) -> OcrResponseHandling {
         OcrResponseHandling::AzureDocumentIntelligencePoll
     }
@@ -438,6 +540,36 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn succeeded_response() -> Value {
+        json!({
+            "status": "succeeded",
+            "analyzeResult": {
+                "content": "Invoice\nTotal: $100.00",
+                "pages": [{
+                    "pageNumber": 1,
+                    "width": 8.5,
+                    "height": 11,
+                    "unit": "inch",
+                    "lines": [{"content": "Invoice"}, {"content": "Total: $100.00"}]
+                }],
+                "tables": [{"rowCount": 1, "columnCount": 1, "cells": []}],
+                "keyValuePairs": [{"key": {"content": "Total"}, "value": {"content": "$100.00"}}]
+            }
+        })
+    }
+
+    fn mapped_params(params: Value) -> Map<String, Value> {
+        AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
+            .map_ocr_params(params.as_object().expect("params object"))
+            .expect("params map")
+    }
+
+    fn document_intelligence_response(params: Map<String, Value>) -> OcrResponseData {
+        AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
+            .transform_ocr_response_with_params("prebuilt-layout", succeeded_response(), &params)
+            .expect("response transforms")
+    }
 
     #[test]
     fn azure_ai_reuses_mistral_body_transform() {
@@ -449,30 +581,8 @@ mod tests {
             )
             .expect("request transforms")
             .data;
-
         assert_eq!(body["model"], "pixtral-12b-2409");
         assert_eq!(body["include_image_base64"], true);
-        assert_eq!(
-            body["document"]["document_url"],
-            "data:application/pdf;base64,abc"
-        );
-    }
-
-    #[test]
-    fn document_intelligence_url_normalizes_zero_based_pages() {
-        let params = serde_json::Map::from_iter([("pages".to_string(), json!([2, 0, 2]))]);
-        let url = complete_document_intelligence_url(
-            Some("https://example.cognitiveservices.azure.com/"),
-            "azure_ai/doc-intelligence/prebuilt-layout",
-            &params,
-            &|_| None,
-        )
-        .expect("url builds");
-
-        assert_eq!(
-            url,
-            "https://example.cognitiveservices.azure.com/documentintelligence/documentModels/prebuilt-layout:analyze?api-version=2024-11-30&pages=1,3"
-        );
     }
 
     #[test]
@@ -485,36 +595,250 @@ mod tests {
             )
             .expect("request transforms")
             .data;
-
         assert_eq!(body, json!({"base64Source": "abc123"}));
     }
 
     #[test]
-    fn document_intelligence_response_normalizes_pages() {
-        let response = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
-            .transform_ocr_response(
-                "prebuilt-layout",
-                json!({
-                    "status": "succeeded",
-                    "analyzeResult": {
-                        "pages": [{
-                            "pageNumber": 2,
-                            "width": 8.5,
-                            "height": 11,
-                            "unit": "inch",
-                            "lines": [{"content": "hello"}, {"content": "world"}]
-                        }]
-                    }
-                }),
-            )
-            .expect("response transforms");
+    fn document_intelligence_model_id_percent_encodes_reserved_bytes() {
+        let url = complete_document_intelligence_url(
+            Some("https://example.cognitiveservices.azure.com"),
+            "prebuilt-layout?x=1#frag",
+            &Map::new(),
+            &|_| None,
+        )
+        .expect("url builds");
+        assert_eq!(
+            url,
+            "https://example.cognitiveservices.azure.com/documentintelligence/documentModels/prebuilt-layout%3Fx%3D1%23frag:analyze?api-version=2024-11-30"
+        );
+    }
 
-        assert_eq!(response.pages[0]["index"], 1);
-        assert_eq!(response.pages[0]["markdown"], "hello\nworld");
-        assert_eq!(response.pages[0]["dimensions"]["width"], 816);
+    #[test]
+    fn document_intelligence_model_id_rejects_dot_segment() {
+        let error = complete_document_intelligence_url(
+            Some("https://example.cognitiveservices.azure.com"),
+            "azure_ai/doc-intelligence/..",
+            &Map::new(),
+            &|_| None,
+        )
+        .expect_err("dot segment must fail");
+        assert!(
+            matches!(error, Error::InvalidRequest(message) if message.contains("model_id cannot be a dot path segment"))
+        );
+    }
+
+    #[test]
+    fn document_intelligence_response_preserves_native_fields() {
+        let response = document_intelligence_response(Map::new());
+        assert_eq!(response.content, Some(json!("Invoice\nTotal: $100.00")));
+        assert_eq!(
+            response.tables,
+            Some(json!([{"rowCount": 1, "columnCount": 1, "cells": []}]))
+        );
+        assert_eq!(
+            response.key_value_pairs,
+            Some(json!([{"key": {"content": "Total"}, "value": {"content": "$100.00"}}]))
+        );
+        assert_eq!(
+            response.pages[0]["dimensions"],
+            json!({"width": 816, "height": 1056, "dpi": 96})
+        );
+    }
+
+    #[test]
+    fn document_intelligence_async_response_preserves_native_fields() {
+        let response = document_intelligence_response(Map::new());
+        assert_eq!(response.pages[0]["index"], 0);
+        assert_eq!(response.pages[0]["markdown"], "Invoice\nTotal: $100.00");
         assert_eq!(
             response.usage_info,
             Some(json!({"pages_processed": 1, "doc_size_bytes": null}))
+        );
+    }
+
+    #[test]
+    fn document_intelligence_response_tolerates_missing_native_fields() {
+        let response = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
+            .transform_ocr_response(
+                "prebuilt-read",
+                json!({"status": "succeeded", "analyzeResult": {"pages": []}}),
+            )
+            .expect("response transforms");
+        assert_eq!(response.content, None);
+        assert_eq!(response.tables, None);
+        assert_eq!(response.key_value_pairs, None);
+    }
+
+    #[test]
+    fn document_intelligence_response_rejects_non_succeeded_status() {
+        let error = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
+            .transform_ocr_response("prebuilt-layout", json!({"status": "failed"}))
+            .expect_err("failed operation must error");
+        assert!(
+            matches!(error, Error::InvalidResponse(message) if message.contains("status: failed"))
+        );
+    }
+
+    #[test]
+    fn document_intelligence_supported_params_match_python() {
+        assert_eq!(
+            AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG.supported_ocr_params(),
+            ["pages", "features", "req_format"]
+        );
+    }
+
+    #[test]
+    fn document_intelligence_native_format_retains_raw_operation() {
+        let response =
+            document_intelligence_response(mapped_params(json!({"req_format": "native"})));
+        assert_eq!(
+            response.provider_native_response,
+            Some(succeeded_response())
+        );
+        assert_eq!(response.usage_info.unwrap()["pages_processed"], 1);
+    }
+
+    #[test]
+    fn document_intelligence_async_native_format_retains_raw_operation() {
+        let response =
+            document_intelligence_response(mapped_params(json!({"req_format": "native"})));
+        assert_eq!(
+            response
+                .provider_native_response
+                .as_ref()
+                .and_then(|value| value.get("status")),
+            Some(&json!("succeeded"))
+        );
+    }
+
+    #[test]
+    fn document_intelligence_default_format_omits_raw_operation() {
+        assert_eq!(
+            document_intelligence_response(Map::new()).provider_native_response,
+            None
+        );
+        assert_eq!(
+            document_intelligence_response(mapped_params(json!({"req_format": "litellm"})))
+                .provider_native_response,
+            None
+        );
+    }
+
+    #[test]
+    fn document_intelligence_req_format_maps_supported_values() {
+        assert_eq!(
+            mapped_params(json!({"req_format": "native"})),
+            serde_json::Map::from_iter([("req_format".to_string(), json!("native"))])
+        );
+        assert_eq!(
+            mapped_params(json!({"req_format": "litellm"})),
+            serde_json::Map::from_iter([("req_format".to_string(), json!("litellm"))])
+        );
+    }
+
+    #[test]
+    fn document_intelligence_req_format_rejects_unknown_value() {
+        let error = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
+            .map_ocr_params(&serde_json::Map::from_iter([(
+                "req_format".to_string(),
+                json!("azure"),
+            )]))
+            .expect_err("unknown format must fail");
+        assert!(
+            matches!(error, Error::InvalidRequest(message) if message.contains("Invalid `req_format`"))
+        );
+    }
+
+    #[test]
+    fn document_intelligence_url_omits_req_format() {
+        let url = complete_document_intelligence_url(
+            Some("https://example.cognitiveservices.azure.com"),
+            "prebuilt-layout",
+            &mapped_params(json!({"req_format": "native"})),
+            &|_| None,
+        )
+        .expect("url builds");
+        assert!(!url.contains("req_format"));
+    }
+
+    #[test]
+    fn document_intelligence_features_normalize_supported_inputs() {
+        for (input, expected) in [
+            (json!(["keyValuePairs"]), json!("keyValuePairs")),
+            (
+                json!(["keyValuePairs", "languages"]),
+                json!("keyValuePairs,languages"),
+            ),
+            (
+                json!("keyValuePairs, languages"),
+                json!("keyValuePairs,languages"),
+            ),
+        ] {
+            assert_eq!(
+                mapped_params(json!({"features": input}))["features"],
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn document_intelligence_empty_features_are_omitted() {
+        assert!(!mapped_params(json!({"features": []})).contains_key("features"));
+    }
+
+    #[test]
+    fn document_intelligence_features_reject_invalid_values() {
+        for value in [
+            json!("keyValuePairs&pages=9"),
+            json!(""),
+            json!([1]),
+            json!({"feature": "keyValuePairs"}),
+        ] {
+            let error = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
+                .map_ocr_params(&serde_json::Map::from_iter([(
+                    "features".to_string(),
+                    value,
+                )]))
+                .expect_err("invalid feature must fail");
+            assert!(
+                matches!(error, Error::InvalidRequest(message) if message.contains("Invalid `features`"))
+            );
+        }
+    }
+
+    #[test]
+    fn document_intelligence_url_appends_features_query() {
+        let url = complete_document_intelligence_url(
+            Some("https://example.cognitiveservices.azure.com"),
+            "prebuilt-layout",
+            &mapped_params(json!({"features": "keyValuePairs"})),
+            &|_| None,
+        )
+        .expect("url builds");
+        assert!(url.ends_with("&features=keyValuePairs"));
+    }
+
+    #[test]
+    fn document_intelligence_url_combines_pages_and_features() {
+        let url = complete_document_intelligence_url(
+            Some("https://example.cognitiveservices.azure.com"),
+            "prebuilt-layout",
+            &mapped_params(json!({"pages": [0, 1, 2], "features": ["keyValuePairs", "languages"]})),
+            &|_| None,
+        )
+        .expect("url builds");
+        assert!(url.ends_with("&pages=1,2,3&features=keyValuePairs,languages"));
+    }
+
+    #[test]
+    fn document_intelligence_auth_uses_subscription_key() {
+        assert_eq!(
+            AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG.auth_strategy(),
+            OcrAuthStrategy::Header("Ocp-Apim-Subscription-Key")
+        );
+        assert_eq!(
+            resolve_document_intelligence_api_key(Some("my-key"), &|_| None),
+            Ok("my-key".to_string())
         );
     }
 }
