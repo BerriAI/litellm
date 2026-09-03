@@ -1,3 +1,4 @@
+use crate::http_utils::body::JsonPayload;
 use serde_json::{Map, Value, json};
 
 use crate::audio_transcription::transformation::{
@@ -6,7 +7,7 @@ use crate::audio_transcription::transformation::{
 use crate::audio_transcription::types::{
     AudioTranscriptionRequestData, AudioTranscriptionResponseData,
 };
-use crate::error::{Error, json_type_name};
+use crate::error::Error;
 
 pub use super::aws_base::{aws_auth_config, bedrock_model_id_and_region, resolve_bedrock_region};
 use super::constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE};
@@ -18,24 +19,24 @@ pub static BEDROCK_AUDIO_TRANSCRIPTION_CONFIG: BedrockAudioTranscriptionConfig =
 
 pub struct BedrockAudioTranscriptionConfig;
 
-fn audio_fields(audio: Value) -> Result<(String, String), Error> {
-    let object = audio.as_object().ok_or_else(|| Error::InvalidType {
-        expected: "object",
-        actual: json_type_name(&audio),
-    })?;
+fn audio_fields(audio: JsonPayload) -> Result<(JsonPayload, String), Error> {
+    let mut object = audio.into_object()?;
     let data = object
-        .get("data")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
+        .remove("data")
+        .filter(|value| match value {
+            JsonPayload::String(text) => !text.as_str().is_empty(),
+            JsonPayload::Base64(bytes) => !bytes.is_empty(),
+            _ => false,
+        })
         .ok_or(Error::MissingField("audio.data"))?;
     let format = object
         .get("format")
-        .and_then(Value::as_str)
+        .and_then(JsonPayload::as_str)
         .filter(|value| matches!(*value, "wav" | "mp3" | "flac" | "ogg"))
         .ok_or_else(|| {
-            Error::InvalidRequest("audio.format must be wav, mp3, flac, or ogg".to_string())
+            Error::InvalidRequest("audio.format must be wav, mp3, flac, or ogg".into())
         })?;
-    Ok((data.to_string(), format.to_string()))
+    Ok((data, format.to_owned()))
 }
 
 fn optional_string<'a>(params: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
@@ -52,10 +53,10 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn transform_transcription_request(
+    fn transform_transcription_payload(
         &self,
         _model: &str,
-        audio: Value,
+        audio: JsonPayload,
         optional_params: Map<String, Value>,
     ) -> Result<AudioTranscriptionRequestData, Error> {
         let (data, format) = audio_fields(audio)?;
@@ -71,17 +72,32 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
             inference_config.insert("temperature".to_string(), temperature.clone());
         }
         Ok(AudioTranscriptionRequestData {
-            body: json!({
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {"audio": {"format": format, "source": {"bytes": data}}},
-                        {"text": instruction}
-                    ]
-                }],
-                "system": [{"text": "You are a transcription assistant."}],
-                "inferenceConfig": inference_config,
-            }),
+            body: JsonPayload::object([
+                (
+                    "messages",
+                    JsonPayload::Array(vec![JsonPayload::object([
+                        ("role", "user".into()),
+                        (
+                            "content",
+                            JsonPayload::Array(vec![
+                                JsonPayload::object([(
+                                    "audio",
+                                    JsonPayload::object([
+                                        ("format", format.into()),
+                                        ("source", JsonPayload::object([("bytes", data)])),
+                                    ]),
+                                )]),
+                                JsonPayload::object([("text", instruction.into())]),
+                            ]),
+                        ),
+                    ])]),
+                ),
+                (
+                    "system",
+                    json!([{"text": "You are a transcription assistant."}]).into(),
+                ),
+                ("inferenceConfig", Value::Object(inference_config).into()),
+            ]),
         })
     }
 

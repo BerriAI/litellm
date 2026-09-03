@@ -6,6 +6,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+base64.workspace = true
+futures-util.workspace = true
+h2.workspace = true
+tokio.workspace = true
+bytes.workspace = true
+bytestring.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -32,4 +38,5 @@ bedrock-auth = [
 ]
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+http = "1"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }

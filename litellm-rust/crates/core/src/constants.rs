@@ -41,3 +41,12 @@ pub const CHAT_COMPLETION_OBJECT: &str = "chat.completion";
 /// `litellm/litellm_core_utils/prompt_templates/factory.py`.
 pub const EMPTY_TEXT_PLACEHOLDER: &str =
     "[System: Empty message content sanitised to satisfy protocol]";
+
+pub const JSON_BODY_CHUNK_BYTES: usize = 64 * 1024;
+pub const JSON_BODY_MAX_REDIRECTS: usize = 10;
+pub const JSON_BODY_PROTOCOL_RETRIES: usize = 2;
+
+pub const JSON_PAYLOAD_MAX_DEPTH: usize = 128;
+
+pub const OCR_TIMEOUT_SECS: u64 = 600;
+pub const AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS: u64 = 120;

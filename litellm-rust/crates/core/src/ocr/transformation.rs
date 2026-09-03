@@ -1,4 +1,5 @@
 use crate::Error;
+use crate::http_utils::body::JsonPayload;
 use serde_json::{Map, Value};
 
 use super::types::{OcrRequestData, OcrResponseData};
@@ -42,6 +43,15 @@ pub trait OcrProviderConfig: Sync {
         &self,
         model: &str,
         document: Value,
+        optional_params: Map<String, Value>,
+    ) -> Result<OcrRequestData, Error> {
+        self.transform_ocr_payload(model, document.into(), optional_params)
+    }
+
+    fn transform_ocr_payload(
+        &self,
+        model: &str,
+        document: JsonPayload,
         optional_params: Map<String, Value>,
     ) -> Result<OcrRequestData, Error>;
 

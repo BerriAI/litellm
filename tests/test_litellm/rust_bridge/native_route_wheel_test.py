@@ -16,6 +16,9 @@ from pathlib import Path
 from socket import socket as Socket
 from typing import Final
 
+MEDIA: Final = "AQID" * (256 * 1024)
+DOCUMENT: Final = "data:application/pdf;base64," + MEDIA
+
 REQUEST_STARTED: Final = threading.Event()
 REQUEST_CANCELLED: Final = threading.Event()
 
@@ -83,7 +86,7 @@ def assert_native_request(
         assert path == "/v1/ocr"
         assert headers.get("authorization") == "Bearer sk-native"
         assert body["model"] == "mistral-ocr-latest"
-        assert body["document"]["document_url"] == "https://example.com/document.pdf"
+        assert body["document"]["document_url"] == DOCUMENT
         assert body["include_image_base64"] is True
         return
     if route == "transcription":
@@ -98,7 +101,7 @@ def assert_native_request(
     assert body["model"] == "claude-sonnet-4-5"
     if route == "messages":
         assert body["max_tokens"] == 16
-        assert body["messages"][0]["content"] == "hello-from-messages"
+        assert body["messages"][0]["content"][0]["content"][0]["source"]["data"] == MEDIA
         return
     assert body["max_tokens"] == 17
     assert body["messages"][0]["content"] == [{"type": "text", "text": "hello-from-chat"}]
@@ -132,7 +135,7 @@ def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
     if route == "ocr":
         return common | {
             "model": "mistral-ocr-latest",
-            "document": {"type": "document_url", "document_url": "https://example.com/document.pdf"},
+            "document": {"type": "document_url", "document_url": DOCUMENT},
             "api_key": "sk-native",
             "custom_llm_provider": "mistral",
             "optional_params": {"include_image_base64": True},
@@ -140,7 +143,7 @@ def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
     if route == "transcription":
         return common | {
             "model": "mistral.voxtral-mini-3b-2507",
-            "audio": {"data": "AQI=", "format": "wav", "filename": "audio.wav"},
+            "audio": {"data": b"\x01\x02", "format": "wav", "filename": "audio.wav"},
             "custom_llm_provider": "bedrock",
             "optional_params": {
                 "aws_access_key_id": "native-access-key",
@@ -155,7 +158,23 @@ def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
             "body": {
                 "model": "claude-sonnet-4-5",
                 "max_tokens": 16,
-                "messages": [{"role": "user", "content": "hello-from-messages"}],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tool_1",
+                                "content": [
+                                    {
+                                        "type": "image",
+                                        "source": {"type": "base64", "media_type": "image/png", "data": MEDIA},
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
             },
             "api_key": "sk-native",
             "custom_llm_provider": "anthropic",
@@ -237,12 +256,7 @@ async def exercise_async(native: object, api_base: str) -> None:
 
 async def exercise_async_concurrency(native: object, api_base: str) -> None:
     responses: Final = await asyncio.wait_for(
-        asyncio.gather(
-            *(
-                native.amessages(**route_kwargs("messages", api_base, "success"))
-                for _ in range(32)
-            )
-        ),
+        asyncio.gather(*(native.amessages(**route_kwargs("messages", api_base, "success")) for _ in range(32))),
         timeout=15,
     )
     for response in responses:
@@ -252,6 +266,17 @@ async def exercise_async_concurrency(native: object, api_base: str) -> None:
 def exercise_routes(native_path: Path, api_base: str) -> object:
     native: Final = load_native(native_path)
     exercise_sync(native, api_base)
+    assert_success(
+        "transcription",
+        native.transcription(
+            **(
+                route_kwargs("transcription", api_base, "success")
+                | {
+                    "audio": {"data": "AQI=", "format": "wav", "filename": "audio.wav"},
+                }
+            )
+        ),
+    )
     asyncio.run(exercise_async(native, api_base))
     asyncio.run(exercise_async_concurrency(native, api_base))
     return native

@@ -1,3 +1,4 @@
+use litellm_core::http_utils::body::JsonPayload;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,7 +16,9 @@ pub(crate) struct PreparedOcrCall {
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
+pub(crate) fn prepare_ocr_call<D: Into<JsonPayload>>(
+    request: OcrRequest<'_, D>,
+) -> PreparedOcrCall {
     let call_id = request
         .litellm_call_id
         .map(str::to_string)
@@ -49,7 +52,7 @@ pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
             model,
             custom_llm_provider,
             litellm_call_id: call_id,
-            document: request.document,
+            document: request.document.into(),
             api_key: request.api_key.map(str::to_string),
             api_base: request.api_base.map(str::to_string),
             extra_headers: request.extra_headers,

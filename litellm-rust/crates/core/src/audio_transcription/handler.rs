@@ -1,7 +1,11 @@
 use serde_json::Value;
 
+use crate::constants::AUDIO_TRANSCRIPTION_TIMEOUT_SECS;
 use crate::error::Error;
-use crate::http_utils::{http_request, truncate_error_body};
+use crate::http_utils::body::PreparedJsonBody;
+use crate::http_utils::replay::{BodySigner, replay_client, send_json};
+use crate::http_utils::truncate_error_body;
+use std::time::Duration;
 
 use super::client::http_client;
 use super::types::ProviderAudioTranscriptionRequest;
@@ -10,19 +14,23 @@ use super::types::ProviderAudioTranscriptionRequest;
 pub async fn execute_audio_transcription_provider_call(
     request: ProviderAudioTranscriptionRequest,
 ) -> Result<Value, Error> {
-    let body = serde_json::to_vec(&request.body)
-        .map_err(|error| Error::InvalidRequest(format!("invalid audio request body: {error}")))?;
-    let headers = signed_headers(&request, &body).await?;
-    let mut request_builder = http_client().post(&request.url).body(body);
-    for (key, value) in headers {
-        request_builder = request_builder.header(key, value);
-    }
-    if let Some(duration) = request.timeout {
-        request_builder = request_builder.timeout(duration);
-    }
-    let response = http_request(request_builder)
-        .await
-        .map_err(|error| Error::Network(error.to_string()))?;
+    let signer = request_signer(&request).await?;
+    let body = PreparedJsonBody::new(request.body.clone())?;
+    let response = send_json(
+        if body.is_streamed() {
+            replay_client()?
+        } else {
+            http_client()
+        },
+        &request.url,
+        &body,
+        &request.upstream_headers,
+        request
+            .timeout
+            .unwrap_or(Duration::from_secs(AUDIO_TRANSCRIPTION_TIMEOUT_SECS)),
+        signer.as_deref(),
+    )
+    .await?;
     let status = response.status();
     let text = response
         .text()
@@ -43,19 +51,17 @@ pub async fn execute_audio_transcription_provider_call(
 }
 
 #[cfg(feature = "bedrock-auth")]
-async fn signed_headers(
+async fn request_signer(
     request: &ProviderAudioTranscriptionRequest,
-    body: &[u8],
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<Option<Box<BodySigner<'static>>>, Error> {
+    use crate::audio_transcription::transformation::AudioTranscriptionAuth;
+    use crate::providers::bedrock::audio_transcription::aws_auth_config;
+    use crate::providers::bedrock::aws_base::{resolve_credentials, sign_bedrock_digest};
     use std::collections::BTreeMap;
     use std::time::SystemTime;
 
-    use crate::audio_transcription::transformation::AudioTranscriptionAuth;
-    use crate::providers::bedrock::audio_transcription::aws_auth_config;
-    use crate::providers::bedrock::aws_base::{resolve_credentials, sign_bedrock_post};
-
     let AudioTranscriptionAuth::AwsSigV4 { region, .. } = &request.auth else {
-        return Ok(request.upstream_headers.clone());
+        return Ok(None);
     };
     let env_lookup = |key: &str| std::env::var(key).ok();
     let credentials = resolve_credentials(
@@ -63,29 +69,56 @@ async fn signed_headers(
         &env_lookup,
     )
     .await?;
-    let unsigned: BTreeMap<String, String> = request.upstream_headers.iter().cloned().collect();
-    let signature = sign_bedrock_post(
-        &request.url,
-        body,
-        &unsigned,
-        region,
-        &credentials,
-        SystemTime::now(),
-    )?;
-    Ok(unsigned.into_iter().chain(signature).collect())
+    let region = region.clone();
+    Ok(Some(Box::new(move |url, digest, headers| {
+        let unsigned = headers
+            .iter()
+            .filter(|(name, _)| {
+                !matches!(
+                    name.as_str(),
+                    "authorization" | "x-amz-date" | "x-amz-security-token" | "host"
+                )
+            })
+            .map(|(name, value)| {
+                Ok((
+                    name.to_string(),
+                    value
+                        .to_str()
+                        .map_err(|_| Error::InvalidRequest("invalid signing header".into()))?
+                        .to_owned(),
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, Error>>()?;
+        let signed = sign_bedrock_digest(
+            url.as_str(),
+            digest,
+            &unsigned,
+            &region,
+            &credentials,
+            SystemTime::now(),
+        )?;
+        let mut result = headers.clone();
+        for (name, value) in signed {
+            result.insert(
+                reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                    .map_err(|_| Error::Auth("invalid signing header".into()))?,
+                reqwest::header::HeaderValue::from_str(&value)
+                    .map_err(|_| Error::Auth("invalid signing value".into()))?,
+            );
+        }
+        Ok(result)
+    })))
 }
 
 #[cfg(not(feature = "bedrock-auth"))]
-async fn signed_headers(
+async fn request_signer(
     request: &ProviderAudioTranscriptionRequest,
-    _body: &[u8],
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<Option<Box<BodySigner<'static>>>, Error> {
     use crate::audio_transcription::transformation::AudioTranscriptionAuth;
-
     match request.auth {
         AudioTranscriptionAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
             "AWS SigV4 requires the bedrock-auth feature",
         )),
-        AudioTranscriptionAuth::Bearer => Ok(request.upstream_headers.clone()),
+        AudioTranscriptionAuth::Bearer => Ok(None),
     }
 }

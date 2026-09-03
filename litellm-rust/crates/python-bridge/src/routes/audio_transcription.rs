@@ -1,4 +1,5 @@
 use litellm_core::Error;
+use litellm_core::http_utils::body::JsonPayload;
 use std::future::Future;
 
 use litellm_core::audio_transcription::{
@@ -53,8 +54,8 @@ bridge_route! {
     inputs = AudioTranscriptionInputs,
     required = {
         model: String,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        audio: Value,
+        #[pyo3(from_py_with = crate::payload::audio_payload_from_py)]
+        audio: JsonPayload,
     },
     optional = {
         api_key: Option<String>,

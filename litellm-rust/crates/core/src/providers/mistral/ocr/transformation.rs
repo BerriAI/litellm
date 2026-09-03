@@ -1,7 +1,9 @@
 use crate::error::{Error, json_type_name};
+use crate::http_utils::body::JsonPayload;
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
 const SUPPORTED_OCR_PARAMS: &[&str] = &[
     "pages",
@@ -76,28 +78,28 @@ impl OcrProviderConfig for MistralOcrConfig {
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn transform_ocr_request(
+    fn transform_ocr_payload(
         &self,
         model: &str,
-        document: Value,
+        document: JsonPayload,
         optional_params: Map<String, Value>,
     ) -> Result<OcrRequestData, Error> {
         if !document.is_object() {
             return Err(Error::InvalidType {
                 expected: "object",
-                actual: json_type_name(&document),
+                actual: document.type_name(),
             });
         }
 
-        let mut data = Map::new();
-        data.insert("model".to_string(), Value::String(model.to_string()));
+        let mut data = BTreeMap::new();
+        data.insert("model".to_string(), JsonPayload::from(model));
         data.insert("document".to_string(), document);
         for (param, value) in optional_params {
-            data.insert(param, value);
+            data.insert(param, value.into());
         }
 
         Ok(OcrRequestData {
-            data: Value::Object(data),
+            data: JsonPayload::Object(data),
             files: None,
         })
     }
@@ -301,9 +303,12 @@ mod tests {
                 json!({param: value}).as_object().unwrap().clone(),
             )
             .expect("request should transform");
-            assert_eq!(result.data.get(param), Some(&value));
-            assert_eq!(result.data.get("model"), Some(&json!("mistral-ocr-latest")));
-            assert_eq!(result.data.get("document"), Some(&document));
+            assert_eq!(result.data.materialize().get(param), Some(&value));
+            assert_eq!(
+                result.data.materialize().get("model"),
+                Some(&json!("mistral-ocr-latest"))
+            );
+            assert_eq!(result.data.materialize().get("document"), Some(&document));
             assert_eq!(result.files, None);
         }
     }
@@ -324,12 +329,21 @@ mod tests {
         .clone();
         let result = transform_ocr_request("mistral-ocr-latest", document, optional_params)
             .expect("request should transform");
-        assert_eq!(result.data.get("table_format"), Some(&json!("html")));
         assert_eq!(
-            result.data.get("confidence_scores_granularity"),
+            result.data.materialize().get("table_format"),
+            Some(&json!("html"))
+        );
+        assert_eq!(
+            result
+                .data
+                .materialize()
+                .get("confidence_scores_granularity"),
             Some(&json!("page"))
         );
-        assert_eq!(result.data.get("extract_header"), Some(&json!(true)));
+        assert_eq!(
+            result.data.materialize().get("extract_header"),
+            Some(&json!(true))
+        );
     }
 
     #[test]

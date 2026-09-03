@@ -7,7 +7,6 @@ use crate::messages::types::{
 use crate::providers::anthropic::messages::transformation::{
     ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig, non_empty,
 };
-use serde_json::{Map, Value};
 
 const AZURE_API_KEY_ENV: &str = "AZURE_API_KEY";
 const AZURE_API_BASE_ENV: &str = "AZURE_API_BASE";
@@ -86,13 +85,16 @@ fn strip_scope_from_message(message: &mut AnthropicMessage) {
     }
 }
 
-fn text_content_block(text: String) -> ContentBlock {
-    let extra = Map::from_iter([
+fn text_content_block(text: crate::http_utils::body::SharedText) -> ContentBlock {
+    let extra = std::collections::BTreeMap::from_iter([
         (
             "type".to_string(),
-            Value::String(TEXT_BLOCK_TYPE.to_string()),
+            crate::http_utils::body::JsonPayload::from(TEXT_BLOCK_TYPE),
         ),
-        ("text".to_string(), Value::String(text)),
+        (
+            "text".to_string(),
+            crate::http_utils::body::JsonPayload::String(text),
+        ),
     ]);
     ContentBlock {
         cache_control: None,

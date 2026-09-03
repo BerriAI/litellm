@@ -1,3 +1,4 @@
+use super::types::IntoMessagesRequest;
 use crate::error::Error;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
@@ -6,8 +7,8 @@ use super::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrateg
 use super::types::{MessagesRequest, ProviderMessagesRequest};
 use serde_json::{Map, Value};
 
-pub(super) fn prepare_provider_request(
-    request: MessagesRequest<'_>,
+pub(super) fn prepare_provider_request<B: IntoMessagesRequest>(
+    request: MessagesRequest<'_, B>,
 ) -> Result<ProviderMessagesRequest, Error> {
     let provider_info = get_custom_llm_provider(request.model, request.custom_llm_provider)
         .or_else(|| {
@@ -33,15 +34,8 @@ pub(super) fn prepare_provider_request(
     let headers =
         validate_environment(config, request.extra_headers, request.api_key, &env_lookup)?;
 
-    let typed_request = serde_json::from_value(request.body).map_err(|err| {
-        Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
-    })?;
-    let transformed = config.transform_request(typed_request)?;
-    let body = serde_json::to_value(transformed).map_err(|err| {
-        Error::InvalidRequest(format!(
-            "failed to serialize Anthropic messages request: {err}"
-        ))
-    })?;
+    let typed_request = request.body.into_messages_request()?;
+    let body = config.transform_request(typed_request)?;
 
     let url = config.complete_url(request.api_base, &model, &env_lookup)?;
 
