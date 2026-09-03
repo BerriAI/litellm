@@ -198,3 +198,57 @@ class TestCountTokensUsesWorkloadIdentity:
         assert result.status_code == 401
         assert result.total_tokens == 0
         assert "fdrl_" in (result.error_message or "")
+
+    @pytest.mark.asyncio
+    async def test_a_vault_backed_static_key_never_mints(self, monkeypatch):
+        from litellm.llms.anthropic.count_tokens import token_counter as token_counter_module
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+        vault_key = "sk-ant-api03-only-in-the-vault"
+
+        def vault_only(secret_name, default_value=None):
+            return vault_key if secret_name == "ANTHROPIC_API_KEY" else None
+
+        monkeypatch.setattr("litellm.secret_managers.main.get_secret_str", vault_only, raising=False)
+
+        mint_calls: list[str] = []
+
+        async def fake_mint(_params, _api_base, model):
+            mint_calls.append(model)
+            return "sk-ant-oat01-should-not-be-minted"
+
+        monkeypatch.setattr(token_counter_module, "aget_anthropic_wif_token", fake_mint, raising=False)
+        monkeypatch.setattr("litellm.llms.anthropic.wif.aget_anthropic_wif_token", fake_mint, raising=False)
+
+        seen: dict[str, object] = {}
+
+        async def fake_request(**kwargs):
+            seen.update(kwargs)
+            return {"input_tokens": 7}
+
+        monkeypatch.setattr(
+            token_counter_module.anthropic_count_tokens_handler,
+            "handle_count_tokens_request",
+            fake_request,
+            raising=False,
+        )
+
+        result = await token_counter_module.AnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    "anthropic_federation_rule_id": "fdrl_x",
+                    "anthropic_organization_id": "org-x",
+                }
+            },
+            request_model="claude-sonnet-4-5",
+        )
+
+        assert result is not None
+        assert result.total_tokens == 7
+        assert seen["api_key"] == vault_key
+        assert mint_calls == []

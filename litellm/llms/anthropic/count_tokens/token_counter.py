@@ -2,7 +2,6 @@
 Anthropic Token Counter implementation using the CountTokens API.
 """
 
-import os
 from typing import Any, Final
 
 from litellm._logging import verbose_logger
@@ -56,7 +55,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
         api_base: Final = litellm_params.get("api_base")
-        static_key: Final = litellm_params.get("api_key") or os.getenv("ANTHROPIC_API_KEY")
+        static_key: Final = AnthropicModelInfo.get_api_key(litellm_params.get("api_key"))
         auth_token_configured: Final = AnthropicModelInfo.get_auth_token() is not None
 
         try:
