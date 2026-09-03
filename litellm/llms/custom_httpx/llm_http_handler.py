@@ -308,27 +308,28 @@ def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
     )
 
 
-def _collect_ws_response_id_authorizer() -> ResponseIdAuthorizer | None:
-    """Duck-type discover the proxy hook that owns Responses id authorization, so
+def _collect_ws_response_id_authorizers() -> tuple[ResponseIdAuthorizer, ...]:
+    """Duck-type discover the proxy hooks that own Responses id authorization, so
     the WebSocket surface refuses a ``previous_response_id`` the connection's key
     does not own through the very same step the HTTP routes run.
 
     Uses duck-typing on ``litellm.callbacks`` (rather than importing the proxy
     hook directly) to avoid a layering violation (SDK importing from the proxy
-    layer). Without the proxy there is no key to authorize and no hook to find.
+    layer). Every match is returned rather than the first, because config-loaded
+    callbacks are registered ahead of the proxy hooks: taking the first match
+    would let an unrelated callback answering to the same method name silently
+    stand in for the hook that owns this check. Without the proxy there is no key
+    to authorize and no hook to find.
     """
     import litellm as _litellm
 
     callbacks: Final = cast(  # cast-ok: callback registry is inspected before protocol use
         Sequence[object], _litellm.callbacks
     )
-    return next(
-        (
-            cast(ResponseIdAuthorizer, callback)  # cast-ok: required callback method is callable
-            for callback in callbacks
-            if callable(getattr(callback, "response_id_ownership_refusal", None))
-        ),
-        None,
+    return tuple(
+        cast(ResponseIdAuthorizer, callback)  # cast-ok: required callback method is callable
+        for callback in callbacks
+        if callable(getattr(callback, "response_id_ownership_refusal", None))
     )
 
 
@@ -6454,7 +6455,7 @@ class BaseLLMHTTPHandler:
         - Forwards events over the websocket connection
         """
         _ws_quota_callbacks: Final = _collect_ws_project_quota_callbacks()
-        _ws_response_id_authorizer: Final = _collect_ws_response_id_authorizer()
+        _ws_response_id_authorizers: Final = _collect_ws_response_id_authorizers()
 
         if responses_api_provider_config is None or not responses_api_provider_config.supports_native_websocket():
             from litellm.responses.streaming_iterator import (
@@ -6473,7 +6474,7 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 first_message=first_message,
                 quota_callbacks=_ws_quota_callbacks,
-                response_id_authorizer=_ws_response_id_authorizer,
+                response_id_authorizers=_ws_response_id_authorizers,
                 **kwargs,
             )
             await handler.run()
@@ -6596,7 +6597,7 @@ class BaseLLMHTTPHandler:
                     output_guardrail_callbacks=_ws_output_guardrail_callbacks,
                     quota_callbacks=_ws_quota_callbacks,
                     authorized_model=model,
-                    response_id_authorizer=_ws_response_id_authorizer,
+                    response_id_authorizers=_ws_response_id_authorizers,
                 )
                 await streaming.bidirectional_forward()
 

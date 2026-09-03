@@ -1542,38 +1542,60 @@ async def _enforce_frame_project_quota(
         )
 
 
-def _frame_previous_response_id(raw_message: str) -> str | None:
-    """Read ``previous_response_id`` off a ``response.create`` frame, handling both
-    wire shapes:
+def _frame_previous_response_ids(raw_message: str) -> tuple[str, ...]:
+    """Read every ``previous_response_id`` a ``response.create`` frame carries, across
+    both wire shapes:
       flat:   {"type": "response.create", "previous_response_id": "..."}
       nested: {"type": "response.create", "response": {"previous_response_id": "..."}}
+
+    A frame may carry both placements at once, and the native relay forwards the frame
+    to the provider close to verbatim, so every placement is reported rather than only
+    the one this proxy would itself read. ``_enforce_authorized_model`` defends the
+    ``model`` field across both placements for the same reason.
     """
     try:
         msg_obj: Final = _load_json_value(raw_message)
     except (json.JSONDecodeError, TypeError):
-        return None
+        return ()
     if not _is_json_object(msg_obj) or msg_obj.get("type") != "response.create":
-        return None
+        return ()
     nested: Final = msg_obj.get("response")
-    params: Final[Mapping[str, object]] = nested if _is_json_object(nested) and nested else msg_obj
-    return _optional_str(params.get("previous_response_id"))
+    nested_params: Final[Mapping[str, object]] = nested if _is_json_object(nested) else {}
+    return tuple(
+        dict.fromkeys(
+            candidate
+            for candidate in (
+                _optional_str(msg_obj.get("previous_response_id")),
+                _optional_str(nested_params.get("previous_response_id")),
+            )
+            if candidate is not None
+        )
+    )
 
 
-def _previous_response_id_refusal(
-    authorizer: ResponseIdAuthorizer | None,
+def _previous_response_ids_refusal(
+    authorizers: Sequence[ResponseIdAuthorizer],
     user_api_key_dict: UserAPIKeyAuth | None,
-    previous_response_id: str,
+    previous_response_ids: Sequence[str],
 ) -> str | None:
     """Run the shared Responses id authorization step, the one the HTTP routes run,
-    against an id this connection was not itself handed.
+    against ids this connection was not itself handed.
 
-    Returns the refusal message when the connection's key may not address the id,
-    and None when it may. Without an authorizer or an authenticated key there is
-    no proxy in front of this socket and nothing to authorize against.
+    Returns the first refusal message when the connection's key may not address one
+    of the ids, and None when it may address all of them. Every discovered authorizer
+    is consulted, so an unrelated callback answering to the same method name can only
+    add refusals, never shadow the proxy hook that owns this check. Without an
+    authorizer or an authenticated key there is no proxy in front of this socket and
+    nothing to authorize against.
     """
-    if authorizer is None or user_api_key_dict is None:
+    if not authorizers or user_api_key_dict is None:
         return None
-    return authorizer.response_id_ownership_refusal(previous_response_id, user_api_key_dict)
+    refusals: Final = (
+        authorizer.response_id_ownership_refusal(previous_response_id, user_api_key_dict)
+        for previous_response_id in previous_response_ids
+        for authorizer in authorizers
+    )
+    return next((refusal for refusal in refusals if refusal is not None), None)
 
 
 RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
@@ -1612,7 +1634,7 @@ class ResponsesWebSocketStreaming:
         output_guardrail_callbacks: list[PresidioGuardrailCallback] | None = None,
         quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
         authorized_model: str | None = None,
-        response_id_authorizer: ResponseIdAuthorizer | None = None,
+        response_id_authorizers: Sequence[ResponseIdAuthorizer] | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -1628,7 +1650,9 @@ class ResponsesWebSocketStreaming:
         # Model name authorized at connection time; enforced on every
         # response.create frame to prevent deployment-substitution attacks.
         self.authorized_model: str | None = authorized_model
-        self.response_id_authorizer: ResponseIdAuthorizer | None = response_id_authorizer
+        self.response_id_authorizers: tuple[ResponseIdAuthorizer, ...] = (
+            tuple(response_id_authorizers) if response_id_authorizers else ()
+        )
         # Response ids this connection handed the client. A connection carries
         # exactly one authenticated key, so continuing one of these needs no
         # further authorization; any other id does.
@@ -2073,11 +2097,17 @@ class ResponsesWebSocketStreaming:
 
     def _unauthorized_previous_response_id(self, message: str) -> str | None:
         """Return why this connection's key may not continue the frame's
-        ``previous_response_id``, or None when it may."""
-        previous_response_id: Final = _frame_previous_response_id(message)
-        if previous_response_id is None or previous_response_id in self._issued_response_ids:
-            return None
-        return _previous_response_id_refusal(self.response_id_authorizer, self.user_api_key_dict, previous_response_id)
+        ``previous_response_id``, or None when it may.
+
+        The frame reaches the provider close to verbatim, so every placement the
+        frame carries is checked, not only the one this proxy would read itself.
+        """
+        unowned_ids: Final = tuple(
+            previous_response_id
+            for previous_response_id in _frame_previous_response_ids(message)
+            if previous_response_id not in self._issued_response_ids
+        )
+        return _previous_response_ids_refusal(self.response_id_authorizers, self.user_api_key_dict, unowned_ids)
 
     async def _enforce_or_reject_frame(self, message: str) -> bool:
         """Run the per-frame ownership and project quota checks.
@@ -2193,7 +2223,7 @@ class ManagedResponsesWebSocketHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
-        response_id_authorizer: ResponseIdAuthorizer | None = None,
+        response_id_authorizers: Sequence[ResponseIdAuthorizer] | None = None,
         **kwargs: object,
     ) -> None:
         self.websocket = websocket
@@ -2212,7 +2242,9 @@ class ManagedResponsesWebSocketHandler:
         self._connection_provider = self._resolve_provider(model) or custom_llm_provider
         self.first_message = first_message
         self.quota_callbacks: tuple[ProjectQuotaCallback, ...] = tuple(quota_callbacks) if quota_callbacks else ()
-        self.response_id_authorizer: ResponseIdAuthorizer | None = response_id_authorizer
+        self.response_id_authorizers: tuple[ResponseIdAuthorizer, ...] = (
+            tuple(response_id_authorizers) if response_id_authorizers else ()
+        )
         # Carry through safe pass-through kwargs (e.g. extra_headers)
         self.extra_kwargs: dict[str, object] = {k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS}
         # In-memory session history: response_id → full accumulated message list.
@@ -2465,8 +2497,8 @@ class ManagedResponsesWebSocketHandler:
         # No history on this connection, so the id was issued elsewhere: it goes
         # through the same authorization step the HTTP routes run before the
         # session is reconstructed from anywhere else.
-        refusal: Final = _previous_response_id_refusal(
-            self.response_id_authorizer, self.user_api_key_dict, previous_response_id
+        refusal: Final = _previous_response_ids_refusal(
+            self.response_id_authorizers, self.user_api_key_dict, (previous_response_id,)
         )
         if refusal is not None:
             return refusal

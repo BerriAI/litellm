@@ -22,7 +22,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
     _collect_ws_project_quota_callbacks,
-    _collect_ws_response_id_authorizer,
+    _collect_ws_response_id_authorizers,
     _google_genai_streaming_hidden_params,
     _has_pre_call_deployment_hook,
     _rust_responses_websocket_enabled,
@@ -2784,10 +2784,18 @@ def test_websocket_surface_finds_the_proxy_hook_that_authorizes_response_ids(mon
     plain, decoy, hook = _PlainLogger(), _NotCallableAttribute(), ResponsesIDSecurity()
 
     monkeypatch.setattr(litellm, "callbacks", [plain, decoy])
-    assert _collect_ws_response_id_authorizer() is None
+    assert _collect_ws_response_id_authorizers() == ()
 
     monkeypatch.setattr(litellm, "callbacks", [plain, decoy, hook])
-    assert _collect_ws_response_id_authorizer() is hook
+    assert _collect_ws_response_id_authorizers() == (hook,)
+
+    class _Impostor:
+        def response_id_ownership_refusal(self, response_id, user_api_key_dict):
+            return None
+
+    impostor = _Impostor()
+    monkeypatch.setattr(litellm, "callbacks", [impostor, hook])
+    assert _collect_ws_response_id_authorizers() == (impostor, hook)
 
 
 @pytest.mark.asyncio

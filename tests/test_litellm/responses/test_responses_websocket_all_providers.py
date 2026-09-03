@@ -2655,6 +2655,29 @@ class _CountingAuthorizer:
         return self.inner.response_id_ownership_refusal(response_id, user_api_key_dict)
 
 
+def _native_streaming(monkeypatch, **kwargs):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.responses.streaming_iterator import ResponsesWebSocketStreaming
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", _WS_UNIT_TEST_SALT_KEY)
+    mock_backend_ws = MagicMock()
+    mock_backend_ws.send = AsyncMock()
+    mock_websocket = MagicMock()
+    mock_websocket.send_text = AsyncMock()
+    return ResponsesWebSocketStreaming(
+        websocket=mock_websocket,
+        backend_ws=mock_backend_ws,
+        logging_obj=MagicMock(),
+        authorized_model="gpt-4o",
+        **kwargs,
+    )
+
+
+def _sent_error_type(mock_websocket):
+    return json.loads(mock_websocket.send_text.call_args[0][0])["error"]["type"]
+
+
 def _managed_handler(monkeypatch, **kwargs):
     from unittest.mock import AsyncMock, MagicMock
 
@@ -2712,7 +2735,7 @@ class TestWebSocketPreviousResponseIdOwnership:
         handler, mock_websocket = _managed_handler(
             monkeypatch,
             user_api_key_dict=_ws_auth(),
-            response_id_authorizer=_ws_id_authorizer(),
+            response_id_authorizers=[_ws_id_authorizer()],
         )
 
         await handler._process_response_create(
@@ -2736,7 +2759,7 @@ class TestWebSocketPreviousResponseIdOwnership:
         handler, _ = _managed_handler(
             monkeypatch,
             user_api_key_dict=_ws_auth(),
-            response_id_authorizer=authorizer,
+            response_id_authorizers=[authorizer],
         )
         handler._store_history(_WS_FABRICATED_PROVIDER_ID, [{"role": "user", "content": "turn one"}])
 
@@ -2759,7 +2782,7 @@ class TestWebSocketPreviousResponseIdOwnership:
         handler, _ = _managed_handler(
             monkeypatch,
             user_api_key_dict=_ws_auth(),
-            response_id_authorizer=_ws_id_authorizer({"allow_unmanaged_response_ids": True}),
+            response_id_authorizers=[_ws_id_authorizer({"allow_unmanaged_response_ids": True})],
         )
 
         await handler._process_response_create(
@@ -2810,7 +2833,7 @@ class TestWebSocketPreviousResponseIdOwnership:
             logging_obj=MagicMock(),
             user_api_key_dict=_ws_auth(),
             authorized_model="gpt-4o",
-            response_id_authorizer=_ws_id_authorizer(),
+            response_id_authorizers=[_ws_id_authorizer()],
         )
 
         allowed = await handler._enforce_or_reject_frame(
@@ -2844,7 +2867,7 @@ class TestWebSocketPreviousResponseIdOwnership:
             logging_obj=MagicMock(),
             user_api_key_dict=_ws_auth(),
             authorized_model="gpt-4o",
-            response_id_authorizer=authorizer,
+            response_id_authorizers=[authorizer],
         )
         handler._record_issued_response_id(
             json.dumps(
@@ -2881,7 +2904,7 @@ class TestWebSocketPreviousResponseIdOwnership:
             logging_obj=MagicMock(),
             user_api_key_dict=_ws_auth(),
             authorized_model="gpt-4o",
-            response_id_authorizer=_ws_id_authorizer({"allow_unmanaged_response_ids": True}),
+            response_id_authorizers=[_ws_id_authorizer({"allow_unmanaged_response_ids": True})],
         )
 
         allowed = await handler._enforce_or_reject_frame(
@@ -2901,27 +2924,127 @@ class TestWebSocketPreviousResponseIdOwnership:
         [
             (
                 {"type": "response.create", "previous_response_id": _WS_FABRICATED_STRANGER_ID},
-                _WS_FABRICATED_STRANGER_ID,
+                (_WS_FABRICATED_STRANGER_ID,),
             ),
             (
                 {
                     "type": "response.create",
                     "response": {"previous_response_id": _WS_FABRICATED_STRANGER_ID},
                 },
-                _WS_FABRICATED_STRANGER_ID,
+                (_WS_FABRICATED_STRANGER_ID,),
             ),
-            ({"type": "response.create", "input": "hi"}, None),
-            ({"type": "response.cancel", "previous_response_id": _WS_FABRICATED_STRANGER_ID}, None),
-            ({"type": "response.create", "previous_response_id": {"forged": "object"}}, None),
+            (
+                {
+                    "type": "response.create",
+                    "previous_response_id": _WS_FABRICATED_STRANGER_ID,
+                    "response": {"input": "continue please"},
+                },
+                (_WS_FABRICATED_STRANGER_ID,),
+            ),
+            (
+                {
+                    "type": "response.create",
+                    "previous_response_id": _WS_FABRICATED_STRANGER_ID,
+                    "response": {"previous_response_id": _WS_FABRICATED_PROVIDER_ID},
+                },
+                (_WS_FABRICATED_STRANGER_ID, _WS_FABRICATED_PROVIDER_ID),
+            ),
+            (
+                {
+                    "type": "response.create",
+                    "previous_response_id": _WS_FABRICATED_STRANGER_ID,
+                    "response": {"previous_response_id": _WS_FABRICATED_STRANGER_ID},
+                },
+                (_WS_FABRICATED_STRANGER_ID,),
+            ),
+            ({"type": "response.create", "input": "hi"}, ()),
+            ({"type": "response.cancel", "previous_response_id": _WS_FABRICATED_STRANGER_ID}, ()),
+            ({"type": "response.create", "previous_response_id": {"forged": "object"}}, ()),
         ],
     )
-    def test_previous_response_id_is_read_from_both_wire_shapes(self, frame, expected):
-        from litellm.responses.streaming_iterator import _frame_previous_response_id
+    def test_previous_response_ids_are_read_from_every_wire_placement(self, frame, expected):
+        from litellm.responses.streaming_iterator import _frame_previous_response_ids
 
-        assert _frame_previous_response_id(json.dumps(frame)) == expected
+        assert _frame_previous_response_ids(json.dumps(frame)) == expected
 
     def test_malformed_frames_read_as_carrying_no_previous_response_id(self):
-        from litellm.responses.streaming_iterator import _frame_previous_response_id
+        from litellm.responses.streaming_iterator import _frame_previous_response_ids
 
-        assert _frame_previous_response_id("not json at all") is None
-        assert _frame_previous_response_id(json.dumps(["not", "an", "object"])) is None
+        assert _frame_previous_response_ids("not json at all") == ()
+        assert _frame_previous_response_ids(json.dumps(["not", "an", "object"])) == ()
+
+    @pytest.mark.asyncio
+    async def test_native_relay_refuses_a_stranger_id_hidden_beside_a_nested_response(self, monkeypatch):
+        """A frame carrying a top-level ``previous_response_id`` next to a non-empty
+        ``response`` object reaches the provider socket verbatim, so the id is refused
+        even though this proxy would read the nested placement for its own call."""
+        streaming = _native_streaming(
+            monkeypatch,
+            user_api_key_dict=_ws_auth(),
+            response_id_authorizers=[_ws_id_authorizer()],
+        )
+
+        allowed = await streaming._enforce_or_reject_frame(
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "previous_response_id": _WS_FABRICATED_STRANGER_ID,
+                    "response": {"input": "continue please"},
+                }
+            )
+        )
+
+        assert allowed is False
+        streaming.backend_ws.send.assert_not_called()
+        assert _sent_error_type(streaming.websocket) == "permission_denied"
+
+    @pytest.mark.asyncio
+    async def test_managed_handler_never_forwards_a_stranger_id_beside_a_nested_response(self, monkeypatch):
+        """The managed handler rebuilds the upstream call from the nested params, so a
+        top-level ``previous_response_id`` sibling is dropped rather than forwarded."""
+        captured = _capture_aresponses(monkeypatch)
+        handler, _ = _managed_handler(
+            monkeypatch,
+            user_api_key_dict=_ws_auth(),
+            response_id_authorizers=[_ws_id_authorizer()],
+        )
+
+        await handler._process_response_create(
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "previous_response_id": _WS_FABRICATED_STRANGER_ID,
+                    "response": {"input": "continue please"},
+                }
+            )
+        )
+
+        assert captured.get("called") is True
+        assert "previous_response_id" not in captured
+
+    @pytest.mark.asyncio
+    async def test_a_callback_answering_to_the_same_name_cannot_shadow_the_proxy_hook(self, monkeypatch):
+        """Config-loaded callbacks are registered ahead of the proxy hooks, so the
+        surface consults every discovered authorizer rather than only the first."""
+
+        class _PermissiveImpostor:
+            def response_id_ownership_refusal(self, response_id, user_api_key_dict):
+                return None
+
+        streaming = _native_streaming(
+            monkeypatch,
+            user_api_key_dict=_ws_auth(),
+            response_id_authorizers=[_PermissiveImpostor(), _ws_id_authorizer()],
+        )
+
+        allowed = await streaming._enforce_or_reject_frame(
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "previous_response_id": _WS_FABRICATED_STRANGER_ID,
+                }
+            )
+        )
+
+        assert allowed is False
+        streaming.backend_ws.send.assert_not_called()
