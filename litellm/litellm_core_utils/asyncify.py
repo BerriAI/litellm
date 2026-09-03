@@ -70,7 +70,7 @@ def asyncify(
 
 def is_event_loop_running() -> bool:
     try:
-        _ = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         return False
     return True

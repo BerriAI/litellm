@@ -1,11 +1,14 @@
 import base64
 import json
 import time
-from unittest.mock import mock_open, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-from litellm.llms.chatgpt.authenticator import Authenticator
+from litellm.llms.chatgpt.authenticator import (
+    TOKEN_REFRESH_TIMEOUT_SECONDS,
+    Authenticator,
+)
 from litellm.llms.chatgpt.common_utils import GetAccessTokenError
 
 
@@ -55,6 +58,23 @@ class TestChatGPTAuthenticator:
             token = authenticator.get_access_token()
             assert token == "token-new"
 
+    def test_refresh_tokens_uses_bounded_timeout(self, authenticator):
+        client = MagicMock()
+        response = MagicMock()
+        response.json.return_value = {
+            "access_token": "token-new",
+            "id_token": "id-123",
+        }
+        client.post.return_value = response
+
+        with patch(  # test-quality-ok: requested seam for asserting timeout propagation
+            "litellm.llms.chatgpt.authenticator._get_httpx_client", return_value=client
+        ):
+            refreshed = authenticator._refresh_tokens("refresh-123")
+
+        assert refreshed["access_token"] == "token-new"
+        assert client.post.call_args.kwargs["timeout"] == TOKEN_REFRESH_TIMEOUT_SECONDS
+
     @pytest.mark.asyncio
     async def test_get_access_token_refuses_device_code_login_in_event_loop(self, authenticator):
         with (
@@ -97,9 +117,7 @@ class TestChatGPTAuthenticator:
         assert token == "tok"
 
     def test_get_account_id_from_id_token(self, authenticator):
-        id_token = _make_jwt(
-            {"https://api.openai.com/auth": {"chatgpt_account_id": "acct-123"}}
-        )
+        id_token = _make_jwt({"https://api.openai.com/auth": {"chatgpt_account_id": "acct-123"}})
         auth_data = json.dumps({"id_token": id_token})
 
         with (

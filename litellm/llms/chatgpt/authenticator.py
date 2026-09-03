@@ -26,6 +26,7 @@ from .common_utils import (
 )
 
 TOKEN_EXPIRY_SKEW_SECONDS: Final = 60
+TOKEN_REFRESH_TIMEOUT_SECONDS: Final = 30
 DEVICE_CODE_TIMEOUT_SECONDS: Final = 15 * 60
 DEVICE_CODE_COOLDOWN_SECONDS: Final = 5 * 60
 DEVICE_CODE_POLL_SLEEP_SECONDS: Final = 5
@@ -322,6 +323,7 @@ class Authenticator:
                     "refresh_token": refresh_token,
                     "scope": "openid profile email",
                 },
+                timeout=TOKEN_REFRESH_TIMEOUT_SECONDS,
             )
             resp.raise_for_status()
             data: Final = _JSON_OBJECT_ADAPTER.validate_python(resp.json())
