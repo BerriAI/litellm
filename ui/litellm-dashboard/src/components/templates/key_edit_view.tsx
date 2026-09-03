@@ -105,7 +105,6 @@ export function KeyEditView({
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
       : [],
   );
-  const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(keyData.organization_id || null);
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(keyData.auto_rotate || false);
   const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "");
   const [neverExpire, setNeverExpire] = useState<boolean>(!keyData.expires);
@@ -134,6 +133,7 @@ export function KeyEditView({
     return project?.project_alias ? `${project.project_alias} (${keyData.project_id})` : keyData.project_id;
   })();
 
+  const selectedOrganizationId = form.watch("organization_id") ?? null;
   const allowedRoutesValue = form.watch("allowed_routes");
   const selectedModels = (form.watch("models") as string[] | undefined) ?? [];
   const allowedRoutes = parseAllowedRoutes(allowedRoutesValue);
@@ -305,7 +305,6 @@ export function KeyEditView({
 
   const handleOrganizationChange = (setField: (value: string | undefined) => void, orgId: string | undefined) => {
     setField(orgId);
-    setSelectedOrganizationId(orgId || null);
     form.setValue("team_id", undefined);
   };
 
@@ -313,10 +312,8 @@ export function KeyEditView({
     setField(teamId);
     const selectedTeam = teams?.find((t) => t.team_id === teamId) || null;
     if (selectedTeam?.organization_id) {
-      setSelectedOrganizationId(selectedTeam.organization_id);
       form.setValue("organization_id", selectedTeam.organization_id);
     } else if (!teamId) {
-      setSelectedOrganizationId(null);
       form.setValue("organization_id", undefined);
     }
   };

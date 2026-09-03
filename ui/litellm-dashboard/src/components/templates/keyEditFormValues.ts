@@ -4,7 +4,7 @@ import { KeyResponse } from "../key_team_helpers/key_list";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import { estimateChecks, estimateFields } from "./estimatedOutputTokens";
-import { canonicalBudgetDuration } from "./keyEditFieldNormalizers";
+import { canonicalBudgetDuration, keyOrganizationId } from "./keyEditFieldNormalizers";
 
 export interface McpServersAndGroups {
   servers: string[];
@@ -99,7 +99,7 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
     agents: keyData.object_permission?.agents || [],
     accessGroups: keyData.object_permission?.agent_access_groups || [],
   },
-  organization_id: keyData.organization_id,
+  organization_id: keyOrganizationId(keyData),
   team_id: keyData.team_id,
   logging_settings: extractLoggingSettings(keyData.metadata),
   metadata: formatMetadataForDisplay(stripTagsFromMetadata(keyData.metadata)),

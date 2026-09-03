@@ -40,6 +40,7 @@ import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { InheritedBudgetHint, inheritedBudgetGates } from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
+import { keyOrganizationId } from "./keyEditFieldNormalizers";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -468,7 +469,7 @@ export default function KeyInfoView({
   const lastConfiguredAt = currentKeyData.settings_updated_at || currentKeyData.created_at;
 
   const parentTeam = currentKeyData.team_id ? teamsData?.find((team) => team.team_id === currentKeyData.team_id) : null;
-  const orgId = currentKeyData.organization_id || currentKeyData.org_id || parentTeam?.organization_id || "";
+  const orgId = keyOrganizationId(currentKeyData) || parentTeam?.organization_id || "";
   const parentOrg = orgId ? organizations?.find((org) => org.organization_id === orgId) : null;
 
   const hasOwnBudget = currentKeyData.max_budget !== null;
@@ -835,7 +836,7 @@ export default function KeyInfoView({
 
                   <div>
                     <p className="text-sm font-medium">Organization</p>
-                    <p className="text-sm">{(currentKeyData.organization_id ?? currentKeyData.org_id) || "Not Set"}</p>
+                    <p className="text-sm">{keyOrganizationId(currentKeyData) || "Not Set"}</p>
                   </div>
 
                   <div>
