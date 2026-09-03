@@ -1,13 +1,10 @@
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use litellm_core::error::Error;
-use litellm_core::ocr::transformation::OcrAuthStrategy;
 use serde_json::{Map, Value, json};
 use std::future::Future;
 use std::pin::Pin;
 
-use super::common_utils::{
-    convert_document_url_to_data_uri, has_header, ocr_provider_config, string_headers,
-};
+use super::common_utils::{convert_document_url_to_data_uri, string_headers};
 use super::types::{PreparedOcrRequest, ProviderOcrRequest};
 use crate::integrations::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
@@ -62,6 +59,10 @@ impl OcrLifecycleHooks {
             .await
             .map_err(guardrail_error_to_core_error)?;
         let (document, optional_params) = parse_ocr_pre_call_guardrail_request(guardrail_request)?;
+        let optional_params = match &request.config {
+            Ok(config) => config.map_ocr_params(&optional_params),
+            Err(_) => optional_params,
+        };
         Ok(PreparedOcrRequest {
             document,
             optional_params,
@@ -69,25 +70,23 @@ impl OcrLifecycleHooks {
         })
     }
 
-    async fn prepare_provider_request(
+    pub(crate) async fn prepare_provider_request(
         &self,
         request: PreparedOcrRequest,
     ) -> Result<ProviderOcrRequest, Error> {
-        let config = ocr_provider_config(&request.custom_llm_provider, &request.model)
-            .ok_or_else(|| Error::InvalidProvider(request.custom_llm_provider.clone()))?;
+        let config = request.config?;
         let env_lookup = |key: &str| std::env::var(key).ok();
-        let headers = string_headers(request.extra_headers)?;
-        let auth_strategy = config.auth_strategy();
-        let api_key = (!has_header(&headers, auth_strategy.header_name()))
-            .then(|| config.resolve_api_key(request.api_key.as_deref(), &env_lookup))
-            .transpose()?;
+        let upstream_headers = config.validate_environment(
+            string_headers(request.extra_headers)?,
+            request.api_key.as_deref(),
+            &env_lookup,
+        )?;
         let url = config.complete_url(
             request.api_base.as_deref(),
             &request.model,
             &request.optional_params,
             &env_lookup,
         )?;
-        let filtered_params = config.map_ocr_params(&request.optional_params);
         let model = request.model.clone();
         let custom_llm_provider = request.custom_llm_provider.clone();
         let document = if config.requires_data_uri_document() {
@@ -96,9 +95,8 @@ impl OcrLifecycleHooks {
             request.document
         };
         let body = config
-            .transform_ocr_request(&request.model, document, filtered_params)?
+            .transform_ocr_request(&request.model, document, request.optional_params)?
             .data;
-        let upstream_headers = upstream_headers(&headers, auth_strategy, api_key.as_deref());
         let body = self
             .run_during_call_guardrails(&model, &custom_llm_provider, &url, body)
             .await?;
@@ -167,9 +165,9 @@ impl OcrLifecycleHooks {
     }
 }
 
-impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLifecycleHooks {
+impl CallLifecycleHooks<PreparedOcrRequest, PreparedOcrRequest, Value> for OcrLifecycleHooks {
     type PreCallFuture<'a> = OcrFuture<'a, PreparedOcrRequest>;
-    type DuringCallFuture<'a> = OcrFuture<'a, ProviderOcrRequest>;
+    type DuringCallFuture<'a> = OcrFuture<'a, PreparedOcrRequest>;
     type SuccessFuture<'a> = OcrLogFuture<'a>;
     type FailureFuture<'a> = OcrLogFuture<'a>;
 
@@ -186,7 +184,7 @@ impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLi
         _context: &'a CallLifecycleContext,
         request: PreparedOcrRequest,
     ) -> Self::DuringCallFuture<'a> {
-        Box::pin(async move { self.prepare_provider_request(request).await })
+        Box::pin(async move { Ok(request) })
     }
 
     fn async_log_success_event<'a>(
@@ -245,21 +243,6 @@ impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLi
                 .await;
         })
     }
-}
-
-fn upstream_headers(
-    headers: &[(String, String)],
-    auth_strategy: OcrAuthStrategy,
-    api_key: Option<&str>,
-) -> Vec<(String, String)> {
-    api_key
-        .map(|api_key| match auth_strategy {
-            OcrAuthStrategy::Bearer => ("Authorization".to_string(), format!("Bearer {api_key}")),
-            OcrAuthStrategy::Header(header_name) => (header_name.to_string(), api_key.to_string()),
-        })
-        .into_iter()
-        .chain(headers.iter().cloned())
-        .collect()
 }
 
 fn guardrail_context(metadata: &RequestMetadata) -> GuardrailContext {

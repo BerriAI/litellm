@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import ModifyResponseException
     from litellm.llms.base_llm.guardrail_translation.base_translation import (
         BaseTranslation,
+        StreamingScanKey,
     )
 
 # Call types that stream JSON-RPC events (A2A); guardrail HTTPException is emitted as in-stream error
@@ -55,6 +56,9 @@ class _EndpointTranslation(Protocol):
     def process_output_streaming_response(self) -> "Callable[..., Awaitable[object]]": ...
 
     @property
+    def get_streaming_scan_key(self) -> "Callable[[Sequence[object]], StreamingScanKey | None]": ...
+
+    @property
     def build_block_sse_chunks(self) -> "Callable[..., Sequence[bytes] | None]": ...
 
     @property
@@ -68,6 +72,12 @@ def _as_endpoint_translation(translation: _EndpointTranslation) -> _EndpointTran
 def _chunk_choices(item: object) -> Sequence[object]:
     choices: Final[Sequence[object]] = getattr(item, "choices", None) or []
     return choices
+
+
+def _is_redundant_scan(scan_key: "StreamingScanKey | None", last_scan_key: "StreamingScanKey | None") -> bool:
+    if scan_key is None:
+        return False
+    return scan_key == last_scan_key or scan_key.has_nothing_to_scan
 
 
 class _StreamTerminated(Exception):
@@ -1011,6 +1021,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         # Drives how a block terminates the stream: continue the in-progress
         # message (True) vs emit a standalone block message (False, buffered).
         chunks_yielded = False
+        last_scan_key: StreamingScanKey | None = None  # rebind-ok: replaced after every scan round
 
         async for item in response:
             chunk_counter += 1
@@ -1052,6 +1063,19 @@ class UnifiedLLMGuardrails(CustomLogger):
 
             # Process chunk based on sampling rate
             if chunk_counter % sampling_rate == 0:
+                endpoint_translation = endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
+                scan_key = endpoint_translation.get_streaming_scan_key(responses_so_far)
+                if _is_redundant_scan(scan_key, last_scan_key):
+                    verbose_proxy_logger.debug(
+                        "Skipping streaming chunk %s for guardrail %s: nothing new to scan since the last round",
+                        chunk_counter,
+                        guardrail_to_apply.guardrail_name,
+                    )
+                    chunks_yielded = True
+                    responses_yielded.append(item)
+                    yield item
+                    continue
+
                 verbose_proxy_logger.debug(
                     "Processing streaming chunk %s (sampling_rate=%s) with guardrail %s",
                     chunk_counter,
@@ -1066,8 +1090,6 @@ class UnifiedLLMGuardrails(CustomLogger):
                 # copy, yielding processed_items[-1] would yield an empty
                 # string, permanently losing this chunk's content.
                 original_item = copy.deepcopy(item)
-
-                endpoint_translation = endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
 
                 try:
                     await endpoint_translation.process_output_streaming_response(
@@ -1110,6 +1132,8 @@ class UnifiedLLMGuardrails(CustomLogger):
                     ):
                         yield error_item
                     return
+                if scan_key is not None:
+                    last_scan_key = scan_key
                 chunks_yielded = True
                 responses_yielded.append(original_item)
                 yield original_item
@@ -1136,6 +1160,18 @@ class UnifiedLLMGuardrails(CustomLogger):
             # preserve the list, not clone every chunk (deepcopy would double
             # peak memory for large responses).
             buffered_items: Final = list(responses_so_far) if buffer_until_moderated else None
+            end_scan_key: Final = endpoint_translation.get_streaming_scan_key(responses_so_far)
+            if _is_redundant_scan(end_scan_key, last_scan_key):
+                verbose_proxy_logger.debug(
+                    "Skipping end-of-stream scan for guardrail %s: the last sampled round already scanned it all",
+                    guardrail_to_apply.guardrail_name,
+                )
+                for buffered_item in buffered_items or ():
+                    yield buffered_item
+                for pending_item in pending_end_of_stream_items:
+                    responses_yielded.append(pending_item)
+                    yield pending_item
+                return
 
             try:
                 await endpoint_translation.process_output_streaming_response(

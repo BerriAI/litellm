@@ -1,21 +1,21 @@
 {
   "ANN001": {
-    "limit": 2957
+    "limit": 2985
   },
   "ANN002": {
     "limit": 71
   },
   "ANN003": {
-    "limit": 806
+    "limit": 809
   },
   "ANN201": {
-    "limit": 1981
+    "limit": 2000
   },
   "ANN202": {
-    "limit": 831
+    "limit": 835
   },
   "ANN204": {
-    "limit": 683
+    "limit": 693
   },
   "ANN205": {
     "limit": 112
@@ -24,7 +24,7 @@
     "limit": 133
   },
   "ANN401": {
-    "limit": 122
+    "limit": 304
   },
   "ASYNC230": {
     "limit": 11
@@ -156,7 +156,7 @@
     "limit": 215
   },
   "PLW0603": {
-    "limit": 191
+    "limit": 190
   },
   "PLW1508": {
     "limit": 190
@@ -177,7 +177,7 @@
     "limit": 8
   },
   "RUF019": {
-    "limit": 31
+    "limit": 27
   },
   "RUF046": {
     "limit": 4
@@ -231,7 +231,7 @@
     "limit": 5
   },
   "TID251": {
-    "limit": 1036
+    "limit": 1071
   },
   "TRY002": {
     "limit": 524

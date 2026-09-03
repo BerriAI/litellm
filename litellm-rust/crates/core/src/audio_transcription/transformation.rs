@@ -15,6 +15,7 @@ pub enum AudioTranscriptionAuth {
 pub trait AudioTranscriptionProviderConfig: Sync {
     fn supported_transcription_params(&self) -> &'static [&'static str];
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn map_transcription_params(&self, params: &Map<String, Value>) -> Map<String, Value> {
         params
             .iter()

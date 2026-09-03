@@ -28,6 +28,7 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
     - text: str
 """
 
+import copy
 import time
 import uuid
 from collections.abc import Mapping, Sequence
@@ -36,7 +37,6 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from openai.types.responses.tool_param import FunctionToolParam
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
@@ -44,11 +44,17 @@ from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     OpenAiResponsesToChatCompletionStreamIterator,
 )
-from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.base_llm.guardrail_translation.base_translation import (
+    BaseTranslation,
+    StreamingScanKey,
+)
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_responses_stream_usage,
     stream_item_field,
+    stream_item_fingerprint,
+    stream_item_items,
 )
+from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -62,7 +68,6 @@ from litellm.types.llms.openai import (
     ContentPartDonePartOutputText,
     ErrorEvent,
     ErrorEventError,
-    OpenAIMcpServerTool,
     OutputItemAddedEvent,
     OutputItemDoneEvent,
     OutputTextDeltaEvent,
@@ -157,23 +162,31 @@ class OpenAIResponsesHandler(BaseTranslation):
         Handles both string input and list of message objects.
         """
         input_data: Final[str | ResponseInputParam | None] = data.get("input")
-        tools_to_check: Final[list[ChatCompletionToolParam]] = []
         if input_data is None:
             return data
 
         structured_messages: Final = self.get_structured_messages(data)
+        raw_tools: Final = data.get("tools")
+        original_tools: Final[tuple[Mapping[str, object], ...]] = (
+            tuple(raw_tools) if isinstance(raw_tools, list) else ()
+        )
+        flattened_tool_groups: Final = tuple(
+            form.chat_tools for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(original_tools)
+        )
+        flattened_tools: Final = tuple(
+            cast(ChatCompletionToolParam, tool)  # cast-ok: mcp tools ride along in the guardrail's tool list
+            for group in flattened_tool_groups
+            for tool in group
+        )
+        tools_to_check: Final[list[ChatCompletionToolParam]] = list(  # mutable-ok: guardrail inputs want a list
+            copy.deepcopy(flattened_tools)
+        )
 
         # Handle simple string input
         if isinstance(input_data, str):
             inputs = GenericGuardrailAPIInputs(texts=[input_data])
-            original_tools: list[dict[str, object]] = []
-
-            # Extract and transform tools if present
-            if "tools" in data and data["tools"]:
-                original_tools = list(data["tools"])
-                self._extract_and_transform_tools(data["tools"], tools_to_check)
-                if tools_to_check:
-                    inputs["tools"] = tools_to_check
+            if tools_to_check:
+                inputs["tools"] = tools_to_check
             if structured_messages:
                 inputs["structured_messages"] = structured_messages
             # Include model information if available
@@ -189,7 +202,9 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
             guardrailed_texts = guardrailed_inputs.get("texts", [])
             data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data
-            self._apply_guardrailed_tools_to_data(data, original_tools, guardrailed_inputs.get("tools"))
+            self._apply_guardrailed_tools_to_data(
+                data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools")
+            )
             verbose_proxy_logger.debug("OpenAI Responses API: Processed string input")
             return data
 
@@ -200,7 +215,6 @@ class OpenAIResponsesHandler(BaseTranslation):
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
         task_mappings: Final[list[tuple[int, int | None]]] = []
-        original_tools_list: Final[list[dict[str, object]]] = list(data.get("tools") or [])
 
         # Step 1: Extract all text content, images, and tools
         for msg_idx, message in enumerate(input_data):
@@ -211,10 +225,6 @@ class OpenAIResponsesHandler(BaseTranslation):
                 images_to_check=images_to_check,
                 task_mappings=task_mappings,
             )
-
-        # Extract and transform tools if present
-        if "tools" in data and data["tools"]:
-            self._extract_and_transform_tools(data["tools"], tools_to_check)
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check:
@@ -238,9 +248,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
             self._apply_guardrailed_tools_to_data(
-                data,
-                original_tools_list,
-                guardrailed_inputs.get("tools"),
+                data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools")
             )
 
             # Step 3: Map guardrail responses back to original input structure
@@ -267,73 +275,18 @@ class OpenAIResponsesHandler(BaseTranslation):
                 names.append(str(tool["server_label"]))
         return names
 
-    def _extract_and_transform_tools(
-        self,
-        tools: list[FunctionToolParam | OpenAIMcpServerTool],
-        tools_to_check: list[ChatCompletionToolParam],
-    ) -> None:
-        """
-        Extract and transform tools from Responses API format to Chat Completion format.
-
-        Uses the LiteLLM transformation function to convert Responses API tools
-        to Chat Completion tools that can be passed to guardrails.
-        """
-        if tools is not None and isinstance(tools, list):
-            # Transform Responses API tools to Chat Completion tools
-            (
-                transformed_tools,
-                _,
-            ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools)
-            tools_to_check.extend(cast(list[ChatCompletionToolParam], transformed_tools))
-
-    def _remap_tools_to_responses_api_format(self, guardrailed_tools: list[Any]) -> list[dict[str, object]]:
-        """
-        Remap guardrail-returned tools (Chat Completion format) back to
-        Responses API request tool format.
-        """
-        return LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(
-            guardrailed_tools
-        )
-
-    def _merge_tools_after_guardrail(
-        self,
-        original_tools: list[dict[str, object]],
-        remapped: list[dict[str, object]],
-    ) -> list[dict[str, object]]:
-        """
-        Merge remapped guardrailed tools with original tools that were not sent
-        to the guardrail (e.g. web_search, web_search_preview), preserving order.
-        Tools a guardrail appended (``remapped`` longer than ``original_tools``)
-        have no original slot and are kept so an injected tool is not dropped.
-        """
-        if not original_tools:
-            return remapped
-        result: Final[list[dict[str, object]]] = []
-        j = 0
-        for tool in original_tools:
-            if isinstance(tool, dict) and tool.get("type") in (
-                "web_search",
-                "web_search_preview",
-            ):
-                result.append(tool)
-            else:
-                if j < len(remapped):
-                    result.append(remapped[j])
-                    j += 1
-        # Keep guardrail-appended tools that matched no original slot above.
-        result.extend(remapped[j:])
-        return result
-
     def _apply_guardrailed_tools_to_data(
         self,
         data: dict,
-        original_tools: list[dict[str, object]],
-        guardrailed_tools: list[ChatCompletionToolParam] | None,
+        original_tools: Sequence[Mapping[str, object]],
+        flattened_tool_groups: Sequence[Sequence[Mapping[str, object]]],
+        guardrailed_tools: Sequence[ChatCompletionToolParam] | None,
     ) -> None:
-        """Remap guardrailed tools to Responses API format and merge with original, then set data['tools']."""
-        if guardrailed_tools is not None:
-            remapped: Final = self._remap_tools_to_responses_api_format(guardrailed_tools)
-            data["tools"] = self._merge_tools_after_guardrail(original_tools, remapped)
+        if guardrailed_tools is None:
+            return
+        data["tools"] = list(  # mutable-ok: downstream wants a list  # rebind-ok: in-place request rewrite
+            merge_guardrailed_tools(original_tools, flattened_tool_groups, guardrailed_tools)
+        )
 
     def _extract_input_text_and_images(
         self,
@@ -645,18 +598,55 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
         return responses_so_far
 
-    def _check_streaming_has_ended(self, responses_so_far: Sequence[ResponsesStreamChunk]) -> bool:
+    def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
         """
         Check if the streaming has ended.
         """
         if not responses_so_far:
             return False
-        terminal_types: Final = {
-            ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value,
-            ResponsesAPIStreamEvents.RESPONSE_FAILED.value,
-            ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE.value,
-        }
-        return responses_so_far[-1].get("type") in terminal_types
+        terminal_types: Final = frozenset(
+            (
+                ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value,
+                ResponsesAPIStreamEvents.RESPONSE_FAILED.value,
+                ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE.value,
+            )
+        )
+        return stream_item_field(responses_so_far[-1], "type") in terminal_types
+
+    def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        if not responses_so_far or not hasattr(responses_so_far[-1], "get"):
+            return None
+        last_event: Final = responses_so_far[-1]
+        last_event_type: Final = stream_item_field(last_event, "type")
+        if last_event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE.value:
+            return None
+        if last_event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value:
+            return self._completed_response_scan_key(stream_item_field(last_event, "response"))
+        return StreamingScanKey(
+            texts=(self.get_streaming_string_so_far(responses_so_far),),
+            stream_ended=self._check_streaming_has_ended(responses_so_far),
+        )
+
+    @staticmethod
+    def _completed_response_scan_key(response: object) -> StreamingScanKey:
+        output_items: Final = stream_item_items(response, "output")
+        message_items: Final = tuple(
+            item for item in output_items if stream_item_field(item, "type") != "function_call"
+        )
+        return StreamingScanKey(
+            texts=tuple(
+                text
+                for item in message_items
+                for part in stream_item_items(item, "content")
+                if isinstance(text := stream_item_field(part, "text"), str) and text
+            ),
+            tool_calls=tuple(
+                stream_item_fingerprint(item)
+                for item in output_items
+                if stream_item_field(item, "type") == "function_call"
+            ),
+            stream_ended=True,
+        )
 
     def build_stream_error_items(
         self,
@@ -681,7 +671,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             ),
         )
 
-    def get_streaming_string_so_far(self, responses_so_far: Sequence[ResponsesStreamChunk]) -> str:
+    def get_streaming_string_so_far(self, responses_so_far: Sequence[object]) -> str:
         """
         Get the string so far from the responses so far.
 
@@ -693,12 +683,16 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
         keyed_events: Final = tuple(
             (
-                (event.get("item_id"), event.get("output_index"), event.get("content_index")),
-                event.get("text"),
-                event.get("delta"),
+                (
+                    stream_item_field(event, "item_id"),
+                    stream_item_field(event, "output_index"),
+                    stream_item_field(event, "content_index"),
+                ),
+                stream_item_field(event, "text"),
+                stream_item_field(event, "delta"),
             )
             for event in responses_so_far
-            if isinstance(event.get("text"), str) or isinstance(event.get("delta"), str)
+            if isinstance(stream_item_field(event, "text"), str) or isinstance(stream_item_field(event, "delta"), str)
         )
 
         def part_text(part_key: tuple[object, object, object]) -> str:
