@@ -1774,22 +1774,25 @@ async def update_user(
             roles=user_data["roles"],
         )
 
+        # SCIM User.groups is readOnly (RFC 7643 4.1.2): IdPs sync membership via /Groups and send
+        # no groups or `groups: []` on profile PUTs, so empty means unspecified, not "remove from every team"
+        target_teams: Final = user_data["teams"] or existing_user.teams
         await _handle_team_membership_changes(
             user_id=user_id,
-            existing_teams=existing_user.teams or [],
-            new_teams=user_data["teams"],
+            existing_teams=existing_user.teams,
+            new_teams=target_teams,
         )
 
         update_data: Final = {
             "user_email": user_data["user_email"],
             "user_alias": user_data["user_alias"],
             "sso_user_id": user_data["sso_user_id"],
-            "teams": user_data["teams"],
+            "teams": target_teams,
             "metadata": safe_dumps(metadata),
         }
 
         admin_group: Final = await _get_scim_admin_group()
-        if admin_group is not None:
+        if admin_group is not None and user_data["teams"]:
             update_data["user_role"] = _resolve_scim_user_role(
                 user.groups or [], admin_group, _default_scim_user_role()
             )
