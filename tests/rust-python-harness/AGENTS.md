@@ -17,6 +17,7 @@ tests/rust-python-harness/
 │   │
 │   ├── trace_parity/
 │   │   ├── __init__.py
+│   │   ├── models.py
 │   │   ├── reporting.py
 │   │   └── sdk/
 │   │       ├── chat_completions/
@@ -26,6 +27,9 @@ tests/rust-python-harness/
 │   │
 │   ├── unit_tests_mapping/
 │   │   ├── __init__.py
+│   │   ├── contracts.py
+│   │   ├── cases/
+│   │   │   └── ocr.py
 │   │   ├── mapping_report.py
 │   │   ├── mappings.py
 │   │   ├── mapping_validator.py
@@ -61,7 +65,7 @@ tests/rust-python-harness/
 - `e2e_parity/` compares SDK objects, exceptions, callbacks, and streams, or gateway HTTP responses
 - `trace_parity/` compares mapped operations, call counts, and required execution ordering; before running it rebuilds the native bridge with the `trace-parity` feature whenever `litellm-rust` sources are newer than the installed extension (`shared/native_build.py`)
 - E2E and trace strategies load their registered module cases and run surface-specific execution from their folders
-- `unit_tests_mapping/mappings.py` owns typed harness-side mapping contracts; live test discovery derives unmapped Python and Rust-only tests without an exhaustive manifest
+- `unit_tests_mapping/contracts.py` owns typed harness-side mapping contracts, per-function contracts live below `cases/`, and `mappings.py` exports the registry; live test discovery derives unmapped Python and Rust-only tests without an exhaustive manifest
 - `unit_tests_mapping/runner.py` validates confirmed mappings against the live Python and Rust inventories and attaches the derived status report
 - `unit_tests_parity/runner.py` runs each contract's `unit_parity_scope` with `LITELLM_RUST=0` and `LITELLM_RUST=1` in separate processes and requires matching outcomes, including failures; exclusions require a reason in the contract
 - `unit_tests_rust/runner.py` runs each contract's focused Cargo test suite; native Rust unit tests stay beside their implementation

@@ -15,7 +15,7 @@ from ...shared.reporting.strategy import (
     SuiteCaseSpec,
 )
 from ...shared.unit_runners.suite_runner import run_suites
-from ..unit_tests_mapping.mappings import MAPPING_SUITES
+from ..unit_tests_mapping.mappings import UNIT_TEST_CONTRACTS
 from .reporting import render_unit_parity_results
 from .runner import UnitParityExclusion, UnitParitySuite, run_suite
 
@@ -23,16 +23,16 @@ from .runner import UnitParityExclusion, UnitParitySuite, run_suite
 UNIT_PARITY_SUITES: Final[Mapping[SdkFunction, UnitParitySuite]] = MappingProxyType(
     {
         sdk_function: UnitParitySuite(
-            python_selectors=suite.unit_parity_selectors,
+            python_selectors=contract.unit_parity.python_selectors,
             exclusions=tuple(
                 UnitParityExclusion(
                     nodeid=exclusion.nodeid,
                     reason=exclusion.reason,
                 )
-                for exclusion in suite.unit_parity_exclusions
+                for exclusion in contract.unit_parity.exclusions
             ),
         )
-        for sdk_function, suite in MAPPING_SUITES.items()
+        for sdk_function, contract in UNIT_TEST_CONTRACTS.items()
     }
 )
 

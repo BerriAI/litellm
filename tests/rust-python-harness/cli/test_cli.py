@@ -19,7 +19,7 @@ from ..shared.reporting.models import (
 )
 from ..shared.reporting.strategy import NotImplementedCaseSpec, SkippedCaseSpec, StrategyDefinition
 from ..shared.reporting.ui import PlainDashboard, final_report, make_dashboard
-from ..strategies.unit_tests_mapping.mappings import MAPPING_SUITES
+from ..strategies.unit_tests_mapping.mappings import UNIT_TEST_CONTRACTS
 from ..strategies.unit_tests_parity import UNIT_PARITY_SUITES
 from ..strategies.unit_tests_rust import RUST_SUITES
 from . import main
@@ -116,7 +116,7 @@ def test_unit_strategies_use_function_only_cases() -> None:
         assert len(cases) == 3
         assert all(case.surface is None for case in cases)
         expected_mapping: Final = (
-            CaseDisposition.RUNNABLE if sdk_function in MAPPING_SUITES else CaseDisposition.NOT_IMPLEMENTED
+            CaseDisposition.RUNNABLE if sdk_function in UNIT_TEST_CONTRACTS else CaseDisposition.NOT_IMPLEMENTED
         )
         assert cases[0].spec.disposition is expected_mapping
         expected_parity: Final = (

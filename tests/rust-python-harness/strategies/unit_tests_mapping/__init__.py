@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from typing import Final
 
@@ -11,9 +12,10 @@ from ...shared.reporting.strategy import (
     StrategyDefinition,
     SuiteCaseSpec,
 )
-from .mappings import MAPPING_SUITES
+from ...shared.unit_runners.suite_runner import run_suites
+from .mappings import UNIT_TEST_CONTRACTS
 from .reporting import render_mapping_results
-from .runner import run_mapping_cases
+from .runner import run_suite
 
 
 CASES: Final[tuple[CaseDefinition, ...]] = (
@@ -21,7 +23,7 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
         CaseDefinition(
             sdk_function,
             SuiteCaseSpec(coverage=Coverage.COMPLETE, suite=sdk_function)
-            if sdk_function in MAPPING_SUITES
+            if sdk_function in UNIT_TEST_CONTRACTS
             else NotImplementedCaseSpec(reason=f"No {sdk_function} unit-test mapping is registered."),
         )
         for sdk_function in SDK_FUNCTIONS
@@ -36,7 +38,7 @@ STRATEGY: Final = StrategyDefinition(
     directory=Path(__file__).parent,
     runnable_spec=SuiteCaseSpec,
     cases=CASES,
-    run=run_mapping_cases,
+    run=partial(run_suites, suites=UNIT_TEST_CONTRACTS, execute=run_suite),
     render=render_mapping_results,
     runner_argument=RunnerArgumentDefinition(
         option="--detail",

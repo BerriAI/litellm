@@ -1,18 +1,26 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
-from typing import TypeVar
+from typing import Final, TypeVar
 
 from pydantic import BaseModel
 
-from ..reporting.models import HarnessCase, HarnessRun, RunStatus, SdkFunction
+from ..reporting.models import HarnessCase, HarnessRun, ResultArtifact, RunStatus, SdkFunction
 from ..reporting.strategy import SuiteCaseSpec, UpdateCallback
 
 S = TypeVar("S", bound=BaseModel)
 
-SuiteExecutor = Callable[[S, Path, Sequence[str]], tuple[str, ...]]
+
+@dataclass(frozen=True, slots=True)
+class SuiteExecution:
+    problems: tuple[str, ...] = ()
+    artifacts: tuple[ResultArtifact, ...] = ()
+
+
+SuiteExecutor = Callable[[S, Path, Sequence[str]], SuiteExecution]
 
 
 def suite_nodeid(case: HarnessCase) -> str:
@@ -46,13 +54,17 @@ def run_suites(
             report.failures.append((nodeid, f"no suite registered for {case.sdk_function}"))
             continue
         try:
-            problems = execute(suite, repo_root, runner_args)
+            execution: Final = execute(suite, repo_root, runner_args)
         except (OSError, ValueError) as error:
             result.record(nodeid, RunStatus.ERROR)
             report.failures.append((nodeid, str(error)))
             continue
-        result.record(nodeid, RunStatus.FAILED if problems else RunStatus.PASSED)
-        report.failures.extend((nodeid, problem) for problem in problems)
+        result.record(
+            nodeid,
+            RunStatus.FAILED if execution.problems else RunStatus.PASSED,
+            artifacts=execution.artifacts,
+        )
+        report.failures.extend((nodeid, problem) for problem in execution.problems)
         on_update(report)
     report.finished_at = monotonic()
     on_update(report)

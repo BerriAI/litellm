@@ -4,7 +4,16 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from typing import Final
 
+from pydantic import BaseModel, ConfigDict
+
 from .mapping_validator import MappingReport
+
+
+class MappingReportArtifact(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    report: MappingReport
+    detailed: bool = False
 
 
 def _group_counts(nodeids: Sequence[str], owner: Callable[[str], str]) -> tuple[str, ...]:

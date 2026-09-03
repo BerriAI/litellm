@@ -5,7 +5,7 @@ from typing import Final
 
 from .....shared.parity.recorded_http import HttpHeader, RecordedHttpResponse
 from .....shared.tracing.steps import Engine, mapping
-from ..execution import RouteFixture, RouteSpec, TraceScenario, TraceSuite
+from ...models import RouteFixture, RouteSpec, TraceScenario, TraceSuite
 
 COMMON_MAPPINGS: Final = (
     mapping(rust_span="messages", python_frame=r"anthropic_interface/messages/__init__\.py:\d+ a?create$"),
@@ -92,9 +92,7 @@ SPEC: Final = RouteSpec("messages", ("create", "acreate"), ("messages", "amessag
 TRACE_SUITE: Final = TraceSuite(
     route=SPEC,
     scenarios=(
-        TraceScenario(
-            name="anthropic", fixture=_anthropic_fixture, mappings=ANTHROPIC_MAPPINGS, modes=("async",)
-        ),
+        TraceScenario(name="anthropic", fixture=_anthropic_fixture, mappings=ANTHROPIC_MAPPINGS, modes=("async",)),
         TraceScenario(name="azure-ai", fixture=_azure_fixture, mappings=AZURE_MAPPINGS, modes=("async",)),
     ),
 )

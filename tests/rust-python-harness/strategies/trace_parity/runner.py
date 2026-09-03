@@ -9,11 +9,12 @@ from typing import Final
 from ...shared.reporting.models import CaseResult, HarnessCase, HarnessRun, ResultArtifact, RunStatus, Surface
 from ...shared.reporting.strategy import ModuleCaseSpec, UpdateCallback
 from ...shared.native_build import ensure_trace_bridge
-from .reporting import TRACE_COMPARISON_ARTIFACT
-from .sdk.execution import RouteSpec, TraceExecutionFailure, TraceMode, TraceScenario, TraceSuite, execute_trace
+from .models import GatewayRouteSpec, RouteSpec, TraceExecutionFailure, TraceMode, TraceScenario, TraceSuite
+from .reporting import TRACE_COMPARISON_ARTIFACT, TraceComparisonArtifact
+from .sdk.execution import execute_trace
 
 
-def _load_case(reference: str) -> TraceSuite | TraceExecutionFailure:
+def _load_case(reference: str, harness_case: HarnessCase) -> TraceSuite | TraceExecutionFailure:
     try:
         module: Final = importlib.import_module(reference)
     except Exception as error:
@@ -21,16 +22,34 @@ def _load_case(reference: str) -> TraceSuite | TraceExecutionFailure:
     suite: Final = getattr(module, "TRACE_SUITE", None)
     if not isinstance(suite, TraceSuite):
         return TraceExecutionFailure("harness", f"{reference} must export TRACE_SUITE: TraceSuite")
-    validation_error: Final = validate_trace_suite(suite)
+    validation_error: Final = validate_trace_suite(suite, harness_case)
     if validation_error is not None:
         return TraceExecutionFailure("harness", f"{reference} {validation_error}")
     return suite
 
 
-def validate_trace_suite(suite: TraceSuite) -> str | None:
+def validate_trace_suite(suite: TraceSuite, harness_case: HarnessCase) -> str | None:
     names: Final = tuple(scenario.name for scenario in suite.scenarios)
     if not names or len(names) != len(set(names)) or any(not name or ":" in name for name in names):
         return "scenario names must be non-empty, unique, and colon-free"
+    invalid_modes: Final = tuple(
+        scenario.name
+        for scenario in suite.scenarios
+        if not scenario.modes
+        or len(scenario.modes) != len(set(scenario.modes))
+        or any(mode not in {"sync", "async"} for mode in scenario.modes)
+    )
+    if invalid_modes:
+        return f"scenarios must use non-empty, unique sync/async modes: {', '.join(invalid_modes)}"
+    surface: Final = harness_case.surface
+    if surface == "sdk" and not isinstance(suite.route, RouteSpec):
+        return "must use RouteSpec for the sdk surface"
+    if surface == "gateway" and not isinstance(suite.route, GatewayRouteSpec):
+        return "must use GatewayRouteSpec for the gateway surface"
+    if surface is None:
+        return "requires an sdk or gateway surface"
+    if suite.route.route != harness_case.sdk_function:
+        return f"route {suite.route.route} does not match case function {harness_case.sdk_function}"
     return None
 
 
@@ -58,7 +77,7 @@ def _record_setup_failure(run: HarnessRun, case: HarnessCase, message: str, stag
     run.failures.append((nodeid, message))
 
 
-def _run_mode(
+def run_trace_mode(
     run: HarnessRun,
     result: CaseResult,
     trace_suite: TraceSuite,
@@ -69,17 +88,13 @@ def _run_mode(
     on_update: UpdateCallback,
 ) -> None:
     started_at: Final = monotonic()
-    if surface == "gateway":
-        from .gateway.execution import GatewayRouteSpec, execute_gateway_trace
-
-        if not isinstance(trace_suite.route, GatewayRouteSpec):
-            raise TypeError("gateway trace suite has an invalid route spec")
-        comparison = execute_gateway_trace(trace_suite.route, scenario, mode)
-    elif isinstance(trace_suite.route, RouteSpec):
-        comparison = execute_trace(trace_suite.route, scenario, mode, surface)
-    else:
-        raise TypeError("SDK trace suite has an invalid route spec")
+    comparison: Final = _execute_mode(trace_suite, scenario, mode, surface)
     duration: Final = monotonic() - started_at
+    if isinstance(comparison, TraceExecutionFailure):
+        result.record(nodeid, RunStatus.ERROR, duration)
+        run.failures.append((nodeid, comparison.message))
+        on_update(run)
+        return
     artifact: Final = ResultArtifact(TRACE_COMPARISON_ARTIFACT, comparison.model_dump_json())
     if comparison.has_errors():
         result.record(nodeid, RunStatus.ERROR, duration, (artifact,))
@@ -92,6 +107,24 @@ def _run_mode(
         if status is RunStatus.FAILED:
             run.failures.append((nodeid, "trace contract mismatch; see the rendered comparison"))
     on_update(run)
+
+
+def _execute_mode(
+    trace_suite: TraceSuite,
+    scenario: TraceScenario,
+    mode: TraceMode,
+    surface: Surface,
+) -> TraceComparisonArtifact | TraceExecutionFailure:
+    route: Final = trace_suite.route
+    if isinstance(route, GatewayRouteSpec):
+        if surface != "gateway":
+            return TraceExecutionFailure("harness", "gateway route cannot run on the sdk surface")
+        from .gateway.execution import execute_gateway_trace
+
+        return execute_gateway_trace(route, scenario, mode)
+    if surface != "sdk":
+        return TraceExecutionFailure("harness", "sdk route cannot run on the gateway surface")
+    return execute_trace(route, scenario, mode, surface)
 
 
 def _run_case(
@@ -107,7 +140,7 @@ def _run_case(
     surface: Final = harness_case.surface
     if surface is None:
         return
-    trace_suite: Final = _load_case(spec.module)
+    trace_suite: Final = _load_case(spec.module, harness_case)
     if isinstance(trace_suite, TraceExecutionFailure):
         _record_setup_failure(run, harness_case, trace_suite.message, "load")
         on_update(run)
@@ -121,7 +154,7 @@ def _run_case(
     result.status = RunStatus.RUNNING
     on_update(run)
     for scenario, mode, nodeid in nodeids:
-        _run_mode(run, result, trace_suite, scenario, mode, surface, nodeid, on_update)
+        run_trace_mode(run, result, trace_suite, scenario, mode, surface, nodeid, on_update)
 
 
 def run_trace_cases(

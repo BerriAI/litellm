@@ -5,8 +5,7 @@ from typing import Final
 
 from .....shared.parity.recorded_http import HttpHeader, RecordedHttpResponse
 from .....shared.tracing.steps import Engine, mapping
-from ...sdk.execution import RouteFixture, TraceScenario, TraceSuite
-from ..execution import GatewayRouteSpec
+from ...models import GatewayRouteSpec, RouteFixture, TraceScenario, TraceSuite
 
 
 GATEWAY_MAPPINGS: Final = (
@@ -21,7 +20,10 @@ GATEWAY_MAPPINGS: Final = (
     ),
     mapping(rust_span="messages_gateway_service"),
     mapping(rust_span="messages"),
-    mapping(span="python_messages_provider_config", python_frame=r"ProviderConfigManager\.get_provider_anthropic_messages_config$"),
+    mapping(
+        span="python_messages_provider_config",
+        python_frame=r"ProviderConfigManager\.get_provider_anthropic_messages_config$",
+    ),
     mapping(rust_span="messages_provider_config"),
     mapping(rust_span="validate_environment", python_frame=r"validate_anthropic_messages_environment$"),
     mapping(rust_span="complete_url", python_frame=r"get_complete_url$"),
@@ -78,12 +80,21 @@ def _azure_fixture(engine: Engine, _base_url: str) -> RouteFixture:
 
 ANTHROPIC_MAPPINGS: Final = (
     *GATEWAY_MAPPINGS,
-    mapping(rust_span="transform_request", python_frame=r"(?<!Azure)AnthropicMessagesConfig\.transform_anthropic_messages_request$"),
+    mapping(
+        rust_span="transform_request",
+        python_frame=r"(?<!Azure)AnthropicMessagesConfig\.transform_anthropic_messages_request$",
+    ),
 )
 AZURE_MAPPINGS: Final = (
     *GATEWAY_MAPPINGS,
-    mapping(rust_span="transform_request", python_frame=r"AzureAnthropicMessagesConfig\.transform_anthropic_messages_request$"),
-    mapping(span="python_anthropic_transform_request", python_frame=r"(?<!Azure)AnthropicMessagesConfig\.transform_anthropic_messages_request$"),
+    mapping(
+        rust_span="transform_request",
+        python_frame=r"AzureAnthropicMessagesConfig\.transform_anthropic_messages_request$",
+    ),
+    mapping(
+        span="python_anthropic_transform_request",
+        python_frame=r"(?<!Azure)AnthropicMessagesConfig\.transform_anthropic_messages_request$",
+    ),
 )
 
 TRACE_SUITE: Final = TraceSuite(

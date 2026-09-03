@@ -5,7 +5,7 @@ from typing import Final, cast
 
 from .....shared.parity.recorded_http import HttpHeader, RecordedHttpResponse
 from .....shared.tracing.steps import Engine, mapping
-from ..execution import RouteFixture, RouteSpec, TraceScenario, TraceSuite
+from ...models import RouteFixture, RouteSpec, TraceScenario, TraceSuite
 
 COMMON_MAPPINGS: Final = (
     mapping(rust_span="ocr", python_frame=r"ocr/main\.py:\d+ a?ocr$"),
@@ -84,8 +84,7 @@ def _fixture(engine: Engine, model: str, document: dict[str, str] | None = None)
     return RouteFixture(
         kwargs={
             "model": model,
-            "document": document
-            or {"type": "document_url", "document_url": "https://example.com/document.pdf"},
+            "document": document or {"type": "document_url", "document_url": "https://example.com/document.pdf"},
             **({"optional_params": {"pages": [0]}} if engine == "rust" else {"pages": [0]}),
         },
         provider_responses=(
@@ -254,11 +253,17 @@ DOCUMENT_INTELLIGENCE_COMMON_MAPPINGS: Final = (
     mapping(rust_span="ocr", python_frame=r"ocr/main\.py:\d+ a?ocr$"),
     mapping(rust_span="prepare_ocr_call", python_frame=r"ocr/main\.py:\d+ _prepare_ocr_request$"),
     mapping(rust_span="ocr_provider_config", python_frame=r"ProviderConfigManager\.get_provider_ocr_config$"),
-    mapping(rust_span="supported_ocr_params", python_frame=r"AzureDocumentIntelligenceOCRConfig\.get_supported_ocr_params$"),
+    mapping(
+        rust_span="supported_ocr_params", python_frame=r"AzureDocumentIntelligenceOCRConfig\.get_supported_ocr_params$"
+    ),
     mapping(rust_span="map_ocr_params", python_frame=r"AzureDocumentIntelligenceOCRConfig\.map_ocr_params$"),
-    mapping(rust_span="validate_environment", python_frame=r"AzureDocumentIntelligenceOCRConfig\.validate_environment$"),
+    mapping(
+        rust_span="validate_environment", python_frame=r"AzureDocumentIntelligenceOCRConfig\.validate_environment$"
+    ),
     mapping(rust_span="complete_url", python_frame=r"AzureDocumentIntelligenceOCRConfig\.get_complete_url$"),
-    mapping(rust_span="transform_ocr_request", python_frame=r"AzureDocumentIntelligenceOCRConfig\.transform_ocr_request$"),
+    mapping(
+        rust_span="transform_ocr_request", python_frame=r"AzureDocumentIntelligenceOCRConfig\.transform_ocr_request$"
+    ),
     mapping(rust_span="http_request", python_frame=r"AsyncHTTPHandler\.post$|HTTPHandler\.post$"),
     mapping(
         rust_span="poll_document_intelligence",
@@ -273,14 +278,20 @@ DOCUMENT_INTELLIGENCE_SYNC_MAPPINGS: Final = (
     *DOCUMENT_INTELLIGENCE_COMMON_MAPPINGS,
     mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
     mapping(span="python_transform_ocr_response_wrapper", python_frame=r"BaseLLMHTTPHandler\._transform_ocr_response$"),
-    mapping(span="python_provider_transform_response", python_frame=r"AzureDocumentIntelligenceOCRConfig\.transform_ocr_response$"),
+    mapping(
+        span="python_provider_transform_response",
+        python_frame=r"AzureDocumentIntelligenceOCRConfig\.transform_ocr_response$",
+    ),
     mapping(span="python_poll_http_request", python_frame=r"HTTPHandler\.get$"),
 )
 DOCUMENT_INTELLIGENCE_ASYNC_MAPPINGS: Final = (
     *DOCUMENT_INTELLIGENCE_COMMON_MAPPINGS,
     mapping(span="python_ocr_wrapper", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
     mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.async_ocr$"),
-    mapping(span="python_provider_transform_response", python_frame=r"AzureDocumentIntelligenceOCRConfig\.async_transform_ocr_response$"),
+    mapping(
+        span="python_provider_transform_response",
+        python_frame=r"AzureDocumentIntelligenceOCRConfig\.async_transform_ocr_response$",
+    ),
     mapping(span="python_poll_http_request", python_frame=r"AsyncHTTPHandler\.get$"),
 )
 

@@ -11,11 +11,12 @@ strategy_module = importlib.import_module("tests.rust-python-harness.shared.repo
 ui = importlib.import_module("tests.rust-python-harness.shared.reporting.ui")
 mapping_validator = importlib.import_module("tests.rust-python-harness.strategies.unit_tests_mapping.mapping_validator")
 mappings = importlib.import_module("tests.rust-python-harness.strategies.unit_tests_mapping.mappings")
+ocr_mapping = importlib.import_module("tests.rust-python-harness.strategies.unit_tests_mapping.cases.ocr")
 cli = importlib.import_module("tests.rust-python-harness.cli")
 
 audit_mapping = mapping_validator.audit_mapping
-MAPPING_SUITES = mappings.MAPPING_SUITES
-OCR_MAPPING = mappings.OCR_MAPPING
+UNIT_TEST_CONTRACTS = mappings.UNIT_TEST_CONTRACTS
+OCR_CONTRACT = ocr_mapping.OCR_CONTRACT
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CaseResult = models.CaseResult
 Coverage = models.Coverage
@@ -115,11 +116,11 @@ def test_should_format_developer_facing_run_context() -> None:
 
 
 def test_should_leave_functions_without_mapping_contracts_unimplemented() -> None:
-    assert "messages" not in MAPPING_SUITES
+    assert "messages" not in UNIT_TEST_CONTRACTS
 
 
 def test_should_derive_ocr_mapping_status_from_live_tests() -> None:
-    report = audit_mapping(OCR_MAPPING, repo_root=REPO_ROOT)
+    report = audit_mapping(OCR_CONTRACT, repo_root=REPO_ROOT)
 
     assert report.is_valid, (
         f"Missing Python tests: {list(report.missing_python_tests)}\n"
@@ -127,7 +128,7 @@ def test_should_derive_ocr_mapping_status_from_live_tests() -> None:
         f"Duplicate Python mappings: {list(report.duplicate_python_mappings)}\n"
         f"Invalid parity exclusions: {list(report.invalid_unit_parity_exclusions)}"
     )
-    assert report.mapped_count == len(OCR_MAPPING.mappings)
+    assert report.mapped_count == len(OCR_CONTRACT.mapping.mappings)
     assert report.total_count == report.mapped_count + len(report.unmapped_python_tests)
 
 

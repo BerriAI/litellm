@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Protocol, cast
 
@@ -10,17 +9,11 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 
 from ....shared.parity.replay import replay_server
-from ....shared.reporting.models import SdkFunction
 from ....shared.tracing.native import TraceResponsePayload, native_trace_events
 from ....shared.tracing.profiler import FunctionTraceEvent, profile_python
 from ....shared.tracing.steps import Engine, PipelineProjection, pipeline_projection
+from ..models import GatewayRouteSpec, RouteFixture, TraceExecutionFailure, TraceMode, TraceScenario
 from ..reporting import TraceComparisonArtifact
-from ..sdk.execution import RouteFixture, TraceExecutionFailure, TraceMode, TraceScenario
-
-
-@dataclass(frozen=True, slots=True)
-class GatewayRouteSpec:
-    route: SdkFunction
 
 
 class _GatewayResponsePayload(BaseModel):
@@ -108,9 +101,7 @@ def _collect_rust(fixture: RouteFixture) -> tuple[FunctionTraceEvent, ...]:
     return native_trace_events(payload)
 
 
-def _collect(
-    scenario: TraceScenario, engine: Engine
-) -> tuple[FunctionTraceEvent, ...] | TraceExecutionFailure:
+def _collect(scenario: TraceScenario, engine: Engine) -> tuple[FunctionTraceEvent, ...] | TraceExecutionFailure:
     try:
         with replay_server() as provider:
             base_fixture: Final = scenario.fixture(engine, provider.url)
@@ -144,15 +135,11 @@ def _projections(
         return PipelineProjection(), PipelineProjection(), f"harness: {error}"
 
 
-def execute_gateway_trace(
-    route: GatewayRouteSpec, scenario: TraceScenario, mode: TraceMode
-) -> TraceComparisonArtifact:
+def execute_gateway_trace(route: GatewayRouteSpec, scenario: TraceScenario, mode: TraceMode) -> TraceComparisonArtifact:
     mappings: Final = scenario.mappings_for(mode)
     python_trace: Final = _collect(scenario, "python")
     rust_trace: Final = _collect(scenario, "rust")
-    collection_python_error: Final = (
-        None if isinstance(python_trace, tuple) else f"python: {python_trace.message}"
-    )
+    collection_python_error: Final = None if isinstance(python_trace, tuple) else f"python: {python_trace.message}"
     rust_error: Final = None if isinstance(rust_trace, tuple) else f"rust: {rust_trace.message}"
     python_events: Final = python_trace if isinstance(python_trace, tuple) else ()
     rust_events: Final = rust_trace if isinstance(rust_trace, tuple) else ()

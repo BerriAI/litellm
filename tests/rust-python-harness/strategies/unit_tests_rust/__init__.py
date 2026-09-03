@@ -14,7 +14,7 @@ from ...shared.reporting.strategy import (
     SuiteCaseSpec,
 )
 from ...shared.unit_runners.suite_runner import run_suites
-from ..unit_tests_mapping.mappings import MAPPING_SUITES
+from ..unit_tests_mapping.mappings import UNIT_TEST_CONTRACTS
 from .reporting import render_rust_unit_results
 from .runner import RustSuite, run_suite
 
@@ -22,11 +22,11 @@ from .runner import RustSuite, run_suite
 RUST_SUITES: Final[Mapping[SdkFunction, RustSuite]] = MappingProxyType(
     {
         sdk_function: RustSuite(
-            cargo_manifest=suite.cargo_manifest,
-            cargo_filter=suite.cargo_filter,
-            cargo_package=suite.cargo_package,
+            cargo_manifest=contract.rust.cargo_manifest,
+            cargo_filter=contract.rust.cargo_filter,
+            cargo_package=contract.rust.cargo_package,
         )
-        for sdk_function, suite in MAPPING_SUITES.items()
+        for sdk_function, contract in UNIT_TEST_CONTRACTS.items()
     }
 )
 

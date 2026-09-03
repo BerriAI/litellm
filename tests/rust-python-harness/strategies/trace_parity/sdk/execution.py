@@ -1,66 +1,21 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable
 from pathlib import Path
-from typing import Final, Literal, Protocol, cast
+from typing import Final, Protocol, cast
 
-from ....shared.parity.recorded_http import RecordedHttpResponse
 from ....shared.parity.replay import replay_server
-from ....shared.reporting.models import SdkFunction, Surface
+from ....shared.reporting.models import Surface
 from ....shared.tracing.native import native_trace_events
 from ....shared.tracing.profiler import FunctionTraceEvent, profile_python
-from ....shared.tracing.steps import Engine, TraceContract, TraceMapping, pipeline_projection
+from ....shared.tracing.steps import Engine, pipeline_projection
+from ..models import RouteSpec, TraceExecutionFailure, TraceMode, TraceScenario
 from ..reporting import TraceComparisonArtifact
-
-TraceMode = Literal["sync", "async"]
-TraceFailureSource = Literal["python", "rust", "harness"]
 
 
 class SdkCall(Protocol):
     def __call__(self, **kwargs: object) -> object: ...
-
-
-@dataclass(frozen=True, slots=True)
-class RouteFixture:
-    kwargs: dict[str, object]
-    provider_responses: tuple[RecordedHttpResponse, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class RouteSpec:
-    route: SdkFunction
-    python_entrypoints: tuple[str, str]
-    rust_entrypoints: tuple[str, str]
-    fixture: Callable[[Engine, str], RouteFixture]
-
-
-@dataclass(frozen=True, slots=True)
-class TraceScenario:
-    name: str
-    fixture: Callable[[Engine, str], RouteFixture]
-    mappings: tuple[TraceMapping, ...]
-    modes: tuple[TraceMode, ...] = ("sync", "async")
-    contract: TraceContract = TraceContract()
-    sync_mappings: tuple[TraceMapping, ...] | None = None
-    async_mappings: tuple[TraceMapping, ...] | None = None
-
-    def mappings_for(self, mode: TraceMode) -> tuple[TraceMapping, ...]:
-        selected: Final = self.async_mappings if mode == "async" else self.sync_mappings
-        return self.mappings if selected is None else selected
-
-
-@dataclass(frozen=True, slots=True)
-class TraceSuite:
-    route: object
-    scenarios: tuple[TraceScenario, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class TraceExecutionFailure:
-    engine: TraceFailureSource
-    message: str
 
 
 def _invoke(function: SdkCall, kwargs: dict[str, object], *, asynchronous: bool) -> object:

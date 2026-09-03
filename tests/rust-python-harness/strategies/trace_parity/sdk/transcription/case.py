@@ -8,7 +8,7 @@ from typing import Final
 
 from .....shared.parity.recorded_http import HttpHeader, RecordedHttpResponse
 from .....shared.tracing.steps import Engine, mapping
-from ..execution import RouteFixture, RouteSpec, TraceScenario, TraceSuite
+from ...models import RouteFixture, RouteSpec, TraceScenario, TraceSuite
 
 MAPPINGS: Final = (
     mapping(rust_span="prepare_audio_transcription_provider_call"),

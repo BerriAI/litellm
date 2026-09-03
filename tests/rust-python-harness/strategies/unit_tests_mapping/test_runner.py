@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from typing import Final
 
 from ...shared.reporting.models import Coverage, HarnessCase, RunStatus
 from ...shared.reporting.strategy import SuiteCaseSpec
 from ...shared.unit_runners.rust_runner import RustTarget, RustTestIdentity, RustTestScope
-from .mapping_validator import MappingSuite, TestMapping as MappingPair
-from .runner import MAPPING_REPORT_ARTIFACT, run_mapping_cases
+from ...shared.unit_runners.suite_runner import run_suites
+from .contracts import MappingSpec, RustUnitSpec, TestMapping as MappingPair, UnitParitySpec, UnitTestContract
+from .mapping_report import MappingReportArtifact
+from .runner import MAPPING_REPORT_ARTIFACT, run_suite
 
 _TARGET: Final = RustTarget(package="example", name="example", kind="lib")
 _RUST_TEST: Final = RustTestIdentity(target=_TARGET, name="api::tests::decodes")
@@ -22,67 +25,73 @@ def _rust_inventory(*_: object) -> frozenset[RustTestIdentity]:
     return frozenset((_RUST_TEST, _RUST_ONLY))
 
 
-def _suite(mapping: MappingPair) -> MappingSuite:
-    return MappingSuite(
-        python_selectors=("test_api.py",),
-        unit_parity_selectors=("test_api.py",),
-        rust_scope=(RustTestScope(target=_TARGET, modules=("api::tests",)),),
-        cargo_manifest="Cargo.toml",
-        cargo_filter="api",
-        mappings=(mapping,),
+def _contract(mapping: MappingPair) -> UnitTestContract:
+    return UnitTestContract(
+        mapping=MappingSpec(
+            python_selectors=("test_api.py",),
+            rust_scope=(RustTestScope(target=_TARGET, modules=("api::tests",)),),
+            mappings=(mapping,),
+        ),
+        unit_parity=UnitParitySpec(python_selectors=("test_api.py",)),
+        rust=RustUnitSpec(cargo_manifest="Cargo.toml", cargo_filter="api"),
     )
 
 
-def test_reports_derived_mapping_status_without_running_tests(tmp_path: Path) -> None:
-    suite: Final = _suite(MappingPair(python="test_api.py::test_decode", rust=_RUST_TEST.key))
-    case: Final = HarnessCase(
+def _case() -> HarnessCase:
+    return HarnessCase(
         strategy_id="unit_tests_mapping",
         strategy_label="Unit test mapping",
         sdk_function="ocr",
         spec=SuiteCaseSpec(coverage=Coverage.COMPLETE, suite="ocr"),
     )
 
-    code, report = run_mapping_cases(
+
+def test_reports_structured_mapping_status_without_running_tests(tmp_path: Path) -> None:
+    contract: Final = _contract(MappingPair(python="test_api.py::test_decode", rust=_RUST_TEST))
+    case: Final = _case()
+
+    code, report = run_suites(
         (case,),
         tmp_path,
         lambda _: None,
-        suites={"ocr": suite},
-        python_inventory=_python_inventory,
-        rust_inventory=_rust_inventory,
+        suites={"ocr": contract},
+        execute=partial(
+            run_suite,
+            python_inventory=_python_inventory,
+            rust_inventory=_rust_inventory,
+        ),
     )
 
-    assert code == 0, report.failures
-    assert report.results[case.key].status is RunStatus.PASSED
-    rendered: Final = "\n".join(
-        artifact.body
-        for artifacts in report.results[case.key].artifacts.values()
-        for artifact in artifacts
+    result: Final = report.results[case.key]
+    artifacts: Final = tuple(
+        artifact
+        for values in result.artifacts.values()
+        for artifact in values
         if artifact.kind == MAPPING_REPORT_ARTIFACT
     )
-    assert "Contract: PASS" in rendered
-    assert "Mapped       1 / 2 (50.0%)" in rendered
-    assert "Unmapped     1 / 2 (50.0%)" in rendered
-    assert "Unmapped Python tests by file (1)\n  1  test_api.py" in rendered
-    assert f"Rust-only tests by module (1)\n  1  {_RUST_ONLY.key.rpartition('::')[0]}" in rendered
+    parsed: Final = MappingReportArtifact.model_validate_json(artifacts[0].body)
+    assert code == 0, report.failures
+    assert result.status is RunStatus.PASSED
+    assert parsed.report.mapped_count == 1
+    assert parsed.report.total_count == 2
+    assert not parsed.detailed
 
 
 def test_fails_when_a_mapping_target_is_missing(tmp_path: Path) -> None:
-    missing: Final = f"{_TARGET.key}::api::tests::missing"
-    suite: Final = _suite(MappingPair(python="test_api.py::test_decode", rust=missing))
-    case: Final = HarnessCase(
-        strategy_id="unit_tests_mapping",
-        strategy_label="Unit test mapping",
-        sdk_function="ocr",
-        spec=SuiteCaseSpec(coverage=Coverage.COMPLETE, suite="ocr"),
-    )
+    missing: Final = RustTestIdentity(target=_TARGET, name="api::tests::missing")
+    contract: Final = _contract(MappingPair(python="test_api.py::test_decode", rust=missing))
+    case: Final = _case()
 
-    code, report = run_mapping_cases(
+    code, report = run_suites(
         (case,),
         tmp_path,
         lambda _: None,
-        suites={"ocr": suite},
-        python_inventory=_python_inventory,
-        rust_inventory=_rust_inventory,
+        suites={"ocr": contract},
+        execute=partial(
+            run_suite,
+            python_inventory=_python_inventory,
+            rust_inventory=_rust_inventory,
+        ),
     )
 
     assert code == 1
@@ -90,31 +99,15 @@ def test_fails_when_a_mapping_target_is_missing(tmp_path: Path) -> None:
     assert any("mapped Rust test does not exist" in detail for _, detail in report.failures)
 
 
-def test_full_detail_expands_grouped_test_names(tmp_path: Path) -> None:
-    suite: Final = _suite(MappingPair(python="test_api.py::test_decode", rust=_RUST_TEST.key))
-    case: Final = HarnessCase(
-        strategy_id="unit_tests_mapping",
-        strategy_label="Unit test mapping",
-        sdk_function="ocr",
-        spec=SuiteCaseSpec(coverage=Coverage.COMPLETE, suite="ocr"),
-    )
-
-    _, report = run_mapping_cases(
-        (case,),
+def test_detail_argument_is_stored_in_artifact(tmp_path: Path) -> None:
+    contract: Final = _contract(MappingPair(python="test_api.py::test_decode", rust=_RUST_TEST))
+    execution: Final = run_suite(
+        contract,
         tmp_path,
-        lambda _: None,
         ("full",),
-        suites={"ocr": suite},
         python_inventory=_python_inventory,
         rust_inventory=_rust_inventory,
     )
-    rendered: Final = "\n".join(
-        artifact.body
-        for artifacts in report.results[case.key].artifacts.values()
-        for artifact in artifacts
-        if artifact.kind == MAPPING_REPORT_ARTIFACT
-    )
+    artifact: Final = MappingReportArtifact.model_validate_json(execution.artifacts[0].body)
 
-    assert "Unmapped Python test details\n  test_api.py\n    test_unmapped" in rendered
-    assert "Rust-only test details" in rendered
-    assert "rust_only" in rendered
+    assert artifact.detailed
