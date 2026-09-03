@@ -334,6 +334,10 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
                 .to_string(),
             document_annotation: object.get("document_annotation").cloned(),
             usage_info,
+            content: None,
+            tables: None,
+            key_value_pairs: None,
+            provider_native_response: None,
             object: "ocr".to_string(),
         })
     }
