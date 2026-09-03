@@ -2553,6 +2553,51 @@ class TestBatchCostAttribution:
 
         assert metadata["user_api_key_alias"] == "prod-key"
 
+    @pytest.mark.asyncio
+    async def test_org_id_comes_from_the_creating_key(self):
+        """The spend update writer increments organization spend from user_api_key_org_id,
+        so an org-scoped key's batch cost must carry the key's org id."""
+        from types import SimpleNamespace
+
+        instance = self._instance(
+            key_row=SimpleNamespace(key_alias="prod-key", org_id="org-42"),
+            team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
+        )
+
+        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+
+        assert metadata["user_api_key_org_id"] == "org-42"
+
+    @pytest.mark.asyncio
+    async def test_org_id_falls_back_to_the_team_organization(self):
+        """A key with no org of its own still books batch spend against its team's
+        organization, matching how the request path resolves org attribution."""
+        from types import SimpleNamespace
+
+        instance = self._instance(
+            key_row=SimpleNamespace(key_alias="prod-key", org_id=None),
+            team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
+        )
+
+        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+
+        assert metadata["user_api_key_org_id"] == "org-team"
+
+    @pytest.mark.asyncio
+    async def test_no_org_leaves_the_key_unset(self):
+        """Without any org the key is absent entirely, so the spend writer's org update
+        stays skipped instead of matching an empty-string organization."""
+        from types import SimpleNamespace
+
+        instance = self._instance(
+            key_row=SimpleNamespace(key_alias="prod-key", org_id=None),
+            team_row=SimpleNamespace(team_alias="Team Alpha", organization_id=None),
+        )
+
+        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+
+        assert "user_api_key_org_id" not in metadata
+
 
 class TestPollPageStarvation:
     """LIT-5462 regression: a row that can never be costed used to keep its slot in the
