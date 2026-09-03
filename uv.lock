@@ -10,7 +10,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
+exclude-newer = "2026-08-31T17:52:45.782441Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -4765,12 +4765,12 @@ proxy-dev = [
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.63"
+version = "0.1.64"
 source = { editable = "enterprise" }
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.92"
+version = "0.4.93"
 source = { editable = "litellm-proxy-extras" }
 
 [[package]]
