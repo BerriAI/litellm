@@ -158,6 +158,29 @@ def test_get_logging_payload_reads_omit_decision_stamped_on_request(
     assert payload["session_id"] == expected
 
 
+@pytest.mark.parametrize("policy", ["omit", "generate", None])
+def test_get_logging_payload_applies_omit_to_requests_that_carry_no_stamp(policy: str | None):
+    """Router-model passthrough calls `allm_passthrough_route` directly and never reaches the pre-call helper that
+    stamps the omit decision, so an unstamped request falls back to the configured policy. Without that fallback
+    `missing_session_id: omit` would fabricate a uuid session id on every passthrough spend log while its Langfuse
+    trace has none, which is the divergence the policy exists to remove."""
+    with patch(  # test-quality-ok: general_settings is proxy config, loaded from yaml, not an HTTP boundary
+        "litellm.proxy.proxy_server.general_settings", {} if policy is None else {"missing_session_id": policy}
+    ):
+        payload: SpendLogsPayload = get_logging_payload(
+            kwargs={
+                "model": "claude-opus-4",
+                "litellm_trace_id": "trace-abc",
+                "litellm_params": {"litellm_session_id": "trace-abc", "metadata": {"trace_id": "trace-abc"}},
+                "standard_logging_object": _TRACE_ONLY_STANDARD_LOGGING,
+            },
+            response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+            start_time=datetime.datetime.now(timezone.utc),
+            end_time=datetime.datetime.now(timezone.utc),
+        )
+    assert payload["session_id"] == (None if policy == "omit" else "trace-abc")
+
+
 def test_get_logging_payload_preserves_anthropic_cache_read_input_tokens():
     additional_usage_values = _get_additional_usage_values_for_usage(
         litellm.Usage(

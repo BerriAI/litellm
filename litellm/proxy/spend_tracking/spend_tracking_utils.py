@@ -581,7 +581,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
                 kwargs=kwargs,
                 metadata=metadata,
                 standard_logging_payload=standard_logging_payload,
-                omit_when_missing=bool(metadata.get(SESSION_ID_OMITTED_METADATA_KEY)) if metadata else False,
+                omit_when_missing=_omits_session_id_when_missing(metadata),
             ),
             request_duration_ms=_get_request_duration_ms(start_time, end_time),
             status=_get_status_for_spend_log(
@@ -605,15 +605,26 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         raise e
 
 
+def _omits_session_id_when_missing(metadata: Mapping[str, object] | None) -> bool:
+    """The pre-call stamp pins `omit` on for the requests that carry it, so a config reload between pre-call and spend
+    logging cannot fabricate a session. Requests that never reach the pre-call helper, router-model passthrough among
+    them, carry no stamp, so they fall back to the configured policy and `omit` still covers their spend logs."""
+    if metadata is not None and metadata.get(SESSION_ID_OMITTED_METADATA_KEY):
+        return True
+
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("missing_session_id") == "omit"
+
+
 def _get_session_id_for_spend_log(
     kwargs: Mapping[str, object],
     metadata: Mapping[str, object] | None,
     standard_logging_payload: StandardLoggingPayload | None,
     omit_when_missing: bool,
 ) -> str | None:
-    """`omit_when_missing` is the pre-call `missing_session_id: omit` decision stamped on this request, so a config
-    reload mid-flight cannot change it. Under it only `metadata.session_id`, the key Langfuse reads, counts as a session;
-    `litellm_session_id` may be a copied trace id."""
+    """Under `omit` only `metadata.session_id`, the key Langfuse reads, counts as a session; `litellm_session_id` may
+    be a copied trace id."""
     if omit_when_missing:
         session_id: Final = metadata.get("session_id") if metadata else None
         return str(session_id) if session_id else None
