@@ -5818,12 +5818,18 @@ export const ragIngestCall = async (
     const formData = new FormData();
     formData.append("file", file);
 
+    const { embedding_model: providerEmbeddingModel, ...paramsWithoutEmbeddingModel } = providerSpecificParams ?? {};
+    const s3EmbeddingModel = customLlmProvider === "s3_vectors" ? providerEmbeddingModel : undefined;
+    const vectorStoreParams =
+      customLlmProvider === "s3_vectors" ? paramsWithoutEmbeddingModel : providerSpecificParams ?? {};
+
     const ingestOptions: any = {
       ingest_options: {
+        ...(typeof s3EmbeddingModel === "string" && s3EmbeddingModel && { embedding: { model: s3EmbeddingModel } }),
         vector_store: {
           custom_llm_provider: customLlmProvider,
           ...(vectorStoreId && { vector_store_id: vectorStoreId }),
-          ...(providerSpecificParams && providerSpecificParams),
+          ...vectorStoreParams,
         },
       },
     };
