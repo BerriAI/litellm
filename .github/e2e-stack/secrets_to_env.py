@@ -1,9 +1,12 @@
+import re
 import sys
 from pathlib import Path
+from typing import Final
 
 from pydantic import TypeAdapter
 
 secrets_adapter: TypeAdapter[dict[str, str]] = TypeAdapter(dict[str, str])
+SECRET_NAME: Final = re.compile(r"KEY|SECRET|TOKEN|PASS|CREDENTIAL|LICENSE|AUTH")
 
 
 def main() -> int:
@@ -18,8 +21,8 @@ def main() -> int:
     lines = tuple(f"{key}='{value}'" for key, value in secrets.items() if value)
     with env_path.open("a") as handle:
         _ = handle.write("\n".join(lines) + "\n")
-    for value in secrets.values():
-        if value:
+    for key, value in secrets.items():
+        if value and SECRET_NAME.search(key):
             _ = sys.stdout.write(f"::add-mask::{value}\n")
     return 0
 
