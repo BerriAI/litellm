@@ -73,6 +73,17 @@ describe("provider_info_helpers", () => {
       expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.SCX_AI]);
     });
 
+    it("should map the opper slug and Opper enum key to the Opper display name and logo", () => {
+      const fromSlug = getProviderLogoAndName("opper");
+      expect(fromSlug.displayName).toBe(Providers.Opper);
+      expect(fromSlug.logo).toBe(providerLogoMap[Providers.Opper]);
+      expect(fromSlug.logo).toBeTruthy();
+
+      const fromEnumKey = getProviderLogoAndName("Opper");
+      expect(fromEnumKey.displayName).toBe(Providers.Opper);
+      expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.Opper]);
+    });
+
     it("should map bedrock_mantle slug to Bedrock Mantle display name and logo", () => {
       const result = getProviderLogoAndName("bedrock_mantle");
       expect(result.displayName).toBe(Providers.BedrockMantle);
@@ -193,6 +204,10 @@ describe("provider_info_helpers", () => {
 
     it("should return an scx-ai model placeholder for SCX_AI provider", () => {
       expect(getPlaceholder(Providers.SCX_AI)).toBe("scx-ai/GLM-5.2");
+    });
+
+    it("should return an opper model placeholder for Opper provider", () => {
+      expect(getPlaceholder(Providers.Opper)).toBe("opper/anthropic/claude-haiku-4-5");
     });
 
     it("should return claude-3-opus placeholder for Anthropic provider", () => {

@@ -2,7 +2,11 @@ from typing import Final, cast
 from urllib.parse import urlparse
 
 import litellm
-from litellm.constants import PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO, REPLICATE_MODEL_NAME_WITH_ID_LENGTH
+from litellm.constants import (
+    OPPER_API_BASE,
+    PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
+    REPLICATE_MODEL_NAME_WITH_ID_LENGTH,
+)
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_routing_generalization,
 )
@@ -202,6 +206,12 @@ def get_llm_provider(
             remainder: Final = model[len("openrouter/") :]
             if "/" in remainder:
                 return remainder, custom_llm_provider, dynamic_api_key, api_base
+            return model, custom_llm_provider, dynamic_api_key, api_base
+
+        if custom_llm_provider == "opper" and model.startswith("opper/"):
+            opper_remainder: Final = model[len("opper/") :]
+            if "/" in opper_remainder:
+                return opper_remainder, custom_llm_provider, dynamic_api_key, api_base
             return model, custom_llm_provider, dynamic_api_key, api_base
 
         # Check JSON-configured providers FIRST (before enum-based provider_list)
@@ -689,6 +699,10 @@ def _get_openai_compatible_provider_info(
         api_base = api_base or get_secret("TENCENT_API_BASE") or "https://tokenhub-intl.tencentcloudmaas.com/v1"
 
         dynamic_api_key = api_key or get_secret_str("TENCENT_API_KEY")
+    elif custom_llm_provider == "opper":
+        api_base = api_base or get_secret("OPPER_API_BASE") or OPPER_API_BASE  # rebind-ok: set per provider branch
+
+        dynamic_api_key = api_key or get_secret_str("OPPER_API_KEY")  # rebind-ok: set per provider branch
     elif custom_llm_provider == "fireworks_ai":
         # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.fireworks.ai/inference/v1
         (

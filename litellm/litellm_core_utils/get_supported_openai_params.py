@@ -142,6 +142,8 @@ def get_supported_openai_params(
             return litellm.AzureOpenAIConfig().get_supported_openai_params(model=_azure_detection_model)
     elif custom_llm_provider == "openrouter":
         return litellm.OpenrouterConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "opper":
+        return litellm.OpperConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "vercel_ai_gateway":
         return litellm.VercelAIGatewayConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "mistral" or custom_llm_provider == "codestral":
