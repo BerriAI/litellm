@@ -3,6 +3,7 @@ import gzip
 import os
 import time
 import zlib
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Final, Literal
 
@@ -108,7 +109,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
 
         return tags
 
-    def _add_latency_metric(self, metric: str, seconds: float, timestamp: int, tags: list[str]) -> None:
+    def _add_latency_metric(self, metric: str, seconds: float, timestamp: int, tags: Sequence[str]) -> None:
         """
         Queues a latency sample as a gauge (legacy metric name) and as a distribution
         (`<metric>.distribution`) so Datadog computes percentiles over every request
@@ -159,7 +160,9 @@ class DatadogMetricsLogger(CustomBatchLogger):
         litellm_overhead_time_ms: Final = hidden_params.get("litellm_overhead_time_ms")
         if litellm_overhead_time_ms is not None:
             overhead_tags: Final = self._extract_tags(log)  # no status_code on latency metric
-            self._add_latency_metric("litellm.overhead.latency", litellm_overhead_time_ms / 1000, timestamp, overhead_tags)
+            self._add_latency_metric(
+                "litellm.overhead.latency", litellm_overhead_time_ms / 1000, timestamp, overhead_tags
+            )
 
         # 4. Request Count / Status Code
         series_count: Final[DatadogMetricSeries] = {
@@ -212,8 +215,8 @@ class DatadogMetricsLogger(CustomBatchLogger):
         if not self.log_queue:
             return
 
-        batch: Final = tuple(self.log_queue)
-        series: Final[list[DatadogMetricSeries]] = [s for s in batch if s["type"] != "distribution"]
+        batch: Final[tuple[DatadogMetricSeries | DatadogDistributionSeries, ...]] = tuple(self.log_queue)
+        series: Final[tuple[DatadogMetricSeries, ...]] = tuple(s for s in batch if s["type"] != "distribution")
         distributions: Final[tuple[DatadogDistributionSeries, ...]] = tuple(
             s for s in batch if s["type"] == "distribution"
         )

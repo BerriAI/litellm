@@ -1,6 +1,7 @@
+from collections.abc import Sequence
 from typing import Literal
 
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 
 class DatadogMetricPoint(TypedDict):
@@ -8,16 +9,16 @@ class DatadogMetricPoint(TypedDict):
     value: float  # The metric value
 
 
-class DatadogMetricSeries(TypedDict, total=False):
-    metric: str
-    type: int  # 0=unspecified, 1=count, 2=rate, 3=gauge
-    points: list[DatadogMetricPoint]
-    tags: list[str]
-    interval: int | None  # Required for count (type=1) and rate (type=2) metrics
+class DatadogMetricSeries(TypedDict):
+    metric: ReadOnly[str]
+    type: ReadOnly[Literal[0, 1, 2, 3]]  # 0=unspecified, 1=count, 2=rate, 3=gauge
+    points: ReadOnly[Sequence[DatadogMetricPoint]]
+    tags: ReadOnly[Sequence[str]]
+    interval: ReadOnly[NotRequired[int]]  # Required for count (type=1) and rate (type=2) metrics
 
 
 class DatadogMetricsPayload(TypedDict):
-    series: list[DatadogMetricSeries]
+    series: ReadOnly[Sequence[DatadogMetricSeries]]
 
 
 DatadogDistributionPoint = tuple[int, tuple[float, ...]]
