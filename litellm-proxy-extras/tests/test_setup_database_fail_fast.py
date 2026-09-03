@@ -446,7 +446,10 @@ def test_v2_advisory_lock_timeout_retries(monkeypatch, tmp_path):
     """v2: the advisory-lock waiter that times out while a peer's retry holds
     the lock retries instead of dying."""
     _stub_v2_env(monkeypatch, tmp_path)
-    monkeypatch.setattr("litellm_proxy_extras.prisma_toolchain.run_prisma", _succeed_after(2, _P1002_ADVISORY_LOCK_STDERR))
+    monkeypatch.setattr(
+        "litellm_proxy_extras.prisma_toolchain.run_prisma",
+        _succeed_after(2, _P1002_ADVISORY_LOCK_STDERR),
+    )
 
     ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
     assert ok is True
