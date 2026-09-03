@@ -21,7 +21,6 @@ from litellm.types.vector_stores import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
-    from litellm.router import Router
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -162,7 +161,6 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: Mapping[str, object] | None = None,
-        router: "Router | None" = None,
     ) -> tuple[str, dict[str, object]]:
         """
         Transform search request for Vertex AI RAG API
