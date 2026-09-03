@@ -1,4 +1,5 @@
-from collections.abc import Mapping, Sequence, Set as AbstractSet
+from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from typing import Final, Protocol
 
 from typing_extensions import TypedDict
@@ -149,9 +150,7 @@ async def _spend_logs_key_metadata(
             "user_email": row.get("user_email"),
         }
         for row in spend_log_rows
-        if isinstance(row, dict)
-        and isinstance(row.get("api_key"), str)
-        and row["api_key"] in wanted
+        if isinstance(row, dict) and isinstance(row.get("api_key"), str) and row["api_key"] in wanted
     }
 
 
@@ -162,9 +161,7 @@ async def _emails_for_user_ids(
     if not user_ids:
         return {}
     try:
-        users: Final = await UserRepository(prisma_client).table.find_many(
-            where={"user_id": {"in": list(user_ids)}}
-        )
+        users: Final = await UserRepository(prisma_client).table.find_many(where={"user_id": {"in": list(user_ids)}})
     except Exception as e:
         verbose_proxy_logger.warning(
             "Failed user_email recovery for %d user ids: %s",
