@@ -107,34 +107,42 @@
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_map_ocr_params_features",
-      "status": "unmapped",
-      "reason": "features-string normalization in map_ocr_params has no Rust test"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/core/src/providers/azure_ai/ocr/transformation.rs",
+      "rust_test": "document_intelligence_url_normalizes_features",
+      "justification": "both normalize comma-separated feature names and whitespace; Python does this during parameter mapping and Rust during URL construction"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_map_ocr_params_empty_features_list_omitted",
-      "status": "unmapped",
-      "reason": "empty-features omission has no Rust test"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/core/src/providers/azure_ai/ocr/transformation.rs",
+      "rust_test": "document_intelligence_url_omits_empty_feature_list",
+      "justification": "both omit empty feature lists from the outgoing request; Python removes the parameter and Rust omits the query field"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_map_ocr_params_invalid_features_raises",
-      "status": "unmapped",
-      "reason": "features validation error path has no Rust test"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/core/src/providers/azure_ai/ocr/transformation.rs",
+      "rust_test": "document_intelligence_url_rejects_invalid_features",
+      "justification": "both reject malformed feature values, including query injection, empty strings, and objects before sending the request"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_get_complete_url_appends_features_query",
-      "status": "unmapped",
-      "reason": "features query-param construction has no Rust test"
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/core/src/providers/azure_ai/ocr/transformation.rs",
+      "rust_test": "document_intelligence_url_normalizes_features",
+      "justification": "both assert the selected feature names appear in the outgoing features query parameter"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
       "python_test": "test_get_complete_url_combines_pages_and_features",
       "status": "mapped",
       "rust_file": "litellm-rust/crates/core/src/providers/azure_ai/ocr/transformation.rs",
-      "rust_test": "document_intelligence_url_normalizes_zero_based_pages",
-      "justification": "both assert 0-based, duplicate page indices are deduped, sorted, and rewritten 1-based into the request URL"
+      "rust_test": "document_intelligence_url_combines_pages_and_feature_list",
+      "justification": "both combine zero-based pages [0, 1, 2] with keyValuePairs and languages into pages=1,2,3 and features=keyValuePairs,languages"
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
@@ -195,6 +203,12 @@
       "python_test": "test_env_var_enables_rust_ocr",
       "status": "unmapped",
       "reason": "bridge-plumbing: Python-side env-var flag gating"
+    },
+    {
+      "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
+      "python_test": "test_explicit_false_overrides_process_enable",
+      "status": "unmapped",
+      "reason": "Python request-level Rust opt-out overrides the process flag before any Rust implementation runs"
     },
     {
       "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
@@ -1001,15 +1015,19 @@
       "python_test": "test_should_return_normalized_response_when_no_native_payload",
       "status": "unmapped",
       "reason": "proxy-layer response construction has no Rust equivalent"
-    },
-    {
-      "python_file": "tests/test_litellm/ocr/test_rust_bridge.py",
-      "python_test": "test_explicit_false_overrides_process_enable",
-      "status": "unmapped",
-      "reason": "bridge-plumbing: asserts the explicit-per-request rust:False override wins over the Python process flag, no Rust-owned behavior runs"
     }
   ],
   "rust_only_tests": [
+    {
+      "rust_file": "litellm-rust/crates/core/src/providers/azure_ai/ocr/transformation.rs",
+      "rust_test": "document_intelligence_maps_features",
+      "reason": "Rust retains the feature list while filtering unsupported parameters; Python normalizes the list to a string during mapping"
+    },
+    {
+      "rust_file": "litellm-rust/crates/core/src/providers/azure_ai/ocr/transformation.rs",
+      "rust_test": "document_intelligence_url_normalizes_zero_based_pages",
+      "reason": "Python covers ascending page indices with features, but has no dedicated test for deduplicating and sorting page indices"
+    },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/integrations/custom_logger/mod.rs",
       "rust_test": "rust_custom_logger_reads_failure_payload_for_non_ocr_call_type",
