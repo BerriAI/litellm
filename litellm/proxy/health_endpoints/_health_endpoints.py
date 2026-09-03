@@ -182,6 +182,7 @@ services = (
         "arize",
         "galileo",
         "newrelic",
+        "pointfive",
         "sqs",
     ]
     | str
@@ -269,6 +270,7 @@ async def health_services_endpoint(
             "arize",
             "galileo",
             "newrelic",
+            "pointfive",
             "sqs",
         ]:
             raise HTTPException(
@@ -293,7 +295,7 @@ async def health_services_endpoint(
             service == "openmeter"
             or service == "braintrust"
             or service == "generic_api"
-            or (service_in_success_callbacks and service != "langfuse")
+            or (service_in_success_callbacks and service not in ("langfuse", "pointfive"))
         ):
             _ = await litellm.acompletion(
                 model="openai/litellm-mock-response-model",
@@ -385,6 +387,27 @@ async def health_services_endpoint(
                 ),
             }
 
+        elif service == "pointfive":
+            if not _is_proxy_admin(user_api_key_dict):
+                non_admin_detail: Final[_ServiceTestErrorDetail] = {
+                    "error": "Only proxy admins can trigger the PointFive liveness ping."
+                }
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=non_admin_detail)
+            from litellm.integrations.pointfive import PointFiveLogger
+
+            try:
+                pointfive_logger: Final = PointFiveLogger(start_periodic_flush=False)
+            except ValueError as missing_key:
+                # No key configured is the answer the operator asked for, not a server error.
+                no_key: Final[_ServiceTestSuccessResponse] = {"status": "unhealthy", "message": str(missing_key)}
+                return no_key
+            response = await pointfive_logger.async_health_check()
+            pointfive_health: Final[_ServiceTestSuccessResponse] = {
+                "status": response["status"],
+                "message": (response["error_message"] if response["status"] == "unhealthy" else "PointFive is healthy")
+                or "PointFive is healthy",
+            }
+            return pointfive_health
         if service == "webhook":
             user_info: Final = CallInfo(
                 token=user_api_key_dict.token or "",

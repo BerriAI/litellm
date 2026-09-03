@@ -366,6 +366,27 @@
     "description": "OpenTelemetry Logging Integration"
   },
   {
+    "id": "pointfive",
+    "displayName": "PointFive",
+    "logo": "pointfive.png",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "POINTFIVE_API_KEY": {
+        "type": "password",
+        "ui_name": "API Key",
+        "description": "PointFive API key, used to request an upload url for each batch of logs",
+        "required": true
+      },
+      "POINTFIVE_API_URL": {
+        "type": "text",
+        "ui_name": "API URL",
+        "description": "PointFive API endpoint. Leave blank to use https://api.pointfive.co/query",
+        "required": false
+      }
+    },
+    "description": "PointFive Logging Integration"
+  },
+  {
     "id": "s3",
     "displayName": "S3",
     "logo": "aws.svg",

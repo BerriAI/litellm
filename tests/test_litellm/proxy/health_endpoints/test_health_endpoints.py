@@ -1057,6 +1057,35 @@ async def test_health_services_endpoint_galileo(status, error_message):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,error_message",
+    [
+        ("healthy", ""),
+        ("unhealthy", "PointFive authentication failed"),
+    ],
+)
+async def test_health_services_endpoint_pointfive(monkeypatch, status, error_message):
+    import litellm.integrations.pointfive as pointfive_package
+
+    mock_instance = MagicMock()
+    mock_instance.async_health_check = AsyncMock(return_value={"status": status, "error_message": error_message})
+    logger_class = MagicMock(return_value=mock_instance)
+    monkeypatch.setattr(pointfive_package, "PointFiveLogger", logger_class)
+
+    result = await health_services_endpoint(user_api_key_dict=_pointfive_admin(), service="pointfive")
+
+    if status == "healthy":
+        assert result["status"] == "healthy"
+        assert result["message"] == "PointFive is healthy"
+    else:
+        assert result["status"] == "unhealthy"
+        assert result["message"] == error_message
+    mock_instance.async_health_check.assert_awaited_once()
+    # A check that left the periodic flush running would leak a flusher per press of the ui test button.
+    logger_class.assert_called_once_with(start_periodic_flush=False)
+
+
+@pytest.mark.asyncio
 async def test_health_services_endpoint_datadog_llm_observability():
     """
     Verify that 'datadog_llm_observability' is accepted as a valid service
@@ -2928,3 +2957,60 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
 
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "success"
+
+
+def _pointfive_admin() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(token="admin-token", user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_pointfive_without_a_key_is_unhealthy_not_a_server_error(monkeypatch):
+    """
+    The logger refuses to start without an api key.
+
+    That refusal is the answer the operator asked for, so it has to come back as an
+    unhealthy result rather than a 500 from the endpoint.
+    """
+    import litellm.integrations.pointfive as pointfive_package
+
+    def refuse(**_):
+        raise ValueError("pointfive logging requires an api key. Set POINTFIVE_API_KEY")
+
+    monkeypatch.setattr(pointfive_package, "PointFiveLogger", refuse)
+
+    result = await health_services_endpoint(user_api_key_dict=_pointfive_admin(), service="pointfive")
+
+    assert result["status"] == "unhealthy"
+    assert "requires an api key" in result["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        LitellmUserRoles.TEAM,
+        LitellmUserRoles.CUSTOMER,
+    ],
+)
+async def test_health_services_endpoint_pointfive_blocks_non_admin(monkeypatch, role):
+    """
+    The ping travels on the proxy-wide PointFive credential and stamps liveness at PointFive.
+
+    A tenant key must not be able to keep an integration looking alive, or read back
+    account-level authentication failures through it.
+    """
+    import litellm.integrations.pointfive as pointfive_package
+    from litellm.proxy._types import ProxyException
+
+    logger_class = MagicMock()
+    monkeypatch.setattr(pointfive_package, "PointFiveLogger", logger_class)
+
+    with pytest.raises(ProxyException) as raised:
+        await health_services_endpoint(
+            user_api_key_dict=UserAPIKeyAuth(token="t", user_id="u", user_role=role), service="pointfive"
+        )
+
+    assert str(raised.value.code) == "403"
+    logger_class.assert_not_called()
