@@ -4,6 +4,7 @@ from typing import Any, Final
 from pydantic import BaseModel
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+from litellm.litellm_core_utils.secret_redaction import REDACTED
 
 
 class SensitiveDataMasker:
@@ -212,6 +213,36 @@ def mask_sensitive_keys(data: dict[str, Any], sensitive_fields: set[str]) -> dic
         else:
             masked[key] = value
     return masked
+
+
+def redact_credentials_in_payload(data: Mapping[str, object]) -> Mapping[str, object]:
+    """Return a copy of ``data`` where every value under a credential-named key is
+    replaced by the shared ``REDACTED`` marker, nested mappings are recursed into,
+    and every other value is preserved by identity.
+
+    Sensitive-key detection is delegated to the shared :class:`SensitiveDataMasker`,
+    so the credential names stay in one place. Unlike
+    :func:`mask_credentials_in_payload`, no prefix or suffix of the secret survives
+    and non-string secrets are covered too, which is what a payload rendered
+    straight to stdout needs. ``None`` is preserved so an unset credential still
+    reads as unset, and non-mapping containers are left alone so the caller's
+    ``repr`` is unchanged.
+    """
+    return _redact_mapping(data, 0)
+
+
+def _redact_mapping(data: Mapping[str, object], depth: int) -> Mapping[str, object]:
+    if depth >= DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER:
+        return data
+    return {key: _redact_entry(key, value, depth) for key, value in data.items()}
+
+
+def _redact_entry(key: str, value: object, depth: int) -> object:
+    if value is not None and _default_masker.is_sensitive_key(key):
+        return REDACTED
+    if isinstance(value, Mapping):
+        return _redact_mapping(value, depth + 1)
+    return value
 
 
 # Usage example:

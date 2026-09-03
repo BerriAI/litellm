@@ -312,3 +312,39 @@ def test_mask_credentials_in_payload_masks_only_sensitive_string_leaves():
     assert masked != plaintext
     assert masked.startswith(plaintext[:4])
     assert masked.endswith(plaintext[-4:])
+
+
+def test_redact_credentials_in_payload_leaves_no_fragment_of_the_secret():
+    """A payload rendered straight to stdout cannot afford the partial reveal
+    mask_credentials_in_payload leaves, so every credential-named value is replaced
+    whole, nested header dicts included, while ordinary params survive verbatim."""
+    from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+
+    fake_key = "sk-fake-lit6823-0000000000000000"
+    fake_token = "fake-azure-ad-token-0000"
+    result = redact_credentials_in_payload(
+        {
+            "api_key": fake_key,
+            "azure_ad_token": fake_token,
+            "aws_secret_access_key": "fake-aws-secret-0000",
+            "vertex_credentials": {"private_key": "fake-pem"},
+            "extra_headers": {"Authorization": "Bearer fake-bearer-0000", "x-request-id": "abc123"},
+            "model": "gpt-4o-mini",
+            "max_tokens": 17,
+            "temperature": 0.25,
+            "api_base": None,
+        }
+    )
+
+    assert fake_key not in str(result)
+    assert fake_token not in str(result)
+    assert "fake-aws-secret-0000" not in str(result)
+    assert "fake-pem" not in str(result)
+    assert "fake-bearer-0000" not in str(result)
+    assert result["api_key"] == "REDACTED"
+    assert result["extra_headers"]["Authorization"] == "REDACTED"
+    assert result["extra_headers"]["x-request-id"] == "abc123"
+    assert result["model"] == "gpt-4o-mini"
+    assert result["max_tokens"] == 17
+    assert result["temperature"] == 0.25
+    assert result["api_base"] is None
