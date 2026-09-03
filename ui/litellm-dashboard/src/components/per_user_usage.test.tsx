@@ -78,6 +78,25 @@ describe("PerUserUsage", () => {
     });
   });
 
+  it("shows every fetched row with a footer that matches the server total and page size", async () => {
+    const results = Array.from({ length: 25 }, (_, index) => userRow(`user-${index}`, "curl/8.0", index));
+    mockPerUserAnalyticsCall.mockResolvedValue({ ...mockResponse, results, total_count: 60, total_pages: 3 });
+    render(<PerUserUsage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("user-24")).toBeInTheDocument();
+    });
+
+    expect(mockPerUserAnalyticsCall).toHaveBeenLastCalledWith("test-token", 1, 25, undefined);
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-25 of 60");
+
+    fireEvent.click(screen.getByTestId("pagination-next"));
+
+    await waitFor(() => {
+      expect(mockPerUserAnalyticsCall).toHaveBeenLastCalledWith("test-token", 2, 25, undefined);
+    });
+  });
+
   it("keeps both tab panels mounted so switching tabs does not reset their state", async () => {
     render(<PerUserUsage {...defaultProps} />);
 
