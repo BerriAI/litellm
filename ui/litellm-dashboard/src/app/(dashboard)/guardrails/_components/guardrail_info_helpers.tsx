@@ -201,6 +201,7 @@ export const guardrailLogoMap = {
   XecGuard: xecguardLogo.src,
   "LiteLLM Content Filter": litellmLogo.src,
   "LiteLLM LLM as a Judge": litellmLogo.src,
+  "Hide Secrets": litellmLogo.src,
   Akto: aktoLogo.src,
   "DeepKeep AI Firewall": deepkeepLogo.src,
   "Qostodian Nexus": qohashLogo.src,
