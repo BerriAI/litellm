@@ -1,3 +1,5 @@
+import gzip
+import json
 import time
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
@@ -487,6 +489,58 @@ async def test_async_send_batch_skips_v2_when_only_distributions_queued(clean_en
     assert [call.args[0] for call in logger.async_client.post.call_args_list] == [
         "https://api.test.datadoghq.com/api/v1/distribution_points"
     ]
+
+
+@pytest.mark.asyncio
+async def test_flush_retries_only_distributions_after_v1_failure(clean_env):
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
+    logger.async_client = AsyncMock()
+    v2_url = "https://api.test.datadoghq.com/api/v2/series"
+    v1_url = "https://api.test.datadoghq.com/api/v1/distribution_points"
+    responses = {
+        v2_url: Response(202, json={"status": "ok"}, request=Request("POST", v2_url)),
+        v1_url: Response(503, json={"errors": ["down"]}, request=Request("POST", v1_url)),
+    }
+    timestamp = int(time.time())
+    late_count = {
+        "metric": "litellm.llm_api.request_count",
+        "type": 1,
+        "points": [{"timestamp": timestamp, "value": 1}],
+        "tags": ["env:test"],
+    }
+
+    def post(url, **_):
+        if url == v1_url and late_count not in logger.log_queue:
+            logger.log_queue.append(late_count)
+        return responses[url]
+
+    logger.async_client.post.side_effect = post
+
+    gauge = {
+        "metric": "litellm.request.total_latency",
+        "type": 3,
+        "points": [{"timestamp": timestamp, "value": 1.5}],
+        "tags": ["env:test"],
+    }
+    distribution = {
+        "metric": "litellm.request.total_latency.distribution",
+        "type": "distribution",
+        "points": ((timestamp, (1.5,)),),
+        "tags": ("env:test",),
+    }
+    logger.log_queue = [gauge, distribution]
+
+    await logger.flush_queue()
+
+    assert logger.log_queue == [distribution, late_count]
+
+    responses[v1_url] = Response(202, json={"status": "ok"}, request=Request("POST", v1_url))
+    await logger.flush_queue()
+
+    assert logger.log_queue == []
+    assert [call.args[0] for call in logger.async_client.post.call_args_list] == [v2_url, v1_url, v2_url, v1_url]
+    second_v2 = json.loads(gzip.decompress(logger.async_client.post.call_args_list[2].kwargs["content"]))
+    assert [s["metric"] for s in second_v2["series"]] == ["litellm.llm_api.request_count"]
 
 
 @pytest.mark.asyncio
