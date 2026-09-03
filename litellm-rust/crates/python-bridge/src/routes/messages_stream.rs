@@ -17,7 +17,7 @@ use pyo3::types::{PyAny, PyBytes};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use crate::errors::core_error_to_pyerr;
+use crate::errors::{core_error_to_pyerr, fallback_error_to_pyerr};
 use crate::marshal::{RouteOptions, RouteOptionsInputs, required_value};
 
 /// One complete SSE frame, converted to `bytes` on the attached thread that
@@ -115,6 +115,10 @@ fn amessages_stream<'py>(
             extra_headers,
             timeout,
         } = options;
+        // Only the request start maps through the fallback contract: declines
+        // (unsupported provider, bad request) happen before the provider is
+        // called, so the host may retry on its own path. Failures surfaced by
+        // `__anext__` are mid-stream and keep `core_error_to_pyerr`.
         let frames = messages_stream_frames(MessagesRequest {
             model: &model,
             body,
@@ -125,7 +129,7 @@ fn amessages_stream<'py>(
             timeout,
         })
         .await
-        .map_err(core_error_to_pyerr)?;
+        .map_err(fallback_error_to_pyerr)?;
         Ok(MessagesStream {
             frames: Arc::new(Mutex::new(Some(frames))),
         })
@@ -187,12 +191,12 @@ mod tests {
     }
 
     /// An SSE upstream that sends `body` in chunks separated by short delays
-    /// so frames span network chunk boundaries.
+    /// so frames span network chunk boundaries. Returns the captured request.
     async fn streaming_upstream(
         listener: TcpListener,
         status_line: &'static str,
         body: &'static str,
-    ) {
+    ) -> String {
         let (mut socket, _) = listener.accept().await.expect("accepts request");
         let request = read_http_request(&mut socket).await;
         assert!(
@@ -217,6 +221,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
             socket.write_all(chunk).await.expect("writes body chunk");
         }
+        request
     }
 
     fn register_stream_module(py: Python<'_>) -> Bound<'_, PyModule> {
@@ -233,6 +238,18 @@ mod tests {
         locals
             .set_item("url", url)
             .expect("URL should enter Python locals");
+        locals
+            .set_item(
+                "Declined",
+                py.get_type::<crate::errors::RustBridgeDeclined>(),
+            )
+            .expect("declined exception should enter Python locals");
+        locals
+            .set_item(
+                "UpstreamError",
+                py.get_type::<crate::errors::RustUpstreamError>(),
+            )
+            .expect("upstream exception should enter Python locals");
         let source = CString::new(code).expect("Python source should not contain null bytes");
         py.run(&source, Some(&locals), Some(&locals))
             .expect("Python stream exercise should pass");
@@ -324,8 +341,9 @@ async def exercise():
             api_base=url,
             custom_llm_provider="anthropic",
         )
-    except RuntimeError as error:
-        assert "429" in str(error), str(error)
+    except UpstreamError as error:
+        assert not isinstance(error, Declined), "a provider 429 is not a decline"
+        assert error.args[0] == 429, error.args
     else:
         raise AssertionError("upstream error should surface from the awaitable")
 
@@ -338,6 +356,100 @@ asyncio.run(exercise())
             .block_on(async { tokio::time::timeout(Duration::from_secs(5), server).await })
             .expect("server should finish")
             .expect("server task should not panic");
+    }
+
+    #[test]
+    fn stream_route_streams_azure_ai_through_the_anthropic_endpoint() {
+        Python::initialize();
+        let runtime = pyo3_async_runtimes::tokio::get_runtime();
+        let listener = runtime
+            .block_on(TcpListener::bind("127.0.0.1:0"))
+            .expect("listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("listener should have an address");
+        let body = concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\"}\n\n",
+            "event: content_block_delta\ndata: {\"delta\":\"hi\"}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        );
+        let server = runtime.spawn(streaming_upstream(listener, "HTTP/1.1 200 OK", body));
+
+        Python::attach(|py| {
+            let module = register_stream_module(py);
+            run_async_code(
+                py,
+                &module,
+                &format!("http://{address}"),
+                r#"
+import asyncio
+
+async def exercise():
+    stream = await runtime.amessages_stream(
+        model="claude-sonnet-4-5",
+        body={"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []},
+        api_key="sk-azure",
+        api_base=url,
+        custom_llm_provider="azure_ai",
+    )
+    frames = [chunk async for chunk in stream]
+    assert frames == [
+        b'event: message_start\ndata: {"type":"message_start"}\n\n',
+        b'event: content_block_delta\ndata: {"delta":"hi"}\n\n',
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ], frames
+
+asyncio.run(exercise())
+"#,
+            );
+        });
+
+        let request = runtime
+            .block_on(async { tokio::time::timeout(Duration::from_secs(5), server).await })
+            .expect("server should finish")
+            .expect("server task should not panic");
+        let head = request
+            .split_once("\r\n\r\n")
+            .expect("request should have a body")
+            .0
+            .to_ascii_lowercase();
+        assert!(
+            head.starts_with("post /anthropic/v1/messages "),
+            "azure_ai must stream through the anthropic endpoint: {head}"
+        );
+        assert!(head.contains("x-api-key: sk-azure"), "{head}");
+    }
+
+    #[test]
+    fn stream_route_declines_unsupported_provider_before_any_request() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = register_stream_module(py);
+            run_async_code(
+                py,
+                &module,
+                "http://127.0.0.1:1",
+                r#"
+import asyncio
+
+async def exercise():
+    try:
+        await runtime.amessages_stream(
+            model="gpt-4o",
+            body={"model": "gpt-4o", "max_tokens": 8, "messages": []},
+            api_key="sk",
+            api_base=url,
+            custom_llm_provider="openai",
+        )
+    except Declined as error:
+        assert not isinstance(error, UpstreamError), str(error)
+    else:
+        raise AssertionError("unsupported provider must decline from the awaitable")
+
+asyncio.run(exercise())
+"#,
+            );
+        });
     }
 
     #[test]

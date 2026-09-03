@@ -9,8 +9,12 @@ use crate::error::Error;
 use super::common_utils::{
     has_bearer_auth, has_header, messages_provider_config, string_headers, truncate_error_body,
 };
+use super::handler::ensure_streaming_supported;
 use super::messages;
+use super::transformation::AnthropicMessagesProviderConfig;
 use super::types::MessagesRequest;
+use crate::providers::anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG;
+use crate::providers::azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG;
 
 async fn read_http_request(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();
@@ -58,6 +62,37 @@ fn provider_config_resolves_anthropic_and_azure_ai() {
     assert!(messages_provider_config("anthropic").is_some());
     assert!(messages_provider_config("azure_ai").is_some());
     assert!(messages_provider_config("openai").is_none());
+}
+
+#[test]
+fn streaming_gate_accepts_opted_in_providers_and_declines_the_rest() {
+    struct NonStreamingConfig;
+
+    impl AnthropicMessagesProviderConfig for NonStreamingConfig {
+        fn complete_url(
+            &self,
+            _api_base: Option<&str>,
+            _model: &str,
+            _env_lookup: &dyn Fn(&str) -> Option<String>,
+        ) -> Result<String, crate::error::Error> {
+            unreachable!("the streaming gate must not touch the config's URLs")
+        }
+
+        fn resolve_api_key(
+            &self,
+            _api_key: Option<&str>,
+            _env_lookup: &dyn Fn(&str) -> Option<String>,
+        ) -> Result<String, crate::error::Error> {
+            unreachable!("the streaming gate must not resolve credentials")
+        }
+    }
+
+    assert!(ensure_streaming_supported(&ANTHROPIC_MESSAGES_CONFIG).is_ok());
+    assert!(ensure_streaming_supported(&AZURE_ANTHROPIC_MESSAGES_CONFIG).is_ok());
+    assert!(matches!(
+        ensure_streaming_supported(&NonStreamingConfig).expect_err("default config declines"),
+        Error::Unsupported(_)
+    ));
 }
 
 #[test]
@@ -508,6 +543,97 @@ async fn messages_stream_frames_yields_complete_frames_and_forces_stream_flag() 
     let (_, body) = request.split_once("\r\n\r\n").expect("has body");
     let sent_body: Value = serde_json::from_str(body).expect("body is json");
     assert_eq!(sent_body["stream"], Value::Bool(true));
+}
+
+#[tokio::test]
+async fn messages_stream_frames_streams_azure_ai_through_the_anthropic_endpoint() {
+    use futures_util::StreamExt;
+
+    use super::messages_stream_frames;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("addr");
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let request = read_http_request(&mut socket).await;
+        let body = concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\"}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        );
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("writes response head");
+        socket
+            .write_all(body.as_bytes())
+            .await
+            .expect("writes body");
+        request
+    });
+
+    let mut stream = messages_stream_frames(MessagesRequest {
+        model: "claude-sonnet-4-5",
+        body: json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}]
+        }),
+        api_key: Some("sk-azure"),
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("azure_ai"),
+        extra_headers: None,
+        timeout: Some(Duration::from_secs(5)),
+    })
+    .await
+    .expect("azure_ai stream request succeeds");
+
+    let mut frames = Vec::new();
+    while let Some(frame) = stream.next().await {
+        frames.push(String::from_utf8(frame.expect("frame decodes")).expect("frame is utf8"));
+    }
+    assert_eq!(
+        frames,
+        vec![
+            "event: message_start\ndata: {\"type\":\"message_start\"}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        ]
+    );
+
+    let request = server.await.expect("server task completes");
+    let (head, body) = request.split_once("\r\n\r\n").expect("has body");
+    assert!(head.starts_with("POST /anthropic/v1/messages "), "{head}");
+    let head_lower = head.to_ascii_lowercase();
+    assert!(head_lower.contains("x-api-key: sk-azure"), "{head}");
+    let sent_body: Value = serde_json::from_str(body).expect("body is json");
+    assert_eq!(sent_body["stream"], Value::Bool(true));
+}
+
+#[tokio::test]
+async fn messages_stream_declines_unsupported_provider_before_the_call() {
+    use super::messages_stream_frames;
+
+    let err = match messages_stream_frames(MessagesRequest {
+        model: "gpt-4o",
+        body: json!({"model": "gpt-4o", "max_tokens": 8, "messages": []}),
+        api_key: Some("sk"),
+        // Nothing listens here: a decline must return before any connection.
+        api_base: Some("http://127.0.0.1:1"),
+        custom_llm_provider: Some("openai"),
+        extra_headers: None,
+        timeout: Some(Duration::from_millis(50)),
+    })
+    .await
+    {
+        Err(err) => err,
+        Ok(_) => panic!("unsupported provider must decline before the stream"),
+    };
+
+    assert!(matches!(err, Error::InvalidProvider(provider) if provider == "openai"));
 }
 
 #[tokio::test]

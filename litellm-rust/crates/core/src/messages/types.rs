@@ -16,7 +16,6 @@ pub struct MessagesRequest<'a> {
 }
 
 pub(super) struct ProviderMessagesRequest {
-    pub(super) provider: String,
     pub(super) model: String,
     pub(super) config: &'static dyn AnthropicMessagesProviderConfig,
     pub(super) url: String,

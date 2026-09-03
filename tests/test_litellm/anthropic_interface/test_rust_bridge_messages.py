@@ -480,6 +480,29 @@ async def test_stream_gate_returns_sse_frames_and_keeps_stream_flag():
 
 
 @pytest.mark.asyncio
+async def test_stream_gate_routes_azure_ai_to_the_native_stream():
+    bridge = RecordingAsyncMessagesStream()
+    rust_messages_stream.set_rust_amessages_stream(amessages_stream=bridge)
+
+    response = await _stream_gate(
+        custom_llm_provider="azure_ai",
+        litellm_params=GenericLiteLLMParams(api_key="sk-azure", rust=True),
+        api_key="sk-azure",
+        api_base="https://resource.services.ai.azure.com/anthropic",
+        headers={"x-api-key": "sk-azure", "anthropic-version": "2023-06-01"},
+    )
+
+    assert response is not None
+    assert response._hidden_params["additional_headers"] == {"x-litellm-rust": "true"}
+    chunks = [chunk async for chunk in response]
+    assert chunks == list(FAKE_SSE_FRAMES)
+    call = bridge.calls[0]
+    assert call["custom_llm_provider"] == "azure_ai"
+    assert call["api_key"] == "sk-azure"
+    assert call["body"]["stream"] is True
+
+
+@pytest.mark.asyncio
 async def test_stream_gate_falls_back_to_python_when_bridge_raises():
     bridge = RaisingAsyncMessagesStream()
     rust_messages_stream.set_rust_amessages_stream(amessages_stream=bridge)

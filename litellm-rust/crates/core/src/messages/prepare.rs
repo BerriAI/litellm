@@ -46,7 +46,6 @@ pub(super) fn prepare_provider_request(
     let url = config.complete_url(request.api_base, &model, &env_lookup)?;
 
     Ok(ProviderMessagesRequest {
-        provider: provider.to_string(),
         model,
         config,
         url,
