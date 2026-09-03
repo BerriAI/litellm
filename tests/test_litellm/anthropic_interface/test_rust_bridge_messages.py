@@ -1,7 +1,7 @@
 """Tests for the optional Rust-backed Anthropic Messages path."""
 
 import importlib
-from typing import cast
+from typing import AsyncIterator
 
 import httpx
 import pytest
@@ -9,12 +9,10 @@ import pytest
 import litellm
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import configuration
-from litellm.types.llms.anthropic_messages.anthropic_response import (
-    AnthropicMessagesResponse,
-)
 from litellm.types.router import GenericLiteLLMParams
 
 rust_messages = importlib.import_module("litellm.rust_bridge.messages")
+rust_messages_stream = importlib.import_module("litellm.rust_bridge.messages_stream")
 rust_bridge_loader = importlib.import_module("litellm.rust_bridge.loader")
 
 FAKE_MESSAGES_RESPONSE: dict[str, object] = {
@@ -108,13 +106,86 @@ class RaisingAsyncMessages:
         raise RuntimeError("upstream request failed with status 400: bad request")
 
 
+FAKE_SSE_FRAMES: tuple[bytes, ...] = (
+    b'event: message_start\ndata: {"type":"message_start"}\n\n',
+    b'event: content_block_delta\ndata: {"delta":"hello world"}\n\n',
+    b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+)
+
+
+class FakeNativeStream:
+    """Stands in for the native `MessagesStream` async iterator."""
+
+    def __init__(self, frames: tuple[bytes, ...] = FAKE_SSE_FRAMES) -> None:
+        self._frames = frames
+        self._index = 0
+
+    def __aiter__(self) -> "FakeNativeStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        if self._index >= len(self._frames):
+            raise StopAsyncIteration
+        frame = self._frames[self._index]
+        self._index += 1
+        return frame
+
+
+class RecordingAsyncMessagesStream:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def __call__(
+        self,
+        model: str,
+        body: dict[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str | None,
+        extra_headers: dict[str, object] | None,
+        timeout_seconds: float | None,
+    ) -> object:
+        self.calls.append(
+            {
+                "model": model,
+                "body": body,
+                "api_key": api_key,
+                "api_base": api_base,
+                "custom_llm_provider": custom_llm_provider,
+                "extra_headers": extra_headers,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        return FakeNativeStream()
+
+
+class ExplodingAsyncMessagesStream:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self, **kwargs: object) -> object:
+        self.calls += 1
+        raise AssertionError("stream bridge must not be called")
+
+
+class RaisingAsyncMessagesStream:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self, **kwargs: object) -> object:
+        self.calls += 1
+        raise RuntimeError("upstream request failed with status 429: rate limited")
+
+
 @pytest.fixture(autouse=True)
 def _reset_rust_flag():
     rust_messages.set_rust_messages(messages=None, amessages=None)
+    rust_messages_stream.set_rust_amessages_stream(amessages_stream=None)
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
     yield
     rust_messages.set_rust_messages(messages=None, amessages=None)
+    rust_messages_stream.set_rust_amessages_stream(amessages_stream=None)
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
 
@@ -375,20 +446,149 @@ async def test_gate_streams_through_rust_when_eligible_and_strips_stream_flag():
     assert bridge.calls[0]["body"] == REQUEST_BODY
 
 
+def _stream_gate(**overrides):
+    kwargs = {
+        "custom_llm_provider": "anthropic",
+        "litellm_params": GenericLiteLLMParams(api_key="sk-ant", rust=True),
+        "has_agentic_hook": False,
+        "model": "claude-sonnet-4-5",
+        "api_key": "sk-ant",
+        "api_base": "https://api.anthropic.com",
+        "headers": {"x-api-key": "sk-ant", "anthropic-version": "2023-06-01"},
+        "request_body": {**REQUEST_BODY, "stream": True},
+        "timeout": 30.0,
+    }
+    kwargs.update(overrides)
+    return BaseLLMHTTPHandler._maybe_rust_anthropic_messages_stream(**kwargs)
+
+
 @pytest.mark.asyncio
-async def test_fake_stream_wraps_rust_response_as_anthropic_sse():
-    response = cast(AnthropicMessagesResponse, dict(FAKE_MESSAGES_RESPONSE))
-    stream = BaseLLMHTTPHandler._rust_anthropic_messages_fake_stream(response)
+async def test_stream_gate_returns_sse_frames_and_keeps_stream_flag():
+    bridge = RecordingAsyncMessagesStream()
+    rust_messages_stream.set_rust_amessages_stream(amessages_stream=bridge)
 
-    assert stream._hidden_params["additional_headers"] == {"x-litellm-rust": "true"}
+    response = await _stream_gate()
 
-    chunks = [chunk async for chunk in stream]
-    joined = b"".join(chunks)
+    assert response is not None
+    assert response._hidden_params["additional_headers"] == {"x-litellm-rust": "true"}
+    chunks = [chunk async for chunk in response]
+    assert chunks == list(FAKE_SSE_FRAMES)
+    call = bridge.calls[0]
+    assert call["model"] == "claude-sonnet-4-5"
+    assert call["body"]["stream"] is True
+    assert call["timeout_seconds"] == 30.0
 
-    assert b"event: message_start" in joined
-    assert b"event: content_block_delta" in joined
-    assert b"hello world" in joined
-    assert b"event: message_stop" in joined
+
+@pytest.mark.asyncio
+async def test_stream_gate_falls_back_to_python_when_bridge_raises():
+    bridge = RaisingAsyncMessagesStream()
+    rust_messages_stream.set_rust_amessages_stream(amessages_stream=bridge)
+
+    response = await _stream_gate()
+
+    assert response is None
+    assert bridge.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_gate_skips_rust_when_flag_absent():
+    bridge = ExplodingAsyncMessagesStream()
+    rust_messages_stream.set_rust_amessages_stream(amessages_stream=bridge)
+
+    response = await _stream_gate(
+        litellm_params=GenericLiteLLMParams(api_key="sk-ant"),
+    )
+
+    assert response is None
+    assert bridge.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_stream_gate_skips_rust_for_agentic_hook():
+    bridge = ExplodingAsyncMessagesStream()
+    rust_messages_stream.set_rust_amessages_stream(amessages_stream=bridge)
+
+    response = await _stream_gate(has_agentic_hook=True)
+
+    assert response is None
+    assert bridge.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_stream_gate_skips_rust_for_unsupported_provider():
+    bridge = ExplodingAsyncMessagesStream()
+    rust_messages_stream.set_rust_amessages_stream(amessages_stream=bridge)
+
+    response = await _stream_gate(custom_llm_provider="openai")
+
+    assert response is None
+    assert bridge.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_stream_gate_falls_back_when_bridge_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        importlib.import_module("litellm.rust_bridge"),
+        "get_native_bridge",
+        lambda: None,
+    )
+    litellm.use_litellm_rust(True)
+
+    response = await _stream_gate()
+
+    assert response is None
+
+
+@pytest.mark.asyncio
+async def test_messages_stream_wrapper_forwards_args_and_adapts_frames():
+    bridge = RecordingAsyncMessagesStream()
+    rust_messages_stream.set_rust_amessages_stream(amessages_stream=bridge)
+
+    stream = await rust_messages_stream.amessages_stream(
+        model="claude-sonnet-4-5",
+        body={**REQUEST_BODY, "stream": True},
+        api_key="sk-ant",
+        api_base="https://api.anthropic.com",
+        custom_llm_provider="anthropic",
+        extra_headers=None,
+        timeout=httpx.Timeout(600.0, read=42.0),
+    )
+
+    assert stream is not None
+    assert [chunk async for chunk in stream] == list(FAKE_SSE_FRAMES)
+    assert bridge.calls[0]["timeout_seconds"] == 42.0
+    assert bridge.calls[0]["body"]["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_messages_stream_adapter_aclose_ends_iteration():
+    adapter = rust_messages_stream.RustMessagesStreamAdapter(FakeNativeStream())
+    assert await adapter.__anext__() == FAKE_SSE_FRAMES[0]
+    await adapter.aclose()
+    with pytest.raises(StopAsyncIteration):
+        await adapter.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_messages_stream_wrapper_returns_none_when_bridge_absent(monkeypatch):
+    monkeypatch.setattr(
+        importlib.import_module("litellm.rust_bridge"),
+        "get_native_bridge",
+        lambda: None,
+    )
+    litellm.use_litellm_rust(True)
+
+    stream = await rust_messages_stream.amessages_stream(
+        model="claude-sonnet-4-5",
+        body={**REQUEST_BODY, "stream": True},
+        api_key="sk-ant",
+        api_base="https://api.anthropic.com",
+        custom_llm_provider="anthropic",
+        extra_headers=None,
+        timeout=30.0,
+    )
+
+    assert stream is None
 
 
 @pytest.mark.asyncio
