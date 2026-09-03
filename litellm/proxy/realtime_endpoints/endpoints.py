@@ -2,7 +2,7 @@
 
 import json
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Final
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -24,15 +24,15 @@ from litellm.types.realtime import (
     RealtimeTranscriptionSessionResponse,
 )
 
-router = APIRouter()
+router: Final = APIRouter()
 
-_REALTIME_TOKEN_VERSION = "realtime_v1"
-_DEFAULT_REALTIME_MODEL = "gpt-4o-realtime-preview"
-_DEFAULT_TRANSCRIPTION_MODEL = "gpt-realtime-whisper"
-_ALLOWED_SESSION_TYPES = ("realtime", "transcription")
+_REALTIME_TOKEN_VERSION: Final = "realtime_v1"
+_DEFAULT_REALTIME_MODEL: Final = "gpt-4o-realtime-preview"
+_DEFAULT_TRANSCRIPTION_MODEL: Final = "gpt-realtime-whisper"
+_ALLOWED_SESSION_TYPES: Final = ("realtime", "transcription")
 
 
-def _coerce_realtime_session_type(session_type: Optional[str]) -> str:
+def _coerce_realtime_session_type(session_type: str | None) -> str:
     if session_type in _ALLOWED_SESSION_TYPES:
         return session_type
     return "realtime"
@@ -44,20 +44,20 @@ def _append_model_candidate(candidates: list[str], model: Any) -> None:
 
 
 def _transcription_model_candidates_from_session(session: dict) -> list[str]:
-    candidates: list[str] = []
+    candidates: Final[list[str]] = []
 
-    audio = session.get("audio")
+    audio: Final = session.get("audio")
     if isinstance(audio, dict):
-        audio_input = audio.get("input")
+        audio_input: Final = audio.get("input")
         if isinstance(audio_input, dict):
-            nested_transcription = audio_input.get("transcription")
+            nested_transcription: Final = audio_input.get("transcription")
             if isinstance(nested_transcription, dict):
                 _append_model_candidate(
                     candidates,
                     nested_transcription.get("model"),
                 )
 
-    flat_transcription = session.get("input_audio_transcription")
+    flat_transcription: Final = session.get("input_audio_transcription")
     if isinstance(flat_transcription, dict):
         _append_model_candidate(candidates, flat_transcription.get("model"))
 
@@ -71,7 +71,7 @@ def _set_transcription_model_on_session(
 ) -> None:
     updated_existing_config = False
 
-    flat_transcription = session.get("input_audio_transcription")
+    flat_transcription: Final = session.get("input_audio_transcription")
     if isinstance(flat_transcription, dict):
         session["input_audio_transcription"] = {
             **flat_transcription,
@@ -83,7 +83,7 @@ def _set_transcription_model_on_session(
     if isinstance(audio, dict):
         audio_input = audio.get("input")
         if isinstance(audio_input, dict):
-            nested_transcription = audio_input.get("transcription")
+            nested_transcription: Final = audio_input.get("transcription")
             if isinstance(nested_transcription, dict):
                 session["audio"] = {
                     **audio,
@@ -115,15 +115,15 @@ def _set_transcription_model_on_session(
 async def _prepare_client_secret_session(
     req: RealtimeClientSecretRequest,
     user_api_key_dict: UserAPIKeyAuth,
-    llm_model_list: Optional[list],
+    llm_model_list: list | None,
     llm_router: Any,
-) -> tuple[str, Optional[dict], str]:
-    session_type = _coerce_realtime_session_type(req.session.type if req.session else None)
-    session_data: Optional[dict] = req.session.model_dump(exclude_none=True) if req.session else None
+) -> tuple[str, dict | None, str]:
+    session_type: Final = _coerce_realtime_session_type(req.session.type if req.session else None)
+    session_data: Final[dict | None] = req.session.model_dump(exclude_none=True) if req.session else None
     if session_data is not None:
         session_data["type"] = session_type
 
-    session_model = req.session.model if req.session else None
+    session_model: Final = req.session.model if req.session else None
     model: str = session_model or req.model or _DEFAULT_REALTIME_MODEL
     if session_type != "transcription":
         await can_key_call_resolved_model(
@@ -134,7 +134,7 @@ async def _prepare_client_secret_session(
         )
         return model, session_data, session_type
 
-    transcription_model_candidates = _transcription_model_candidates_from_session(session_data or {})
+    transcription_model_candidates: Final = _transcription_model_candidates_from_session(session_data or {})
     if not transcription_model_candidates:
         _append_model_candidate(transcription_model_candidates, session_model)
         _append_model_candidate(transcription_model_candidates, req.model)
@@ -162,16 +162,16 @@ async def _prepare_client_secret_session(
 def _encode_realtime_token_payload(
     ephemeral_key: str,
     model_id: str,
-    user_id: Optional[str],
-    team_id: Optional[str],
-    expires_at: Optional[int],
+    user_id: str | None,
+    team_id: str | None,
+    expires_at: int | None,
     session_type: str = "realtime",
 ) -> str:
     """
     Encode metadata with the upstream ephemeral key so /realtime/calls can
     route without requiring model as a query param.
     """
-    payload: Dict[str, Any] = {
+    payload: Final[dict[str, Any]] = {
         "v": _REALTIME_TOKEN_VERSION,
         "ephemeral_key": ephemeral_key,
         "model_id": model_id,
@@ -185,12 +185,12 @@ def _encode_realtime_token_payload(
 
 def _decode_realtime_token_payload(
     decrypted_value: str,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """
     Decode realtime token payload; returns None for legacy/raw ephemeral tokens.
     """
     try:
-        decoded = json.loads(decrypted_value)
+        decoded: Final = json.loads(decrypted_value)
     except Exception:
         return None
 
@@ -228,8 +228,8 @@ async def create_realtime_client_secret(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        llm_router,
         llm_model_list,
+        llm_router,
         proxy_config,
         proxy_logging_obj,
         route_request,
@@ -239,8 +239,8 @@ async def create_realtime_client_secret(
 
     data: dict = {}
     try:
-        body = await _read_request_body(request=request)
-        req = RealtimeClientSecretRequest(**body)
+        body: Final = await _read_request_body(request=request)
+        req: Final = RealtimeClientSecretRequest(**body)
 
         model, session_data, session_type = await _prepare_client_secret_session(
             req=req,
@@ -278,13 +278,13 @@ async def create_realtime_client_secret(
 
         verbose_proxy_logger.debug("WebRTC: /v1/realtime/client_secrets (model=%s)", model)
 
-        llm_call = await route_request(
+        llm_call: Final = await route_request(
             data=data,
             route_type="acreate_realtime_client_secret",
             llm_router=llm_router,
             user_model=user_model,
         )
-        upstream_resp: httpx.Response = await llm_call  # type: ignore
+        upstream_resp: Final[httpx.Response] = await llm_call
 
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -318,19 +318,19 @@ async def create_realtime_client_secret(
             upstream_resp.status_code,
             upstream_resp.text,
         )
-        return Response(  # type: ignore[return-value]
+        return Response(
             content=upstream_resp.content,
             status_code=upstream_resp.status_code,
             media_type="application/json",
         )
 
-    upstream_json: dict = upstream_resp.json()
+    upstream_json: Final[dict] = upstream_resp.json()
 
     # Encrypt upstream ephemeral key with routing metadata so /realtime/calls
     # can recover model without requiring query params.
-    raw_value: str = upstream_json.get("value", "")
-    expires_at = upstream_json.get("expires_at")
-    token_payload = _encode_realtime_token_payload(
+    raw_value: Final[str] = upstream_json.get("value", "")
+    expires_at: Final = upstream_json.get("expires_at")
+    token_payload: Final = _encode_realtime_token_payload(
         ephemeral_key=raw_value,
         model_id=model,
         user_id=getattr(user_api_key_dict, "user_id", None),
@@ -338,12 +338,12 @@ async def create_realtime_client_secret(
         expires_at=expires_at if isinstance(expires_at, int) else None,
         session_type=session_type,
     )
-    encrypted_token: str = encrypt_value_helper(token_payload)
+    encrypted_token: Final[str] = encrypt_value_helper(token_payload)
     upstream_json["value"] = encrypted_token
 
-    session_obj: Optional[dict] = upstream_json.get("session")
+    session_obj: Final[dict | None] = upstream_json.get("session")
     if isinstance(session_obj, dict):
-        cs = session_obj.get("client_secret")
+        cs: Final = session_obj.get("client_secret")
         if isinstance(cs, dict) and "value" in cs:
             cs["value"] = encrypted_token
         upstream_json["session"] = session_obj
@@ -380,7 +380,7 @@ async def proxy_realtime_calls(
 
     # Auth: the Bearer token is the encrypted ephemeral key issued by
     # /realtime/client_secrets, not a standard proxy API key.
-    auth_header: Optional[str] = request.headers.get("Authorization")
+    auth_header: Final[str | None] = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         return Response(
             content=json.dumps({"error": "Missing or invalid Authorization header"}),
@@ -388,8 +388,8 @@ async def proxy_realtime_calls(
             media_type="application/json",
         )
 
-    encrypted_token = auth_header.removeprefix("Bearer ").strip()
-    decrypted_token_value = decrypt_value_helper(
+    encrypted_token: Final = auth_header.removeprefix("Bearer ").strip()
+    decrypted_token_value: Final = decrypt_value_helper(
         value=encrypted_token,
         key="realtime_calls_auth",
     )
@@ -400,11 +400,11 @@ async def proxy_realtime_calls(
             media_type="application/json",
         )
 
-    sdp_body: bytes = await request.body()
-    decoded_payload = _decode_realtime_token_payload(decrypted_token_value)
+    sdp_body: Final[bytes] = await request.body()
+    decoded_payload: Final = _decode_realtime_token_payload(decrypted_token_value)
     if decoded_payload is not None:
         # Check token expiry
-        expires_at = decoded_payload.get("expires_at")
+        expires_at: Final = decoded_payload.get("expires_at")
         if expires_at is not None and isinstance(expires_at, int):
             if time.time() > expires_at:
                 return Response(
@@ -428,14 +428,14 @@ async def proxy_realtime_calls(
 
     # Build a minimal UserAPIKeyAuth with user/team IDs from the token
     # so spend tracking and budget enforcement work correctly.
-    minimal_auth = UserAPIKeyAuth(
+    minimal_auth: Final = UserAPIKeyAuth(
         user_id=user_id,
         team_id=team_id,
     )
 
     data: dict = {}
     try:
-        session_config = {
+        session_config: Final = {
             "type": session_type,
         }
         if session_type == "transcription":
@@ -471,13 +471,13 @@ async def proxy_realtime_calls(
 
         verbose_proxy_logger.debug("WebRTC: /v1/realtime/calls (model=%s)", model)
 
-        llm_call = await route_request(
+        llm_call: Final = await route_request(
             data=data,
             route_type="arealtime_calls",
             llm_router=llm_router,
             user_model=user_model,
         )
-        upstream_resp: httpx.Response = await llm_call  # type: ignore
+        upstream_resp: Final[httpx.Response] = await llm_call
 
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -540,8 +540,8 @@ async def create_realtime_transcription_session(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
-        llm_router,
         llm_model_list,
+        llm_router,
         proxy_config,
         proxy_logging_obj,
         route_request,
@@ -551,10 +551,10 @@ async def create_realtime_transcription_session(
 
     data: dict = {}
     try:
-        body = await _read_request_body(request=request)
-        req = RealtimeTranscriptionSessionRequest(**body)
+        body: Final = await _read_request_body(request=request)
+        req: Final = RealtimeTranscriptionSessionRequest(**body)
 
-        model: str = req.resolved_model() or "gpt-realtime-whisper"
+        model: Final[str] = req.resolved_model() or "gpt-realtime-whisper"
         await can_key_call_resolved_model(
             model=model,
             valid_token=user_api_key_dict,
@@ -562,7 +562,7 @@ async def create_realtime_transcription_session(
             llm_router=llm_router,
         )
 
-        transcription_session = {k: v for k, v in body.items() if k != "model"}
+        transcription_session: Final = {k: v for k, v in body.items() if k != "model"}
         data = {"model": model, "transcription_session": transcription_session}
 
         data = await add_litellm_data_to_request(
@@ -582,13 +582,13 @@ async def create_realtime_transcription_session(
 
         verbose_proxy_logger.debug("Realtime: /v1/realtime/transcription_sessions (model=%s)", model)
 
-        llm_call = await route_request(
+        llm_call: Final = await route_request(
             data=data,
             route_type="acreate_realtime_transcription_session",
             llm_router=llm_router,
             user_model=user_model,
         )
-        upstream_resp: httpx.Response = await llm_call  # type: ignore
+        upstream_resp: Final[httpx.Response] = await llm_call
 
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -622,21 +622,21 @@ async def create_realtime_transcription_session(
             upstream_resp.status_code,
             upstream_resp.text,
         )
-        return Response(  # type: ignore[return-value]
+        return Response(
             content=upstream_resp.content,
             status_code=upstream_resp.status_code,
             media_type="application/json",
         )
 
-    upstream_json: dict = upstream_resp.json()
+    upstream_json: Final[dict] = upstream_resp.json()
 
     # Encrypt the ephemeral key (returned under client_secret.value) with routing
     # metadata so the follow-up /realtime/calls request can recover the model.
-    client_secret = upstream_json.get("client_secret")
+    client_secret: Final = upstream_json.get("client_secret")
     if isinstance(client_secret, dict) and "value" in client_secret:
-        raw_value: str = client_secret.get("value", "")
-        expires_at = client_secret.get("expires_at")
-        token_payload = _encode_realtime_token_payload(
+        raw_value: Final[str] = client_secret.get("value", "")
+        expires_at: Final = client_secret.get("expires_at")
+        token_payload: Final = _encode_realtime_token_payload(
             ephemeral_key=raw_value,
             model_id=model,
             user_id=getattr(user_api_key_dict, "user_id", None),

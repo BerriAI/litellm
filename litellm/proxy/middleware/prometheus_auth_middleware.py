@@ -3,7 +3,8 @@ Prometheus Auth Middleware - Pure ASGI implementation
 """
 
 import json
-from typing import Any, List, MutableMapping
+from collections.abc import MutableMapping
+from typing import Any, Final
 
 from fastapi import Request
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -13,7 +14,7 @@ from litellm.proxy._types import SpecialHeaders
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 # Cache the header name at module level to avoid repeated enum attribute access
-_AUTHORIZATION_HEADER = SpecialHeaders.openai_authorization.value  # "Authorization"
+_AUTHORIZATION_HEADER: Final = SpecialHeaders.openai_authorization.value  # "Authorization"
 
 
 class PrometheusAuthMiddleware:
@@ -44,14 +45,14 @@ class PrometheusAuthMiddleware:
             # user_api_key_auth reads the request body, which consumes ASGI `receive`.
             # Buffer those messages and replay them for the inner app; otherwise a
             # successful auth would forward an exhausted receive and /metrics hangs.
-            buffered_messages: List[MutableMapping[str, Any]] = []
+            buffered_messages: Final[list[MutableMapping[str, Any]]] = []
 
             async def receive_for_auth() -> MutableMapping[str, Any]:
-                message = await receive()
+                message: Final = await receive()
                 buffered_messages.append(message)
                 return message
 
-            request = Request(scope, receive_for_auth)
+            request: Final = Request(scope, receive_for_auth)
 
             try:
                 await user_api_key_auth(
@@ -67,8 +68,8 @@ class PrometheusAuthMiddleware:
                 )
             except Exception as e:
                 # Send 401 response directly via ASGI protocol
-                error_message = getattr(e, "message", str(e))
-                body = json.dumps(
+                error_message: Final = getattr(e, "message", str(e))
+                body: Final = json.dumps(
                     f"Unauthorized access to metrics endpoint: {error_message} "
                     f"To allow unauthenticated access, set "
                     f"`litellm_settings.require_auth_for_metrics_endpoint: false` "
@@ -97,7 +98,7 @@ class PrometheusAuthMiddleware:
             async def receive_replay() -> MutableMapping[str, Any]:
                 nonlocal replay_idx
                 if replay_idx < len(buffered_messages):
-                    msg = buffered_messages[replay_idx]
+                    msg: Final = buffered_messages[replay_idx]
                     replay_idx += 1
                     return msg
                 return await receive()

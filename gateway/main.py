@@ -25,17 +25,25 @@ DatabaseURLSettings.from_env().apply_to_env()
 
 from litellm.proxy.proxy_server import app
 
-from gateway.routes.allowlist import GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
+from gateway.routes.allowlist import (
+    GATEWAY_EXACT_PATHS,
+    GATEWAY_MOUNT_PATHS,
+    GATEWAY_PATH_PREFIXES,
+)
 
 
 def _is_gateway_route(route) -> bool:
-    """Keep the route on the gateway if its path is in the LLM data-plane surface."""
+    """Keep the route on the gateway if its path is in the LLM data-plane surface.
+
+    Prometheus registers /metrics as a Mount (``app.mount("/metrics", make_asgi_app())``),
+    so Mounts are matched against GATEWAY_MOUNT_PATHS instead of being dropped with
+    the UI static mounts.
+    """
     path = getattr(route, "path", None)
     if path is None:
         return False
     if isinstance(route, Mount):
-        # Gateway never serves the static UI or its asset bundles.
-        return False
+        return path in GATEWAY_MOUNT_PATHS
     if path in GATEWAY_EXACT_PATHS:
         return True
     return any(path.startswith(prefix) for prefix in GATEWAY_PATH_PREFIXES)

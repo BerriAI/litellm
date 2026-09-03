@@ -64,6 +64,65 @@ def test_dotted_module_path_is_unaffected_by_gate():
     assert result == "loaded"
 
 
+def test_installed_package_resolved_when_local_file_absent(tmp_path, monkeypatch):
+    # Regression: with config_file_path set (startup load path) but no local
+    # module file next to it, get_instance_fn must fall back to importing the
+    # dotted name as an installed package. Previously it raised ImportError
+    # ("Could not find module file ..."), so plugins shipped as pip packages
+    # (e.g. router_settings/complexity_router plugins) could not be referenced.
+    pkg_dir = tmp_path / "site"
+    pkg_dir.mkdir()
+    (pkg_dir / "my_installed_plugin.py").write_text(
+        "class _P:\n"
+        "    async def run(self, context):\n"
+        "        return context\n"
+        "\n"
+        "instance = _P()\n"
+    )
+    monkeypatch.syspath_prepend(str(pkg_dir))
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+
+    result = get_instance_fn(
+        value="my_installed_plugin.instance",
+        config_file_path=str(config_dir / "config.yaml"),
+    )
+
+    assert type(result).__name__ == "_P"
+
+
+def test_local_module_file_wins_over_installed_package(tmp_path, monkeypatch):
+    # A local module file next to the config must still take precedence over an
+    # installed package of the same dotted name -- the fallback only kicks in
+    # when no local file exists.
+    pkg_dir = tmp_path / "site"
+    pkg_dir.mkdir()
+    (pkg_dir / "shadowed_mod.py").write_text("value = 'from-installed'\n")
+    monkeypatch.syspath_prepend(str(pkg_dir))
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "shadowed_mod.py").write_text("value = 'from-local-file'\n")
+
+    result = get_instance_fn(
+        value="shadowed_mod.value",
+        config_file_path=str(config_dir / "config.yaml"),
+    )
+
+    assert result == "from-local-file"
+
+
+def test_missing_module_everywhere_raises_import_error(tmp_path):
+    # Neither a local file nor an installed package: the fallback import must
+    # surface a real ImportError rather than silently succeeding.
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    with pytest.raises(ImportError):
+        get_instance_fn(
+            value="definitely_not_a_real_module_xyz.instance",
+            config_file_path=str(config_dir / "config.yaml"),
+        )
+
+
 def test_pass_through_route_threads_config_file_path():
     # ``create_pass_through_route`` must forward ``config_file_path`` so
     # an operator with ``custom_handler: s3://...`` declared in

@@ -59,6 +59,33 @@ locals {
     { name = "OTEL_HEADERS", secret = var.otel_headers_secret, version = "latest" },
   ] : []
 
+  # Enterprise request metering, gated on billing_metrics_endpoint. The
+  # endpoint rides in as a plain env var; the mTLS material lives in Secret
+  # Manager (secrets.tf) and is injected as PEM-valued env vars, which the
+  # proxy accepts in place of file paths. Each PEM is wired only when the
+  # operator supplied it, so an empty ca_cert_pem falls back to the system
+  # trust store.
+  billing_metrics_enabled             = var.billing_metrics_endpoint != ""
+  billing_metrics_client_cert_enabled = local.billing_metrics_enabled && var.billing_metrics_client_cert_pem != ""
+  billing_metrics_client_key_enabled  = local.billing_metrics_enabled && var.billing_metrics_client_key_pem != ""
+  billing_metrics_ca_cert_enabled     = local.billing_metrics_enabled && var.billing_metrics_ca_cert_pem != ""
+
+  billing_metrics_env_kv = local.billing_metrics_enabled ? [
+    { name = "LITELLM_BILLING_METRICS_ENDPOINT", value = var.billing_metrics_endpoint },
+  ] : []
+
+  billing_metrics_env_secrets = concat(
+    local.billing_metrics_client_cert_enabled ? [
+      { name = "LITELLM_BILLING_METRICS_CLIENT_CERT", secret = google_secret_manager_secret.billing_metrics_client_cert[0].id, version = "latest" },
+    ] : [],
+    local.billing_metrics_client_key_enabled ? [
+      { name = "LITELLM_BILLING_METRICS_CLIENT_KEY", secret = google_secret_manager_secret.billing_metrics_client_key[0].id, version = "latest" },
+    ] : [],
+    local.billing_metrics_ca_cert_enabled ? [
+      { name = "LITELLM_BILLING_METRICS_CA_CERT", secret = google_secret_manager_secret.billing_metrics_ca_cert[0].id, version = "latest" },
+    ] : [],
+  )
+
   # Cloud Run v2 secret env vars use value_source.secret_key_ref pointing at a
   # secret resource ID. Shared between gateway and backend (the migrations
   # job has its own narrower env list — see migrations_env_secrets below).
@@ -108,16 +135,22 @@ locals {
     "export DATABASE_URL_READ_REPLICA=\"postgresql://$${DATABASE_USER}:$${DATABASE_PASSWORD}@$${DATABASE_HOST_READ_REPLICA}:$${DATABASE_PORT_READ_REPLICA}/$${DATABASE_NAME}\"",
   ]
 
+  gateway_uvicorn_args = "--host 0.0.0.0 --port 4000 --workers ${var.gateway_num_workers}"
+  backend_uvicorn_args = "--host 0.0.0.0 --port 4001"
+
+  gateway_launch_cmd = "if [ \"$USE_DDTRACE\" = \"true\" ]; then export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn gateway.main:app ${local.gateway_uvicorn_args}; else exec uvicorn gateway.main:app ${local.gateway_uvicorn_args}; fi"
+  backend_launch_cmd = "if [ \"$USE_DDTRACE\" = \"true\" ]; then export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn backend.main:app ${local.backend_uvicorn_args}; else exec uvicorn backend.main:app ${local.backend_uvicorn_args}; fi"
+
   gateway_args = join(" && ", concat(
     local.redis_ca_fragment,
     local.database_url_fragment,
-    ["exec uvicorn gateway.main:app --host 0.0.0.0 --port 4000 --workers ${var.gateway_num_workers}"],
+    [local.gateway_launch_cmd],
   ))
 
   backend_args = join(" && ", concat(
     local.redis_ca_fragment,
     local.database_url_fragment,
-    ["exec uvicorn backend.main:app --host 0.0.0.0 --port 4001"],
+    [local.backend_launch_cmd],
   ))
 
   # Env shipped to the migrations Job. The migrations image runs run.py
@@ -138,6 +171,30 @@ locals {
 
 # ---------- Gateway ----------
 resource "google_cloud_run_v2_service" "gateway" {
+  # Metering needs a client certificate AND its key. Each secret is created only
+  # when its own PEM is supplied, so an endpoint set with a missing key would
+  # otherwise apply cleanly and leave the proxy logging "missing config" and
+  # never exporting. ca_cert_pem stays optional: empty means fall back to the
+  # system trust store.
+  #
+  # The guard lives here, on an unconditional resource, rather than on the cert
+  # secret: that secret is count-gated on the cert itself, so it has zero
+  # instances in exactly the case this must catch. Adding count or for_each to
+  # this resource would silently stop the guard from evaluating.
+  #
+  #   endpoint  cert  key  -> result
+  #   ""        any   any  -> metering off, no secrets created
+  #   set       set   set  -> metering on
+  #   set       any-missing -> plan fails here
+  lifecycle {
+    precondition {
+      condition = var.billing_metrics_endpoint == "" || (
+        var.billing_metrics_client_cert_pem != "" && var.billing_metrics_client_key_pem != ""
+      )
+      error_message = "billing_metrics_client_cert_pem and billing_metrics_client_key_pem are both required when billing_metrics_endpoint is set."
+    }
+  }
+
   name                = "${local.name}-gateway"
   location            = var.region
   ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
@@ -175,7 +232,7 @@ resource "google_cloud_run_v2_service" "gateway" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_kv, local.gateway_otel_env_kv, local.gateway_extra_env_kv, local.proxy_config_env)
+        for_each = concat(local.shared_env_kv, local.gateway_otel_env_kv, local.billing_metrics_env_kv, local.gateway_extra_env_kv, local.proxy_config_env)
         content {
           name  = env.value.name
           value = env.value.value
@@ -183,7 +240,7 @@ resource "google_cloud_run_v2_service" "gateway" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_secrets, local.otel_env_secrets, local.gateway_extra_secret_kv)
+        for_each = concat(local.shared_env_secrets, local.otel_env_secrets, local.billing_metrics_env_secrets, local.gateway_extra_secret_kv)
         content {
           name = env.value.name
           value_source {
@@ -242,6 +299,9 @@ resource "google_cloud_run_v2_service" "gateway" {
     google_secret_manager_secret_iam_member.license,
     google_secret_manager_secret_iam_member.extras,
     google_secret_manager_secret_iam_member.otel_headers,
+    google_secret_manager_secret_iam_member.billing_metrics_client_cert,
+    google_secret_manager_secret_iam_member.billing_metrics_client_key,
+    google_secret_manager_secret_iam_member.billing_metrics_ca_cert,
     google_storage_bucket_iam_member.proxy_config_runtime,
     google_sql_user.app,
     # Don't go live until the schema is migrated; otherwise the proxy boots,
@@ -252,6 +312,18 @@ resource "google_cloud_run_v2_service" "gateway" {
 
 # ---------- Backend ----------
 resource "google_cloud_run_v2_service" "backend" {
+  # Same guard as the gateway: the backend meters too (it serves the named-server
+  # MCP transport), and a targeted apply of just this resource must not slip a
+  # billing endpoint through without the credentials to use it.
+  lifecycle {
+    precondition {
+      condition = var.billing_metrics_endpoint == "" || (
+        var.billing_metrics_client_cert_pem != "" && var.billing_metrics_client_key_pem != ""
+      )
+      error_message = "billing_metrics_client_cert_pem and billing_metrics_client_key_pem are both required when billing_metrics_endpoint is set."
+    }
+  }
+
   name                = "${local.name}-backend"
   location            = var.region
   ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
@@ -289,7 +361,7 @@ resource "google_cloud_run_v2_service" "backend" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_kv, local.backend_default_env_kv, local.backend_otel_env_kv, local.backend_extra_env_kv, local.proxy_config_env)
+        for_each = concat(local.shared_env_kv, local.backend_default_env_kv, local.backend_otel_env_kv, local.billing_metrics_env_kv, local.backend_extra_env_kv, local.proxy_config_env)
         content {
           name  = env.value.name
           value = env.value.value
@@ -297,7 +369,7 @@ resource "google_cloud_run_v2_service" "backend" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_secrets, local.backend_managed_env_secrets, local.otel_env_secrets, local.backend_extra_secret_kv)
+        for_each = concat(local.shared_env_secrets, local.backend_managed_env_secrets, local.otel_env_secrets, local.billing_metrics_env_secrets, local.backend_extra_secret_kv)
         content {
           name = env.value.name
           value_source {
@@ -357,6 +429,9 @@ resource "google_cloud_run_v2_service" "backend" {
     google_secret_manager_secret_iam_member.ui_password,
     google_secret_manager_secret_iam_member.extras,
     google_secret_manager_secret_iam_member.otel_headers,
+    google_secret_manager_secret_iam_member.billing_metrics_client_cert,
+    google_secret_manager_secret_iam_member.billing_metrics_client_key,
+    google_secret_manager_secret_iam_member.billing_metrics_ca_cert,
     google_storage_bucket_iam_member.proxy_config_runtime,
     google_sql_user.app,
     terraform_data.migration,

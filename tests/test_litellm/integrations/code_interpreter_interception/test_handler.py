@@ -14,6 +14,7 @@ from litellm.integrations.code_interpreter_interception.handler import (
     LITELLM_CODE_EXECUTION_TOOL_NAME,
     _INTERCEPTION_ACTIVE_KEY as _ACTIVE_KEY,
     _SANDBOX_KEY,
+    _SESSION_SCOPED_KEY,
 )
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
@@ -138,11 +139,7 @@ async def test_build_plan_runs_code_and_feeds_output_back():
     assert sandbox.run_calls[0]["code"] == "print(40 + 2)"
 
     messages = _iter_messages(plan)
-    outputs = [
-        m
-        for m in messages
-        if isinstance(m, dict) and m.get("type") == "function_call_output"
-    ]
+    outputs = [m for m in messages if isinstance(m, dict) and m.get("type") == "function_call_output"]
     assert outputs, "expected a function_call_output item appended"
     output_item = next(m for m in outputs if m.get("call_id") == "c1")
     assert "42" in str(output_item["output"])
@@ -160,9 +157,7 @@ async def test_pre_call_converts_code_interpreter_tool():
 
     assert result is not None
     tools = result["tools"]
-    assert not any(
-        t.get("type") == "code_interpreter" for t in tools
-    ), "code_interpreter tool must be removed"
+    assert not any(t.get("type") == "code_interpreter" for t in tools), "code_interpreter tool must be removed"
     names = [t.get("name") or (t.get("function") or {}).get("name") for t in tools]
     assert LITELLM_CODE_EXECUTION_TOOL_NAME in names
 
@@ -267,9 +262,7 @@ async def test_should_run_detects_only_matching_function_call():
     logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
 
     active_kwargs = {"_code_interpreter_interception_active": True}
-    match = FakeResponse(
-        output=[_function_call_item(name=LITELLM_CODE_EXECUTION_TOOL_NAME)]
-    )
+    match = FakeResponse(output=[_function_call_item(name=LITELLM_CODE_EXECUTION_TOOL_NAME)])
     should_run, payload = await logger.async_should_run_agentic_loop(
         response=match,
         model="gpt-5",
@@ -331,9 +324,7 @@ async def test_container_reused_within_request_via_server_sandbox_key():
         **common,
     )
 
-    assert (
-        len(sandbox.create_calls) == 1
-    ), "the sandbox is reused across loop iterations sharing one server sandbox key"
+    assert len(sandbox.create_calls) == 1, "the sandbox is reused across loop iterations sharing one server sandbox key"
 
 
 @pytest.mark.asyncio
@@ -372,9 +363,9 @@ async def test_colliding_caller_call_id_does_not_share_sandbox():
         **common,
     )
 
-    assert (
-        len(sandbox.create_calls) == 2
-    ), "distinct server sandbox keys must isolate sandboxes despite a colliding call id"
+    assert len(sandbox.create_calls) == 2, (
+        "distinct server sandbox keys must isolate sandboxes despite a colliding call id"
+    )
 
 
 @pytest.mark.asyncio
@@ -479,14 +470,11 @@ async def test_post_hook_injects_code_interpreter_call_matching_openai_shape():
     )
     response = FakeResponse(output=[{"type": "message", "content": []}])
 
-    out = await logger.async_post_agentic_loop_response_hook(
-        response=response, plan=plan, kwargs={}
-    )
+    out = await logger.async_post_agentic_loop_response_hook(response=response, plan=plan, kwargs={})
 
     types = [item.get("type") for item in out.output]
     assert types == ["code_interpreter_call", "message"], (
-        "code_interpreter_call must be re-injected before the message, matching "
-        "OpenAI's native output ordering"
+        "code_interpreter_call must be re-injected before the message, matching OpenAI's native output ordering"
     )
     assert set(out.output[0].keys()) == {
         "id",
@@ -524,8 +512,7 @@ async def test_pre_call_forces_non_stream_for_loop():
     assert out is not None
     assert out["stream"] is False, "loop requires a non-streaming upstream call"
     assert out["_code_interpreter_interception_converted_stream"] is True, (
-        "the converted-stream flag must be set so the final response is wrapped "
-        "back into a stream for the caller"
+        "the converted-stream flag must be set so the final response is wrapped back into a stream for the caller"
     )
 
 
@@ -556,9 +543,7 @@ async def test_gate_refuses_without_server_active_marker():
     """A forged litellm_code_execution call must not trigger the loop unless the
     pre-call hook actually converted a native code_interpreter tool."""
     logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
-    forged = FakeResponse(
-        output=[_function_call_item(name=LITELLM_CODE_EXECUTION_TOOL_NAME)]
-    )
+    forged = FakeResponse(output=[_function_call_item(name=LITELLM_CODE_EXECUTION_TOOL_NAME)])
 
     should_run, payload = await logger.async_should_run_agentic_loop(
         response=forged,
@@ -577,12 +562,8 @@ async def test_gate_refuses_without_server_active_marker():
 @pytest.mark.asyncio
 async def test_gate_rechecks_provider_scope():
     """enabled_providers must be re-enforced at the gate, not only in pre-call."""
-    logger = CodeInterpreterInterceptionLogger(
-        sandbox_config=FakeSandbox(), enabled_providers=["openai"]
-    )
-    response = FakeResponse(
-        output=[_function_call_item(name=LITELLM_CODE_EXECUTION_TOOL_NAME)]
-    )
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox(), enabled_providers=["openai"])
+    response = FakeResponse(output=[_function_call_item(name=LITELLM_CODE_EXECUTION_TOOL_NAME)])
 
     should_run, _ = await logger.async_should_run_agentic_loop(
         response=response,
@@ -600,11 +581,7 @@ async def test_gate_rechecks_provider_scope():
 @pytest.mark.asyncio
 async def test_chat_completion_gate_detects_code_execution_tool_call():
     logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
-    response = {
-        "choices": [
-            {"message": {"tool_calls": [_chat_function_call_item(call_id="call_123")]}}
-        ]
-    }
+    response = {"choices": [{"message": {"tool_calls": [_chat_function_call_item(call_id="call_123")]}}]}
 
     should_run, payload = await logger.async_should_run_agentic_loop(
         response=response,
@@ -661,9 +638,7 @@ async def test_chat_completion_build_plan_runs_code_and_appends_tool_message():
         },
         model="gpt-5",
         messages=[{"role": "user", "content": "x"}],
-        response={
-            "choices": [{"message": {"tool_calls": [_chat_function_call_item()]}}]
-        },
+        response={"choices": [{"message": {"tool_calls": [_chat_function_call_item()]}}]},
         anthropic_messages_provider_config=None,
         anthropic_messages_optional_request_params={
             "tools": [native_chat_tool],
@@ -738,8 +713,7 @@ async def test_pre_call_strips_client_forged_marker_on_initial_request():
     await logger.async_pre_call_deployment_hook(kwargs, CallTypes.aresponses)
 
     assert _ACTIVE_KEY not in kwargs, (
-        "no native code_interpreter tool was present, so a client-supplied "
-        "active marker must be cleared"
+        "no native code_interpreter tool was present, so a client-supplied active marker must be cleared"
     )
     assert kwargs["litellm_metadata"] == {"safe_user_value": "kept"}
 
@@ -774,8 +748,7 @@ async def test_pre_call_strips_forged_loop_controls_then_mints_own_markers():
     assert metadata[_ACTIVE_KEY] is True
     assert metadata[_SANDBOX_KEY] == result[_SANDBOX_KEY]
     assert metadata[_SANDBOX_KEY] != "client-forged", (
-        "the surviving sandbox key must be the server-minted one, not the forged "
-        "value the client supplied"
+        "the surviving sandbox key must be the server-minted one, not the forged value the client supplied"
     )
 
 
@@ -793,8 +766,7 @@ async def test_pre_call_preserves_marker_on_server_followup():
     await logger.async_pre_call_deployment_hook(kwargs, CallTypes.aresponses)
 
     assert kwargs.get(_ACTIVE_KEY) is True, (
-        "the server-set marker must survive followup requests so multi-round "
-        "code execution keeps working"
+        "the server-set marker must survive followup requests so multi-round code execution keeps working"
     )
 
 
@@ -805,9 +777,7 @@ async def test_sandbox_deleted_after_loop_completes():
 
     plan = await _build_plan(logger, sandbox, call_id="k1")
     assert sandbox.create_calls, "sandbox must be created during the loop"
-    assert (
-        not sandbox.delete_calls
-    ), "sandbox must outlive the loop until the final hook"
+    assert not sandbox.delete_calls, "sandbox must outlive the loop until the final hook"
 
     await logger.async_post_agentic_loop_response_hook(
         response=FakeResponse(output=[{"type": "message", "content": []}]),
@@ -816,8 +786,7 @@ async def test_sandbox_deleted_after_loop_completes():
     )
 
     assert len(sandbox.delete_calls) == 1, (
-        "the sandbox must be deleted once the final response is assembled, "
-        "otherwise it keeps running and billing"
+        "the sandbox must be deleted once the final response is assembled, otherwise it keeps running and billing"
     )
     assert "sbxkey1" not in logger._container_cache
 
@@ -829,16 +798,11 @@ async def test_post_hook_delete_is_idempotent_across_loop_levels():
     plan = await _build_plan(logger, sandbox, call_id="k1")
     response = FakeResponse(output=[{"type": "message", "content": []}])
 
-    await logger.async_post_agentic_loop_response_hook(
-        response=response, plan=plan, kwargs={}
-    )
-    await logger.async_post_agentic_loop_response_hook(
-        response=response, plan=plan, kwargs={}
-    )
+    await logger.async_post_agentic_loop_response_hook(response=response, plan=plan, kwargs={})
+    await logger.async_post_agentic_loop_response_hook(response=response, plan=plan, kwargs={})
 
     assert len(sandbox.delete_calls) == 1, (
-        "deleting an already-removed container must be a no-op so unwinding "
-        "loop levels do not double-delete"
+        "deleting an already-removed container must be a no-op so unwinding loop levels do not double-delete"
     )
 
 
@@ -860,8 +824,7 @@ async def test_build_plan_deletes_sandbox_when_execution_raises():
 
     assert len(sandbox.create_calls) == 1, "the sandbox must have been created"
     assert len(sandbox.delete_calls) == 1, (
-        "a build failure must delete the cached sandbox so it does not keep "
-        "running and billing"
+        "a build failure must delete the cached sandbox so it does not keep running and billing"
     )
     assert "sbxkey1" not in logger._container_cache
 
@@ -875,8 +838,7 @@ async def test_cleanup_hook_deletes_sandbox():
     await logger.async_agentic_loop_cleanup_hook(plan=plan, kwargs={})
 
     assert len(sandbox.delete_calls) == 1, (
-        "the cleanup hook must delete the sandbox so a rerun failure cannot "
-        "leak a running container"
+        "the cleanup hook must delete the sandbox so a rerun failure cannot leak a running container"
     )
     assert "sbxkey1" not in logger._container_cache
 
@@ -895,8 +857,7 @@ async def test_cleanup_hook_is_idempotent_with_post_hook():
     await logger.async_agentic_loop_cleanup_hook(plan=plan, kwargs={})
 
     assert len(sandbox.delete_calls) == 1, (
-        "cleanup running in finally after the success-path post hook already "
-        "deleted the sandbox must not double-delete"
+        "cleanup running in finally after the success-path post hook already deleted the sandbox must not double-delete"
     )
 
 
@@ -923,9 +884,7 @@ async def test_responses_plan_cleans_up_sandbox_when_followup_raises():
 
     plan = AgenticLoopPlan(
         run_agentic_loop=True,
-        request_patch=AgenticLoopRequestPatch(
-            model="gpt-5", messages=[{"role": "user", "content": "x"}]
-        ),
+        request_patch=AgenticLoopRequestPatch(model="gpt-5", messages=[{"role": "user", "content": "x"}]),
         metadata={"sandbox_key": "sbxkey1"},
     )
 
@@ -995,9 +954,7 @@ async def test_run_code_does_not_re_resolve_registry(monkeypatch):
 
         sandbox_tools.clear_sandbox_tools()
 
-        stdout = await logger._run_tool_call(
-            container=container, params=params, arguments='{"code":"print(1)"}'
-        )
+        stdout = await logger._run_tool_call(container=container, params=params, arguments='{"code":"print(1)"}')
     finally:
         sandbox_tools.clear_sandbox_tools()
 
@@ -1013,9 +970,7 @@ async def test_run_tool_call_surfaces_execution_error():
     class ErroringSandbox(FakeSandbox):
         async def arun_code(self, *, container, code, **kwargs):
             self.run_calls.append({"container": container, "code": code})
-            return CodeExecutionResult(
-                stdout="", error={"name": "ValueError", "value": "boom"}
-            )
+            return CodeExecutionResult(stdout="", error={"name": "ValueError", "value": "boom"})
 
     sandbox = ErroringSandbox()
     logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
@@ -1036,9 +991,7 @@ async def test_run_tool_call_reports_unparseable_arguments():
     logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
     container = await logger._create_container()
 
-    stdout = await logger._run_tool_call(
-        container=container[0], params=None, arguments="not-json"
-    )
+    stdout = await logger._run_tool_call(container=container[0], params=None, arguments="not-json")
 
     assert stdout == "[invalid tool arguments: could not parse code]"
     assert not sandbox.run_calls, "code must not run when arguments cannot be parsed"
@@ -1048,9 +1001,7 @@ async def test_run_tool_call_reports_unparseable_arguments():
 async def test_pre_call_skips_provider_outside_scope():
     """enabled_providers must filter the pre-call conversion so a request to an
     out-of-scope provider is left untouched."""
-    logger = CodeInterpreterInterceptionLogger(
-        sandbox_config=FakeSandbox(), enabled_providers=["openai"]
-    )
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox(), enabled_providers=["openai"])
     kwargs = {
         "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
         "custom_llm_provider": "anthropic",
@@ -1119,6 +1070,7 @@ async def test_prune_expired_cache_deletes_underlying_container():
         container,
         params,
         time.time() - handler_mod._CACHE_TTL_SECONDS - 1,
+        None,
     )
 
     await logger._prune_expired_cache()
@@ -1217,3 +1169,258 @@ async def test_extract_tool_calls_reads_object_attributes():
     assert len(calls) == 1
     assert calls[0]["call_id"] == "c9"
     assert calls[0]["arguments"] == '{"code":"print(1)"}'
+
+
+# ---------------------------------------------------------------------------
+# Sticky session tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pre_call_uses_session_id_from_metadata_as_sandbox_key():
+    """When session_id is in request metadata, it becomes the sandbox key so the
+    container is shared across requests in the same session."""
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    session_id = "conv-abc-123"
+    kwargs = {
+        "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
+        "custom_llm_provider": "openai",
+        "metadata": {"session_id": session_id},
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs, CallTypes.acompletion)
+
+    assert result is not None
+    assert result[_SANDBOX_KEY] == session_id
+    assert result[_SESSION_SCOPED_KEY] is True
+    assert result["litellm_metadata"][_SANDBOX_KEY] == session_id
+    assert result["litellm_metadata"][_SESSION_SCOPED_KEY] is True
+
+
+@pytest.mark.asyncio
+async def test_pre_call_uses_session_id_from_litellm_metadata():
+    """session_id in litellm_metadata also works as the sticky key."""
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    session_id = "sess-xyz-789"
+    kwargs = {
+        "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
+        "custom_llm_provider": "openai",
+        "litellm_metadata": {"session_id": session_id},
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs, CallTypes.acompletion)
+
+    assert result is not None
+    assert result[_SANDBOX_KEY] == session_id
+    assert result[_SESSION_SCOPED_KEY] is True
+
+
+@pytest.mark.asyncio
+async def test_pre_call_without_session_id_still_mints_random_key():
+    """Requests without a session_id still get a server-minted random sandbox key."""
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    kwargs = {
+        "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
+        "custom_llm_provider": "openai",
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs, CallTypes.acompletion)
+
+    assert result is not None
+    assert _SESSION_SCOPED_KEY not in result or result[_SESSION_SCOPED_KEY] is False
+    assert len(result[_SANDBOX_KEY]) >= 16
+
+
+@pytest.mark.asyncio
+async def test_session_scoped_sandbox_survives_agentic_loop_cleanup():
+    """A session-scoped sandbox must NOT be deleted by the cleanup or post hooks;
+    it needs to persist across requests within the same session."""
+    sandbox = FakeSandbox(stdout="42")
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+    session_id = "conv-persist-me"
+
+    plan = await logger.async_build_agentic_loop_plan(
+        tools={
+            "tool_calls": [
+                {
+                    "call_id": "c1",
+                    "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                    "arguments": '{"code":"x = 10"}',
+                }
+            ]
+        },
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "set x"}],
+        response=FakeResponse(output=[_function_call_item()]),
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={"tools": []},
+        logging_obj=FakeLogging(litellm_call_id="k1"),
+        stream=False,
+        kwargs={
+            "litellm_call_id": "k1",
+            _SANDBOX_KEY: session_id,
+            _SESSION_SCOPED_KEY: True,
+        },
+    )
+
+    assert plan.metadata["is_session_scoped"] is True
+
+    await logger.async_post_agentic_loop_response_hook(
+        response=FakeResponse(output=[{"type": "message", "content": []}]),
+        plan=plan,
+        kwargs={},
+    )
+    await logger.async_agentic_loop_cleanup_hook(plan=plan, kwargs={})
+
+    assert not sandbox.delete_calls, (
+        "session-scoped sandbox must not be deleted after a single agentic loop; "
+        "it must persist for the next request in the session"
+    )
+    assert session_id in logger._container_cache, "session-scoped container must remain in cache after loop ends"
+
+
+@pytest.mark.asyncio
+async def test_session_scoped_sandbox_reused_across_sequential_requests():
+    """Two sequential requests with the same session_id must share one container,
+    confirming state (e.g. assigned variables) can persist across HTTP requests."""
+    sandbox = FakeSandbox(stdout="42")
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+    session_id = "conv-reuse-me"
+
+    common_plan_args = dict(
+        tools={
+            "tool_calls": [
+                {
+                    "call_id": "c1",
+                    "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                    "arguments": '{"code":"print(1)"}',
+                }
+            ]
+        },
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "x"}],
+        response=FakeResponse(output=[_function_call_item()]),
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={"tools": []},
+        stream=False,
+    )
+    session_kwargs = {_SANDBOX_KEY: session_id, _SESSION_SCOPED_KEY: True}
+
+    plan1 = await logger.async_build_agentic_loop_plan(
+        logging_obj=FakeLogging(litellm_call_id="req1"),
+        kwargs={"litellm_call_id": "req1", **session_kwargs},
+        **common_plan_args,
+    )
+    await logger.async_post_agentic_loop_response_hook(
+        response=FakeResponse(output=[{"type": "message", "content": []}]),
+        plan=plan1,
+        kwargs={},
+    )
+
+    plan2 = await logger.async_build_agentic_loop_plan(
+        logging_obj=FakeLogging(litellm_call_id="req2"),
+        kwargs={"litellm_call_id": "req2", **session_kwargs},
+        **common_plan_args,
+    )
+    await logger.async_post_agentic_loop_response_hook(
+        response=FakeResponse(output=[{"type": "message", "content": []}]),
+        plan=plan2,
+        kwargs={},
+    )
+
+    assert len(sandbox.create_calls) == 1, (
+        "a single container must serve both requests in the same session; "
+        "two creates means state cannot persist between requests"
+    )
+    assert len(sandbox.delete_calls) == 0, "the session container must still be alive after both requests complete"
+
+
+@pytest.mark.asyncio
+async def test_non_session_sandbox_still_deleted_after_loop():
+    """Without a session_id, the existing per-request ephemeral behavior is unchanged."""
+    sandbox = FakeSandbox(stdout="42")
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+
+    plan = await _build_plan(logger, sandbox, call_id="k1")
+    await logger.async_post_agentic_loop_response_hook(
+        response=FakeResponse(output=[{"type": "message", "content": []}]),
+        plan=plan,
+        kwargs={},
+    )
+
+    assert len(sandbox.delete_calls) == 1, "non-session sandbox must still be cleaned up after each request"
+
+
+@pytest.mark.asyncio
+async def test_sandbox_key_scoped_to_api_key_hash_isolates_users():
+    """Two callers supplying the same session_id but different API key hashes must
+    each get their own sandbox; sharing across tenants would let one read or mutate
+    the other's interpreter state."""
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    session_id = "same-session-id"
+
+    result_a = await logger.async_pre_call_deployment_hook(
+        {
+            "tools": [{"type": "code_interpreter"}],
+            "custom_llm_provider": "openai",
+            "metadata": {"session_id": session_id},
+            "user_api_key_hash": "hash-for-tenant-a",
+        },
+        CallTypes.acompletion,
+    )
+    result_b = await logger.async_pre_call_deployment_hook(
+        {
+            "tools": [{"type": "code_interpreter"}],
+            "custom_llm_provider": "openai",
+            "metadata": {"session_id": session_id},
+            "user_api_key_hash": "hash-for-tenant-b",
+        },
+        CallTypes.acompletion,
+    )
+
+    assert result_a is not None and result_b is not None
+    assert result_a[_SANDBOX_KEY] != result_b[_SANDBOX_KEY], (
+        "same session_id from different API keys must yield different sandbox keys; "
+        "otherwise tenant A can read tenant B's sandbox state"
+    )
+    assert "hash-for-tenant-a" in result_a[_SANDBOX_KEY]
+    assert "hash-for-tenant-b" in result_b[_SANDBOX_KEY]
+
+
+@pytest.mark.asyncio
+async def test_per_identity_cap_evicts_lru_session():
+    """When a single identity holds the cap limit of session sandboxes and opens a
+    new one, the least-recently-used session is evicted so the allocation stays
+    bounded.  Without this, rotating session IDs is an unbounded sandbox leak."""
+    from litellm.integrations.code_interpreter_interception.handler import _SESSION_SCOPED_PER_IDENTITY_CAP
+
+    sandbox = FakeSandbox(stdout="ok")
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+    identity = "hash-for-identity-x"
+
+    for i in range(_SESSION_SCOPED_PER_IDENTITY_CAP):
+        await logger._get_or_create_container(
+            cache_key=f"{identity}:session-{i}",
+            identity=identity,
+        )
+        logger._container_cache[f"{identity}:session-{i}"] = (
+            logger._container_cache[f"{identity}:session-{i}"][0],
+            logger._container_cache[f"{identity}:session-{i}"][1],
+            float(i),
+            identity,
+        )
+
+    assert len(logger._container_cache) == _SESSION_SCOPED_PER_IDENTITY_CAP
+
+    await logger._get_or_create_container(
+        cache_key=f"{identity}:session-new",
+        identity=identity,
+    )
+
+    assert len(logger._container_cache) == _SESSION_SCOPED_PER_IDENTITY_CAP, (
+        "adding a new session beyond the cap must evict one entry so total stays bounded"
+    )
+    assert f"{identity}:session-0" not in logger._container_cache, (
+        "the entry with the oldest last_accessed timestamp must be evicted first (LRU)"
+    )
+    assert len(sandbox.delete_calls) == 1, "evicted sandbox must be deleted, not just removed from cache"

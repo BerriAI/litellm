@@ -1,205 +1,160 @@
 """
 Cost calculator for Dashscope Chat models.
 
-Handles tiered pricing and prompt caching scenarios.
+Alibaba Model Studio tiered pricing is all-or-nothing: the tier is picked from the
+total input tokens of a single request, and every token of that request (input,
+cached, cache-creation, output, reasoning) is billed at that one tier's rate.
+See https://help.aliyun.com/zh/model-studio/billing-for-model-studio
 """
 
-from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from dataclasses import dataclass, replace
+from datetime import datetime
+from typing import Final
 
+from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    apply_off_peak_pricing,
+    parse_completion_tokens_details,
+    parse_prompt_tokens_details,
+)
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class TokenBreakdown:
-    """Token breakdown for cost calculation."""
-
     text_tokens: int
     cached_tokens: int
+    cache_creation_tokens: int
     completion_tokens: int
     reasoning_tokens: int
 
+    @property
+    def total_input_tokens(self) -> int:
+        return self.text_tokens + self.cached_tokens + self.cache_creation_tokens
+
+
+@dataclass(frozen=True, slots=True)
+class TokenRates:
+    input_rate: float
+    cache_read_rate: float
+    cache_creation_rate: float
+    output_rate: float
+    reasoning_rate: float | None
+
+    @property
+    def billed_reasoning_rate(self) -> float:
+        return self.output_rate if self.reasoning_rate is None else self.reasoning_rate
+
 
 def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
-    """Extract token counts from usage, handling cached and reasoning tokens."""
-    cached_tokens = 0
-    if usage.prompt_tokens_details and hasattr(usage.prompt_tokens_details, "cached_tokens"):
-        cached_tokens = usage.prompt_tokens_details.cached_tokens or 0
+    prompt_details: Final = parse_prompt_tokens_details(usage)
+    cached_tokens: Final = prompt_details["cache_hit_tokens"]
+    cache_creation_tokens: Final = prompt_details["cache_creation_tokens"]
+    text_tokens: Final = max(usage.prompt_tokens - cached_tokens - cache_creation_tokens, 0)
 
-    text_tokens = usage.prompt_tokens - cached_tokens
+    reasoning_tokens: Final = parse_completion_tokens_details(usage)["reasoning_tokens"]
+    completion_tokens: Final = max((usage.completion_tokens or 0) - reasoning_tokens, 0)
 
-    reasoning_tokens = 0
-    if (
-        hasattr(usage, "completion_tokens_details")
-        and usage.completion_tokens_details
-        and hasattr(usage.completion_tokens_details, "reasoning_tokens")
-    ):
-        reasoning_tokens = usage.completion_tokens_details.reasoning_tokens or 0
-
-    completion_tokens = (usage.completion_tokens or 0) - reasoning_tokens
-
-    return TokenBreakdown(text_tokens, cached_tokens, completion_tokens, reasoning_tokens)
+    return TokenBreakdown(
+        text_tokens=text_tokens,
+        cached_tokens=cached_tokens,
+        cache_creation_tokens=cache_creation_tokens,
+        completion_tokens=completion_tokens,
+        reasoning_tokens=reasoning_tokens,
+    )
 
 
-def _calculate_tiered_cost(
-    tokens: int,
-    tiered_pricing: List[dict],
-    cost_key: str,
-    fallback_cost_key: Optional[str] = None,
-) -> float:
-    """
-    Calculate cost for a given number of tokens based on a true tiered pricing structure.
-
-    This function iterates through sorted pricing tiers, calculates the cost for the
-    number of tokens that fall into each tier's range, and sums them up to get the total cost.
-
-    Args:
-        tokens (int): The total number of tokens to calculate the cost for.
-        tiered_pricing (List[dict]): A list of dictionaries, where each dictionary
-            represents a pricing tier.
-        cost_key (str): The key in the tier dictionary that holds the per-token cost
-            (e.g., 'input_cost_per_token').
-        fallback_cost_key (Optional[str], optional): A fallback key to use if the
-            primary `cost_key` is not found in a tier. Defaults to None.
-
-    Returns:
-        float: The total calculated cost for the given tokens.
-
-    Example:
-        >>> tiered_pricing = [
-        ...     {"range": [0, 100000], "input_cost_per_token": 0.0001},
-        ...     {"range": [100000, 500000], "input_cost_per_token": 0.00005},
-        ... ]
-
-        Calculating cost for 150,000 tokens:
-        (100,000 * 0.0001) + (50,000 * 0.00005) = $12.5
-    """
-    if not tiered_pricing or tokens <= 0:
-        return 0.0
-
-    total_cost = 0.0
-    tokens_processed = 0
-
-    sorted_tiers = sorted(tiered_pricing, key=lambda x: x.get("range", [0, 0])[0])
-
-    for tier in sorted_tiers:
-        if tokens_processed >= tokens:
-            break
-
-        tier_range = tier.get("range", [])
-        if len(tier_range) != 2:
-            continue
-
-        range_start, range_end = tier_range
-
-        if tokens <= range_start:
-            continue
-
-        tier_start = max(range_start, tokens_processed)
-        tier_end = min(range_end, tokens)
-
-        if tier_end > tier_start:
-            tokens_in_tier = tier_end - tier_start
-            cost_per_token = tier.get(cost_key) or tier.get(fallback_cost_key, 0)
-            total_cost += tokens_in_tier * cost_per_token
-            tokens_processed = tier_end
-
-    # After loop, check if any tokens remain (i.e., tokens > highest tier's end range)
-    # and charge them at the last tier's rate.
-    if tokens_processed < tokens and sorted_tiers:
-        last_tier = sorted_tiers[-1]
-        remaining_tokens = tokens - tokens_processed
-        cost_per_token = last_tier.get(cost_key) or last_tier.get(fallback_cost_key, 0)
-        total_cost += remaining_tokens * cost_per_token
-
-    return total_cost
+def _flat_rate(model_info: ModelInfo, cost_key: str, fallback_cost_key: str) -> float:
+    value: Final = model_info.get(cost_key)
+    if value is None:
+        return float(model_info.get(fallback_cost_key) or 0.0)
+    return float(value)
 
 
-def _calculate_prompt_cost(
-    breakdown: TokenBreakdown,
-    model_info: ModelInfo,
-    tiered_pricing: Optional[List[dict]],
-) -> float:
-    """Calculate total prompt cost including cached tokens."""
-    if tiered_pricing:
-        text_cost = _calculate_tiered_cost(
-            tokens=breakdown.text_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="input_cost_per_token",
-        )
-        cache_cost = _calculate_tiered_cost(
-            tokens=breakdown.cached_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="cache_read_input_token_cost",
-            fallback_cost_key="input_cost_per_token",
-        )
-        return text_cost + cache_cost
-
-    input_cost = float(model_info.get("input_cost_per_token") or 0.0)
-
-    # For cache_cost, first try the specific key, then fall back to input_cost.
-    cache_cost_val = model_info.get("cache_read_input_token_cost")
-    if cache_cost_val is None:
-        cache_cost = input_cost
-    else:
-        cache_cost = float(cache_cost_val)
-
-    return (breakdown.text_tokens * input_cost) + (breakdown.cached_tokens * cache_cost)
+def _flat_rates(model_info: ModelInfo) -> TokenRates:
+    reasoning_rate: Final = model_info.get("output_cost_per_reasoning_token")
+    return TokenRates(
+        input_rate=float(model_info.get("input_cost_per_token") or 0.0),
+        cache_read_rate=_flat_rate(model_info, "cache_read_input_token_cost", "input_cost_per_token"),
+        cache_creation_rate=_flat_rate(model_info, "cache_creation_input_token_cost", "input_cost_per_token"),
+        output_rate=float(model_info.get("output_cost_per_token") or 0.0),
+        reasoning_rate=None if reasoning_rate is None else float(reasoning_rate),
+    )
 
 
-def _calculate_completion_cost(
-    breakdown: TokenBreakdown,
-    model_info: ModelInfo,
-    tiered_pricing: Optional[List[dict]],
-) -> float:
-    """Calculate total completion cost including reasoning tokens."""
-    if tiered_pricing:
-        completion_cost = _calculate_tiered_cost(
-            tokens=breakdown.completion_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="output_cost_per_token",
-        )
-        reasoning_cost = _calculate_tiered_cost(
-            tokens=breakdown.reasoning_tokens,
-            tiered_pricing=tiered_pricing,
-            cost_key="output_cost_per_reasoning_token",
-            fallback_cost_key="output_cost_per_token",
-        )
-        return completion_cost + reasoning_cost
-
-    output_cost = float(model_info.get("output_cost_per_token") or 0.0)
-
-    # For reasoning_cost, first try the specific key, then fall back to output_cost.
-    reasoning_cost_val = model_info.get("output_cost_per_reasoning_token")
-    if reasoning_cost_val is None:
-        reasoning_cost = output_cost
-    else:
-        reasoning_cost = float(reasoning_cost_val)
-
-    return (breakdown.completion_tokens * output_cost) + (breakdown.reasoning_tokens * reasoning_cost)
+def _tier_rates(model_info: ModelInfo, tier: dict) -> TokenRates:
+    # A tier that declares output rates keeps the request on them, all-or-nothing. A tier table
+    # spelling out only input rates would serve every completion for free, so there the model's
+    # own output rates stand in
+    flat_rates: Final = _flat_rates(model_info)
+    tier_declares_output: Final = "output_cost_per_token" in tier
+    tier_declares_reasoning: Final = "output_cost_per_reasoning_token" in tier
+    return TokenRates(
+        input_rate=tier_rate(tier, "input_cost_per_token"),
+        cache_read_rate=tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token"),
+        cache_creation_rate=tier_rate(tier, "cache_creation_input_token_cost", "input_cost_per_token"),
+        output_rate=tier_rate(tier, "output_cost_per_token") if tier_declares_output else flat_rates.output_rate,
+        reasoning_rate=(
+            tier_rate(tier, "output_cost_per_reasoning_token")
+            if tier_declares_reasoning
+            else None
+            if tier_declares_output
+            else flat_rates.reasoning_rate
+        ),
+    )
 
 
-def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
+def _off_peak_rates(model_info: ModelInfo, current_time: datetime | None, rates: TokenRates) -> TokenRates:
+    input_rate, output_rate, cache_read_rate = apply_off_peak_pricing(
+        model_info, current_time, rates.input_rate, rates.output_rate, rates.cache_read_rate
+    )
+    return replace(rates, input_rate=input_rate, output_rate=output_rate, cache_read_rate=cache_read_rate)
+
+
+def _bill(breakdown: TokenBreakdown, rates: TokenRates) -> tuple[float, float]:
+    prompt_cost: Final = (
+        (breakdown.text_tokens * rates.input_rate)
+        + (breakdown.cached_tokens * rates.cache_read_rate)
+        + (breakdown.cache_creation_tokens * rates.cache_creation_rate)
+    )
+    completion_cost: Final = (breakdown.completion_tokens * rates.output_rate) + (
+        breakdown.reasoning_tokens * rates.billed_reasoning_rate
+    )
+    return prompt_cost, completion_cost
+
+
+def cost_per_token(
+    model: str,
+    usage: Usage,
+    custom_llm_provider: str = "dashscope",
+    current_time: datetime | None = None,
+) -> tuple[float, float]:
     """
     Calculate cost per token for Dashscope models.
 
-    Supports both tiered and flat pricing with cached and reasoning tokens.
+    Supports both tiered and flat pricing with cached and reasoning tokens, and swaps in the
+    model's off_peak_pricing rates while one of its windows is open.
 
     Args:
         model: Model name without provider prefix
         usage: LiteLLM Usage block
+        custom_llm_provider: The provider id the request resolved to; dashscope or one of its brand aliases
+        current_time: The moment the request is billed at; defaults to now, UTC
 
     Returns:
         Tuple[float, float] - (prompt_cost_in_usd, completion_cost_in_usd)
     """
-    model_info = get_model_info(model=model, custom_llm_provider="dashscope")
-    breakdown = _extract_token_breakdown(usage)
-    tiered_pricing = model_info.get("tiered_pricing") if isinstance(model_info.get("tiered_pricing"), list) else None
-
-    prompt_cost = _calculate_prompt_cost(breakdown=breakdown, model_info=model_info, tiered_pricing=tiered_pricing)
-    completion_cost = _calculate_completion_cost(
-        breakdown=breakdown, model_info=model_info, tiered_pricing=tiered_pricing
+    model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    breakdown: Final = _extract_token_breakdown(usage)
+    raw_tiers: Final = model_info.get("tiered_pricing")
+    tiered_pricing: Final = raw_tiers if isinstance(raw_tiers, list) else None
+    tier: Final = (
+        select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=breakdown.total_input_tokens)
+        if tiered_pricing
+        else None
     )
+    standard_rates: Final = _flat_rates(model_info) if tier is None else _tier_rates(model_info, tier)
+    rates: Final = _off_peak_rates(model_info, current_time, standard_rates)
 
-    return prompt_cost, completion_cost
+    return _bill(breakdown, rates)

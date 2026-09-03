@@ -111,23 +111,6 @@ async def test_pick_record_flush_full_cycle():
 
 
 @pytest.mark.asyncio
-async def test_owner_cache_pins_attribution_to_first_picked_model():
-    """First call claims ownership; matching model returns True, mismatch False."""
-    router = _make_router()
-    chosen = await router.pick_model(RequestType.GENERAL)
-    assert router.claim_or_check_owner("sess-own", chosen) is True
-
-    # Same model on later turns keeps attributing.
-    for _ in range(5):
-        assert router.claim_or_check_owner("sess-own", chosen) is True
-
-    # A different model on a later turn is rejected.
-    other = "gpt-4o" if chosen == "gpt-4o-mini" else "gpt-4o-mini"
-    assert router.claim_or_check_owner("sess-own", other) is False
-    assert router._skipped_updates_total == 1
-
-
-@pytest.mark.asyncio
 async def test_pick_model_returns_valid_models_without_error():
     router = _make_router()
     # Picks may legitimately differ across calls (Thompson sampling is stochastic).

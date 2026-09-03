@@ -5,11 +5,6 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 // Define the props type
-interface UserSpendData {
-  spend: number; // Adjust the type accordingly based on your data
-  max_budget?: number | null; // Optional property with a default of null
-  // Add other properties if needed
-}
 interface ViewUserSpendProps {
   userSpend: number | null;
   userMaxBudget: number | null;
@@ -80,7 +75,6 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget,
         if (accessToken !== null) {
           const model_available = await modelAvailableCall(accessToken, userID, userRole);
           let available_model_names = model_available["data"].map((element: { id: string }) => element.id);
-          console.log("available_model_names:", available_model_names);
           setUserModels(available_model_names);
         }
       } catch (error) {
@@ -106,7 +100,6 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget,
 
   // check if "all-proxy-models" is in modelsToDisplay
   if (modelsToDisplay && modelsToDisplay.includes("all-proxy-models")) {
-    console.log("user models:", userModels);
     modelsToDisplay = userModels;
   } else if (modelsToDisplay && modelsToDisplay.includes("all-team-models")) {
     modelsToDisplay = selectedTeam.models;
@@ -118,27 +111,22 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget,
 
   const roundedSpend = spend !== undefined ? formatNumberWithCommas(spend, 4) : null;
 
-  console.log(`spend in view user spend: ${spend}`);
   return (
     <div className="flex items-center">
       <div className="flex justify-between gap-x-6">
         <div>
-          <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">Total Spend</p>
-          <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">
-            ${roundedSpend}
-          </p>
+          <p className="text-sm text-muted-foreground">Total Spend</p>
+          <p className="text-2xl font-semibold text-foreground">${roundedSpend}</p>
         </div>
         <div>
-          <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">Max Budget</p>
-          <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">
-            {displayMaxBudget}
-          </p>
+          <p className="text-sm text-muted-foreground">Max Budget</p>
+          <p className="text-2xl font-semibold text-foreground">{displayMaxBudget}</p>
         </div>
       </div>
       {/* <div className="ml-auto">
           <Accordion>
             <AccordionHeader><Text>Team Models</Text></AccordionHeader>
-            <AccordionBody className="absolute right-0 z-10 bg-white p-2 shadow-lg max-w-xs">
+            <AccordionBody className="absolute right-0 z-floating bg-card p-2 shadow-lg max-w-xs">
               <List>
                 {modelsToDisplay.map((model: string) => (
                   <ListItem key={model}>
