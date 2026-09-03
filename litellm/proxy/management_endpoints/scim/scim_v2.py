@@ -1123,7 +1123,6 @@ async def _create_user_if_not_exists(user_id: str, created_via: str = "scim_grou
             user_id=user_id,
             user_email=user_id,  # We don't have email from group membership
             user_alias=None,
-            teams=[],  # Teams will be added separately
             metadata={"created_via": created_via},
             auto_create_key=False,
             user_role=default_role,
@@ -1699,7 +1698,7 @@ async def create_user(
             user_id=user_id,
             user_email=user_data["user_email"],
             user_alias=user_data["user_alias"],
-            teams=user_data["teams"],
+            teams=user_data["teams"] or None,
             metadata=metadata,
             auto_create_key=False,
             user_role=resolved_role if admin_group is not None else default_role,
