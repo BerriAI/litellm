@@ -8,7 +8,7 @@ from typing import Final
 
 import pytest
 
-from .profiler import FunctionTraceEvent, PythonProfiler, profile_python
+from .profiler import FunctionTraceEvent, PythonProfiler, profile_python, profile_python_function_usage
 
 
 def _events_named(profiler: PythonProfiler, name: str) -> tuple[FunctionTraceEvent, ...]:
@@ -88,3 +88,21 @@ def test_profiler_captures_worker_threads_when_enabled() -> None:
 
     called_event: Final = _events_named(profiler, "called")[0]
     assert called_event.parent_id is None
+
+
+def test_function_usage_profiler_records_only_selected_functions() -> None:
+    def selected() -> None:
+        return None
+
+    def ignored() -> None:
+        return None
+
+    source_root: Final = Path(__file__).parent
+    function: Final = PythonProfiler(source_root).function_name(selected.__code__)
+    assert function is not None
+
+    with profile_python_function_usage(source_root, frozenset((function,))) as profiler:
+        selected()
+        ignored()
+
+    assert profiler.called == {function}

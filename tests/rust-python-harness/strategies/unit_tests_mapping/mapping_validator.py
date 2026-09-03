@@ -1,18 +1,158 @@
 from __future__ import annotations
 
-from collections import Counter
+import importlib
+from collections import Counter, defaultdict
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Final, TypeAlias
 
 from pydantic import BaseModel, ConfigDict
 
-from ...shared.unit_runners.python_runner import collect_python_tests
-from ...shared.unit_runners.rust_runner import RustTestIdentity, RustTestScope, enumerate_rust_tests
-from .contracts import UnitTestContract
+from ...shared.tracing.pytest_usage import (
+    PythonFunctionIdentity,
+    RustFunctionIdentity,
+    candidate_test_files,
+    collect_python_function_tests,
+)
+from ...shared.tracing.steps import pipeline_projection
+from ...shared.unit_runners.python_runner import collect_python_tests, contract_nodeid
+from ...shared.unit_runners.rust_runner import RustTarget, RustTestIdentity, RustTestScope, enumerate_rust_tests
+from .contracts import PythonFunctionDiscoverySpec, TestMapping, UnitTestContract
 
 PythonInventory: TypeAlias = Callable[[Sequence[str], Path], frozenset[str]]
 RustInventory: TypeAlias = Callable[[Path, tuple[RustTestScope, ...]], frozenset[RustTestIdentity]]
+
+
+def _trace_functions(
+    spec: PythonFunctionDiscoverySpec,
+) -> tuple[tuple[PythonFunctionIdentity, ...], tuple[RustFunctionIdentity, ...]]:
+    from ..trace_parity.models import RouteSpec, TraceExecutionFailure, TraceSuite
+    from ..trace_parity.sdk.execution import collect_trace
+
+    if spec.trace_module is None:
+        return ()
+    module: Final = importlib.import_module(spec.trace_module)
+    suite: Final = getattr(module, "TRACE_SUITE", None)
+    if not isinstance(suite, TraceSuite) or not isinstance(suite.route, RouteSpec):
+        raise ValueError(f"{spec.trace_module} must export an SDK TRACE_SUITE")
+    python_functions: Final[dict[str, PythonFunctionIdentity]] = {}
+    rust_functions: Final[dict[str, RustFunctionIdentity]] = {}
+    for scenario in suite.scenarios:
+        for mode in scenario.modes:
+            route: Final = RouteSpec(
+                route=suite.route.route,
+                python_entrypoints=suite.route.python_entrypoints,
+                rust_entrypoints=suite.route.rust_entrypoints,
+                fixture=scenario.fixture,
+            )
+            python_trace: Final = collect_trace(route, "python", asynchronous=mode == "async")
+            rust_trace: Final = collect_trace(route, "rust", asynchronous=mode == "async")
+            if isinstance(python_trace, TraceExecutionFailure):
+                raise ValueError(f"Python trace discovery failed for {scenario.name}/{mode}: {python_trace.message}")
+            if isinstance(rust_trace, TraceExecutionFailure):
+                raise ValueError(f"Rust trace discovery failed for {scenario.name}/{mode}: {rust_trace.message}")
+            mappings: Final = scenario.mappings_for(mode)
+            python_projection: Final = pipeline_projection("python", python_trace, mappings)
+            rust_projection: Final = pipeline_projection("rust", rust_trace, mappings)
+            for step in python_projection.steps:
+                if step.span in spec.trace_spans:
+                    function: Final = PythonFunctionIdentity.from_trace(step.raw)
+                    python_functions[function.raw] = function
+            for step in rust_projection.steps:
+                if step.span in spec.trace_spans:
+                    function: Final = RustFunctionIdentity.from_trace(step.raw)
+                    rust_functions[step.raw] = function
+    if not python_functions or not rust_functions:
+        raise ValueError(f"Python trace discovery found no functions for spans: {', '.join(spec.trace_spans)}")
+    return (
+        tuple(python_functions[key] for key in sorted(python_functions)),
+        tuple(rust_functions[key] for key in sorted(rust_functions)),
+    )
+
+
+def collect_python_function_inventory(
+    spec: PythonFunctionDiscoverySpec,
+    repo_root: Path,
+    traced_functions: Sequence[PythonFunctionIdentity] = (),
+) -> frozenset[str]:
+    source_root: Final = repo_root / "litellm"
+    functions: Final = (
+        tuple(reference.resolve(source_root) for reference in spec.functions)
+        if spec.functions
+        else tuple(traced_functions)
+    )
+    discovered: Final = candidate_test_files(
+        functions,
+        spec.search_roots,
+        repo_root,
+        exclude_roots=spec.exclude_roots,
+    )
+    selectors: Final = tuple(dict.fromkeys((*discovered, *spec.includes)))
+    if not selectors:
+        raise ValueError("Python function discovery found no candidate test files")
+    report: Final = collect_python_function_tests(
+        functions,
+        selectors,
+        repo_root,
+        source_root=source_root,
+        exclusions=spec.exclusions,
+    )
+    if report.exit_code or report.problems:
+        details: Final = "\n".join(report.problems) or f"pytest exited with code {report.exit_code}"
+        raise ValueError(f"Python function test discovery failed:\n{details}")
+    return frozenset(contract_nodeid(nodeid) for usage in report.usages for nodeid in usage.tests)
+
+
+def _colocated_rust_scope(mappings: Sequence[TestMapping]) -> tuple[RustTestScope, ...]:
+    modules_by_target: Final[dict[str, set[str]]] = defaultdict(set)
+    targets: Final[dict[str, RustTarget]] = {}
+    for item in mappings:
+        module, separator, _ = item.rust.name.partition("::tests::")
+        if not separator:
+            raise ValueError(f"Rust unit test is not colocated in a tests module: {item.rust.key}")
+        target_key: Final = item.rust.target.key
+        targets[target_key] = item.rust.target
+        modules_by_target[target_key].add(f"{module}::tests")
+    return tuple(
+        RustTestScope(
+            target=targets[target_key],
+            modules=tuple(sorted(modules_by_target[target_key])),
+        )
+        for target_key in sorted(targets)
+    )
+
+
+def _traced_rust_scope(
+    functions: Sequence[RustFunctionIdentity],
+    targets: Sequence[RustTarget],
+    repo_root: Path,
+) -> tuple[RustTestScope, ...]:
+    targets_by_name: Final = {target.name: target for target in targets}
+    modules_by_target: Final[dict[str, set[str]]] = defaultdict(set)
+    for function in functions:
+        crate: Final = function.module_path.partition("::")[0]
+        target: Final = targets_by_name.get(crate)
+        if target is None:
+            continue
+        source_candidates: Final = (
+            repo_root / "litellm-rust" / function.file,
+            repo_root / function.file,
+        )
+        source: Final = next((path for path in source_candidates if path.is_file()), None)
+        if source is None:
+            raise ValueError(f"Traced Rust source does not exist: {function.file}")
+        contents: Final = source.read_text()
+        if "mod tests" in contents and "#[cfg(test)]" in contents:
+            modules_by_target[target.key].add(function.test_module)
+    selected_targets: Final = {target.key: target for target in targets}
+    scopes: Final = tuple(
+        RustTestScope(target=selected_targets[key], modules=tuple(sorted(modules)))
+        for key, modules in sorted(modules_by_target.items())
+        if modules
+    )
+    if not scopes:
+        raise ValueError("Traced Rust functions have no colocated test modules")
+    return scopes
 
 
 class MappingReport(BaseModel):
@@ -52,11 +192,6 @@ class MappingReport(BaseModel):
         )
 
 
-def _selected(nodeid: str, selectors: Sequence[str]) -> bool:
-    source: Final = nodeid.partition("::")[0]
-    return any(source == selector or source.startswith(f"{selector.rstrip('/')}/") for selector in selectors)
-
-
 def audit_mapping(
     contract: UnitTestContract,
     repo_root: Path,
@@ -65,11 +200,22 @@ def audit_mapping(
     rust_inventory: RustInventory = enumerate_rust_tests,
 ) -> MappingReport:
     mapping: Final = contract.mapping
-    python_tests: Final = python_inventory(mapping.python_selectors, repo_root)
-    unit_parity_tests: Final = frozenset(
-        nodeid for nodeid in python_tests if _selected(nodeid, contract.unit_parity.python_selectors)
+    traced_python: tuple[PythonFunctionIdentity, ...] = ()
+    traced_rust: tuple[RustFunctionIdentity, ...] = ()
+    if mapping.python_functions is not None and mapping.python_functions.trace_module is not None:
+        traced_python, traced_rust = _trace_functions(mapping.python_functions)
+    python_tests: Final = (
+        collect_python_function_inventory(mapping.python_functions, repo_root, traced_python)
+        if mapping.python_functions is not None
+        else python_inventory(mapping.python_selectors, repo_root)
     )
-    rust_tests: Final = rust_inventory(repo_root, mapping.rust_scope)
+    unit_parity_tests: Final = python_inventory(contract.unit_parity.python_selectors, repo_root)
+    rust_scope: Final = mapping.rust_scope or (
+        _traced_rust_scope(traced_rust, mapping.rust_targets, repo_root)
+        if traced_rust
+        else _colocated_rust_scope(mapping.mappings)
+    )
+    rust_tests: Final = rust_inventory(repo_root, rust_scope)
     mapped_python: Final = frozenset(item.python for item in mapping.mappings)
     mapped_rust: Final = frozenset(item.rust for item in mapping.mappings)
     duplicate_python: Final = tuple(

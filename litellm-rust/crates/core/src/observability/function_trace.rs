@@ -16,6 +16,9 @@ pub struct FunctionTraceEvent {
     pub id: usize,
     pub parent_id: Option<usize>,
     pub function: &'static str,
+    pub module_path: Option<&'static str>,
+    pub file: Option<&'static str>,
+    pub line: Option<u32>,
 }
 
 #[derive(Clone, Default)]
@@ -73,6 +76,9 @@ where
             id: event_id,
             parent_id,
             function: attributes.metadata().name(),
+            module_path: attributes.metadata().module_path(),
+            file: attributes.metadata().file(),
+            line: attributes.metadata().line(),
         });
         self.trace
             .span_events
@@ -88,12 +94,21 @@ mod tests {
 
     use super::*;
 
-    fn event(id: usize, parent_id: Option<usize>, function: &'static str) -> FunctionTraceEvent {
-        FunctionTraceEvent {
-            id,
-            parent_id,
-            function,
-        }
+    fn event(
+        id: usize,
+        parent_id: Option<usize>,
+        function: &'static str,
+    ) -> (usize, Option<usize>, &'static str) {
+        (id, parent_id, function)
+    }
+
+    fn structural_events(
+        events: &[FunctionTraceEvent],
+    ) -> Vec<(usize, Option<usize>, &'static str)> {
+        events
+            .iter()
+            .map(|event| (event.id, event.parent_id, event.function))
+            .collect()
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
@@ -131,11 +146,17 @@ mod tests {
         .await;
 
         assert_eq!(
-            first.events(),
+            structural_events(&first.events()),
             vec![event(0, None, "outer"), event(1, Some(0), "inner")],
         );
-        assert_eq!(second.events(), vec![event(0, None, "inner")],);
-        assert_eq!(outside.events(), vec![event(0, None, "inner")],);
+        assert_eq!(
+            structural_events(&second.events()),
+            vec![event(0, None, "inner")],
+        );
+        assert_eq!(
+            structural_events(&outside.events()),
+            vec![event(0, None, "inner")],
+        );
     }
 
     #[tokio::test]
@@ -148,7 +169,7 @@ mod tests {
             .await;
 
         assert_eq!(
-            trace.events(),
+            structural_events(&trace.events()),
             vec![
                 event(0, None, "concurrent_parent"),
                 event(1, Some(0), "inner"),
@@ -170,7 +191,7 @@ mod tests {
         });
 
         assert_eq!(
-            trace.events(),
+            structural_events(&trace.events()),
             vec![event(0, None, "same_name"), event(1, None, "same_name")]
         );
     }
@@ -187,7 +208,7 @@ mod tests {
         });
 
         assert_eq!(
-            trace.events(),
+            structural_events(&trace.events()),
             vec![event(0, None, "outer"), event(1, Some(0), "inner")]
         );
     }

@@ -47,13 +47,13 @@ mod tests {
             .with_subscriber(trace.dispatcher())
             .await;
 
-        assert_eq!(
-            trace.events(),
-            vec![FunctionTraceEvent {
-                id: 0,
-                parent_id: None,
-                function: "instrumented_with_literal_target",
-            }],
-        );
+        let events = trace.events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].id, 0);
+        assert_eq!(events[0].parent_id, None);
+        assert_eq!(events[0].function, "instrumented_with_literal_target");
+        assert_eq!(events[0].module_path, Some(module_path!()));
+        assert_eq!(events[0].file, Some(file!()));
+        assert!(events[0].line.is_some());
     }
 }

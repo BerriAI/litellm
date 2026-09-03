@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Final
 
-from ....shared.unit_runners.rust_runner import RustTarget, RustTestIdentity, RustTestScope
+from ....shared.unit_runners.rust_runner import RustTarget, RustTestIdentity
 from ..contracts import (
     MappingSpec,
+    PythonFunctionDiscoverySpec,
     RustUnitSpec,
     TestMapping,
     UnitParityExclusionSpec,
@@ -28,31 +29,41 @@ def _rust_test(target: RustTarget, module: str, test: str) -> RustTestIdentity:
 
 OCR_CONTRACT: Final = UnitTestContract(
     mapping=MappingSpec(
-        python_selectors=(
-            "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
-            "tests/test_litellm/llms/mistral/ocr",
-            "tests/test_litellm/llms/ocr",
-            "tests/test_litellm/ocr",
-            "tests/test_litellm/proxy/ocr_endpoints",
-        ),
-        rust_scope=(
-            RustTestScope(
-                target=_CORE_TARGET,
-                modules=(
-                    _AZURE_OCR_TESTS,
-                    "providers::vertex_ai::ocr::transformation::tests",
-                    _MISTRAL_OCR_TESTS,
-                ),
+        python_functions=PythonFunctionDiscoverySpec(
+            trace_module="tests.rust-python-harness.strategies.trace_parity.sdk.ocr.case",
+            trace_spans=(
+                "ocr",
+                "prepare_ocr_call",
+                "ocr_provider_config",
+                "supported_ocr_params",
+                "map_ocr_params",
+                "validate_environment",
+                "complete_url",
+                "transform_ocr_request",
+                "execute_ocr_provider_call",
+                "transform_ocr_response",
+                "poll_document_intelligence",
             ),
-            RustTestScope(
-                target=_GATEWAY_TARGET,
-                modules=(
-                    "ocr::common_utils::tests",
-                    "ocr::tests",
-                    "integrations::custom_logger::tests",
-                ),
+            search_roots=("tests",),
+            exclude_roots=(
+                "tests/e2e",
+                "tests/ocr_tests/test_ocr_mistral.py",
+                "tests/rust-python-harness",
+            ),
+            includes=(
+                "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
+                "tests/test_litellm/llms/mistral/ocr",
+                "tests/test_litellm/llms/ocr",
+                "tests/test_litellm/ocr",
+                "tests/test_litellm/proxy/ocr_endpoints",
+            ),
+            exclusions=(
+                "tests/ocr_tests/test_ocr_azure_document_intelligence.py::TestAzureDocumentIntelligenceOCR",
+                "tests/ocr_tests/test_ocr_vertex_ai.py::TestVertexAIMistralOCR",
+                "tests/ocr_tests/test_ocr_vertex_ai.py::TestVertexAIDeepSeekOCR",
             ),
         ),
+        rust_targets=(_CORE_TARGET, _GATEWAY_TARGET),
         mappings=(
             TestMapping(
                 python="tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py::test_transform_ocr_response_preserves_azure_native_fields",

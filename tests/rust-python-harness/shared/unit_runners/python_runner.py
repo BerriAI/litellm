@@ -189,7 +189,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     return report.exit_code
 
 
-def _contract_nodeid(nodeid: str) -> str:
+def contract_nodeid(nodeid: str) -> str:
     owner, separator, test = nodeid.rpartition("::")
     function: Final = test.partition("[")[0]
     if not separator or not function.startswith("test_"):
@@ -208,7 +208,7 @@ def collect_python_tests(selectors: Sequence[str], repo_root: Path) -> frozenset
     if report.exit_code or report.problems:
         details: Final = "\n".join(report.problems) or f"pytest exited with code {report.exit_code}"
         raise ValueError(f"Python test collection failed:\n{details}")
-    tests: Final = frozenset(_contract_nodeid(nodeid) for nodeid in report.tests)
+    tests: Final = frozenset(contract_nodeid(nodeid) for nodeid in report.tests)
     if not tests:
         raise ValueError(f"pytest collected no tests for: {', '.join(selectors)}")
     return tests

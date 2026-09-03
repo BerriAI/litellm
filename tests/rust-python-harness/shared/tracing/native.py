@@ -12,6 +12,9 @@ class _TraceEventPayload(BaseModel):
     id: int
     parent_id: int | None
     function: str
+    module_path: str | None = None
+    file: str | None = None
+    line: int | None = None
 
 
 class TraceResponsePayload(BaseModel):
@@ -22,4 +25,14 @@ class TraceResponsePayload(BaseModel):
 
 def native_trace_events(payload: object) -> tuple[FunctionTraceEvent, ...]:
     response: Final = TraceResponsePayload.model_validate(payload)
-    return tuple(FunctionTraceEvent(event.id, event.parent_id, event.function) for event in response.trace)
+    return tuple(
+        FunctionTraceEvent(
+            event.id,
+            event.parent_id,
+            event.function,
+            event.module_path,
+            event.file,
+            event.line,
+        )
+        for event in response.trace
+    )

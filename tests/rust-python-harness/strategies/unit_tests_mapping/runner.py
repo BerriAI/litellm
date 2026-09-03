@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
+from ...shared.native_build import ensure_trace_bridge
 from ...shared.reporting.models import ResultArtifact
 from ...shared.unit_runners.python_runner import collect_python_tests
 from ...shared.unit_runners.rust_runner import enumerate_rust_tests
@@ -34,6 +35,10 @@ def run_suite(
     python_inventory: PythonInventory = collect_python_tests,
     rust_inventory: RustInventory = enumerate_rust_tests,
 ) -> SuiteExecution:
+    if contract.mapping.python_functions is not None and contract.mapping.python_functions.trace_module is not None:
+        bridge_error: Final = ensure_trace_bridge(repo_root)
+        if bridge_error is not None:
+            return SuiteExecution(problems=(bridge_error,))
     artifact: Final = MappingReportArtifact(
         report=audit_mapping(
             contract,

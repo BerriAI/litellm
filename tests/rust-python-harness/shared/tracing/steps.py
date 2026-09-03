@@ -95,7 +95,7 @@ def pipeline_projection(
         parent_id: int | None = event.parent_id
         while parent_id is not None and parent_id not in projected_ids:
             parent_id = raw_parents[parent_id]
-        shown.append(PipelineStep(event.id, parent_id, span, event.function))
+        shown.append(PipelineStep(event.id, parent_id, span, event.raw))
         projected_ids.add(event.id)
     return PipelineProjection(tuple(shown), unmatched)
 
