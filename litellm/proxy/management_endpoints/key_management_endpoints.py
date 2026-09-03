@@ -2770,13 +2770,8 @@ async def _validate_update_key_data(
         # one in the key's metadata still applies (it is added on top of
         # max_budget at request time by _update_key_budget_with_temp_budget_increase).
         _effective_temp_increase: float | None = data.temp_budget_increase
-        if (
-            _effective_temp_increase is None
-            and existing_key_row.metadata is not None
-        ):
-            _persisted_increase: Final = existing_key_row.metadata.get(
-                "temp_budget_increase"
-            )
+        if _effective_temp_increase is None and existing_key_row.metadata is not None:
+            _persisted_increase: Final = existing_key_row.metadata.get("temp_budget_increase")
             if _persisted_increase is not None:
                 try:
                     _persisted_expiry: Final = datetime.fromisoformat(
@@ -2792,10 +2787,7 @@ async def _validate_update_key_data(
                 raise HTTPException(
                     status_code=400,
                     detail={
-                        "error": (
-                            f"temp_budget_increase must be a finite number. "
-                            f"Received: {_effective_temp_increase}"
-                        )
+                        "error": (f"temp_budget_increase must be a finite number. Received: {_effective_temp_increase}")
                     },
                 )
             # temp_budget_increase is applied on top of the key's max_budget at
