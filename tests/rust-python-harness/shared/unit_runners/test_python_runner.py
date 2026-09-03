@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Final
 
-from .python_runner import BackendSpec, compare_python_runs, run_python_tests
+from .python_runner import BackendSpec, collect_python_tests, compare_python_runs, run_python_tests
 
 
 def _suite(root: Path, *, mismatch: bool = False) -> BackendSpec:
@@ -69,3 +69,20 @@ def test_reports_worker_output_when_pytest_exits_before_collection(tmp_path: Pat
     assert report.exit_code != 0
     assert report.problems
     assert "missing.py" in report.problems[0]
+
+
+def test_collects_tests_with_pytest_semantics_and_collapses_parameters(tmp_path: Path) -> None:
+    (tmp_path / "pytest.ini").write_text("[pytest]\n")
+    (tmp_path / "test_inventory.py").write_text(
+        "import pytest\n"
+        "class Helper:\n"
+        "    def test_not_collected(self): pass\n"
+        "class TestCollected:\n"
+        "    @pytest.mark.parametrize('value', [1, 2])\n"
+        "    def test_parameterized(self, value): pass\n",
+        encoding="utf-8",
+    )
+
+    tests: Final = collect_python_tests(("test_inventory.py",), tmp_path)
+
+    assert tests == frozenset(("test_inventory.py::TestCollected::test_parameterized",))

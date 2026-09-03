@@ -32,13 +32,25 @@ pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
     let optional_params = match &config {
         Ok(config) => {
             let supported = config.supported_ocr_params();
-            config.map_ocr_params(
+            let mut mapped = config.map_ocr_params(
                 &request
                     .optional_params
-                    .into_iter()
+                    .iter()
                     .filter(|(name, _)| supported.contains(&name.as_str()))
+                    .map(|(name, value)| (name.clone(), value.clone()))
                     .collect(),
-            )
+            );
+            for name in [
+                "vertex_project",
+                "vertex_ai_project",
+                "vertex_location",
+                "vertex_ai_location",
+            ] {
+                if let Some(value) = request.optional_params.get(name) {
+                    mapped.insert(name.to_string(), value.clone());
+                }
+            }
+            mapped
         }
         Err(_) => request.optional_params,
     };

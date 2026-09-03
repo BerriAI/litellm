@@ -1,9 +1,7 @@
-#[cfg(any(feature = "trace-parity", test))]
-mod constants;
 mod diagnostics;
 mod errors;
 mod execution;
-#[cfg(any(feature = "trace-parity", test))]
+#[cfg(feature = "trace-parity")]
 mod function_trace;
 mod marshal;
 mod routes;
@@ -150,6 +148,7 @@ mod tests {
                         "amessages",
                         "chat_completions",
                         "achat_completions",
+                        "gateway_messages",
                     ]
                 );
             }

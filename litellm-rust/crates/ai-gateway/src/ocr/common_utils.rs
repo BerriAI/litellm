@@ -334,6 +334,7 @@ fn operation_status(response_json: &Value) -> Result<&str, Error> {
     }
 }
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) async fn poll_document_intelligence(
     operation_url: &str,
     original_url: &str,

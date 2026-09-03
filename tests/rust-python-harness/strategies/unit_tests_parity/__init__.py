@@ -23,7 +23,7 @@ from .runner import UnitParityExclusion, UnitParitySuite, run_suite
 UNIT_PARITY_SUITES: Final[Mapping[SdkFunction, UnitParitySuite]] = MappingProxyType(
     {
         sdk_function: UnitParitySuite(
-            python_selectors=suite.unit_parity_scope,
+            python_selectors=suite.unit_parity_selectors,
             exclusions=tuple(
                 UnitParityExclusion(
                     nodeid=exclusion.nodeid,

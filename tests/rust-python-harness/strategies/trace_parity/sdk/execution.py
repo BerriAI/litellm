@@ -11,7 +11,7 @@ from ....shared.parity.replay import replay_server
 from ....shared.reporting.models import SdkFunction, Surface
 from ....shared.tracing.native import native_trace_events
 from ....shared.tracing.profiler import FunctionTraceEvent, profile_python
-from ....shared.tracing.steps import Engine, Step, pipeline_issues, pipeline_steps
+from ....shared.tracing.steps import Engine, TraceContract, TraceMapping, pipeline_projection
 from ..reporting import TraceComparisonArtifact
 
 TraceMode = Literal["sync", "async"]
@@ -25,7 +25,7 @@ class SdkCall(Protocol):
 @dataclass(frozen=True, slots=True)
 class RouteFixture:
     kwargs: dict[str, object]
-    provider_response: RecordedHttpResponse
+    provider_responses: tuple[RecordedHttpResponse, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,17 +33,28 @@ class RouteSpec:
     route: SdkFunction
     python_entrypoints: tuple[str, str]
     rust_entrypoints: tuple[str, str]
-    fixture: Callable[[Engine], RouteFixture]
+    fixture: Callable[[Engine, str], RouteFixture]
 
 
 @dataclass(frozen=True, slots=True)
-class TraceCase:
-    route: RouteSpec
-    steps: tuple[Step, ...]
-    edges: tuple[tuple[str, str], ...]
+class TraceScenario:
+    name: str
+    fixture: Callable[[Engine, str], RouteFixture]
+    mappings: tuple[TraceMapping, ...]
     modes: tuple[TraceMode, ...] = ("sync", "async")
-    matching_steps: bool = True
-    exact: bool = False
+    contract: TraceContract = TraceContract()
+    sync_mappings: tuple[TraceMapping, ...] | None = None
+    async_mappings: tuple[TraceMapping, ...] | None = None
+
+    def mappings_for(self, mode: TraceMode) -> tuple[TraceMapping, ...]:
+        selected: Final = self.async_mappings if mode == "async" else self.sync_mappings
+        return self.mappings if selected is None else selected
+
+
+@dataclass(frozen=True, slots=True)
+class TraceSuite:
+    route: object
+    scenarios: tuple[TraceScenario, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,9 +112,10 @@ def collect_trace(
     if isinstance(function, TraceExecutionFailure):
         return function
     try:
-        fixture: Final = spec.fixture(engine)
         with replay_server() as provider:
-            provider.enqueue_response(fixture.provider_response)
+            fixture: Final = spec.fixture(engine, provider.url)
+            for response in fixture.provider_responses:
+                provider.enqueue_response(response)
             kwargs: Final = {
                 **fixture.kwargs,
                 "api_key": "test-key",
@@ -111,7 +123,7 @@ def collect_trace(
                 **({"timeout_seconds": 5} if engine == "rust" else {"timeout": 5}),
             }
             events: Final = _collect(function, kwargs, engine, asynchronous=asynchronous)
-            provider.take_requests(1)
+            provider.take_requests(len(fixture.provider_responses))
     except Exception as error:
         return TraceExecutionFailure(engine, f"{type(error).__name__}: {error}")
     if not events:
@@ -125,26 +137,49 @@ def _failure_message(result: tuple[FunctionTraceEvent, ...] | TraceExecutionFail
     return f"{result.engine}: {result.message}"
 
 
-def execute_trace(case: TraceCase, mode: TraceMode, surface: Surface) -> TraceComparisonArtifact:
+def execute_trace(
+    route: RouteSpec, scenario: TraceScenario, mode: TraceMode, surface: Surface
+) -> TraceComparisonArtifact:
     asynchronous: Final = mode == "async"
-    python_trace: Final = collect_trace(case.route, "python", asynchronous=asynchronous)
-    rust_trace: Final = collect_trace(case.route, "rust", asynchronous=asynchronous)
+    mappings: Final = scenario.mappings_for(mode)
+    scenario_route: Final = RouteSpec(
+        route=route.route,
+        python_entrypoints=route.python_entrypoints,
+        rust_entrypoints=route.rust_entrypoints,
+        fixture=scenario.fixture,
+    )
+    python_trace: Final = collect_trace(scenario_route, "python", asynchronous=asynchronous)
+    rust_trace: Final = collect_trace(scenario_route, "rust", asynchronous=asynchronous)
     python_error: Final = _failure_message(python_trace)
     rust_error: Final = _failure_message(rust_trace)
     python_events: Final = python_trace if isinstance(python_trace, tuple) else ()
     rust_events: Final = rust_trace if isinstance(rust_trace, tuple) else ()
-    python: Final = pipeline_steps("python", python_events, case.steps)
-    rust: Final = pipeline_steps("rust", rust_events, case.steps)
+    try:
+        python: Final = pipeline_projection("python", python_events, mappings)
+        rust: Final = pipeline_projection("rust", rust_events, mappings)
+    except ValueError as error:
+        return TraceComparisonArtifact.from_traces(
+            surface=surface,
+            sdk_function=route.route,
+            scenario=scenario.name,
+            mode=mode,
+            mappings=mappings,
+            contract=scenario.contract,
+            python=(),
+            rust=(),
+            python_unmatched=0,
+            python_error=f"harness: {error}",
+        )
     return TraceComparisonArtifact.from_traces(
         surface=surface,
-        sdk_function=case.route.route,
+        sdk_function=route.route,
+        scenario=scenario.name,
         mode=mode,
-        python=python,
-        rust=rust,
-        python_issues=() if python_error else pipeline_issues("python", python, case.steps, case.edges),
-        rust_issues=() if rust_error else pipeline_issues("rust", rust, case.steps, case.edges),
-        requires_matching_steps=case.matching_steps,
-        requires_exact_trace=case.exact,
+        mappings=mappings,
+        contract=scenario.contract,
+        python=python.steps,
+        rust=rust.steps,
+        python_unmatched=python.unmatched,
         python_error=python_error,
         rust_error=rust_error,
     )

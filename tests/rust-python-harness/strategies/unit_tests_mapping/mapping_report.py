@@ -12,6 +12,7 @@ def mapping_report_lines(report: MappingReport) -> tuple[str, ...]:
         *(f"mapped python test does not exist: {nodeid}" for nodeid in report.missing_python_tests),
         *(f"mapped rust test does not exist: {nodeid}" for nodeid in report.missing_rust_tests),
         *(f"python test has multiple mappings: {nodeid}" for nodeid in report.duplicate_python_mappings),
+        *(f"rust test has multiple mappings: {nodeid}" for nodeid in report.duplicate_rust_mappings),
         *(f"unit parity exclusion does not exist: {nodeid}" for nodeid in report.invalid_unit_parity_exclusions),
         *(("mapping contract is valid",) if report.is_valid else ()),
     )

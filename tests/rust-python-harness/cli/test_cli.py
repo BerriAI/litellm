@@ -402,13 +402,13 @@ def test_run_all_selects_every_declared_case_once(monkeypatch: pytest.MonkeyPatc
 def test_run_reports_not_implemented_surface_as_not_run(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    exit_code: Final = main(["run", "trace_parity", "--surface", "gateway"])
+    exit_code: Final = main(["run", "trace_parity", "--surface", "gateway", "--function", "ocr"])
     captured: Final = capsys.readouterr()
 
     assert exit_code == 0
     assert "Result: NOT RUN" in captured.out
-    assert "Coverage: 0/6 cases implemented" in captured.out
-    assert "Cases: 6 selected, 6 not implemented, 0 skipped" in captured.out
+    assert "Coverage: 0/1 cases implemented" in captured.out
+    assert "Cases: 1 selected, 1 not implemented, 0 skipped" in captured.out
     assert "Not implemented" in captured.out
     assert "No gateway OCR trace-parity case is registered." in captured.out
 

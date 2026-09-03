@@ -212,6 +212,7 @@ impl OcrProviderConfig for VertexAiOcrConfig {
         MISTRAL_OCR_CONFIG.supported_ocr_params()
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_ocr_request(
         &self,
         model: &str,
@@ -229,6 +230,7 @@ impl OcrProviderConfig for VertexAiOcrConfig {
         MISTRAL_OCR_CONFIG.transform_ocr_response(model, response_json)
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn complete_url(
         &self,
         api_base: Option<&str>,
@@ -253,10 +255,21 @@ impl OcrProviderConfig for VertexAiOcrConfig {
 }
 
 impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn supported_ocr_params(&self) -> &'static [&'static str] {
         DEEPSEEK_SUPPORTED_OCR_PARAMS
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+    fn map_ocr_params(&self, non_default_params: &Map<String, Value>) -> Map<String, Value> {
+        non_default_params
+            .iter()
+            .filter(|(name, _)| DEEPSEEK_SUPPORTED_OCR_PARAMS.contains(&name.as_str()))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect()
+    }
+
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_ocr_request(
         &self,
         model: &str,
@@ -283,6 +296,7 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
         })
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_ocr_response(
         &self,
         model: &str,
@@ -338,6 +352,7 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
         })
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn complete_url(
         &self,
         api_base: Option<&str>,

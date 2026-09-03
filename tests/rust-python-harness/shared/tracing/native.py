@@ -9,8 +9,9 @@ from .profiler import FunctionTraceEvent
 
 class _TraceEventPayload(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
+    id: int
+    parent_id: int | None
     function: str
-    depth: int
 
 
 class TraceResponsePayload(BaseModel):
@@ -21,4 +22,4 @@ class TraceResponsePayload(BaseModel):
 
 def native_trace_events(payload: object) -> tuple[FunctionTraceEvent, ...]:
     response: Final = TraceResponsePayload.model_validate(payload)
-    return tuple(FunctionTraceEvent(event.function, event.depth) for event in response.trace)
+    return tuple(FunctionTraceEvent(event.id, event.parent_id, event.function) for event in response.trace)

@@ -5,10 +5,12 @@ from pathlib import Path
 from time import monotonic
 from typing import Final
 
+from ...shared.unit_runners.python_runner import collect_python_tests
+from ...shared.unit_runners.rust_runner import enumerate_rust_tests
 from ...shared.reporting.models import HarnessCase, HarnessRun, ResultArtifact, RunStatus, SdkFunction
 from ...shared.reporting.strategy import SuiteCaseSpec, UpdateCallback
 from .mapping_report import mapping_report_lines
-from .mapping_validator import MappingReport, MappingSuite, audit_mapping
+from .mapping_validator import MappingReport, MappingSuite, PythonInventory, RustInventory, audit_mapping
 from .mappings import MAPPING_SUITES
 
 MAPPING_REPORT_ARTIFACT: Final = "mapping_report"
@@ -19,6 +21,7 @@ def _audit_problems(report: MappingReport) -> tuple[str, ...]:
         *(f"mapped Python test does not exist: {nodeid}" for nodeid in report.missing_python_tests),
         *(f"mapped Rust test does not exist: {nodeid}" for nodeid in report.missing_rust_tests),
         *(f"Python test has multiple mappings: {nodeid}" for nodeid in report.duplicate_python_mappings),
+        *(f"Rust test has multiple mappings: {nodeid}" for nodeid in report.duplicate_rust_mappings),
         *(f"unit parity exclusion does not exist: {nodeid}" for nodeid in report.invalid_unit_parity_exclusions),
     )
 
@@ -34,6 +37,8 @@ def _run_mapping_case(
     report: HarnessRun,
     on_update: UpdateCallback,
     suites: Mapping[SdkFunction, MappingSuite],
+    python_inventory: PythonInventory,
+    rust_inventory: RustInventory,
 ) -> None:
     result: Final = report.results[case.key]
     spec: Final = case.spec
@@ -49,7 +54,12 @@ def _run_mapping_case(
         report.failures.append((nodeid, f"no mapping suite registered for {case.sdk_function}"))
         return
     try:
-        audit: Final = audit_mapping(suite, repo_root)
+        audit: Final = audit_mapping(
+            suite,
+            repo_root,
+            python_inventory=python_inventory,
+            rust_inventory=rust_inventory,
+        )
     except (OSError, ValueError) as error:
         result.record(nodeid, RunStatus.ERROR)
         report.failures.append((nodeid, str(error)))
@@ -68,11 +78,13 @@ def run_mapping_cases(
     runner_args: Sequence[str] = (),
     *,
     suites: Mapping[SdkFunction, MappingSuite] = MAPPING_SUITES,
+    python_inventory: PythonInventory = collect_python_tests,
+    rust_inventory: RustInventory = enumerate_rust_tests,
 ) -> tuple[int, HarnessRun]:
     del runner_args
     report: Final = HarnessRun.from_cases(cases)
     for case in cases:
-        _run_mapping_case(case, repo_root, report, on_update, suites)
+        _run_mapping_case(case, repo_root, report, on_update, suites, python_inventory, rust_inventory)
     report.finished_at = monotonic()
     on_update(report)
     failed: Final = any(

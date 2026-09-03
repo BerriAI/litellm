@@ -6,6 +6,7 @@ from ...shared.reporting.strategy import (
     CaseDefinition,
     ModuleCaseSpec,
     NotImplementedCaseSpec,
+    RunnerArgumentDefinition,
     StrategyDefinition,
 )
 from .reporting import render_trace_results
@@ -16,7 +17,7 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
         "ocr",
         ModuleCaseSpec(
             coverage=Coverage.PARTIAL,
-            module="tests.rust-python-harness.strategies.trace_parity.sdk.ocr.test_trace_parity",
+            module="tests.rust-python-harness.strategies.trace_parity.sdk.ocr.case",
         ),
         surface="sdk",
     ),
@@ -24,7 +25,7 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
         "messages",
         ModuleCaseSpec(
             coverage=Coverage.PARTIAL,
-            module="tests.rust-python-harness.strategies.trace_parity.sdk.messages.test_trace_parity",
+            module="tests.rust-python-harness.strategies.trace_parity.sdk.messages.case",
             note="Async only until anthropic_messages_handler supports sync calls.",
         ),
         surface="sdk",
@@ -43,7 +44,7 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
         "chat_completions",
         ModuleCaseSpec(
             coverage=Coverage.PARTIAL,
-            module="tests.rust-python-harness.strategies.trace_parity.sdk.chat_completions.test_trace_parity",
+            module="tests.rust-python-harness.strategies.trace_parity.sdk.chat_completions.case",
         ),
         surface="sdk",
     ),
@@ -51,7 +52,7 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
         "transcription",
         ModuleCaseSpec(
             coverage=Coverage.PARTIAL,
-            module="tests.rust-python-harness.strategies.trace_parity.sdk.transcription.test_trace_parity",
+            module="tests.rust-python-harness.strategies.trace_parity.sdk.transcription.case",
             note=(
                 "The Python SDK delegates this provider to the Rust pipeline, so only dispatch is visible "
                 "to the Python profiler."
@@ -66,7 +67,11 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
     ),
     CaseDefinition(
         "messages",
-        NotImplementedCaseSpec(reason="No gateway Messages trace-parity case is registered."),
+        ModuleCaseSpec(
+            coverage=Coverage.PARTIAL,
+            module="tests.rust-python-harness.strategies.trace_parity.gateway.messages.case",
+            note="Non-streaming success paths only.",
+        ),
         surface="gateway",
     ),
     CaseDefinition(
@@ -95,11 +100,16 @@ STRATEGY: Final = StrategyDefinition(
     id="trace_parity",
     order=20,
     label="Trace parity",
-    description="Compare mapped operations, call counts, and required execution ordering.",
+    description="Compare pipeline steps, order, and nesting between Python profiler frames and Rust spans via an explicit mapping.",
     directory=Path(__file__).parent,
     runnable_spec=ModuleCaseSpec,
     cases=CASES,
     run=run_trace_cases,
     render=render_trace_results,
     surfaces=SURFACES,
+    runner_argument=RunnerArgumentDefinition(
+        option="--scenario",
+        metavar="NAME",
+        help="run only this named trace scenario; repeat to select more than one",
+    ),
 )

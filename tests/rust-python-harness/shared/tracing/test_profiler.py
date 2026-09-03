@@ -37,8 +37,7 @@ def test_profiler_records_real_frame_ancestry() -> None:
         outer()
 
     outer_event, called_event = (event for event in profiler.events if event.function.endswith(("outer", "called")))
-    assert called_event.ancestors is not None
-    assert outer_event.function in called_event.ancestors
+    assert called_event.parent_id == outer_event.id
 
 
 def test_profiler_restores_previous_profiler_after_failure() -> None:
@@ -62,6 +61,22 @@ def test_profiler_does_not_count_coroutine_resumption_as_another_call() -> None:
     assert len(_events_named(profiler, "suspended")) == 1
 
 
+def test_profiler_preserves_parent_across_coroutine_suspension() -> None:
+    def called() -> None:
+        return None
+
+    async def suspended() -> None:
+        await asyncio.sleep(0)
+        called()
+
+    with profile_python(Path(__file__).parent) as profiler:
+        asyncio.run(suspended())
+
+    suspended_event: Final = _events_named(profiler, "suspended")[0]
+    called_event: Final = _events_named(profiler, "called")[0]
+    assert called_event.parent_id == suspended_event.id
+
+
 def test_profiler_captures_worker_threads_when_enabled() -> None:
     def called() -> None:
         return None
@@ -71,4 +86,5 @@ def test_profiler_captures_worker_threads_when_enabled() -> None:
         thread.start()
         thread.join()
 
-    assert len(_events_named(profiler, "called")) == 1
+    called_event: Final = _events_named(profiler, "called")[0]
+    assert called_event.parent_id is None

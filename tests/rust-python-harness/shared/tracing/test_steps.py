@@ -5,105 +5,153 @@ from typing import Final
 import pytest
 
 from .profiler import FunctionTraceEvent
-from .steps import pipeline_issues, pipeline_steps, step, trace_diff
+from .steps import TraceContract, mapping, pipeline_projection, trace_depths, trace_diff
 
-STEPS: Final = (
-    step("route", r"entry$", "route"),
-    step("provider", r"provider$", "provider"),
-    step("request", r"request$", "request"),
-    step("http", r"post$", "http"),
-    step("response", r"response$", "response"),
+MAPPINGS: Final = (
+    mapping(rust_span="route", python_frame=r"entry$"),
+    mapping(rust_span="provider", python_frame=r"provider$"),
+    mapping(rust_span="request", python_frame=r"request$"),
+    mapping(rust_span="http", python_frame=r"post$"),
+    mapping(rust_span="response", python_frame=r"response$"),
 )
-EDGES: Final = (("route", "provider"), ("provider", "request"), ("request", "http"), ("http", "response"))
 
 
-def test_python_projection_keeps_pipeline_and_drops_noise() -> None:
+def event(event_id: int, function: str, parent_id: int | None = None) -> FunctionTraceEvent:
+    return FunctionTraceEvent(event_id, parent_id, function)
+
+
+def test_python_projection_collapses_unmapped_parents_and_counts_noise() -> None:
     events: Final = (
-        FunctionTraceEvent("noise", 0),
-        FunctionTraceEvent("module.py:1 entry", 1),
-        FunctionTraceEvent("module.py:2 provider", 2),
-        FunctionTraceEvent("module.py:3 request", 2),
-        FunctionTraceEvent("client.py:4 post", 3),
-        FunctionTraceEvent("module.py:5 response", 2),
+        event(0, "module.py:1 entry"),
+        event(1, "noise", 0),
+        event(2, "module.py:2 provider", 1),
+        event(3, "module.py:3 request", 0),
+        event(4, "client.py:4 post", 3),
+        event(5, "module.py:5 response", 0),
     )
-    assert pipeline_steps("python", events, STEPS) == (
-        FunctionTraceEvent("route", 0),
-        FunctionTraceEvent("provider", 1),
-        FunctionTraceEvent("request", 1),
-        FunctionTraceEvent("http", 2),
-        FunctionTraceEvent("response", 1),
-    )
+    projection: Final = pipeline_projection("python", events, MAPPINGS)
+    assert projection.unmatched == 1
+    assert [(step.id, step.parent_id, step.span, step.raw) for step in projection.steps] == [
+        (0, None, "route", "module.py:1 entry"),
+        (2, 0, "provider", "module.py:2 provider"),
+        (3, 0, "request", "module.py:3 request"),
+        (4, 3, "http", "client.py:4 post"),
+        (5, 0, "response", "module.py:5 response"),
+    ]
 
 
 def test_rust_projection_keeps_unknown_spans() -> None:
-    events: Final = (FunctionTraceEvent("route", 0), FunctionTraceEvent("new_span", 1))
-    assert pipeline_steps("rust", events, STEPS) == events
+    projection: Final = pipeline_projection("rust", (event(0, "route"), event(1, "new_span", 0)), MAPPINGS)
+    assert [(step.span, step.parent_id) for step in projection.steps] == [("route", None), ("new_span", 0)]
 
 
-def test_projection_keeps_only_first_occurrence() -> None:
-    events: Final = (FunctionTraceEvent("route", 0), FunctionTraceEvent("route", 0))
-    assert pipeline_steps("rust", events, STEPS) == (FunctionTraceEvent("route", 0),)
-
-
-def test_projection_resets_depth_on_thread_root() -> None:
-    events: Final = (FunctionTraceEvent("route", 1), FunctionTraceEvent("request", 0))
-    assert pipeline_steps("rust", events, STEPS) == (
-        FunctionTraceEvent("route", 0),
-        FunctionTraceEvent("request", 0),
+def test_projection_preserves_repeated_occurrences() -> None:
+    projection: Final = pipeline_projection(
+        "rust",
+        (event(0, "route"), event(1, "http", 0), event(2, "http", 0)),
+        MAPPINGS,
     )
+    assert [step.span for step in projection.steps] == ["route", "http", "http"]
 
 
-def test_projection_uses_actual_ancestors_after_coroutine_resumption() -> None:
-    events: Final = (
-        FunctionTraceEvent("module.py:1 entry", 0, ()),
-        FunctionTraceEvent("module.py:2 provider", 1, ("module.py:1 entry",)),
-        FunctionTraceEvent("module.py:3 response", 1, ("module.py:2 provider",)),
+def test_projection_preserves_multiple_roots() -> None:
+    projection: Final = pipeline_projection("rust", (event(0, "route"), event(1, "request")), MAPPINGS)
+    assert trace_depths(projection.steps) == {0: 0, 1: 0}
+
+
+def test_projection_rejects_duplicate_and_unknown_parent_ids() -> None:
+    with pytest.raises(ValueError, match="duplicate trace event id"):
+        pipeline_projection("rust", (event(0, "route"), event(0, "request")), MAPPINGS)
+    with pytest.raises(ValueError, match="unknown or later parent"):
+        pipeline_projection("rust", (event(1, "request", 0),), MAPPINGS)
+
+
+@pytest.mark.parametrize("engine", ("python", "rust"))
+def test_rust_only_mappings_do_not_swallow_python_frames(engine: str) -> None:
+    projection: Final = pipeline_projection(
+        engine,  # type: ignore[arg-type]
+        (event(0, "anything"),),
+        (mapping(rust_span="rust_only_span"),),
     )
-    assert pipeline_steps("python", events, STEPS)[-1] == FunctionTraceEvent("response", 2)
+    if engine == "python":
+        assert projection.unmatched == 1
+        assert projection.steps == ()
+    else:
+        assert projection.unmatched == 0
+        assert projection.steps[0].span == "anything"
 
 
-def test_projection_does_not_nest_siblings_under_returned_call() -> None:
-    events: Final = (
-        FunctionTraceEvent("module.py:1 entry", 0, ()),
-        FunctionTraceEvent("module.py:2 provider", 1, ("module.py:1 entry",)),
-        FunctionTraceEvent("module.py:3 request", 1, ("module.py:1 entry",)),
+def test_mapping_builder_rejects_empty_and_ambiguous_declarations() -> None:
+    with pytest.raises(ValueError):
+        mapping()
+    with pytest.raises(ValueError):
+        mapping(python_frame=r"frame$")
+    with pytest.raises(ValueError):
+        mapping(rust_span="span_a", python_frame=r"frame$", span="span_b")
+
+
+def test_projection_rejects_ambiguous_python_mapping() -> None:
+    mappings: Final = (
+        mapping(rust_span="first", python_frame=r"same$"),
+        mapping(rust_span="second", python_frame=r"same$"),
     )
-    assert pipeline_steps("python", events, STEPS)[-1] == FunctionTraceEvent("request", 1)
+    with pytest.raises(ValueError, match="multiple trace mappings"):
+        pipeline_projection("python", (event(0, "module.py:1 same"),), mappings)
 
 
-@pytest.mark.parametrize("missing", ("route", "provider", "request", "http", "response"))
-def test_pipeline_check_rejects_missing_stages(missing: str) -> None:
-    events: Final = tuple(FunctionTraceEvent(item.name, 0) for item in STEPS if item.name != missing)
-    assert f"missing {missing}" in pipeline_issues("rust", events, STEPS, EDGES)
+def test_trace_diff_matches_identical_occurrence_trees() -> None:
+    mappings: Final = (MAPPINGS[0], MAPPINGS[2])
+    steps: Final = pipeline_projection(
+        "rust", (event(0, "route"), event(1, "request", 0), event(2, "request", 0)), mappings
+    ).steps
+    assert trace_diff(steps, steps, mappings).matches
 
 
-def test_pipeline_check_rejects_reordered_stages() -> None:
-    events: Final = tuple(FunctionTraceEvent(name, 0) for name in ("route", "provider", "http", "request", "response"))
-    assert "request must precede http" in pipeline_issues("rust", events, STEPS, EDGES)
+def test_trace_diff_rejects_missing_occurrence_and_parent_drift() -> None:
+    python: Final = pipeline_projection(
+        "rust", (event(0, "route"), event(1, "request", 0), event(2, "request", 0)), MAPPINGS
+    ).steps
+    missing: Final = pipeline_projection("rust", (event(0, "route"), event(1, "request", 0)), MAPPINGS).steps
+    reparented: Final = pipeline_projection(
+        "rust", (event(0, "route"), event(1, "request", 0), event(2, "request", 1)), MAPPINGS
+    ).steps
+    assert trace_diff(python, missing, MAPPINGS).python_only == ("request",)
+    assert not trace_diff(python, reparented, MAPPINGS).matches
 
 
-def test_trace_diff_matches_identical_steps() -> None:
-    events: Final = (FunctionTraceEvent("route", 0), FunctionTraceEvent("request", 1))
-    assert trace_diff(events, events).matches
-
-
-def test_trace_diff_reports_exclusive_steps() -> None:
-    diff: Final = trace_diff((FunctionTraceEvent("python", 0),), (FunctionTraceEvent("rust", 0),))
-    assert diff.python_only == ("python",)
-    assert diff.rust_only == ("rust",)
+def test_trace_diff_rejects_sequential_reorder() -> None:
+    first: Final = pipeline_projection(
+        "rust", (event(0, "route"), event(1, "request", 0), event(2, "response", 0)), MAPPINGS
+    ).steps
+    second: Final = pipeline_projection(
+        "rust", (event(0, "route"), event(1, "response", 0), event(2, "request", 0)), MAPPINGS
+    ).steps
+    diff: Final = trace_diff(first, second, MAPPINGS)
     assert not diff.matches
+    assert diff.first_difference == "root/child[1]/route/child[1]: Python='request', Rust='response'"
 
 
-def test_trace_diff_reports_reordered_shared_steps() -> None:
-    first: Final = FunctionTraceEvent("first", 0)
-    second: Final = FunctionTraceEvent("second", 0)
-    assert not trace_diff((first, second), (second, first)).shared_order_matches
+def test_trace_diff_allows_reordered_concurrent_children() -> None:
+    mappings: Final = (MAPPINGS[0], MAPPINGS[2], MAPPINGS[4])
+    first: Final = pipeline_projection(
+        "rust", (event(0, "route"), event(1, "request", 0), event(2, "response", 0)), mappings
+    ).steps
+    second: Final = pipeline_projection(
+        "rust", (event(0, "route"), event(1, "response", 0), event(2, "request", 0)), mappings
+    ).steps
+    contract: Final = TraceContract(frozenset({"route"}))
+    assert trace_diff(first, second, mappings, contract).matches
+
+
+def test_trace_diff_prunes_declared_engine_only_nodes_but_requires_them() -> None:
+    mappings: Final = (MAPPINGS[0], mapping(rust_span="rust_prepare"))
+    python: Final = pipeline_projection("python", (event(0, "module.py:1 entry"),), mappings).steps
+    rust: Final = pipeline_projection(
+        "rust", (event(0, "route"), event(1, "rust_prepare", 0)), mappings
+    ).steps
+    assert trace_diff(python, rust, mappings).matches
+    assert trace_diff(python, rust[:1], mappings).missing_mappings == ("rust_prepare",)
 
 
 def test_trace_diff_does_not_claim_empty_traces_match() -> None:
     assert not trace_diff((), ()).matches
-
-
-def test_pipeline_edges_only_apply_when_both_steps_ran() -> None:
-    events: Final = (FunctionTraceEvent("route", 0),)
-    assert "route must precede provider" not in pipeline_issues("python", events, STEPS, EDGES)

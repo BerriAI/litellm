@@ -12,15 +12,16 @@ from typing import Final
 
 @dataclass(frozen=True, slots=True)
 class FunctionTraceEvent:
+    id: int
+    parent_id: int | None
     function: str
-    depth: int
-    ancestors: tuple[str, ...] | None = None
 
 
 class PythonProfiler:
     def __init__(self, source_root: Path) -> None:
         self._source_root: Final = str(source_root.resolve()) + "/"
         self._seen_frames: Final[set[FrameType]] = set()
+        self._event_ids: Final[dict[FrameType, int]] = {}
         self.events: Final[list[FunctionTraceEvent]] = []
 
     def __call__(self, frame: FrameType, event: str, _arg: object) -> None:
@@ -29,11 +30,14 @@ class PythonProfiler:
         function_name: Final = self.function_name(frame.f_code)
         if function_name is None:
             return
-        ancestors: Final = tuple(
-            name for ancestor in _frame_ancestors(frame) if (name := self.function_name(ancestor.f_code)) is not None
+        event_id: Final = len(self.events)
+        parent_id: Final = next(
+            (self._event_ids[ancestor] for ancestor in _frame_ancestors(frame) if ancestor in self._event_ids),
+            None,
         )
         self._seen_frames.add(frame)
-        self.events.append(FunctionTraceEvent(function=function_name, depth=len(ancestors), ancestors=ancestors))
+        self._event_ids[frame] = event_id
+        self.events.append(FunctionTraceEvent(id=event_id, parent_id=parent_id, function=function_name))
 
     def function_name(self, code: CodeType) -> str | None:
         if not code.co_filename.startswith(self._source_root):

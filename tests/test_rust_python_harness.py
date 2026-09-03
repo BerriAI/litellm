@@ -42,10 +42,11 @@ def _case(module: str = "tests.example") -> HarnessCase:
     "module",
     [
         "tests.rust-python-harness.strategies.e2e_parity.sdk.ocr.test_sdk_parity",
-        "tests.rust-python-harness.strategies.trace_parity.sdk.ocr.test_trace_parity",
-        "tests.rust-python-harness.strategies.trace_parity.sdk.messages.test_trace_parity",
-        "tests.rust-python-harness.strategies.trace_parity.sdk.chat_completions.test_trace_parity",
-        "tests.rust-python-harness.strategies.trace_parity.sdk.transcription.test_trace_parity",
+        "tests.rust-python-harness.strategies.trace_parity.sdk.ocr.case",
+        "tests.rust-python-harness.strategies.trace_parity.sdk.messages.case",
+        "tests.rust-python-harness.strategies.trace_parity.sdk.chat_completions.case",
+        "tests.rust-python-harness.strategies.trace_parity.sdk.transcription.case",
+        "tests.rust-python-harness.strategies.trace_parity.gateway.messages.case",
     ],
 )
 def test_implemented_namespace_case_modules_remain_importable(module: str) -> None:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import importlib
 import os
 import subprocess
@@ -190,20 +189,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     return report.exit_code
 
 
-def enumerate_python_tests(repo_root: Path, relative_path: str) -> frozenset[str]:
-    source = (repo_root / relative_path).read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=relative_path)
+def _contract_nodeid(nodeid: str) -> str:
+    owner, separator, test = nodeid.rpartition("::")
+    function: Final = test.partition("[")[0]
+    if not separator or not function.startswith("test_"):
+        raise ValueError(f"Unrecognized pytest node id: {nodeid}")
+    return f"{owner}::{function}"
 
-    module_level: list[str] = []
-    for node in ast.iter_child_nodes(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
-            module_level.append(node.name)
-        elif isinstance(node, ast.ClassDef):
-            for child in ast.iter_child_nodes(node):
-                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name.startswith("test_"):
-                    module_level.append(f"{node.name}::{child.name}")
 
-    return frozenset(module_level)
+def collect_python_tests(selectors: Sequence[str], repo_root: Path) -> frozenset[str]:
+    report: Final = run_python_tests(
+        selectors,
+        repo_root,
+        "python",
+        BackendSpec(environment_variable="LITELLM_RUST"),
+        ("--collect-only", "-p", "no:cacheprovider"),
+    )
+    if report.exit_code or report.problems:
+        details: Final = "\n".join(report.problems) or f"pytest exited with code {report.exit_code}"
+        raise ValueError(f"Python test collection failed:\n{details}")
+    tests: Final = frozenset(_contract_nodeid(nodeid) for nodeid in report.tests)
+    if not tests:
+        raise ValueError(f"pytest collected no tests for: {', '.join(selectors)}")
+    return tests
 
 
 if __name__ == "__main__":

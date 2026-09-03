@@ -10,18 +10,44 @@ from ...shared.reporting.models import CaseResult, HarnessCase, HarnessRun, Resu
 from ...shared.reporting.strategy import ModuleCaseSpec, UpdateCallback
 from ...shared.native_build import ensure_trace_bridge
 from .reporting import TRACE_COMPARISON_ARTIFACT
-from .sdk.execution import TraceCase, TraceExecutionFailure, TraceMode, execute_trace
+from .sdk.execution import RouteSpec, TraceExecutionFailure, TraceMode, TraceScenario, TraceSuite, execute_trace
 
 
-def _load_case(reference: str) -> TraceCase | TraceExecutionFailure:
+def _load_case(reference: str) -> TraceSuite | TraceExecutionFailure:
     try:
         module: Final = importlib.import_module(reference)
     except Exception as error:
         return TraceExecutionFailure("harness", f"cannot import {reference}: {type(error).__name__}: {error}")
-    case: Final = getattr(module, "TRACE_CASE", None)
-    if not isinstance(case, TraceCase):
-        return TraceExecutionFailure("harness", f"{reference} must export TRACE_CASE: TraceCase")
-    return case
+    suite: Final = getattr(module, "TRACE_SUITE", None)
+    if not isinstance(suite, TraceSuite):
+        return TraceExecutionFailure("harness", f"{reference} must export TRACE_SUITE: TraceSuite")
+    validation_error: Final = validate_trace_suite(suite)
+    if validation_error is not None:
+        return TraceExecutionFailure("harness", f"{reference} {validation_error}")
+    return suite
+
+
+def validate_trace_suite(suite: TraceSuite) -> str | None:
+    names: Final = tuple(scenario.name for scenario in suite.scenarios)
+    if not names or len(names) != len(set(names)) or any(not name or ":" in name for name in names):
+        return "scenario names must be non-empty, unique, and colon-free"
+    return None
+
+
+def scenario_nodeids(
+    trace_suite: TraceSuite,
+    harness_case: HarnessCase,
+    selected_scenarios: frozenset[str] = frozenset(),
+) -> tuple[tuple[TraceScenario, TraceMode, str], ...]:
+    surface: Final = harness_case.surface
+    if surface is None:
+        return ()
+    return tuple(
+        (scenario, mode, f"trace:{surface}:{harness_case.sdk_function}:{scenario.name}:{mode}")
+        for scenario in trace_suite.scenarios
+        if not selected_scenarios or scenario.name in selected_scenarios
+        for mode in scenario.modes
+    )
 
 
 def _record_setup_failure(run: HarnessRun, case: HarnessCase, message: str, stage: str) -> None:
@@ -35,14 +61,24 @@ def _record_setup_failure(run: HarnessRun, case: HarnessCase, message: str, stag
 def _run_mode(
     run: HarnessRun,
     result: CaseResult,
-    trace_case: TraceCase,
+    trace_suite: TraceSuite,
+    scenario: TraceScenario,
     mode: TraceMode,
     surface: Surface,
     nodeid: str,
     on_update: UpdateCallback,
 ) -> None:
     started_at: Final = monotonic()
-    comparison: Final = execute_trace(trace_case, mode, surface)
+    if surface == "gateway":
+        from .gateway.execution import GatewayRouteSpec, execute_gateway_trace
+
+        if not isinstance(trace_suite.route, GatewayRouteSpec):
+            raise TypeError("gateway trace suite has an invalid route spec")
+        comparison = execute_gateway_trace(trace_suite.route, scenario, mode)
+    elif isinstance(trace_suite.route, RouteSpec):
+        comparison = execute_trace(trace_suite.route, scenario, mode, surface)
+    else:
+        raise TypeError("SDK trace suite has an invalid route spec")
     duration: Final = monotonic() - started_at
     artifact: Final = ResultArtifact(TRACE_COMPARISON_ARTIFACT, comparison.model_dump_json())
     if comparison.has_errors():
@@ -58,7 +94,12 @@ def _run_mode(
     on_update(run)
 
 
-def _run_case(run: HarnessRun, harness_case: HarnessCase, on_update: UpdateCallback) -> None:
+def _run_case(
+    run: HarnessRun,
+    harness_case: HarnessCase,
+    selected_scenarios: frozenset[str],
+    on_update: UpdateCallback,
+) -> None:
     result: Final = run.results[harness_case.key]
     spec: Final = harness_case.spec
     if not isinstance(spec, ModuleCaseSpec):
@@ -66,19 +107,21 @@ def _run_case(run: HarnessRun, harness_case: HarnessCase, on_update: UpdateCallb
     surface: Final = harness_case.surface
     if surface is None:
         return
-    trace_case: Final = _load_case(spec.module)
-    if isinstance(trace_case, TraceExecutionFailure):
-        _record_setup_failure(run, harness_case, trace_case.message, "load")
+    trace_suite: Final = _load_case(spec.module)
+    if isinstance(trace_suite, TraceExecutionFailure):
+        _record_setup_failure(run, harness_case, trace_suite.message, "load")
         on_update(run)
         return
-    nodeids: Final[tuple[tuple[TraceMode, str], ...]] = tuple(
-        (mode, f"trace:{surface}:{harness_case.sdk_function}:{mode}") for mode in trace_case.modes
-    )
-    result.collected.update(nodeid for _, nodeid in nodeids)
+    nodeids: Final = scenario_nodeids(trace_suite, harness_case, selected_scenarios)
+    result.collected.update(nodeid for _, _, nodeid in nodeids)
+    if not nodeids:
+        result.status = RunStatus.SKIPPED
+        on_update(run)
+        return
     result.status = RunStatus.RUNNING
     on_update(run)
-    for mode, nodeid in nodeids:
-        _run_mode(run, result, trace_case, mode, surface, nodeid, on_update)
+    for scenario, mode, nodeid in nodeids:
+        _run_mode(run, result, trace_suite, scenario, mode, surface, nodeid, on_update)
 
 
 def run_trace_cases(
@@ -87,7 +130,7 @@ def run_trace_cases(
     on_update: UpdateCallback,
     runner_args: Sequence[str] = (),
 ) -> tuple[int, HarnessRun]:
-    del runner_args
+    selected_scenarios: Final = frozenset(runner_args)
     run: Final = HarnessRun.from_cases(cases)
     bridge_error: Final = ensure_trace_bridge(repo_root)
     if bridge_error is not None:
@@ -97,7 +140,7 @@ def run_trace_cases(
         on_update(run)
         return 1, run
     for harness_case in cases:
-        _run_case(run, harness_case, on_update)
+        _run_case(run, harness_case, selected_scenarios, on_update)
     run.finished_at = monotonic()
     on_update(run)
     failed: Final = any(

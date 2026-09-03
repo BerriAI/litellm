@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from collections.abc import Sequence
 from typing import Final, Literal
@@ -10,8 +11,14 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from ...shared.reporting.models import SURFACES, CaseResult, RunStatus, SdkFunction, Surface
 from ...shared.reporting.rendering import ReportSection
 from ...shared.reporting.strategy import NotImplementedCaseSpec, SkippedCaseSpec
-from ...shared.tracing.profiler import FunctionTraceEvent
-from ...shared.tracing.steps import trace_diff
+from ...shared.tracing.steps import (
+    PipelineStep,
+    TraceContract,
+    TraceDiff,
+    TraceMapping,
+    trace_depths,
+    trace_diff,
+)
 
 TRACE_COMPARISON_ARTIFACT: Final = "trace_comparison"
 TRACE_PARITY_HINT: Final = (
@@ -31,11 +38,21 @@ def _paint(text: str, color: str) -> str:
 class TraceEventArtifact(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    function: str
-    depth: int
+    id: int
+    parent_id: int | None
+    span: str
+    raw: str
 
-    def event(self) -> FunctionTraceEvent:
-        return FunctionTraceEvent(self.function, self.depth)
+    def step(self) -> PipelineStep:
+        return PipelineStep(self.id, self.parent_id, self.span, self.raw)
+
+
+class TraceMappingArtifact(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    span: str
+    python: str | None
+    rust: str | None
 
 
 class TraceComparisonArtifact(BaseModel):
@@ -43,13 +60,13 @@ class TraceComparisonArtifact(BaseModel):
 
     surface: Surface
     sdk_function: SdkFunction
+    scenario: str
     mode: Literal["sync", "async"]
+    mappings: tuple[TraceMappingArtifact, ...]
     python: tuple[TraceEventArtifact, ...]
     rust: tuple[TraceEventArtifact, ...]
-    python_issues: tuple[str, ...]
-    rust_issues: tuple[str, ...]
-    requires_matching_steps: bool
-    requires_exact_trace: bool
+    python_unmatched: int
+    unordered_children_of: frozenset[str]
     python_error: str | None = None
     rust_error: str | None = None
 
@@ -59,75 +76,134 @@ class TraceComparisonArtifact(BaseModel):
         *,
         surface: Surface,
         sdk_function: SdkFunction,
+        scenario: str,
         mode: Literal["sync", "async"],
-        python: Sequence[FunctionTraceEvent],
-        rust: Sequence[FunctionTraceEvent],
-        python_issues: tuple[str, ...],
-        rust_issues: tuple[str, ...],
-        requires_matching_steps: bool,
-        requires_exact_trace: bool,
+        mappings: Sequence[TraceMapping],
+        contract: TraceContract,
+        python: Sequence[PipelineStep],
+        rust: Sequence[PipelineStep],
+        python_unmatched: int,
         python_error: str | None = None,
         rust_error: str | None = None,
     ) -> TraceComparisonArtifact:
         return cls(
             surface=surface,
             sdk_function=sdk_function,
+            scenario=scenario,
             mode=mode,
-            python=tuple(TraceEventArtifact(function=event.function, depth=event.depth) for event in python),
-            rust=tuple(TraceEventArtifact(function=event.function, depth=event.depth) for event in rust),
-            python_issues=python_issues,
-            rust_issues=rust_issues,
-            requires_matching_steps=requires_matching_steps,
-            requires_exact_trace=requires_exact_trace,
+            mappings=tuple(
+                TraceMappingArtifact(
+                    span=item.span,
+                    python=item.python.pattern if item.python else None,
+                    rust=item.rust,
+                )
+                for item in mappings
+            ),
+            python=tuple(
+                TraceEventArtifact(id=step.id, parent_id=step.parent_id, span=step.span, raw=step.raw)
+                for step in python
+            ),
+            rust=tuple(
+                TraceEventArtifact(id=step.id, parent_id=step.parent_id, span=step.span, raw=step.raw)
+                for step in rust
+            ),
+            python_unmatched=python_unmatched,
+            unordered_children_of=contract.unordered_children_of,
             python_error=python_error,
             rust_error=rust_error,
         )
 
-    def python_events(self) -> tuple[FunctionTraceEvent, ...]:
-        return tuple(event.event() for event in self.python)
+    def python_steps(self) -> tuple[PipelineStep, ...]:
+        return tuple(event.step() for event in self.python)
 
-    def rust_events(self) -> tuple[FunctionTraceEvent, ...]:
-        return tuple(event.event() for event in self.rust)
+    def rust_steps(self) -> tuple[PipelineStep, ...]:
+        return tuple(event.step() for event in self.rust)
+
+    def diff(self) -> TraceDiff:
+        return trace_diff(
+            self.python_steps(),
+            self.rust_steps(),
+            tuple(
+                TraceMapping(
+                    item.span,
+                    re.compile(item.python) if item.python is not None else None,
+                    item.rust,
+                )
+                for item in self.mappings
+            ),
+            TraceContract(self.unordered_children_of),
+        )
+
+    def exact_match(self) -> bool:
+        return self.diff().matches
 
     def has_errors(self) -> bool:
         return self.python_error is not None or self.rust_error is not None
 
     def contract_matches(self) -> bool:
-        python: Final = self.python_events()
-        rust: Final = self.rust_events()
-        diff: Final = trace_diff(python, rust)
-        return (
-            not self.has_errors()
-            and not self.python_issues
-            and not self.rust_issues
-            and (not self.requires_matching_steps or diff.matches)
-            and (not self.requires_exact_trace or python == rust)
-        )
+        if self.has_errors():
+            return False
+        return self.diff().matches
 
 
-def _trace_lines(
-    label: str,
-    events: tuple[FunctionTraceEvent, ...],
-    exclusive: frozenset[str],
-    color: str,
-) -> str:
+def _split_raw(raw: str) -> tuple[str, str]:
+    location, separator, name = raw.partition(" ")
+    if separator:
+        return name, location
+    return raw, ""
+
+
+def _python_line(index: int, step: PipelineStep, depth: int, exclusive: frozenset[str]) -> str:
+    name: Final = _split_raw(step.raw)[0]
+    location: Final = _split_raw(step.raw)[1]
+    suffix: Final = f"  ({location})" if location else ""
+    marker: Final = "  [python only]" if step.span in exclusive else ""
+    return _paint(f"{index} {'  ' * depth}{name}{suffix}{marker}", "cyan")
+
+
+def _python_lines(steps: tuple[PipelineStep, ...], exclusive: frozenset[str]) -> str:
+    depths: Final = trace_depths(steps)
     lines: Final = tuple(
-        _paint(
-            f"{'  ' * event.depth}{event.function}{'  [' + label + ' only]' if event.function in exclusive else ''}",
-            color,
-        )
-        for event in events
+        _python_line(index, step, depths[step.id], exclusive) for index, step in enumerate(steps, start=1)
     )
-    return f"{_paint(label.upper(), color)} ({len(events)} steps)\n" + ("\n".join(lines) if lines else "(empty)")
+    return f"{_paint('PYTHON', 'cyan')} ({len(steps)} steps)\n" + ("\n".join(lines) if lines else "(empty)")
 
 
-def _shared_nesting_matches(
-    python: tuple[FunctionTraceEvent, ...],
-    rust: tuple[FunctionTraceEvent, ...],
-) -> bool:
-    rust_depths: Final = {event.function: event.depth for event in rust}
-    shared: Final = tuple(event for event in python if event.function in rust_depths)
-    return bool(shared) and all(event.depth == rust_depths[event.function] for event in shared)
+def _python_references(steps: tuple[PipelineStep, ...]) -> dict[tuple[str, int], str]:
+    references: dict[tuple[str, int], str] = {}
+    occurrences: dict[str, int] = {}
+    for index, step in enumerate(steps, start=1):
+        name: Final = _split_raw(step.raw)[0]
+        occurrence: Final = occurrences.get(step.span, 0) + 1
+        occurrences[step.span] = occurrence
+        references[(step.span, occurrence)] = f"{index} {name}"
+    return references
+
+
+def _rust_line(
+    step: PipelineStep,
+    depth: int,
+    occurrence: int,
+    references: dict[tuple[str, int], str],
+) -> str:
+    span: Final = _paint(step.span, "yellow")
+    key: Final = (step.span, occurrence)
+    reference: Final = (
+        _paint(references[key], "cyan") if key in references else _paint("[rust only]", "yellow")
+    )
+    suffix: Final = f"#{occurrence}" if occurrence > 1 else ""
+    return f"{'  ' * depth}{span}{suffix}  ->  {reference}"
+
+
+def _rust_lines(steps: tuple[PipelineStep, ...], references: dict[tuple[str, int], str]) -> str:
+    depths: Final = trace_depths(steps)
+    occurrences: dict[str, int] = {}
+    lines: list[str] = []
+    for step in steps:
+        occurrence: Final = occurrences.get(step.span, 0) + 1
+        occurrences[step.span] = occurrence
+        lines.append(_rust_line(step, depths[step.id], occurrence, references))
+    return f"{_paint('RUST', 'yellow')} ({len(steps)} steps)\n" + ("\n".join(lines) if lines else "(empty)")
 
 
 def _state_text(state: str, *, good: bool) -> str:
@@ -139,15 +215,6 @@ def _contract_line(artifact: TraceComparisonArtifact) -> str:
     status: Final = _state_text("PASS" if matches else "FAIL", good=matches)
     if artifact.python_error or artifact.rust_error:
         return f"Contract: {status}"
-    python: Final = artifact.python_events()
-    rust: Final = artifact.rust_events()
-    diff: Final = trace_diff(python, rust)
-    if python == rust:
-        return f"Contract: {status}"
-    if not artifact.requires_matching_steps:
-        return f"Contract: {status} (path drift is allowed for this case)"
-    if not artifact.requires_exact_trace and diff.matches:
-        return f"Contract: {status} (nesting drift is allowed for this case)"
     return f"Contract: {status}"
 
 
@@ -162,48 +229,53 @@ def _error_lines(artifact: TraceComparisonArtifact) -> tuple[str, ...]:
     return tuple(lines)
 
 
+def _unseen_mappings(
+    artifact: TraceComparisonArtifact,
+    python: tuple[PipelineStep, ...],
+    rust: tuple[PipelineStep, ...],
+) -> tuple[str, ...]:
+    return artifact.diff().missing_mappings
+
+
 def _comparison_status_lines(
     artifact: TraceComparisonArtifact,
-    python: tuple[FunctionTraceEvent, ...],
-    rust: tuple[FunctionTraceEvent, ...],
+    python: tuple[PipelineStep, ...],
+    rust: tuple[PipelineStep, ...],
 ) -> tuple[str, ...]:
-    diff: Final = trace_diff(python, rust)
-    exact_match: Final = python == rust
-    shared: Final = frozenset(event.function for event in python) & frozenset(event.function for event in rust)
+    diff: Final = artifact.diff()
+    exact_match: Final = artifact.exact_match()
     if artifact.has_errors():
         return (*_error_lines(artifact), _contract_line(artifact))
+    unseen: Final = _unseen_mappings(artifact, python, rust)
+    unseen_line: Final[tuple[str, ...]] = (f"Unseen mappings: {', '.join(unseen)}",) if unseen else ()
     drift_lines: Final[tuple[str, ...]] = (
         (_state_text("Same steps, order, and nesting", good=True),)
         if exact_match
         else (
-            f"Shared order: {_state_text('MATCH' if diff.shared_order_matches else 'DRIFT' if shared else 'NO SHARED STEPS', good=diff.shared_order_matches)}",
-            f"Shared nesting: {_state_text('MATCH' if _shared_nesting_matches(python, rust) else 'DRIFT' if shared else 'NO SHARED STEPS', good=_shared_nesting_matches(python, rust))}",
             _paint(f"Python only: {', '.join(diff.python_only) or 'none'}", "cyan"),
             _paint(f"Rust only: {', '.join(diff.rust_only) or 'none'}", "yellow"),
+            f"First difference: {diff.first_difference or 'none'}",
+            f"Python frames outside mapping: {artifact.python_unmatched}",
         )
-    )
-    issue_lines: Final[tuple[str, ...]] = tuple(
-        _paint(f"{engine} issue: {issue}", "red")
-        for engine, issues in (("Python", artifact.python_issues), ("Rust", artifact.rust_issues))
-        for issue in issues
     )
     return (
         f"Trace: {_state_text('MATCH' if exact_match else 'DRIFT', good=exact_match)}",
         *drift_lines,
-        *issue_lines,
+        *unseen_line,
         _contract_line(artifact),
     )
 
 
 def _render_comparison(artifact: TraceComparisonArtifact) -> str:
-    python: Final = artifact.python_events()
-    rust: Final = artifact.rust_events()
-    diff: Final = trace_diff(python, rust)
+    python: Final = artifact.python_steps()
+    rust: Final = artifact.rust_steps()
+    diff: Final = artifact.diff()
+    python_exclusive: Final = frozenset(item.span for item in artifact.mappings if item.rust is None)
     status_lines: Final = _comparison_status_lines(artifact, python, rust)
     return "\n\n".join(
         (
-            _trace_lines("python", python, frozenset(diff.python_only), "cyan"),
-            _trace_lines("rust", rust, frozenset(diff.rust_only), "yellow"),
+            _python_lines(python, python_exclusive | frozenset(diff.python_only)),
+            _rust_lines(rust, _python_references(python)),
             "\n".join(status_lines),
         )
     )
@@ -214,6 +286,11 @@ def _mode(nodeid: str) -> str:
         return nodeid.rsplit("[", 1)[-1].removesuffix("]")
     head, _, tail = nodeid.rpartition(":")
     return tail if head else "unknown mode"
+
+
+def _scenario(nodeid: str) -> str:
+    parts: Final = nodeid.split(":")
+    return parts[-2] if len(parts) >= 5 else "default"
 
 
 def _unavailable(status: RunStatus) -> str:
@@ -235,7 +312,7 @@ def _mode_section(result: CaseResult, nodeid: str, status: RunStatus) -> str:
     body: Final = (
         "\n\n".join(_render_artifact(artifact.body) for artifact in artifacts) if artifacts else _unavailable(status)
     )
-    label: Final = f"Mode: {_mode(nodeid)}"
+    label: Final = f"Scenario: {_scenario(nodeid)} / Mode: {_mode(nodeid)}"
     return f"{label}\n{'-' * len(label)}\n\n{body}"
 
 
