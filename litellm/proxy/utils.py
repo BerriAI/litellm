@@ -37,7 +37,11 @@ from litellm.proxy._types import (
     SpendLogsMetadata,
     SpendLogsPayload,
 )
-from litellm.proxy.common_utils.openai_error_payload import openai_error_param
+from litellm.proxy.common_utils.openai_error_payload import (
+    error_status_code,
+    openai_error_param,
+    openai_error_type,
+)
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
@@ -7096,18 +7100,19 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
     verbose_proxy_logger.exception("Exception: %s", e)
 
     if isinstance(e, HTTPException):
+        http_status_code: Final = error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
         return ProxyException(
             message=getattr(e, "detail", f"error({e})"),
-            type=ProxyErrorTypes.internal_server_error,
+            type=openai_error_type(e, http_status_code),
             param=openai_error_param(e),
-            code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+            code=http_status_code,
         )
     elif isinstance(e, ProxyException):
         return e
-    _status_code: Final = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
+    _status_code: Final = error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
     return ProxyException(
         message=str(e),
-        type=ProxyErrorTypes.internal_server_error,
+        type=openai_error_type(e, _status_code),
         param=openai_error_param(e),
         code=_status_code,
     )
