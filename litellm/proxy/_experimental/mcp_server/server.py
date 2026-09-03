@@ -3940,6 +3940,13 @@ if MCP_AVAILABLE:
                 and server.auth_type == MCPAuth.oauth2_token_exchange
                 and oauth2_headers
                 and len(mcp_servers or []) == 1
+                and server.server_id
+                in frozenset(
+                    allowed.server_id
+                    for allowed in await _get_allowed_mcp_servers(
+                        user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
+                    )
+                )
             ):
                 await global_mcp_server_manager.preflight_token_exchange(
                     server=server,
