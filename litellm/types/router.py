@@ -166,6 +166,7 @@ class ModelInfo(MirroredPricingParams):
 
     base_model: str | None = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     tier: Literal["free", "paid"] | None = None
+    supported_service_tiers: tuple[str, ...] | None = None
 
     """
     Team Model Specific Fields

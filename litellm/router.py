@@ -357,6 +357,9 @@ def model_info_is_active_for_environment(model_info: Mapping[str, object] | None
 
 
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
+_RouterDeploymentSelection: TypeAlias = (
+    list[DeploymentTypedDict] | DeploymentTypedDict  # mutable-ok: Router selection returns mutable deployment pools
+)
 
 _ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset({"model", "api_base", "api_key", "api_version"})
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
@@ -11967,6 +11970,46 @@ class Router:
         deployment_model: Final = litellm_params.get("model")
         return isinstance(deployment_model, str) and classify_strategy_router_model(deployment_model) is not None
 
+    @staticmethod
+    def _get_requested_service_tier(request_kwargs: Mapping[str, object] | None) -> str | None:
+        if request_kwargs is None:
+            return None
+        requested_service_tier: Final = request_kwargs.get("service_tier")
+        if not isinstance(requested_service_tier, str) or requested_service_tier == "auto":
+            return None
+        return requested_service_tier
+
+    @staticmethod
+    def _filter_deployments_by_service_tier(
+        model: str,
+        deployments: _RouterDeploymentSelection,
+        requested_service_tier: str | None,
+    ) -> _RouterDeploymentSelection:
+        if requested_service_tier is None:
+            return deployments
+        is_direct_deployment: Final = isinstance(deployments, dict)
+        candidates: Final = (deployments,) if is_direct_deployment else tuple(deployments)
+        if not any(
+            (deployment.get("model_info") or MappingProxyType({})).get("supported_service_tiers") is not None
+            for deployment in candidates
+        ):
+            return deployments
+        matches: Final = tuple(
+            deployment
+            for deployment in candidates
+            if requested_service_tier
+            in ((deployment.get("model_info") or MappingProxyType({})).get("supported_service_tiers") or ())
+        )
+        if not matches:
+            raise litellm.BadRequestError(
+                message=f"No deployments available for model={model} with service_tier={requested_service_tier}.",
+                model=model,
+                llm_provider="",
+            )
+        if is_direct_deployment:
+            return matches[0]
+        return list(matches)  # mutable-ok: Router selection returns mutable deployment pools
+
     def _common_checks_available_deployment(
         self,
         model: str,
@@ -11986,6 +12029,7 @@ class Router:
         - Dict, if specific model chosen
         """
 
+        requested_service_tier: Final = self._get_requested_service_tier(request_kwargs)
         request_team_id: str | None = None
         if request_kwargs is not None:
             metadata: Final = request_kwargs.get("metadata") or {}
@@ -11993,12 +12037,22 @@ class Router:
             request_team_id = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
         # check if aliases set on litellm model alias map
         if specific_deployment is True:
-            return model, self._get_deployment_by_litellm_model(model=model)
+            deployments: Final = self._get_deployment_by_litellm_model(model=model)
+            return model, self._filter_deployments_by_service_tier(
+                model=model,
+                deployments=deployments,
+                requested_service_tier=requested_service_tier,
+            )
         elif self.has_model_id(model):
             deployment: Final = self.get_deployment(model_id=model)
             if deployment is not None:
                 deployment_model: Final = deployment.litellm_params.model
-                return deployment_model, deployment.model_dump(exclude_none=True)
+                deployment_dict: Final = deployment.model_dump(exclude_none=True)
+                return deployment_model, self._filter_deployments_by_service_tier(
+                    model=model,
+                    deployments=deployment_dict,  # pyright: ignore[reportArgumentType]  # Pydantic dump preserves DeploymentTypedDict shape
+                    requested_service_tier=requested_service_tier,
+                )
             raise ValueError(
                 f"LiteLLM Router: Trying to call specific deployment, but Model ID :{model} does not exist in Model ID map"
             )
@@ -12015,7 +12069,12 @@ class Router:
                 include_team_models=_is_proxy_admin_request(request_kwargs),
             )
             if early is not None:
-                return early
+                early_model, early_deployments = early
+                return early_model, self._filter_deployments_by_service_tier(
+                    model=early_model,
+                    deployments=early_deployments,  # pyright: ignore[reportArgumentType]  # Legacy resolver returns the same deployment pool shapes
+                    requested_service_tier=requested_service_tier,
+                )
 
         ## get healthy deployments
         ### get all deployments
@@ -12094,7 +12153,11 @@ class Router:
 
         marker_flags: Final = tuple(self._is_strategy_marker_deployment(d) for d in healthy_deployments)
         if not any(marker_flags):
-            return model, healthy_deployments
+            return model, self._filter_deployments_by_service_tier(
+                model=model,
+                deployments=healthy_deployments,
+                requested_service_tier=requested_service_tier,
+            )
         selectable: Final = [  # mutable-ok: matches this function's list contract expected by downstream filters
             d for d, is_marker in zip(healthy_deployments, marker_flags, strict=True) if not is_marker
         ]
@@ -12104,7 +12167,11 @@ class Router:
                 model=model,
                 llm_provider="",
             )
-        return model, selectable
+        return model, self._filter_deployments_by_service_tier(
+            model=model,
+            deployments=selectable,
+            requested_service_tier=requested_service_tier,
+        )
 
     def _filter_deployments_by_model_access_groups(
         self,
