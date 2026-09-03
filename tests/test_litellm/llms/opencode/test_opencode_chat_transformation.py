@@ -22,12 +22,17 @@ from litellm.llms.opencode.chat.transformation import (
     OpenCodeZenGeminiChatConfig,
     OpenCodeZenMessagesChatConfig,
 )
+from litellm.llms.opencode.responses.transformation import (
+    OpenCodeGoResponsesAPIConfig,
+    OpenCodeZenResponsesAPIConfig,
+)
 from litellm.llms.opencode.common_utils import (
     OPENCODE_SESSION_HEADER,
     opencode_endpoint_for_model,
     resolve_opencode_api_key,
     resolve_opencode_session_id,
 )
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
 ZEN_API_BASE: Final = "https://opencode.ai/zen/v1"
@@ -562,3 +567,101 @@ class TestDispatchErrorPath:
                 litellm_session_id="session-err",
                 client=FailingHTTPHandler(),
             )
+
+
+class TestResponsesWireFormat:
+    """OpenCode serves its OpenAI-native models on /responses; /chat/completions answers them 500."""
+
+    @pytest.mark.parametrize(
+        "config, expected_provider, expected_url",
+        [
+            (OpenCodeZenResponsesAPIConfig(), LlmProviders.OPENCODE, f"{ZEN_API_BASE}/responses"),
+            (OpenCodeGoResponsesAPIConfig(), LlmProviders.OPENCODE_GO, f"{GO_API_BASE}/responses"),
+        ],
+    )
+    def test_provider_and_default_url(self, config, expected_provider, expected_url):
+        assert config.custom_llm_provider == expected_provider
+        assert config.get_complete_url(api_base=None, litellm_params={}) == expected_url
+
+    @pytest.mark.parametrize(
+        "config", [OpenCodeZenResponsesAPIConfig(), OpenCodeGoResponsesAPIConfig()]
+    )
+    def test_explicit_api_base_wins_and_trailing_slash_is_trimmed(self, config):
+        assert config.get_complete_url(api_base="https://proxy.internal/v1/", litellm_params={}) == (
+            "https://proxy.internal/v1/responses"
+        )
+
+    def test_auth_uses_bearer_and_stamps_the_session_header(self, monkeypatch):
+        monkeypatch.setenv("OPENCODE_API_KEY", "account-key")
+        headers = OpenCodeGoResponsesAPIConfig().validate_environment(
+            headers={},
+            model="gpt-5.6-luna",
+            litellm_params=GenericLiteLLMParams(litellm_session_id="session-9"),
+        )
+        assert headers["Authorization"] == "Bearer account-key"
+        assert headers["Content-Type"] == "application/json"
+        assert headers[OPENCODE_SESSION_HEADER] == "session-9"
+
+    def test_request_api_key_wins_over_the_env_var(self, monkeypatch):
+        monkeypatch.setenv("OPENCODE_API_KEY", "account-key")
+        headers = OpenCodeZenResponsesAPIConfig().validate_environment(
+            headers={},
+            model="gpt-5.5",
+            litellm_params=GenericLiteLLMParams(api_key="request-key"),
+        )
+        assert headers["Authorization"] == "Bearer request-key"
+
+    def test_caller_supplied_session_header_is_not_overwritten(self, monkeypatch):
+        monkeypatch.setenv("OPENCODE_API_KEY", "account-key")
+        headers = OpenCodeZenResponsesAPIConfig().validate_environment(
+            headers={"X-OpenCode-Session": "caller-owned"},
+            model="gpt-5.5",
+            litellm_params=GenericLiteLLMParams(litellm_session_id="session-9"),
+        )
+        assert headers["X-OpenCode-Session"] == "caller-owned"
+        assert "session-9" not in headers.values()
+
+    def test_missing_litellm_params_still_produces_headers(self, monkeypatch):
+        monkeypatch.setenv("OPENCODE_API_KEY", "account-key")
+        headers = OpenCodeGoResponsesAPIConfig().validate_environment(
+            headers={}, model="gpt-5.6-luna", litellm_params=None
+        )
+        assert headers["Authorization"] == "Bearer account-key"
+
+    @pytest.mark.parametrize(
+        "provider, expected_config",
+        [
+            (LlmProviders.OPENCODE, OpenCodeZenResponsesAPIConfig),
+            (LlmProviders.OPENCODE_GO, OpenCodeGoResponsesAPIConfig),
+        ],
+    )
+    def test_provider_manager_returns_the_responses_config(self, provider, expected_config):
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_responses_api_config(provider=provider, model="gpt-5.6-luna")
+        assert type(config) is expected_config
+
+
+class TestChatConfigProviderNames:
+    @pytest.mark.parametrize(
+        "config, expected",
+        [
+            (OpenCodeZenChatConfig(), "opencode"),
+            (OpenCodeGoChatConfig(), "opencode_go"),
+            (OpenCodeZenMessagesChatConfig(), "opencode"),
+            (OpenCodeGoMessagesChatConfig(), "opencode_go"),
+            (OpenCodeZenGeminiChatConfig(), "opencode"),
+        ],
+    )
+    def test_custom_llm_provider(self, config, expected):
+        assert config.custom_llm_provider == expected
+
+    def test_messages_config_honours_an_explicit_api_base(self):
+        url = OpenCodeGoMessagesChatConfig().get_complete_url(
+            api_base="https://proxy.internal/v1/messages",
+            api_key="k",
+            model="minimax-m3",
+            optional_params={},
+            litellm_params={},
+        )
+        assert url == "https://proxy.internal/v1/messages"
