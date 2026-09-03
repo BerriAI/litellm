@@ -181,7 +181,12 @@ nothing here imports outside it:
   free-form metadata is promoted until each sub-key is explicitly allowlisted.
 - [`baggage.py`](./model/baggage.py) — the single definition of which request-identity
   values are promoted into Baggage (so child spans inherit them) and under which
-  attribute keys.
+  attribute keys. The requested model is promoted as the vendor
+  `litellm.request.model`, never canonical `gen_ai.request.model`: baggage lands
+  on every span of the request, and a canonical GenAI attribute on an HTTP, DB or
+  guardrail span makes GenAI-aware backends read that span as an LLM generation.
+  `gen_ai.request.model` stays on the LLM-call span only, where the `genai`
+  mapper stamps it.
 - [`utils.py`](./model/utils.py) — value coercion, JSON serialization, and
   extractor-table application, shared across the package.
 
