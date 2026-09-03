@@ -1,10 +1,13 @@
 import time
+from collections.abc import Iterator
+from typing import Final
 
 import httpx
 import pytest
-from openai import APIStatusError, BadRequestError, NotFoundError, OpenAI
+from openai import APIStatusError, BadRequestError, NotFoundError, OpenAI, Stream
+from openai.types.responses import ResponseStreamEvent
 
-BACKGROUND_STREAM_ADMISSION_DEADLINE_SECONDS = 90
+BACKGROUND_STREAM_ADMISSION_DEADLINE_SECONDS: Final = 90
 
 
 def generate_key():
@@ -157,10 +160,25 @@ def test_cancel_response():
             raise e
 
 
+def admitted_response_id(chunk: ResponseStreamEvent) -> str | None:
+    response: Final = getattr(chunk, "response", None)
+    return None if response is None else response.id
+
+
+def events_until_admission(stream: Stream[ResponseStreamEvent], started: float) -> Iterator[ResponseStreamEvent]:
+    for chunk in stream:
+        print("stream chunk=", chunk)
+        yield chunk
+        if admitted_response_id(chunk) is not None:
+            return
+        if time.monotonic() - started > BACKGROUND_STREAM_ADMISSION_DEADLINE_SECONDS:
+            return
+
+
 def test_cancel_streaming_response():
-    client = get_test_client()
-    started = time.monotonic()
-    stream = client.responses.create(
+    client: Final = get_test_client()
+    started: Final = time.monotonic()
+    stream: Final = client.responses.create(
         model="gpt-5.5",
         input="count from 1 to 500, one number per line",
         stream=True,
@@ -168,20 +186,12 @@ def test_cancel_streaming_response():
         timeout=BACKGROUND_STREAM_ADMISSION_DEADLINE_SECONDS,
     )
 
-    keepalive_events = 0
-    response_id = None
     with stream:
-        for chunk in stream:
-            print("stream chunk=", chunk)
-            if chunk.type == "keepalive":
-                keepalive_events += 1
-            elif getattr(chunk, "response", None) is not None:
-                response_id = chunk.response.id
-                break
-            if time.monotonic() - started > BACKGROUND_STREAM_ADMISSION_DEADLINE_SECONDS:
-                break
+        events: Final = tuple(events_until_admission(stream, started))
 
-    elapsed = time.monotonic() - started
+    elapsed: Final = time.monotonic() - started
+    keepalive_events: Final = sum(1 for chunk in events if chunk.type == "keepalive")
+    response_id: Final = next((rid for rid in map(admitted_response_id, events) if rid is not None), None)
     if response_id is None and keepalive_events:
         pytest.skip(
             f"OpenAI held the background stream in keepalive for {elapsed:.0f}s "
@@ -189,7 +199,7 @@ def test_cancel_streaming_response():
         )
     assert response_id is not None, f"no response event within {elapsed:.0f}s of streaming a background response"
 
-    cancel_response = client.responses.cancel(response_id)
+    cancel_response: Final = client.responses.cancel(response_id)
     print("CANCEL streaming response=", cancel_response)
     assert cancel_response.status == "cancelled"
 
