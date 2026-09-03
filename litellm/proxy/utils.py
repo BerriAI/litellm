@@ -7531,6 +7531,9 @@ def create_model_info_response(
             max_input_tokens = configured_input
         if configured_output is not None:
             max_output_tokens = configured_output
+        configured_mode: Final = llm_router.get_configured_mode(model_id)
+        if isinstance(configured_mode, str):
+            base["mode"] = configured_mode
 
     if max_input_tokens is not None:
         base["max_input_tokens"] = max_input_tokens
