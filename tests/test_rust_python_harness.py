@@ -66,13 +66,14 @@ def _manifest() -> dict[str, object]:
     }
 
 
-def test_should_load_the_three_harness_strategies_in_order() -> None:
+def test_should_load_the_four_harness_strategies_in_order() -> None:
     strategies = load_catalog()
 
     assert [strategy.id for strategy in strategies] == [
         "e2e_fuzz_tests",
         "unit_tests_rust",
         "validate_sub_methods",
+        "existing_e2e_test_sdk",
     ]
     assert all(
         tuple(case.sdk_function for case in strategy.cases) == SDK_FUNCTIONS
@@ -104,6 +105,8 @@ def test_should_reject_a_manifest_missing_an_sdk_function(tmp_path: Path) -> Non
             True,
         ),
         ("tests/test_parity.py::test_one", "tests/test_parity.py::test_two", False),
+        ("tests/ocr_tests/", "tests/ocr_tests/test_ocr_mistral.py::test_one", True),
+        ("tests/ocr_tests/", "tests/other_tests/test_ocr_mistral.py::test_one", False),
     ],
 )
 def test_should_match_pytest_file_and_node_selectors(
@@ -121,6 +124,13 @@ def test_should_only_return_selectors_whose_files_exist(tmp_path: Path) -> None:
     )
 
     assert runnable_selectors((case,), tmp_path) == ("tests/test_parity.py",)
+
+
+def test_should_treat_an_existing_folder_selector_as_runnable(tmp_path: Path) -> None:
+    (tmp_path / "tests" / "ocr_tests").mkdir(parents=True)
+    case = _case(selectors=("tests/ocr_tests/",))
+
+    assert runnable_selectors((case,), tmp_path) == ("tests/ocr_tests/",)
 
 
 def test_should_mark_planned_and_not_applicable_cases_without_running() -> None:
@@ -239,8 +249,8 @@ def test_should_report_confidence_for_each_sdk_section() -> None:
     }
 
     assert scores["responses"].verified_strategies == 1
-    assert scores["responses"].required_strategies == 3
-    assert scores["responses"].percentage == 33
+    assert scores["responses"].required_strategies == 4
+    assert scores["responses"].percentage == 25
     assert scores["responses"].level.value == "MEDIUM"
     assert scores["count_tokens"].percentage == 0
     assert scores["count_tokens"].level.value == "LOW"
