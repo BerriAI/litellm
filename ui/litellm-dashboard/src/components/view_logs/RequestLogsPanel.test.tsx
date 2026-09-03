@@ -150,9 +150,9 @@ describe("RequestLogsPanel", () => {
 
     it("renders every row the server returns without client-side collapsing", async () => {
       respondWith([
-        logEntry({ request_id: "req-a", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
-        logEntry({ request_id: "req-b", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
-        logEntry({ request_id: "req-c", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-a", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-b", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-c", session_id: "sess-1", session_total_count: 3 }),
       ]);
       renderPanel();
 
@@ -529,7 +529,7 @@ describe("RequestLogsPanel", () => {
 
     it("opens a deep-linked multi-call session log in session mode", async () => {
       respondWith([
-        logEntry({ request_id: "req-llm", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-llm", session_id: "sess-1", session_total_count: 3 }),
       ]);
       renderPanel("?log_id=req-llm");
 
@@ -543,8 +543,8 @@ describe("RequestLogsPanel", () => {
     it("clicking a multi-call session's row writes ?session_id= alongside ?log_id=", async () => {
       const user = userEvent.setup();
       respondWith([
-        logEntry({ request_id: "req-llm", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
-        logEntry({ request_id: "req-llm-2", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-llm", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-llm-2", session_id: "sess-1", session_total_count: 3 }),
       ]);
       renderPanel();
 
@@ -559,7 +559,7 @@ describe("RequestLogsPanel", () => {
     it("selecting another log while a session view is open keeps the session open", async () => {
       const user = userEvent.setup();
       respondWith([
-        logEntry({ request_id: "req-llm", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-llm", session_id: "sess-1", session_total_count: 3 }),
         logEntry({ request_id: "req-unenriched" }),
       ]);
       renderPanel("?log_id=req-llm");
