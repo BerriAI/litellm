@@ -1458,7 +1458,7 @@ describe("KeyEditView", () => {
       });
     });
 
-    it("submits organization_id as undefined after the organization is cleared", async () => {
+    it("submits organization_id as null after the organization is cleared", async () => {
       const onSubmit = vi.fn().mockResolvedValue(undefined);
       renderWithProviders(
         <KeyEditView
@@ -1479,9 +1479,9 @@ describe("KeyEditView", () => {
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ organization_id: undefined }));
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ organization_id: null }));
       });
-      expect(onSubmit.mock.calls[0][0].organization_id).toBeUndefined();
+      expect(JSON.parse(JSON.stringify(onSubmit.mock.calls[0][0]))).toHaveProperty("organization_id", null);
     });
   });
 

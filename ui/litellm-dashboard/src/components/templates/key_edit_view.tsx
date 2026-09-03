@@ -303,8 +303,8 @@ export function KeyEditView({
     }
   };
 
-  const handleOrganizationChange = (setField: (value: string | undefined) => void, orgId: string | undefined) => {
-    setField(orgId || undefined);
+  const handleOrganizationChange = (setField: (value: string | null) => void, orgId: string | undefined) => {
+    setField(orgId || null);
     setSelectedOrganizationId(orgId || null);
     form.setValue("team_id", undefined);
   };
