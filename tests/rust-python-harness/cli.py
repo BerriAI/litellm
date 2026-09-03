@@ -6,14 +6,13 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .catalog import load_catalog
-from .models import HarnessCase, Strategy
+from .models import SDK_FUNCTIONS, HarnessCase, Strategy
 from .runner import run_pytest
 from .ui import make_dashboard
 from .strategies.unit_tests.mapping_validator import FunctionReport, build_function_report
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COVERAGE_ROOT = REPO_ROOT / "target" / "rust-python-harness"
-SDK_FUNCTION_CHOICES = ("ocr", "messages", "responses", "count_tokens")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -42,7 +41,7 @@ def _parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         dest="sdk_functions",
-        choices=SDK_FUNCTION_CHOICES,
+        choices=SDK_FUNCTIONS,
         help="run only this SDK function",
     )
     parser.add_argument(
@@ -110,7 +109,7 @@ def _interactive_filters(strategies: Sequence[Strategy]) -> tuple[set[str], set[
     )
     sdk_functions = _pick_values(
         "SDK functions",
-        [(name, name) for name in SDK_FUNCTION_CHOICES],
+        [(name, name) for name in SDK_FUNCTIONS],
     )
     return strategy_ids, sdk_functions
 
@@ -166,7 +165,7 @@ def _print_function_report(report: FunctionReport) -> None:
 
 
 def _validate_ledger(sdk_functions: set[str]) -> int:
-    functions = sdk_functions or set(SDK_FUNCTION_CHOICES)
+    functions = sdk_functions or set(SDK_FUNCTIONS)
     reports = tuple(build_function_report(function) for function in sorted(functions))
     for report in reports:
         _print_function_report(report)

@@ -119,7 +119,7 @@ class RichDashboard(AbstractContextManager["RichDashboard"]):
 
         table = Table(box=box.ROUNDED, expand=True, title="Strategy × SDK function")
         table.add_column("Strategy", ratio=3)
-        for label in ("ocr/aocr", "messages", "responses", "count_tokens"):
+        for label in SDK_FUNCTIONS:
             table.add_column(label, justify="center", ratio=1)
         for strategy in self.strategies:
             cells = []

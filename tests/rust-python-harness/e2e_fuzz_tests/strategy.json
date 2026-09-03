@@ -7,6 +7,8 @@
     "ocr": {"coverage": "partial", "selectors": ["tests/test_litellm/ocr/test_rust_bridge.py"], "note": "Bridge coverage exists; frozen-oracle fuzz parity is still being added."},
     "messages": {"coverage": "partial", "selectors": ["tests/test_litellm/anthropic_interface/test_rust_bridge_messages.py"], "note": "Bridge coverage exists; frozen-oracle fuzz parity is still being added."},
     "responses": {"coverage": "partial", "selectors": ["tests/test_litellm/responses/test_rust_bridge_websocket.py"], "note": "Covers the websocket bridge; full responses parity is still being added."},
-    "count_tokens": {"coverage": "planned", "selectors": [], "note": "No Rust count_tokens parity test is present yet."}
+    "count_tokens": {"coverage": "planned", "selectors": [], "note": "No Rust count_tokens parity test is present yet."},
+    "chat_completions": {"coverage": "partial", "selectors": ["tests/test_litellm/rust_bridge/test_chat_completions.py"], "note": "Bridge coverage exists; frozen-oracle fuzz parity is still being added."},
+    "transcription": {"coverage": "partial", "selectors": ["tests/test_litellm/test_audio_transcription_rust_bridge.py"], "note": "Bridge coverage exists; frozen-oracle fuzz parity is still being added."}
   }
 }
