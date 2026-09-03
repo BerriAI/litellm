@@ -482,7 +482,6 @@ def search(
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
-            router=router,
         )
 
         return response
