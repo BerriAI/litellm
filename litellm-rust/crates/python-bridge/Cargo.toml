@@ -12,6 +12,9 @@ crate-type = ["cdylib"]
 [features]
 default = ["abi3"]
 abi3 = ["pyo3/abi3-py310"]
+# Free-threaded stable ABI (cp3XXt wheels), following the cryptography project's
+# pyo3 setup; deliberately omits the abi3-py310 GIL-wheel pin.
+freethreaded = ["pyo3/abi3", "pyo3/abi3t"]
 extension-module = ["pyo3/extension-module"]
 panic-test = []
 
