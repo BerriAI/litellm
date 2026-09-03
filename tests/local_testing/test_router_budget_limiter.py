@@ -150,7 +150,7 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
 
     response = await router.acompletion(
         messages=[{"role": "user", "content": "Hello, how are you?"}],
-        model="anthropic/claude-sonnet-4-5-20250929",
+        model=f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
     )
     print(response)
 
@@ -160,7 +160,7 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
         with pytest.raises(Exception, match="Exceeded budget for provider") as exc_info:
             await router.acompletion(
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
-                model="anthropic/claude-sonnet-4-5-20250929",
+                model=f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
             )
 
         await asyncio.sleep(0.5)
