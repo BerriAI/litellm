@@ -199,7 +199,13 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
                 return [{"total_count": min(total, cap_plus_one)}]
             page_size = params[-2] if len(params) >= 2 else 50
             skip = params[-1] if len(params) >= 1 else 0
-            return [row for row in filtered[skip : skip + page_size]]
+            exact_first = re.search(r"ORDER BY \(request_id = \$(\d+)\) DESC", sql_query)
+            ordered = (
+                sorted(filtered, key=lambda row: row["request_id"] == params[int(exact_first.group(1)) - 1], reverse=True)
+                if exact_first
+                else filtered
+            )
+            return [row for row in ordered[skip : skip + page_size]]
 
     class MockPrismaClient:
         def __init__(self):
@@ -2792,6 +2798,113 @@ async def test_ui_view_request_response_custom_logger_allows_own_payload_without
         )
         assert response.status_code == 200
         assert "my own prompt" in response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_request_response_custom_logger_is_keyed_by_callers_own_request_id(client, monkeypatch):
+    """Cold storage is keyed by the provider request_id. The caller's row carries the
+    lookup id only as its client-set litellm_call_id while another tenant's row owns
+    that id as its request_id. The custom logger is asked for the caller's own stored
+    request_id, so the caller gets their payload rather than a 403 from the foreign
+    payload's owner check, and the foreign payload is never fetched."""
+    prisma = _make_payload_lookup_prisma(
+        [
+            _payload_row("shared-id", "other-call-id", "other_user", "other tenant prompt"),
+            _payload_row("caller-req", "shared-id", "caller_user", "caller prompt"),
+        ]
+    )
+    cold_storage = {
+        "shared-id": {
+            "messages": [{"role": "user", "content": "other tenant prompt"}],
+            "response": {"id": "shared-id"},
+            "metadata": {"user_api_key_user_id": "other_user", "user_api_key_team_id": None},
+        },
+        "caller-req": {
+            "messages": [{"role": "user", "content": "caller prompt"}],
+            "response": {"id": "caller-req"},
+            "metadata": {"user_api_key_user_id": "caller_user", "user_api_key_team_id": None},
+        },
+    }
+    requested_ids = []
+
+    class ColdStorageLogger:
+        async def get_request_response_payload(self, request_id, start_time_utc, end_time_utc):
+            requested_ids.append(request_id)
+            return cold_storage.get(request_id)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_active_additional_logging_utils_from_custom_logger",
+        lambda: [ColdStorageLogger()],
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller_user"
+    )
+    try:
+        response = client.get("/spend/logs/ui/shared-id", headers={"Authorization": "Bearer sk-test"})
+        assert response.status_code == 200, response.text
+        assert "caller prompt" in response.text
+        assert "other tenant prompt" not in response.text
+        assert requested_ids == ["caller-req"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_id_lookup_lists_exact_request_id_row_first(client, monkeypatch):
+    """The dashboard's deep link fetches a single row for ``?log_id=``. When a newer
+    row carries that id as its client-set litellm_call_id, the row whose request_id
+    is the id still comes first, so the link opens the request it names."""
+    today = datetime.datetime.now(timezone.utc)
+    corpus = [
+        {
+            "id": "log_colliding",
+            "request_id": "colliding-req",
+            "litellm_call_id": "victim-req",
+            "api_key": "sk-test-key",
+            "user": "other_user",
+            "team_id": None,
+            "spend": 0.01,
+            "startTime": today.isoformat(),
+            "model": "gpt-4",
+        },
+        {
+            "id": "log_victim",
+            "request_id": "victim-req",
+            "litellm_call_id": "victim-call-id",
+            "api_key": "sk-test-key",
+            "user": "victim_user",
+            "team_id": None,
+            "spend": 0.02,
+            "startTime": (today - datetime.timedelta(minutes=5)).isoformat(),
+            "model": "gpt-4",
+        },
+    ]
+
+    def filter_fn(where):
+        rows = _filter_logs_by_date_range(corpus, where)
+        rid_either = where.get("request_id_or_call_id")
+        if rid_either:
+            return [r for r in rows if rid_either in (r["request_id"], r["litellm_call_id"])]
+        return rows
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", make_ui_spend_logs_mock_prisma(corpus, filter_fn))
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={"request_id": "victim-req", "page_size": 1},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["total"] == 2
+        assert [row["request_id"] for row in data["data"]] == ["victim-req"]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 

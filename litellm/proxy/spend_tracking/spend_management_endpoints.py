@@ -2586,6 +2586,7 @@ async def ui_view_spend_logs(
                 p += 1
 
         request_id_filter: Final = where_conditions.get("request_id")
+        exact_request_id_first: Final = f"(request_id = ${p}) DESC, " if isinstance(request_id_filter, str) else ""
         if isinstance(request_id_filter, str):
             sql_conditions.append(f"(request_id = ${p} OR litellm_call_id = ${p})")
             sql_params.append(request_id_filter)
@@ -2702,7 +2703,7 @@ async def ui_view_spend_logs(
                 COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
             FROM "LiteLLM_SpendLogs"
             WHERE {" AND ".join(sql_conditions)}
-            ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
+            ORDER BY {exact_request_id_first}{_order_expr} {_sql_dir}{_nulls_clause}
             LIMIT ${p} OFFSET ${p + 1}
         """
         sql_params.extend([page_size, skip])
@@ -2895,9 +2896,21 @@ async def ui_view_request_response_for_request_id(
     if end_date is not None:
         end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
 
+    spend_log_row: Final = (
+        None
+        if prisma_client is None
+        else await _resolve_spend_log_payload_row(
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            request_id=request_id,
+            caller_is_admin=caller_is_admin,
+        )
+    )
+    stored_request_id: Final = _stored_request_id(spend_log_row, request_id)
+
     for custom_logger in custom_loggers:
         payload = await custom_logger.get_request_response_payload(
-            request_id=request_id,
+            request_id=stored_request_id,
             start_time_utc=start_date_obj,
             end_time_utc=end_date_obj,
         )
@@ -2911,32 +2924,17 @@ async def ui_view_request_response_for_request_id(
                 )
             return payload
 
+    if spend_log_row is None:
+        return None
+
     # Fallback: the list endpoint omits the heavy columns for performance, so
     # serve them here. When prompts were offloaded to cold storage the DB holds
     # only placeholders, so _resolve_request_response_payload fetches the real
     # payload from the configured cold storage backend by object key.
-    if prisma_client is not None:
-        from litellm.proxy.spend_tracking.cold_storage_handler import (
-            ColdStorageHandler,
-        )
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 
-        viewer: Final = None if caller_is_admin else await _spend_log_viewer(prisma_client, user_api_key_dict)
-        sql_query, sql_params = _spend_log_payload_query(request_id, viewer)
-        db_result: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_or_none(
-            prisma_client, sql_query, *sql_params
-        )
-        if db_result and len(db_result) > 0:
-            if not caller_is_admin:
-                await _assert_user_owns_fetched_spend_rows(
-                    prisma_client=prisma_client,
-                    user_api_key_dict=user_api_key_dict,
-                    rows=db_result,
-                    request_id=request_id,
-                )
-            resolved = await _resolve_request_response_payload(db_result[0], cold_storage_handler=ColdStorageHandler())
-            return resolved._asdict()
-
-    return None
+    resolved: Final = await _resolve_request_response_payload(spend_log_row, cold_storage_handler=ColdStorageHandler())
+    return resolved._asdict()
 
 
 @router.get(
@@ -4412,7 +4410,7 @@ def _spend_log_payload_query(request_id: str, viewer: _SpendLogViewer | None) ->
     scope, scope_params = _viewer_scope_clause(viewer)
     return (
         f"""
-            SELECT messages, response, proxy_server_request, metadata, "user", team_id
+            SELECT request_id, messages, response, proxy_server_request, metadata, "user", team_id
             FROM "LiteLLM_SpendLogs"
             WHERE (request_id = $1 OR litellm_call_id = $1){scope}
             ORDER BY (request_id = $1) DESC
@@ -4420,6 +4418,39 @@ def _spend_log_payload_query(request_id: str, viewer: _SpendLogViewer | None) ->
         """,
         (request_id, *scope_params),
     )
+
+
+async def _resolve_spend_log_payload_row(
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_id: str,
+    caller_is_admin: bool,
+) -> Mapping[str, object] | None:
+    """
+    Resolve an id lookup to the caller's own spend-log row before any payload
+    store is consulted. Cold storage is keyed by the provider ``request_id``, so
+    asking it for the raw lookup id could hand back another tenant's payload when
+    that id is only the caller's ``litellm_call_id``; the row's stored
+    ``request_id`` is the key that names the caller's own request.
+    """
+    viewer: Final = None if caller_is_admin else await _spend_log_viewer(prisma_client, user_api_key_dict)
+    sql_query, sql_params = _spend_log_payload_query(request_id, viewer)
+    rows: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_or_none(prisma_client, sql_query, *sql_params)
+    if not rows:
+        return None
+    if not caller_is_admin:
+        await _assert_user_owns_fetched_spend_rows(
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            rows=rows,
+            request_id=request_id,
+        )
+    return rows[0]
+
+
+def _stored_request_id(row: Mapping[str, object] | None, lookup_id: str) -> str:
+    stored: Final = None if row is None else row.get("request_id")
+    return stored if isinstance(stored, str) else lookup_id
 
 
 def _fetched_row_owner(row: Mapping[str, object]) -> tuple[str | None, str | None]:
