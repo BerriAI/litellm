@@ -125,6 +125,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     {
       title: "Spend (USD)",
       key: "spend",
+      numeric: true,
       render: (_: unknown, record: Member) => {
         const orgMember =
           record.user_id != null ? (orgData.members || []).find((m) => m.user_id === record.user_id) : undefined;

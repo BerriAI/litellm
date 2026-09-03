@@ -127,6 +127,14 @@ describe("TeamVirtualKeysTable", () => {
     });
   });
 
+  it("right-aligns the Spend (USD) and Budget (USD) columns", async () => {
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    expect((await screen.findByText("Spend (USD)")).closest("th")).toHaveClass("text-right");
+    expect(screen.getByText("Budget (USD)").closest("th")).toHaveClass("text-right");
+    expect(screen.getByText("Key ID").closest("th")).not.toHaveClass("text-right");
+  });
+
   it("should display keys in table when data is loaded", async () => {
     mockUseKeys.mockReturnValue({
       data: {
