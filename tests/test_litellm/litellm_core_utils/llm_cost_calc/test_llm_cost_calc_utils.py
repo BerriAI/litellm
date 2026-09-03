@@ -13,7 +13,7 @@ from litellm.llms.gemini.image_generation.cost_calculator import (
 from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_image_generation_cost_calculator,
 )
-from litellm.types.llms.openai import FileSearchTool, WebSearchOptions
+from litellm.types.llms.openai import CachedTokensDetails, FileSearchTool, WebSearchOptions
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     ImageObject,
@@ -2241,6 +2241,10 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
 
     prompt_tokens_details: PromptTokensDetailsResult = {
         "cache_hit_tokens": 0,
+        "cached_text_tokens": 0,
+        "cached_audio_tokens": 0,
+        "cached_image_tokens": 0,
+        "has_cached_tokens_details": False,
         "cache_creation_tokens": 0,
         "cache_creation_token_details": CacheCreationTokenDetails(
             ephemeral_5m_input_tokens=100,
@@ -3321,6 +3325,41 @@ def test_token_type_cost_breakdown_xai_just_below_200k_uses_base_tier_rates(_loc
 
     assert breakdown.reasoning_cost == pytest.approx(1_500 * 2.5e-06)
     assert breakdown.cache_read_cost == pytest.approx(50_000 * 2e-07)
+
+
+def test_realtime_cached_modality_breakdown_matches_prompt_cost(_local_model_cost_map):
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=400,
+            audio_tokens=400,
+            image_tokens=200,
+            cached_tokens=300,
+            cached_tokens_details=CachedTokensDetails(
+                text_tokens=100,
+                audio_tokens=150,
+                image_tokens=50,
+            ),
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gpt-realtime-2.1-mini",
+        usage=usage,
+        custom_llm_provider="openai",
+    )
+    breakdown = get_token_type_cost_breakdown(
+        model="gpt-realtime-2.1-mini",
+        custom_llm_provider="openai",
+        usage=usage,
+    )
+
+    expected_cache_cost = 100 * 6e-08 + 150 * 3e-07 + 50 * 8e-08
+    expected_uncached_cost = 300 * 6e-07 + 250 * 1e-05 + 150 * 8e-07
+    assert breakdown.cache_read_cost == pytest.approx(expected_cache_cost)
+    assert prompt_cost == pytest.approx(expected_uncached_cost + expected_cache_cost)
 
 
 def test_token_type_cost_breakdown_includes_cache_creation_from_top_level_usage(_local_model_cost_map):

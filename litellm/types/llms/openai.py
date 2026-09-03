@@ -1126,9 +1126,12 @@ AllEmbeddingInputValues = str | list[str] | list[int] | list[list[int]]
 
 OpenAIAudioTranscriptionOptionalParams = Literal[
     "language",
+    "languages",
+    "keywords",
     "prompt",
     "temperature",
     "response_format",
+    "stream",
     "timestamp_granularities",
     "include",
 ]
@@ -1283,10 +1286,18 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     model_config = {"extra": "allow"}
 
 
+class CachedTokensDetails(BaseLiteLLMOpenAIResponseObject):
+    audio_tokens: int | None = None
+    image_tokens: int | None = None
+    text_tokens: int | None = None
+
+
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: int | None = None
     cached_tokens: int = 0
     text_tokens: int | None = None
+    cached_tokens_details: CachedTokensDetails | None = None
+    image_tokens: int | None = None
 
     model_config = {"extra": "allow"}
 
@@ -2202,6 +2213,16 @@ class OpenAIRealtimeResponseUsage(TypedDict):
     output_token_details: NotRequired[ReadOnly[OpenAIRealtimeUsageTokenDetails]]
 
 
+class OpenAIRealtimeTranslationDurationUsage(TypedDict):
+    type: ReadOnly[Literal["duration"]]
+    output_seconds: ReadOnly[float]
+
+
+class OpenAIRealtimeTranslationClosedEvent(TypedDict):
+    type: ReadOnly[Literal["session.closed"]]
+    usage: ReadOnly[OpenAIRealtimeTranslationDurationUsage]
+
+
 class OpenAIRealtimeEventTypes(Enum):
     SESSION_CREATED = "session.created"
     # Beta delta event names
@@ -2242,6 +2263,7 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeInputAudioBufferSpeechEvent
     | OpenAIRealtimeInputAudioTranscriptionDelta
     | OpenAIRealtimeInputAudioTranscriptionCompleted
+    | OpenAIRealtimeTranslationClosedEvent
 )
 
 OpenAIRealtimeStreamList = list[OpenAIRealtimeEvents]

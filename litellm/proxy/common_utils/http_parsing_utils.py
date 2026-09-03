@@ -274,14 +274,18 @@ async def get_form_data(request: Request) -> dict[str, Any]:
     Handles when OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
     """
     form: Final = await request.form()
-    parsed_form_data: Final[dict[str, Any]] = {}
-    for key, value in form.multi_items():  # not dict(form), which keeps only the last repeat
-        if key.endswith("[]"):
-            clean_key = key[:-2]
-            parsed_form_data.setdefault(clean_key, []).append(value)
-        else:
-            parsed_form_data[key] = value
-    return parsed_form_data
+    form_items: Final = tuple(form.multi_items() if hasattr(form, "multi_items") else form.items())
+    array_keys: Final = frozenset(key[:-2] for key, _ in form_items if key.endswith("[]"))
+    normalized_items: Final = tuple((key.removesuffix("[]"), value) for key, value in form_items)
+    normalized_keys: Final = frozenset(key for key, _ in normalized_items)
+    return {  # mutable-ok: request parsers expose a mutable form-data mapping to endpoint handlers
+        key: [  # mutable-ok: repeated multipart values follow the established mutable list contract
+            value for item_key, value in normalized_items if item_key == key
+        ]
+        if key in array_keys
+        else next(value for item_key, value in reversed(normalized_items) if item_key == key)
+        for key in normalized_keys
+    }
 
 
 async def convert_upload_files_to_file_data(

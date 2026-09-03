@@ -54,6 +54,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         api_version: str | None,
         realtime_protocol: str | None = None,
         query_params: RealtimeQueryParams | None = None,
+        realtime_mode: str = "realtime",
     ) -> str:
         """
         Construct Azure realtime WebSocket URL.
@@ -85,18 +86,26 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         )
         intent: Final = (query_params or {}).get("intent")
 
-        if _is_ga:
-            path = "/openai/v1/realtime"
-            query_parts = []
-            if intent != "transcription" and (query_params is None or "model" in query_params):
-                query_parts.append(urlencode({"model": model}))
-        else:
-            # Default to beta path for backwards compatibility
-            path = "/openai/realtime"
-            query_parts = [urlencode({"api-version": api_version, "deployment": model})]
+        path: Final = (
+            "/openai/v1/realtime/translations"
+            if realtime_mode == "translation"
+            else "/openai/v1/realtime"
+            if _is_ga
+            else "/openai/realtime"
+        )
+        base_query_parts: Final = (
+            (urlencode((("model", model),)),)
+            if realtime_mode == "translation"
+            else (
+                (urlencode((("model", model),)),)
+                if intent != "transcription" and (query_params is None or "model" in query_params)
+                else ()
+            )
+            if _is_ga
+            else (urlencode((("api-version", api_version), ("deployment", model))),)
+        )
 
-        if intent:
-            query_parts.append(urlencode({"intent": intent}))
+        query_parts: Final = (*base_query_parts, urlencode((("intent", intent),))) if intent else base_query_parts
 
         qs: Final = "&".join(query_parts)
         return f"{api_base}{path}?{qs}" if qs else f"{api_base}{path}"
@@ -116,6 +125,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         query_params: RealtimeQueryParams | None = None,
         user_api_key_dict: Any | None = None,
         litellm_metadata: dict | None = None,
+        realtime_mode: str = "realtime",
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -132,6 +142,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             api_version,
             realtime_protocol=realtime_protocol,
             query_params=query_params,
+            realtime_mode=realtime_mode,
         )
 
         auth_headers: Final = self.get_auth_headers(api_key=api_key, azure_ad_token=azure_ad_token)
@@ -155,6 +166,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                     force_transcription_model=(
                         model if (query_params or {}).get("intent") == "transcription" else None
                     ),
+                    translation_session=realtime_mode == "translation",
                 )
                 await realtime_streaming.bidirectional_forward()
 

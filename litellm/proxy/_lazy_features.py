@@ -28,6 +28,20 @@ def _include_router(attr_name: str = "router") -> Callable[["FastAPI", object], 
     return _register
 
 
+def _include_router_prepend(attr_name: str = "router") -> Callable[["FastAPI", object], None]:
+    def _register(app: "FastAPI", module: object) -> None:
+        router: Final = app.router
+        route_count: Final = len(router.routes)
+        app.include_router(getattr(module, attr_name))
+        new_routes: Final = router.routes[route_count:]
+        router.routes[:] = [  # mutable-ok: FastAPI route registration requires in-place list replacement
+            *new_routes,
+            *router.routes[:route_count],
+        ]
+
+    return _register
+
+
 def _mount_app(prefix: str, attr_name: str = "app") -> Callable[["FastAPI", object], None]:
     def _register(app: "FastAPI", module: object) -> None:
         app.mount(path=prefix, app=getattr(module, attr_name))
@@ -189,6 +203,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         name="realtime",
         module_path="litellm.proxy.realtime_endpoints.endpoints",
         path_prefixes=("/openai/v1/realtime", "/v1/realtime", "/realtime"),
+        register_fn=_include_router_prepend(),
     ),
     LazyFeature(
         name="anthropic_passthrough",
