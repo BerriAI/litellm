@@ -943,6 +943,9 @@ class AmazonConverseConfig(BaseConfig):
                         litellm.verbose_logger.warning(DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING, model)
                 else:
                     optional_params["thinking"] = value
+                    AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+                        model=model, optional_params=optional_params, custom_llm_provider="bedrock"
+                    )
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
                     model=model, reasoning_effort=value, optional_params=optional_params
@@ -1334,6 +1337,7 @@ class AmazonConverseConfig(BaseConfig):
             )
 
         additional_request_params.pop("parallel_tool_calls", None)
+        additional_request_params.pop("client_metadata", None)
 
         # Only set the topK value in for models that support it
         additional_request_params.update(self._handle_top_k_value(model, inference_params, drop_params))

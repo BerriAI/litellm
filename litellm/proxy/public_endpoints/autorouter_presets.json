@@ -1,4 +1,26 @@
 {
+  "1m_context": {
+    "label": "1M Context",
+    "description": "Routes across models with 1M-token context windows: Luna for simple queries, Terra for medium, Opus 5 for complex, Opus 5 at high thinking for reasoning.",
+    "complexity_router_config": {
+      "tiers": {
+        "SIMPLE": ["gpt-5.6-luna"],
+        "MEDIUM": ["gpt-5.6-terra"],
+        "COMPLEX": ["claude-opus-5"],
+        "REASONING": ["claude-opus-5"]
+      },
+      "tier_model_configs": {
+        "REASONING": [{ "model_name": "claude-opus-5", "litellm_params": { "reasoning_effort": "high" } }]
+      },
+      "classifier_type": "heuristic_v2",
+      "escalation_keywords": ["LITELLM ESCALATE"],
+      "classification_mode": "every_request",
+      "session_affinity": false,
+      "modality_routing": false,
+      "modality_pin_override": false,
+      "deployment_affinity": true
+    }
+  },
   "anthropic_family": {
     "label": "Anthropic Family",
     "description": "Routes across the Claude model family: Haiku for simple queries, Sonnet for medium, Opus for complex, Opus at high thinking for reasoning.",
@@ -17,6 +39,7 @@
       "classification_mode": "every_request",
       "session_affinity": false,
       "modality_routing": false,
+      "modality_pin_override": false,
       "deployment_affinity": true
     }
   },
@@ -35,6 +58,7 @@
       "classification_mode": "every_request",
       "session_affinity": false,
       "modality_routing": false,
+      "modality_pin_override": false,
       "deployment_affinity": true
     }
   },
@@ -63,24 +87,29 @@
       "classification_mode": "every_request",
       "session_affinity": false,
       "modality_routing": false,
+      "modality_pin_override": false,
       "deployment_affinity": true
     }
   },
   "openai_family": {
     "label": "OpenAI Family",
-    "description": "Routes across the GPT model family: gpt-5.4-nano for simple queries, gpt-5.4-mini for medium, gpt-5.4 for complex, o3 for reasoning-heavy requests.",
+    "description": "Routes across the GPT model family: Luna for simple queries, Terra for medium, Sol for complex, Sol at xhigh thinking for reasoning.",
     "complexity_router_config": {
       "tiers": {
-        "SIMPLE": ["gpt-5.4-nano"],
-        "MEDIUM": ["gpt-5.4-mini"],
-        "COMPLEX": ["gpt-5.4"],
-        "REASONING": ["o3"]
+        "SIMPLE": ["gpt-5.6-luna"],
+        "MEDIUM": ["gpt-5.6-terra"],
+        "COMPLEX": ["gpt-5.6-sol"],
+        "REASONING": ["gpt-5.6-sol"]
+      },
+      "tier_model_configs": {
+        "REASONING": [{ "model_name": "gpt-5.6-sol", "litellm_params": { "reasoning_effort": "xhigh" } }]
       },
       "classifier_type": "heuristic",
       "escalation_keywords": ["LITELLM ESCALATE"],
       "classification_mode": "every_request",
       "session_affinity": false,
       "modality_routing": false,
+      "modality_pin_override": false,
       "deployment_affinity": true
     }
   }
