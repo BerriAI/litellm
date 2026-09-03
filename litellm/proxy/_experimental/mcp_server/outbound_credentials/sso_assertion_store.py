@@ -17,7 +17,6 @@ TTL ``MCP_SSO_ASSERTION_CACHE_TTL_SECONDS``; invalidation also guards against st
 
 from __future__ import annotations
 
-import itertools
 import json
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Protocol
@@ -50,25 +49,18 @@ class SSOIdentityAssertion(BaseModel):
 
 
 class SSOAssertionCache:
-    """Process-local read cache. ``invalidate`` bumps a per-user generation so a fetch that read
-    the row before a login cannot repopulate the previous assertion after it."""
+    """Process-local read cache. ``invalidate`` bumps a process-wide epoch so a fetch that started
+    before a login cannot repopulate the old assertion after it."""
 
     def __init__(self, ttl_seconds: int = MCP_SSO_ASSERTION_CACHE_TTL_SECONDS) -> None:
         self._entries = InMemoryCache(
             max_size_in_memory=MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE,
             default_ttl=ttl_seconds,
         )
-        self._generations = InMemoryCache(
-            max_size_in_memory=MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE,
-            default_ttl=ttl_seconds,
-        )
-        self._next_generation = itertools.count(1)
+        self._epoch: int = 0
 
-    def generation(self, user_id: str) -> int | None:
-        gen: Final = self._generations.get_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
-            user_id
-        )
-        return gen if isinstance(gen, int) else None
+    def epoch(self) -> int:
+        return self._epoch
 
     def get(self, user_id: str) -> SSOIdentityAssertion | None:
         cached: Final = self._entries.get_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
@@ -76,24 +68,21 @@ class SSOAssertionCache:
         )
         return cached if isinstance(cached, SSOIdentityAssertion) else None
 
-    def set_if_unchanged(self, user_id: str, assertion: SSOIdentityAssertion, seen_generation: int | None) -> None:
-        if self.generation(user_id) != seen_generation:
+    def set_if_unchanged(self, user_id: str, assertion: SSOIdentityAssertion, seen_epoch: int) -> None:
+        if self._epoch != seen_epoch:
             return
         self._entries.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
             user_id, assertion
         )
 
     def invalidate(self, user_id: str) -> None:
-        self._generations.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
-            user_id, next(self._next_generation)
-        )
+        self._epoch += 1
         self._entries.delete_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
             user_id
         )
 
     def flush(self) -> None:
         self._entries.flush_cache()  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
-        self._generations.flush_cache()  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
 
 
 _ASSERTION_CACHE: Final = SSOAssertionCache()
@@ -223,10 +212,10 @@ async def fetch_sso_identity_assertion(
     cached: Final = cache.get(user_id)
     if cached is not None:
         return cached
-    seen_generation: Final = cache.generation(user_id)
+    seen_epoch: Final = cache.epoch()
     assertion: Final = await _read_assertion_from_db(user_id)
     if assertion is not None:
-        cache.set_if_unchanged(user_id, assertion, seen_generation)
+        cache.set_if_unchanged(user_id, assertion, seen_epoch)
     return assertion
 
 
