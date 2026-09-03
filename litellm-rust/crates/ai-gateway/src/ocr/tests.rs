@@ -595,6 +595,59 @@ async fn document_intelligence_poll_uses_resolved_subscription_key() {
     );
 }
 
+#[tokio::test]
+async fn document_intelligence_uses_entra_bearer_fallback() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let addr = listener.local_addr().expect("listener has local addr");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let request = read_http_headers(&mut socket).await;
+        let body = r#"{"status":"succeeded","analyzeResult":{"pages":[]}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("writes response");
+        request
+    });
+    let headers = Map::from_iter([("Authorization".to_string(), json!("Bearer entra-token"))]);
+    ocr(OcrRequest {
+        model: "doc-intelligence/prebuilt-read",
+        document: json!({"type": "document_url", "document_url": "data:application/pdf;base64,abc"}),
+        api_key: None,
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("azure_ai"),
+        extra_headers: Some(headers),
+        optional_params: Map::new(),
+        timeout: Some(Duration::from_secs(5)),
+        callbacks: Vec::new(),
+        guardrails: Vec::new(),
+        request_metadata: RequestMetadata::default(),
+        litellm_call_id: None,
+    })
+    .await
+    .expect("entra token authenticates request");
+    let request = server.await.expect("server task completes");
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer entra-token"),
+        "{request}"
+    );
+    assert!(
+        !request
+            .to_ascii_lowercase()
+            .contains("ocp-apim-subscription-key"),
+        "{request}"
+    );
+}
+
 #[test]
 fn string_headers_rejects_non_string_values() {
     let headers = json!({
