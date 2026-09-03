@@ -107,6 +107,7 @@ where
 mod tests {
     use std::ffi::CString;
     use std::future::poll_fn;
+    use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, mpsc};
     use std::task::Poll;
@@ -385,6 +386,31 @@ asyncio.run(exercise())
 
     #[test]
     fn async_result_delivery_does_not_stall_tokio_workers() {
+        const CHILD_PROCESS: &str = "LITELLM_ASYNC_RESULT_DELIVERY_TEST_CHILD";
+
+        if std::env::var_os(CHILD_PROCESS).is_none() {
+            let output =
+                Command::new(std::env::current_exe().expect("test executable should exist"))
+                    .arg("--exact")
+                    .arg(
+                        thread::current()
+                            .name()
+                            .expect("test thread should be named"),
+                    )
+                    .arg("--nocapture")
+                    .env(CHILD_PROCESS, "1")
+                    .env("TOKIO_WORKER_THREADS", "1")
+                    .output()
+                    .expect("isolated result-delivery test should start");
+            assert!(
+                output.status.success(),
+                "isolated result-delivery test failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
+
         Python::initialize();
         ASYNC_PROBE_COMPLETED.store(0, Ordering::SeqCst);
         Python::attach(|py| {
