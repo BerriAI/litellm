@@ -3855,7 +3855,7 @@ def test_pre_call_checks_counts_responses_instructions_tokens(monkeypatch):
 
     input_only_tokens = router._count_pre_call_check_tokens(messages=None, input=short_input)
     with_instructions_tokens = router._count_pre_call_check_tokens(
-        messages=None, input=short_input, instructions=long_instructions
+        messages=None, input=short_input, request_kwargs={"instructions": long_instructions}
     )
     assert with_instructions_tokens > input_only_tokens
 
@@ -3868,6 +3868,164 @@ def test_pre_call_checks_counts_responses_instructions_tokens(monkeypatch):
             healthy_deployments=deployments,
             input=short_input,
             request_kwargs={"instructions": long_instructions},
+        )
+
+
+_OVERSIZED_TOOL_DESCRIPTION = "look up the answer in the knowledge base. " * 40
+
+
+@pytest.mark.parametrize(
+    "prompt_kwargs, tool",
+    [
+        pytest.param(
+            {"messages": [{"role": "user", "content": "hi"}]},
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": _OVERSIZED_TOOL_DESCRIPTION,
+                    "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+                },
+            },
+            id="chat_completions_tool",
+        ),
+        pytest.param(
+            {"input": "hi"},
+            {
+                "type": "function",
+                "name": "lookup",
+                "description": _OVERSIZED_TOOL_DESCRIPTION,
+                "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+            },
+            id="responses_tool",
+        ),
+        pytest.param(
+            {"messages": [{"role": "user", "content": "hi"}]},
+            {
+                "name": "lookup",
+                "description": _OVERSIZED_TOOL_DESCRIPTION,
+                "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}},
+            },
+            id="anthropic_messages_tool",
+        ),
+    ],
+)
+def test_pre_call_checks_counts_tool_definition_tokens(monkeypatch, prompt_kwargs, tool):
+    """
+    Tool definitions are sent to the model as prompt tokens but never appear in
+    `messages` or `input`. A request whose prompt alone fits the context window but
+    whose prompt plus `tools` exceeds it must be rejected before dispatch, for the
+    Chat Completions, Responses and Anthropic Messages tool shapes alike.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+
+    prompt_only_tokens = router._count_pre_call_check_tokens(
+        messages=prompt_kwargs.get("messages"), input=prompt_kwargs.get("input")
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": prompt_only_tokens}
+    )
+
+    assert len(router._pre_call_checks(model="m", healthy_deployments=deployments, **prompt_kwargs)) == 1
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="m",
+            healthy_deployments=deployments,
+            request_kwargs={"tools": [tool]},
+            **prompt_kwargs,
+        )
+
+
+@pytest.mark.parametrize(
+    "system",
+    [
+        pytest.param("You are a meticulous assistant. " * 40, id="system_string"),
+        pytest.param(
+            [{"type": "text", "text": "You are a meticulous assistant. " * 40}],
+            id="system_blocks",
+        ),
+    ],
+)
+def test_pre_call_checks_counts_anthropic_system_tokens(monkeypatch, system):
+    """
+    The Anthropic Messages API carries the system prompt as a top-level `system` field,
+    not as a message. Its tokens reach the model, so a request whose `messages` fit but
+    whose `messages` plus `system` exceed the context window must be rejected.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+    ]
+    messages = [{"role": "user", "content": "hi"}]
+
+    messages_only_tokens = router._count_pre_call_check_tokens(messages=messages, input=None)
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": messages_only_tokens})
+
+    assert len(router._pre_call_checks(model="m", healthy_deployments=deployments, messages=messages)) == 1
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="m",
+            healthy_deployments=deployments,
+            messages=messages,
+            request_kwargs={"system": system},
+        )
+
+
+@pytest.mark.asyncio
+async def test_aanthropic_messages_enforces_context_window_with_system_and_tools():
+    """
+    End-to-end router regression for /v1/messages: a request whose only oversized
+    content lives in the top-level `system` field or in `tools` must trip the pre-call
+    context-window check instead of being dispatched (the deployment uses mock_response,
+    so reaching the provider handler would return a response rather than raise).
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "small-ctx",
+                "litellm_params": {"model": "anthropic/claude-3-5-haiku-20241022", "mock_response": "hi"},
+                "model_info": {"max_input_tokens": 20},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+    messages = [{"role": "user", "content": "hi"}]
+
+    response = await router.aanthropic_messages(model="small-ctx", messages=messages, max_tokens=5)
+    assert response is not None
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aanthropic_messages(
+            model="small-ctx",
+            messages=messages,
+            max_tokens=5,
+            system="You are a meticulous assistant. " * 40,
+        )
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aanthropic_messages(
+            model="small-ctx",
+            messages=messages,
+            max_tokens=5,
+            tools=[
+                {
+                    "name": "lookup",
+                    "description": _OVERSIZED_TOOL_DESCRIPTION,
+                    "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}},
+                }
+            ],
         )
 
 
@@ -7362,14 +7520,14 @@ def test_get_configured_mode_reads_deployment_model_info():
     router = litellm.Router(
         model_list=[
             {
-                "model_name": "chat-model",
-                "litellm_params": {"model": "openai/some-unmapped-model"},
-                "model_info": {"mode": "chat"},
+                "model_name": "tts-model",
+                "litellm_params": {"model": "openai/some-unmapped-tts-model"},
+                "model_info": {"mode": "audio_speech"},
             }
         ]
     )
 
-    assert router.get_configured_mode("chat-model") == "chat"
+    assert router.get_configured_mode("tts-model") == "audio_speech"
 
 
 def test_get_configured_mode_returns_none_for_unset_or_unknown():
@@ -12701,33 +12859,3 @@ async def test_prompt_management_factory_marks_injection_for_every_deployment(mo
     bucket = captured.get("litellm_metadata") or captured["metadata"]
     assert captured["model_info"]["id"] == "provisional-dep"
     assert bucket["litellm_gateway_injected_cache"] == ""
-
-
-def test_get_configured_mode_reads_deployment_model_info():
-    router = Router(
-        model_list=[
-            {
-                "model_name": "my-tts",
-                "litellm_params": {"model": "openai/some-unmapped-mode-model"},
-                "model_info": {"mode": "audio_speech"},
-            }
-        ]
-    )
-
-    assert router.get_configured_mode("my-tts") == "audio_speech"
-
-
-@pytest.mark.parametrize("model_info", [{}, {"mode": ""}, {"mode": "   "}, {"mode": 123}])
-def test_get_configured_mode_returns_none_for_unset_blank_or_unknown(model_info):
-    router = Router(
-        model_list=[
-            {
-                "model_name": "plain-model",
-                "litellm_params": {"model": "openai/some-unmapped-mode-model"},
-                "model_info": model_info,
-            }
-        ]
-    )
-
-    assert router.get_configured_mode("plain-model") is None
-    assert router.get_configured_mode("unknown-model") is None
