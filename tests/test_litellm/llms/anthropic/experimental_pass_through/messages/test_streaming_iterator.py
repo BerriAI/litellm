@@ -544,6 +544,25 @@ async def test_async_sse_wrapper_dispatches_deferred_logging_when_client_disconn
     await asyncio.wait_for(deferred_fired.wait(), timeout=5)
 
 
+class _DetachedFailureRecorder:
+    """Stands in for the closure the proxy arms so a detached-stream failure still reaches its failure hook."""
+
+    def __init__(self):
+        self.exceptions = []
+
+    async def __call__(self, exc: Exception) -> None:
+        self.exceptions.append(exc)
+
+
+async def _wait_for_detached_failure(recorder: _DetachedFailureRecorder) -> Exception:
+    for _ in range(200):
+        if recorder.exceptions:
+            await asyncio.sleep(0.02)
+            return recorder.exceptions[0]
+        await asyncio.sleep(0.01)
+    raise AssertionError("the detached failure hook never fired")
+
+
 class _ProviderStreamError(Exception):
     """Stand-in for a provider-specific streaming failure carrying a status code."""
 
@@ -573,6 +592,8 @@ async def test_async_sse_wrapper_reraises_upstream_error_to_connected_client():
         litellm_logging_obj=_make_logging_obj("test_reraises_upstream_error", recorder),
         request_body={},
     )
+    detached_hook = _DetachedFailureRecorder()
+    iterator.litellm_logging_obj._on_detached_stream_failure = detached_hook
 
     received = []
 
@@ -591,6 +612,8 @@ async def test_async_sse_wrapper_reraises_upstream_error_to_connected_client():
     assert iterator.logged_chunks == []
     assert failure_kwargs["standard_logging_object"]["status"] == "failure"
     assert failure_kwargs["standard_logging_object"]["prompt_tokens"] == 52
+    await asyncio.sleep(0.05)
+    assert detached_hook.exceptions == [], "the relay re-raised the error, so the proxy failure hook already ran"
 
 
 @pytest.mark.asyncio
@@ -614,6 +637,8 @@ async def test_async_sse_wrapper_logs_failure_on_upstream_error_after_disconnect
         litellm_logging_obj=_make_logging_obj("test_failure_logged_on_late_error", recorder),
         request_body={},
     )
+    detached_hook = _DetachedFailureRecorder()
+    iterator.litellm_logging_obj._on_detached_stream_failure = detached_hook
 
     gen = iterator.async_sse_wrapper(_gated_failing_stream())
     received = [await gen.__anext__(), await gen.__anext__()]
@@ -627,6 +652,8 @@ async def test_async_sse_wrapper_logs_failure_on_upstream_error_after_disconnect
     assert failure_kwargs["standard_logging_object"]["status"] == "failure"
     assert failure_kwargs["standard_logging_object"]["prompt_tokens"] == 52
     assert isinstance(failure_kwargs["exception"], _ProviderStreamError)
+    assert await _wait_for_detached_failure(detached_hook) is failure_kwargs["exception"]
+    assert len(detached_hook.exceptions) == 1
 
 
 @pytest.mark.asyncio
@@ -651,6 +678,8 @@ async def test_async_sse_wrapper_logs_failure_when_queued_error_is_never_consume
         litellm_logging_obj=_make_logging_obj("test_failure_logged_on_unconsumed_queued_error", recorder),
         request_body={},
     )
+    detached_hook = _DetachedFailureRecorder()
+    iterator.litellm_logging_obj._on_detached_stream_failure = detached_hook
 
     gen = iterator.async_sse_wrapper(_failing_stream())
     received = [await gen.__anext__(), await gen.__anext__()]
@@ -663,6 +692,8 @@ async def test_async_sse_wrapper_logs_failure_when_queued_error_is_never_consume
     assert iterator.logging_call_count == 0
     assert failure_kwargs["standard_logging_object"]["status"] == "failure"
     assert failure_kwargs["standard_logging_object"]["prompt_tokens"] == 52
+    assert await _wait_for_detached_failure(detached_hook) is failure_kwargs["exception"]
+    assert len(detached_hook.exceptions) == 1
 
 
 @pytest.mark.asyncio

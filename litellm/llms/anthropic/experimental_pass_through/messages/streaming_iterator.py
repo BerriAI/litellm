@@ -176,6 +176,11 @@ def _try_claim_detached_drain_slot() -> bool:
     return True
 
 
+def _exception_left_unconsumed(queue: "asyncio.Queue[bytes | None | BaseException]", exc: BaseException) -> bool:
+    remaining: Final = tuple(queue.get_nowait() for _ in range(queue.qsize()))
+    return any(item is exc for item in remaining)
+
+
 def _sse_event(event_type: str, payload: Mapping[str, object]) -> bytes:
     return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n".encode()
 
@@ -663,18 +668,16 @@ class BaseAnthropicMessagesStreamingIterator:
         collected_chunks: Sequence[bytes],
         exc: Exception,
     ) -> None:
-        """Forward a provider error to a still-connected client and log the request as failed.
+        """Log the request as failed with its partial usage, then make sure the proxy's failure hook runs once.
 
-        The relay re-raises the forwarded exception so the proxy's failure hook
-        keeps the provider status; the logging object's failure handlers fire
-        here either way, carrying the partial usage the provider already
-        billed, so a client that left before consuming the exception still
-        gets a failure row rather than a success one.
+        A still-connected client gets the original exception through the queue,
+        the relay re-raises it, and the proxy's own failure handling records the
+        failed spend. When the client already left, or leaves before consuming
+        the queued exception, that handling never runs, so the detached-failure
+        hook the proxy armed on the logging object fires here instead.
         """
         from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
 
-        if not client_detached.is_set():
-            await self._enqueue_for_client(queue, client_detached, exc)
         PassThroughStreamingHandler.schedule_stream_failure_logging(
             litellm_logging_obj=self.litellm_logging_obj,
             endpoint_type=EndpointType.ANTHROPIC,
@@ -682,3 +685,21 @@ class BaseAnthropicMessagesStreamingIterator:
             raw_bytes=collected_chunks,
             exception=exc,
         )
+        if not client_detached.is_set() and await self._enqueue_for_client(queue, client_detached, exc):
+            await client_detached.wait()
+            if not _exception_left_unconsumed(queue, exc):
+                return
+        await self._fire_detached_failure_hook(exc)
+
+    async def _fire_detached_failure_hook(self, exc: Exception) -> None:
+        from litellm._logging import verbose_proxy_logger
+
+        on_detached_failure: Final = getattr(self.litellm_logging_obj, "_on_detached_stream_failure", None)
+        if on_detached_failure is None:
+            return
+        try:
+            await on_detached_failure(exc)
+        except Exception as hook_failure:  # noqa: BLE001  # a failing proxy hook must not crash the detached pump
+            verbose_proxy_logger.warning(
+                "async_sse_wrapper detached failure hook raised: %s(%s)", type(hook_failure).__name__, hook_failure
+            )
