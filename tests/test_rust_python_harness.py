@@ -2,19 +2,23 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
+from typing import Final
 
 import pytest
 
 catalog = importlib.import_module("tests.rust-python-harness.catalog")
 cli = importlib.import_module("tests.rust-python-harness.cli")
+models = importlib.import_module("tests.rust-python-harness.shared.reporting.models")
+runner = importlib.import_module("tests.rust-python-harness.shared.reporting.pytest_runner")
+ui = importlib.import_module("tests.rust-python-harness.shared.reporting.ui")
 ledger_module = importlib.import_module("tests.rust-python-harness.shared.parity.ledger")
 mapping_validator = importlib.import_module(
     "tests.rust-python-harness.strategies.unit_tests.mapping_validator"
 )
-models = importlib.import_module("tests.rust-python-harness.models")
-runner = importlib.import_module("tests.rust-python-harness.runner")
-ui = importlib.import_module("tests.rust-python-harness.ui")
 
 load_catalog = catalog.load_catalog
 load_ledger = ledger_module.load_ledger
@@ -70,9 +74,9 @@ def test_should_load_the_four_harness_strategies_in_order() -> None:
     strategies = load_catalog()
 
     assert [strategy.id for strategy in strategies] == [
-        "e2e_fuzz_tests",
-        "unit_tests_rust",
-        "validate_sub_methods",
+        "e2e_parity",
+        "trace_parity",
+        "unit_tests",
         "existing_e2e_test_sdk",
     ]
     assert all(
@@ -155,6 +159,46 @@ def test_should_treat_an_all_planned_filtered_run_as_success(tmp_path: Path) -> 
     assert next(iter(run.results.values())).status is RunStatus.PLANNED
 
 
+@pytest.mark.parametrize("strategy_id", ("e2e_parity", "existing_e2e_test_sdk"))
+def test_should_run_namespace_package_relative_imports(tmp_path: Path, strategy_id: str) -> None:
+    package: Final = tmp_path / "manual_suite" / "relative-tests"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "values.py").write_text("ANSWER = 42\n", encoding="utf-8")
+    (package / "test_relative.py").write_text(
+        "from .values import ANSWER\n\ndef test_answer():\n    assert ANSWER == 42\n",
+        encoding="utf-8",
+    )
+    result: Final = subprocess.run(
+        (
+            sys.executable,
+            "-c",
+            "import importlib\n"
+            "from pathlib import Path\n"
+            "cli = importlib.import_module('tests.rust-python-harness.cli')\n"
+            "models = importlib.import_module('tests.rust-python-harness.shared.reporting.models')\n"
+            f"case = models.HarnessCase(strategy_id={strategy_id!r}, strategy_label='Example', "
+            "sdk_function='ocr', coverage=models.Coverage.COMPLETE, "
+            "selectors=('manual_suite/relative-tests/',))\n"
+            f"code, run = cli._resolve_runner({strategy_id!r})((case,), Path.cwd(), lambda _: None)\n"
+            "assert code == 0, code\n"
+            "assert next(iter(run.results.values())).passed == 1\n",
+        ),
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PYTHONPATH": os.pathsep.join((str(tmp_path), str(Path(__file__).resolve().parents[1]))),
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_should_finalize_a_fully_passing_case() -> None:
     result = CaseResult(case=_case(selectors=("tests/test_parity.py",)))
     result.set_initial_status()
@@ -184,10 +228,10 @@ def test_should_replace_a_pass_with_a_teardown_error() -> None:
 def test_should_filter_the_catalog_by_strategy_and_sdk_function() -> None:
     strategies = load_catalog()
 
-    cases = _select(strategies, {"e2e_fuzz_tests"}, {"messages"})
+    cases = _select(strategies, {"e2e_parity"}, {"messages"})
 
     assert len(cases) == 1
-    assert cases[0].key == "e2e_fuzz_tests:messages"
+    assert cases[0].key == "e2e_parity:messages"
 
 
 def test_should_reject_an_unknown_strategy() -> None:
@@ -216,10 +260,10 @@ def test_should_format_developer_facing_run_context() -> None:
     assert _summary(run) == (1, 0, 0, 0)
     assert _format_duration(1.25) == "1.2s"
     assert _rerun_command("tests/test_parity.py::test_one") == (
-        "poetry run pytest tests/test_parity.py::test_one -q"
+        "poetry run pytest tests/test_parity.py::test_one -q -o consider_namespace_packages=true"
     )
     assert _rerun_command("tests/test_parity.py::test_one[value with spaces]") == (
-        "poetry run pytest 'tests/test_parity.py::test_one[value with spaces]' -q"
+        "poetry run pytest 'tests/test_parity.py::test_one[value with spaces]' -q -o consider_namespace_packages=true"
     )
 
 
@@ -240,7 +284,7 @@ def test_should_report_confidence_for_each_sdk_section() -> None:
     strategies = load_catalog()
     cases = tuple(case for strategy in strategies for case in strategy.cases)
     run = HarnessRun.from_cases(cases)
-    passing = run.results["e2e_fuzz_tests:responses"]
+    passing = run.results["e2e_parity:responses"]
     passing.collected.add("tests/test_parity.py::test_one")
     passing.record("tests/test_parity.py::test_one", RunStatus.PASSED)
 
@@ -283,6 +327,21 @@ def test_should_scope_validate_ledger_to_the_requested_function(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "messages" in captured.out
+    assert "no ledger yet" in captured.out
+    assert "ocr" not in captured.out
+
+
+@pytest.mark.parametrize("strategy_id", (None, "e2e_parity", "trace_parity", "unit_tests", "existing_e2e_test_sdk"))
+def test_should_validate_chat_completions_ledger_from_each_runner(
+    strategy_id: str | None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    exit_code: Final = cli.main(
+        ("--validate-ledger", "--function", "chat_completions"), strategy_id=strategy_id
+    )
+
+    captured: Final = capsys.readouterr()
+    assert exit_code == 0
+    assert "chat_completions" in captured.out
     assert "no ledger yet" in captured.out
     assert "ocr" not in captured.out
 

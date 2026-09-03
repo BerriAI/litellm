@@ -28,6 +28,7 @@ from pydantic import BaseModel, create_model
 from litellm._logging import verbose_router_logger
 from litellm.constants import (
     EMPTY_MAPPING,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
 )
@@ -42,6 +43,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
     TierSuccessPredictor,
     resolve_tier_artifact,
 )
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     ModelResponse,
@@ -1668,20 +1670,27 @@ class ComplexityRouter(CustomLogger):
         )
 
         request_metadata = (request_kwargs or {}).get("litellm_metadata") or (request_kwargs or {}).get("metadata")
-        metadata: Final = forwarded_internal_call_metadata(request_metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN)
+        metadata: Final = {  # mutable-ok: SDK metadata kwarg is enriched by the request pipeline
+            **forwarded_internal_call_metadata(request_metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN),
+            INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
+        }
         turn_off_message_logging: Final = _effective_turn_off_message_logging(request_kwargs)
 
-        messages_for_call: Final = [
+        messages_for_call: Final[list[AllMessageValues]] = [  # mutable-ok: SDK request payload list is built once
             {"role": "system", "content": classifier_system_prompt},
             {"role": "user", "content": user_payload},
         ]
         response_format: Final = classifier_response_format
+        classifier_call_params: Mapping[str, str] = EMPTY_MAPPING
+        if llm_config.reasoning_effort is not None:
+            classifier_call_params = MappingProxyType({"reasoning_effort": llm_config.reasoning_effort})
 
         proxy_server_request: Final = {
             "body": {
                 "model": llm_config.model,
                 "messages": messages_for_call,
                 "response_format": response_format,
+                **classifier_call_params,
             }
         }
 
@@ -1693,6 +1702,7 @@ class ComplexityRouter(CustomLogger):
             metadata=metadata,
             proxy_server_request=proxy_server_request,
             turn_off_message_logging=turn_off_message_logging,
+            **classifier_call_params,
             **_parent_session_kwargs(request_kwargs),
         )
         content: Final = response.choices[0].message.content
