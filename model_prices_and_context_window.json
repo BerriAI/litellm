@@ -19669,6 +19669,14 @@
             "notes": "Nimble Search API pay-as-you-go list price: $5 per 1,000 searches, up to 100 results per search. Volume plans price differently."
         }
     },
+    "search1api/search": {
+        "input_cost_per_query": 0.001,
+        "litellm_provider": "search1api",
+        "mode": "search",
+        "metadata": {
+            "notes": "Search1API pay-as-you-go list price: $1 per 1,000 credits, 1 credit per search. Subscriptions go from $0.76/1k (monthly) down to $0.42/1k (Enterprise annual)."
+        }
+    },
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",
