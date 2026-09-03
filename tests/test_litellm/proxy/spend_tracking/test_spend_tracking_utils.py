@@ -125,7 +125,7 @@ def test_session_id_from_litellm_session_id_param(kwargs, expected_session_id):
     assert payload["session_id"] == expected_session_id
 
 
-def test_session_id_prefers_standard_logging_payload_session_id():
+def test_session_id_prefers_metadata_session_id():
     standard_logging_payload: Final = cast(
         StandardLoggingPayload,
         {"session_id": "sess-sl", "metadata": {}, "model_map_information": None, "request_tags": []},
@@ -141,7 +141,39 @@ def test_session_id_prefers_standard_logging_payload_session_id():
         end_time=datetime.datetime.now(timezone.utc),
     )
 
-    assert payload["session_id"] == "sess-sl"
+    assert payload["session_id"] == "sess-meta"
+
+
+def test_session_id_is_none_when_litellm_session_id_is_only_the_metadata_trace_id():
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_trace_id": "trace-abc",
+            "litellm_params": {"litellm_session_id": "trace-abc", "metadata": {"trace_id": "trace-abc"}},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["session_id"] is None
+
+
+def test_session_id_from_metadata_session_id_when_metadata_trace_id_matches():
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {
+                "litellm_session_id": "chain-1",
+                "metadata": {"trace_id": "chain-1", "session_id": "chain-1"},
+            },
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["session_id"] == "chain-1"
 
 
 def test_get_logging_payload_preserves_anthropic_cache_read_input_tokens():

@@ -608,14 +608,19 @@ def _get_session_id_for_spend_log(
     metadata: Mapping[str, object] | None,
     standard_logging_payload: StandardLoggingPayload | None,
 ) -> str | None:
-    """Only a client-established session id is recorded; the same key the Langfuse integration reads."""
+    """Only a client-established session id is recorded: the metadata session_id Langfuse reads, or a litellm_session_id that isn't just the metadata trace_id echoed back."""
+    metadata_session_id: Final = metadata.get("session_id") if metadata else None
+    metadata_trace_id: Final = metadata.get("trace_id") if metadata else None
     sl_session_id: Final = standard_logging_payload.get("session_id") if standard_logging_payload is not None else None
     litellm_params: Final = kwargs.get("litellm_params")
-    candidates: Final[tuple[object, ...]] = (
+    session_id_params: Final[tuple[object, ...]] = (
         sl_session_id,
         kwargs.get("litellm_session_id"),
         litellm_params.get("litellm_session_id") if isinstance(litellm_params, Mapping) else None,
-        metadata.get("session_id") if metadata else None,
+    )
+    candidates: Final[tuple[object, ...]] = (
+        metadata_session_id,
+        *(c for c in session_id_params if c != metadata_trace_id),
     )
     return next((str(c) for c in candidates if c), None)
 
