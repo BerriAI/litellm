@@ -1930,6 +1930,13 @@ class NewTeamRequest(TeamBase):
 
     model_config = ConfigDict(protected_namespaces=())
 
+    @field_validator("team_id", mode="before")
+    @classmethod
+    def treat_blank_team_id_as_unset(cls, v: object) -> object:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
 
 class GlobalEndUsersSpend(LiteLLMPydanticObjectBase):
     api_key: str | None = None
