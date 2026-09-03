@@ -864,7 +864,7 @@ async def extract_file_creation_params(
         target_model_names = await _extract_target_model_names_from_form(request)
 
     # Extract model parameter
-    model: Final = _extract_model_param(request, request_body)
+    model: Final = extract_model_param(request, request_body)
 
     return FileCreationParams(
         target_storage=target_storage,
@@ -1035,7 +1035,7 @@ async def validate_managed_id_requirement(
     )
 
 
-def _extract_model_param(request: "Request", request_body: dict) -> str | None:
+def extract_model_param(request: "Request", request_body: Mapping[str, object]) -> str | None:
     """
     Extract model parameter from request.
 
@@ -1044,7 +1044,12 @@ def _extract_model_param(request: "Request", request_body: dict) -> str | None:
     2. Query parameter (?model=)
     3. Header (x-litellm-model)
     """
-    return request_body.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    body_model: Final = request_body.get("model")
+    return (
+        body_model
+        if isinstance(body_model, str) and body_model
+        else request.query_params.get("model") or request.headers.get("x-litellm-model")
+    )
 
 
 # ============================================================================

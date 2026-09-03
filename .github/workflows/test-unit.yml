@@ -126,6 +126,14 @@ jobs:
             timeout-minutes: 20
             job-timeout-minutes: 60
 
+          - shard: skills
+            artifact-name: skills
+            test-path: "tests/test_litellm/skills"
+            workers: 2
+            reruns: 2
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+
           - shard: proxy-auth
             artifact-name: proxy-auth
             test-path: >-
