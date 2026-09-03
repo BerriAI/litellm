@@ -769,7 +769,7 @@ class _MigrateDeployHarness:
             "_resolve_specific_migration",
             staticmethod(self.resolved.append),
         )
-        monkeypatch.setattr(utils_module.subprocess, "run", self._fake_run)
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", self._fake_run)
         monkeypatch.setattr(utils_module.time, "sleep", lambda seconds: None)
 
         self.baseline_succeeds = True
