@@ -1558,6 +1558,14 @@ class TestLLMClassifierConfig:
         assert config.classifier_type == "heuristic"
         assert config.classifier_llm_config is None
 
+    @pytest.mark.parametrize("reasoning_effort", ["", "ultra"])
+    def test_classifier_reasoning_effort_rejects_unsupported_values(self, reasoning_effort):
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(
+                classifier_type="llm",
+                classifier_llm_config={"model": "haiku-classifier", "reasoning_effort": reasoning_effort},
+            )
+
 
 CUSTOM_TIER_LABELS: Dict[str, str] = {
     "SIMPLE": "Cheap",
@@ -1872,6 +1880,19 @@ class TestLLMClassifier:
         assert call_kwargs["metadata"] == {**request_metadata, "internal_call_origin": "autorouter_classifier"}
 
     @pytest.mark.asyncio
+    async def test_aclassify_stamps_internal_origin_without_caller_metadata(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """Fallback handling must still recognize the classifier when an SDK caller supplied no metadata."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+
+        await llm_complexity_router.aclassify("hi")
+
+        assert mock_router_instance.acompletion.call_args.kwargs["metadata"] == {
+            "internal_call_origin": "autorouter_classifier"
+        }
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "request_kwargs",
         [
@@ -1947,6 +1968,33 @@ class TestLLMClassifier:
             "COMPLEX",
             "REASONING",
         ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reasoning_effort", [None, "none", "low"], ids=["omitted", "none", "low"])
+    async def test_classifier_reasoning_effort_reaches_only_classifier_call(
+        self, mock_router_instance, llm_classifier_config, reasoning_effort
+    ):
+        classifier_llm_config = {
+            **llm_classifier_config["classifier_llm_config"],
+            **({"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}),
+        }
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**llm_classifier_config, "classifier_llm_config": classifier_llm_config},
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+
+        await router.aclassify("explain quantum tunneling in depth")
+
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        body = call_kwargs["proxy_server_request"]["body"]
+        if reasoning_effort is None:
+            assert "reasoning_effort" not in call_kwargs
+            assert "reasoning_effort" not in body
+        else:
+            assert call_kwargs["reasoning_effort"] == reasoning_effort
+            assert body["reasoning_effort"] == reasoning_effort
 
     @pytest.mark.asyncio
     async def test_aclassify_propagates_top_level_turn_off_message_logging(
@@ -8735,9 +8783,10 @@ class TestClassificationRubrics:
         [
             {"model": "haiku-classifier", "system_prompt": "Grade the data sensitivity of the request."},
             {"model": "haiku-classifier", "classification_rubric": "chat"},
+            {"model": "haiku-classifier", "reasoning_effort": "low"},
             {"model": "haiku-classifier"},
         ],
-        ids=["custom-prompt", "chat-preset", "neither"],
+        ids=["custom-prompt", "chat-preset", "reasoning-effort", "neither"],
     )
     def test_config_survives_a_dump_and_rebuild(self, classifier_llm_config):
         """/auto_router/test_routing dumps this config and hands the dict straight back to
