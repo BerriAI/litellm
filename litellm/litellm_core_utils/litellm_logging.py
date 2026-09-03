@@ -1888,6 +1888,11 @@ class Logging(LiteLLMLoggingBaseClass):
             **kwargs,
         )
 
+    def record_partial_usage_for_failure(self, usage: Usage, response_cost: float) -> None:
+        """Stash what an interrupted stream already consumed so the failure log bills it instead of zero."""
+        self.model_call_details["combined_usage_object"] = usage
+        self.model_call_details["response_cost"] = response_cost
+
     async def dispatch_failure_handlers(
         self,
         exception: Exception,

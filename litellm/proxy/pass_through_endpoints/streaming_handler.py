@@ -1,4 +1,5 @@
-from collections.abc import Coroutine
+import traceback
+from collections.abc import Coroutine, Mapping, Sequence
 from datetime import datetime
 from typing import Final, Protocol
 
@@ -49,6 +50,27 @@ class PassThroughStreamingHandler:
     def _stamp_first_chunk_if_needed(litellm_logging_obj: LiteLLMLoggingObj) -> None:
         if litellm_logging_obj.completion_start_time is None:
             litellm_logging_obj._update_completion_start_time(completion_start_time=datetime.now())
+
+    @staticmethod
+    def schedule_stream_failure_logging(
+        litellm_logging_obj: LiteLLMLoggingObj,
+        endpoint_type: EndpointType,
+        request_body: Mapping[str, object],
+        raw_bytes: Sequence[bytes],
+        exception: Exception,
+    ) -> None:
+        if endpoint_type == EndpointType.ANTHROPIC:
+            AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
+                litellm_logging_obj=litellm_logging_obj, request_body=request_body, all_chunks=raw_bytes
+            )
+        try:
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=litellm_logging_obj.dispatch_failure_handlers(
+                    exception, traceback.format_exc(), prefer_async_handlers=True
+                )
+            )
+        except Exception as e:
+            verbose_proxy_logger.error("Error scheduling stream failure logging: %s", e)
 
     @staticmethod
     async def chunk_processor(
@@ -132,9 +154,9 @@ class PassThroughStreamingHandler:
             # coroutine on logging_obj instead of enqueueing now, so
             # ProxyLogging._fire_deferred_stream_logging fires it after
             # guardrail end-of-stream blocks populate guardrail_information.
-            # Disconnect/exception paths skip this and fall through to the
-            # immediate enqueue in ``finally`` to keep partial billing
-            # (LIT-2642).
+            # Disconnect paths skip this and fall through to the immediate
+            # enqueue in ``finally`` to keep partial billing (LIT-2642);
+            # upstream exceptions log a failure instead (LIT-3798).
             if (
                 getattr(litellm_logging_obj, "_on_deferred_stream_complete", None) is not None
                 and raw_bytes
@@ -144,6 +166,15 @@ class PassThroughStreamingHandler:
                 litellm_logging_obj._deferred_stream_complete_args = (_build_logging_coroutine(),)
         except Exception as e:
             verbose_proxy_logger.error("Error in chunk_processor: %s", e)
+            if response.status_code < 400:
+                logging_scheduled = True
+                PassThroughStreamingHandler.schedule_stream_failure_logging(
+                    litellm_logging_obj=litellm_logging_obj,
+                    endpoint_type=endpoint_type,
+                    request_body=request_body or {},
+                    raw_bytes=raw_bytes,
+                    exception=e,
+                )
             raise
         finally:
             # GeneratorExit (raised on client disconnect) is not caught by
