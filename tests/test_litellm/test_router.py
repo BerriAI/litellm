@@ -4943,6 +4943,40 @@ def test_team_wildcard_credentials_not_usable_after_delete_deployment():
     )
 
 
+def test_global_wildcard_pattern_router_evicts_stale_entry_on_upsert_and_delete():
+    """
+    Regression for #29064: upsert_deployment removed the old deployment from
+    model_list but left it in the global pattern_router, so wildcard requests
+    round-robined between the stale and the corrected deployment.
+    """
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/openai/*", "api_key": "sk-old"},
+                "model_info": {"id": "global-wildcard"},
+            }
+        ]
+    )
+
+    router.upsert_deployment(
+        Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*", api_key="sk-new"),
+            model_info={"id": "global-wildcard"},
+        )
+    )
+
+    matches = router.pattern_router.route("openai/gpt-5.2")
+    assert matches is not None
+    assert [m["litellm_params"]["api_key"] for m in matches] == ["sk-new"]
+
+    router.delete_deployment(id="global-wildcard")
+    assert router.pattern_router.patterns == {}
+
+
 def test_pattern_match_router_remove_deployment():
     """
     remove_deployment must drop only the deployment with the given model id and
