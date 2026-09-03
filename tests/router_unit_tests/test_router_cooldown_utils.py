@@ -2,9 +2,6 @@ import sys, os, time
 import traceback, asyncio
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params
@@ -19,16 +16,14 @@ from litellm.router_utils.cooldown_handlers import (
     _should_cooldown_deployment,
     cast_exception_status_to_int,
     _is_cooldown_required,
+    _has_explicit_allowed_fails_policy_for_exception,
 )
+from litellm.types.router import AllowedFailsPolicy
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
 )
 
-import pytest
-from unittest.mock import patch
-from litellm import Router
-from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
 
 load_dotenv()
 
@@ -105,6 +100,137 @@ def test_should_run_cooldown_logic(testing_litellm_router):
         )
         is False
     )
+
+
+@pytest.fixture
+def single_deployment_router():
+    """A router with one deployment whose model_info.id is the lookup-able
+    "dep-1" (unlike `testing_litellm_router`'s top-level "model_id" key, which
+    is not absorbed into model_info.id and so never resolves via
+    get_model_info/get_model_group)."""
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-mini",
+                "litellm_params": {"model": "gpt-5-mini"},
+                "model_info": {"id": "dep-1"},
+            },
+        ]
+    )
+
+
+def test_should_run_cooldown_logic_generic_bad_request_excluded_by_default(
+    single_deployment_router,
+):
+    """A generic BadRequestError/ContentPolicyViolationError (400) is excluded from
+    cooldown evaluation by _is_cooldown_required when no allowed_fails_policy is
+    configured for that exception type. This is the pre-existing, intentional
+    default: a client error is usually not the deployment's fault."""
+    exc = litellm.BadRequestError("bad request", "openai", "gpt-5-mini")
+    assert (
+        _should_run_cooldown_logic(single_deployment_router, "dep-1", 400, exc) is False
+    )
+
+
+def test_should_run_cooldown_logic_router_level_policy_does_not_override_bad_request_exclusion(
+    single_deployment_router,
+):
+    """A router-level allowed_fails_policy is a pre-existing, router-wide setting that
+    predates the per-deployment override feature, so it must keep its existing behavior
+    and stay subject to the generic 4XX exclusion. Only an explicit deployment-level
+    policy (an unambiguous per-exception opt-in for that one deployment) overrides it;
+    see test_should_run_cooldown_logic_explicit_deployment_level_policy_overrides_content_policy_exclusion."""
+    exc = litellm.BadRequestError("bad request", "openai", "gpt-5-mini")
+    single_deployment_router.allowed_fails_policy = AllowedFailsPolicy(
+        BadRequestErrorAllowedFails=5
+    )
+    assert (
+        _should_run_cooldown_logic(single_deployment_router, "dep-1", 400, exc) is False
+    )
+
+
+def test_should_run_cooldown_logic_explicit_deployment_level_policy_overrides_content_policy_exclusion(
+    single_deployment_router,
+):
+    """Same as the router-level case, but for a deployment-level allowed_fails_policy
+    entry (this PR's per-deployment feature) targeting ContentPolicyViolationError."""
+    exc = litellm.ContentPolicyViolationError("flagged content", "openai", "gpt-5-mini")
+    deployment_dict = single_deployment_router.get_model_info(id="dep-1")
+    deployment_dict["model_info"]["allowed_fails_policy"] = {
+        "ContentPolicyViolationErrorAllowedFails": 0
+    }
+    assert (
+        _should_run_cooldown_logic(single_deployment_router, "dep-1", 400, exc) is True
+    )
+
+
+class TestHasExplicitAllowedFailsPolicyForException:
+    def test_no_policy_anywhere_returns_false(self, single_deployment_router):
+        exc = litellm.BadRequestError("bad request", "openai", "gpt-5-mini")
+        assert (
+            _has_explicit_allowed_fails_policy_for_exception(
+                single_deployment_router, "dep-1", exc
+            )
+            is False
+        )
+
+    def test_router_level_policy_for_matching_exception_returns_false(
+        self, single_deployment_router
+    ):
+        """Deliberately scoped to deployment-level only: a router-level policy
+        predates this feature and must not be treated as an explicit per-exception
+        opt-in for cooldown-gate purposes."""
+        exc = litellm.RateLimitError("rate limited", "openai", "gpt-5-mini")
+        single_deployment_router.allowed_fails_policy = AllowedFailsPolicy(
+            RateLimitErrorAllowedFails=3
+        )
+        assert (
+            _has_explicit_allowed_fails_policy_for_exception(
+                single_deployment_router, "dep-1", exc
+            )
+            is False
+        )
+
+    def test_router_level_policy_for_different_exception_returns_false(
+        self, single_deployment_router
+    ):
+        exc = litellm.BadRequestError("bad request", "openai", "gpt-5-mini")
+        single_deployment_router.allowed_fails_policy = AllowedFailsPolicy(
+            RateLimitErrorAllowedFails=3
+        )
+        assert (
+            _has_explicit_allowed_fails_policy_for_exception(
+                single_deployment_router, "dep-1", exc
+            )
+            is False
+        )
+
+    def test_deployment_level_policy_for_matching_exception_returns_true(
+        self, single_deployment_router
+    ):
+        exc = litellm.ContentPolicyViolationError("flagged", "openai", "gpt-5-mini")
+        deployment_dict = single_deployment_router.get_model_info(id="dep-1")
+        deployment_dict["model_info"]["allowed_fails_policy"] = {
+            "ContentPolicyViolationErrorAllowedFails": 0
+        }
+        assert (
+            _has_explicit_allowed_fails_policy_for_exception(
+                single_deployment_router, "dep-1", exc
+            )
+            is True
+        )
+
+    def test_none_deployment_returns_false(self, single_deployment_router):
+        exc = litellm.RateLimitError("rate limited", "openai", "gpt-5-mini")
+        single_deployment_router.allowed_fails_policy = AllowedFailsPolicy(
+            RateLimitErrorAllowedFails=3
+        )
+        assert (
+            _has_explicit_allowed_fails_policy_for_exception(
+                single_deployment_router, None, exc
+            )
+            is False
+        )
 
 
 def test_should_cooldown_deployment_rate_limit_error(testing_litellm_router):

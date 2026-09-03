@@ -74,8 +74,9 @@ def styled_prompt():
 
 
 def show_commands():
-    """Display available commands."""
+    """Display available commands, minus any the operator chose to hide."""
     from .commands.agents import agent_commands
+    from .commands.config import hidden_command_names
 
     commands = [
         ("login", "Authenticate with the LiteLLM proxy server"),
@@ -96,9 +97,12 @@ def show_commands():
         ("quit", "Exit the interactive session"),
     ]
 
+    hidden: Final = hidden_command_names()
+
     click.echo("Available commands:")
     for cmd, description in commands:
-        click.echo(f"  {cmd:<20} {description}")
+        if cmd not in hidden:
+            click.echo(f"  {cmd:<20} {description}")
     click.echo()
 
 

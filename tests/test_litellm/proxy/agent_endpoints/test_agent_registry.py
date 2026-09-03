@@ -8,7 +8,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry, GrantMigrationResult
+from litellm.constants import REDACTED_BY_LITELM_STRING
+from litellm.proxy.agent_endpoints.agent_registry import (
+    AgentRegistry,
+    GrantMigrationResult,
+    _restore_redacted_litellm_params,
+    redact_sensitive_agent_litellm_params,
+)
+
+# Obviously-fake stand-ins for a real AWS credential pair (LIT-6736 regression
+# fixtures) -- never a real key shape, and must never appear in any response.
+SENTINEL_AWS_ACCESS_KEY_ID: Final = "AKIATESTSENTINEL0000"
+SENTINEL_AWS_SECRET_ACCESS_KEY: Final = "test-sentinel-do-not-use-secret-value"
 
 
 def _sample_agent_card_params() -> dict:
@@ -49,6 +60,7 @@ async def test_update_agent_in_db_clears_static_headers_and_extra_headers_when_o
 
     mock_update = AsyncMock(return_value=updated_agent)
     mock_prisma.db.litellm_agentstable.update = mock_update
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
 
     # Agent config WITHOUT static_headers or extra_headers (omitted)
     agent_config = {
@@ -95,6 +107,7 @@ async def test_update_agent_in_db_preserves_explicit_static_headers_and_extra_he
 
     mock_update = AsyncMock(return_value=updated_agent)
     mock_prisma.db.litellm_agentstable.update = mock_update
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
 
     agent_config = {
         "agent_name": "Updated Agent",
@@ -428,3 +441,552 @@ async def test_migrate_legacy_grant_ids_no_ops_without_config_agents():
 
     assert await registry.migrate_legacy_grant_ids(table=table) == GrantMigrationResult(rewritten=0, missed=0)
     table.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_agent_in_db_raises_when_row_deleted_mid_update():
+    """Prisma's update returns None when the row vanished between read and write. Without a
+    guard the code dereferences None and reports an opaque AttributeError instead of the id."""
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(litellm_params={}, object_permission_id=None)
+    )
+    mock_prisma.db.litellm_agentstable.update = AsyncMock(return_value=None)
+
+    with pytest.raises(Exception, match="Error updating agent in DB") as exc_info:
+        await registry.update_agent_in_db(
+            agent_id="agent-123",
+            agent={
+                "agent_name": "Updated Agent",
+                "agent_card_params": _sample_agent_card_params(),
+                "litellm_params": {},
+            },
+            prisma_client=mock_prisma,
+            updated_by="test-user",
+        )
+
+    assert str(exc_info.value) == "Error updating agent in DB: Agent not found, passed agent_id=agent-123"
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_in_db_raises_when_row_deleted_mid_update():
+    """Same race on PATCH: the existing row is read, then deleted before the update lands."""
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value={"agent_id": "agent-123", "agent_name": "Old Agent", "object_permission_id": None}
+    )
+    mock_prisma.db.litellm_agentstable.update = AsyncMock(return_value=None)
+
+    with pytest.raises(Exception, match="Error patching agent in DB") as exc_info:
+        await registry.patch_agent_in_db(
+            agent_id="agent-123",
+            agent={"agent_name": "Patched Agent"},
+            prisma_client=mock_prisma,
+            updated_by="test-user",
+        )
+
+    assert str(exc_info.value) == "Error patching agent in DB: Agent not found, passed agent_id=agent-123"
+
+
+@pytest.mark.asyncio
+async def test_delete_agent_from_db_raises_when_row_already_gone():
+    """Prisma's delete returns None for a missing row, which dict() cannot consume."""
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.delete = AsyncMock(return_value=None)
+
+    with pytest.raises(Exception, match="Error deleting agent from DB") as exc_info:
+        await registry.delete_agent_from_db(agent_id="agent-123", prisma_client=mock_prisma)
+
+    assert str(exc_info.value) == "Error deleting agent from DB: Agent not found, passed agent_id=agent-123"
+
+
+# ---------- LIT-6736: agent litellm_params secret redaction ----------
+
+
+def test_redact_sensitive_agent_litellm_params_masks_secrets_keeps_the_rest():
+    """The sentinel secret must never appear in the redacted output; non-secret
+    keys (model reference, is_public) must survive untouched."""
+    redacted = redact_sensitive_agent_litellm_params(
+        {
+            "aws_access_key_id": SENTINEL_AWS_ACCESS_KEY_ID,
+            "aws_secret_access_key": SENTINEL_AWS_SECRET_ACCESS_KEY,
+            "model": "bedrock/agentcore/my-agent",
+            "is_public": True,
+        }
+    )
+
+    assert SENTINEL_AWS_ACCESS_KEY_ID not in json.dumps(redacted)
+    assert SENTINEL_AWS_SECRET_ACCESS_KEY not in json.dumps(redacted)
+    assert redacted["aws_access_key_id"] == REDACTED_BY_LITELM_STRING
+    assert redacted["aws_secret_access_key"] == REDACTED_BY_LITELM_STRING
+    assert redacted["model"] == "bedrock/agentcore/my-agent"
+    assert redacted["is_public"] is True
+
+
+def test_redact_sensitive_agent_litellm_params_recurses_into_nested_dicts():
+    """A secret nested one level down (e.g. a per-provider sub-config) must
+    also be redacted, not just top-level keys."""
+    redacted = redact_sensitive_agent_litellm_params(
+        {"provider_config": {"aws_secret_access_key": SENTINEL_AWS_SECRET_ACCESS_KEY, "region": "us-east-1"}}
+    )
+
+    assert SENTINEL_AWS_SECRET_ACCESS_KEY not in json.dumps(redacted)
+    assert redacted["provider_config"]["aws_secret_access_key"] == REDACTED_BY_LITELM_STRING
+    assert redacted["provider_config"]["region"] == "us-east-1"
+
+
+def test_redact_sensitive_agent_litellm_params_handles_none_and_json_string():
+    assert redact_sensitive_agent_litellm_params(None) is None
+
+    serialized = json.dumps({"api_key": SENTINEL_AWS_SECRET_ACCESS_KEY, "model": "gpt-4"})
+    redacted = redact_sensitive_agent_litellm_params(serialized)
+
+    assert SENTINEL_AWS_SECRET_ACCESS_KEY not in redacted
+    assert json.loads(redacted)["api_key"] == REDACTED_BY_LITELM_STRING
+    assert json.loads(redacted)["model"] == "gpt-4"
+
+
+def test_redact_sensitive_agent_litellm_params_recurses_into_lists_of_dicts():
+    """A secret nested inside a list of provider sub-configs (a shape a
+    non-sensitively-named key can legitimately hold) must also be redacted,
+    not silently returned as-is."""
+    redacted = redact_sensitive_agent_litellm_params(
+        {
+            "provider_configs": [
+                {"aws_secret_access_key": SENTINEL_AWS_SECRET_ACCESS_KEY, "region": "us-east-1"},
+                {"aws_secret_access_key": "other-" + SENTINEL_AWS_SECRET_ACCESS_KEY, "region": "us-west-2"},
+            ]
+        }
+    )
+
+    assert SENTINEL_AWS_SECRET_ACCESS_KEY not in json.dumps(redacted)
+    assert redacted["provider_configs"][0]["aws_secret_access_key"] == REDACTED_BY_LITELM_STRING
+    assert redacted["provider_configs"][0]["region"] == "us-east-1"
+    assert redacted["provider_configs"][1]["aws_secret_access_key"] == REDACTED_BY_LITELM_STRING
+    assert redacted["provider_configs"][1]["region"] == "us-west-2"
+
+
+def test_redact_sensitive_agent_litellm_params_redacts_secrets_inside_model_list():
+    """The exact shape flagged in review: litellm_params.model_list, where each
+    entry carries its own nested litellm_params with a provider credential."""
+    redacted = redact_sensitive_agent_litellm_params(
+        {
+            "model_list": [
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {"api_key": SENTINEL_AWS_SECRET_ACCESS_KEY, "model": "gpt-4"},
+                },
+                {
+                    "model_name": "claude",
+                    "litellm_params": {
+                        "aws_secret_access_key": "other-" + SENTINEL_AWS_SECRET_ACCESS_KEY,
+                        "model": "bedrock/claude",
+                    },
+                },
+            ]
+        }
+    )
+
+    assert SENTINEL_AWS_SECRET_ACCESS_KEY not in json.dumps(redacted)
+    assert redacted["model_list"][0]["litellm_params"]["api_key"] == REDACTED_BY_LITELM_STRING
+    assert redacted["model_list"][0]["litellm_params"]["model"] == "gpt-4"
+    assert redacted["model_list"][1]["litellm_params"]["aws_secret_access_key"] == REDACTED_BY_LITELM_STRING
+    assert redacted["model_list"][1]["litellm_params"]["model"] == "bedrock/claude"
+
+
+def test_restore_redacted_litellm_params_preserves_secret_inside_model_list():
+    """The write-side counterpart: a caller editing a model_list entry's own
+    non-secret field (renaming it) while leaving that same entry's nested
+    secret masked must not corrupt the stored per-deployment credential.
+    List entries correspond by position (see the module docstring on
+    ``_restore_redacted_nested_value``), so this -- the common "edit this
+    entry, keep its secret" pattern -- must keep working."""
+    existing = {
+        "agent_name": "my-agent",
+        "model_list": [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"api_key": SENTINEL_AWS_SECRET_ACCESS_KEY, "model": "gpt-4"},
+            },
+        ],
+    }
+    incoming = {
+        "agent_name": "my-agent-renamed",
+        "model_list": [
+            {
+                "model_name": "gpt-4-renamed",
+                "litellm_params": {"api_key": REDACTED_BY_LITELM_STRING, "model": "gpt-4"},
+            },
+        ],
+    }
+
+    restored = _restore_redacted_litellm_params(incoming, existing)
+
+    assert SENTINEL_AWS_SECRET_ACCESS_KEY == restored["model_list"][0]["litellm_params"]["api_key"]
+    assert restored["model_list"][0]["model_name"] == "gpt-4-renamed"
+    assert restored["agent_name"] == "my-agent-renamed"
+
+
+def test_restore_redacted_litellm_params_matches_list_entries_by_position():
+    """Documents the accepted trade-off: a list has no stable per-element
+    identity in a plain ``dict[str, object]`` schema, so restoration matches
+    entries by index, the same correspondence every other part of this merge
+    (and the endpoints' full-replace-on-PUT semantics) already assumes. If a
+    caller both reorders the list AND echoes back a masked marker in the same
+    request, a credential can end up attached to a different logical entry.
+    That is a known, narrow limitation -- not a leak between different
+    agents or tenants, since it only reshuffles one agent's own stored
+    values -- and this test pins the current, deliberate behavior rather
+    than asserting it away."""
+    existing = {
+        "model_list": [
+            {"model_name": "gpt-4", "litellm_params": {"api_key": SENTINEL_AWS_SECRET_ACCESS_KEY}},
+            {"model_name": "claude", "litellm_params": {"api_key": "other-" + SENTINEL_AWS_SECRET_ACCESS_KEY}},
+        ],
+    }
+    incoming = {
+        "model_list": [
+            # Same index (0) now holds what used to be at index 1's entry.
+            {"model_name": "claude", "litellm_params": {"api_key": REDACTED_BY_LITELM_STRING}},
+        ],
+    }
+
+    restored = _restore_redacted_litellm_params(incoming, existing)
+
+    assert restored["model_list"][0]["litellm_params"]["api_key"] == SENTINEL_AWS_SECRET_ACCESS_KEY
+
+
+def test_restore_redacted_litellm_params_recovers_a_whole_subtree_collapsed_by_the_depth_cap():
+    """Past the read-side recursion depth cap, a whole nested subtree is
+    collapsed to the flat REDACTED_BY_LITELM marker rather than a dict/list.
+    If the caller echoes that flat marker back unchanged, the whole
+    subtree -- not just the literal marker string -- must be restored."""
+    existing_subtree = {"aws_secret_access_key": SENTINEL_AWS_SECRET_ACCESS_KEY, "region": "us-east-1"}
+    incoming = {"provider_config": REDACTED_BY_LITELM_STRING}
+    existing = {"provider_config": existing_subtree}
+
+    restored = _restore_redacted_litellm_params(incoming, existing)
+
+    assert restored["provider_config"] == existing_subtree
+
+
+def test_redact_sensitive_agent_litellm_params_does_not_reinterpret_plain_string_values_as_json():
+    """A plain non-JSON string value (most string leaves) must pass through
+    unchanged rather than failing to parse and getting redacted."""
+    redacted = redact_sensitive_agent_litellm_params({"model": "bedrock/agentcore/my-agent", "is_public": True})
+
+    assert redacted["model"] == "bedrock/agentcore/my-agent"
+    assert redacted["is_public"] is True
+
+
+@pytest.mark.asyncio
+async def test_add_agent_to_db_drops_a_sentinel_value_instead_of_storing_the_placeholder():
+    """A create has nothing stored to restore behind a redaction marker, so a
+    sensitive key submitted as the literal marker is dropped rather than
+    persisted as the placeholder string itself."""
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    created_agent = MagicMock()
+    created_agent.model_dump.return_value = {
+        "agent_id": "agent-123",
+        "agent_name": "Test Agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "litellm_params": {},
+        "object_permission": None,
+    }
+    created_agent.object_permission = None
+    mock_create = AsyncMock(return_value=created_agent)
+    mock_prisma.db.litellm_agentstable.create = mock_create
+
+    await registry.add_agent_to_db(
+        agent={
+            "agent_name": "Test Agent",
+            "agent_card_params": _sample_agent_card_params(),
+            "litellm_params": {
+                "aws_secret_access_key": REDACTED_BY_LITELM_STRING,
+                "model": "bedrock/agentcore/my-agent",
+            },
+        },
+        prisma_client=mock_prisma,
+        created_by="test-user",
+    )
+
+    stored_params: Final = json.loads(mock_create.call_args.kwargs["data"]["litellm_params"])
+    assert "aws_secret_access_key" not in stored_params
+    assert stored_params["model"] == "bedrock/agentcore/my-agent"
+
+
+@pytest.mark.asyncio
+async def test_update_agent_in_db_preserves_secret_when_echoed_back_redacted():
+    """PUT round-trips the GET response, which shows the secret redacted. Saving
+    an unrelated field change must not overwrite the real stored credential
+    with the redaction marker."""
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            litellm_params={
+                "aws_access_key_id": SENTINEL_AWS_ACCESS_KEY_ID,
+                "aws_secret_access_key": SENTINEL_AWS_SECRET_ACCESS_KEY,
+                "model": "bedrock/agentcore/my-agent",
+            },
+            object_permission_id=None,
+        )
+    )
+    updated_agent = MagicMock()
+    updated_agent.model_dump.return_value = {
+        "agent_id": "agent-123",
+        "agent_name": "Renamed Agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "litellm_params": {},
+        "object_permission": None,
+    }
+    updated_agent.object_permission = None
+    mock_update = AsyncMock(return_value=updated_agent)
+    mock_prisma.db.litellm_agentstable.update = mock_update
+
+    await registry.update_agent_in_db(
+        agent_id="agent-123",
+        agent={
+            "agent_name": "Renamed Agent",
+            "agent_card_params": _sample_agent_card_params(),
+            # The UI round-tripped the redacted secret and the untouched
+            # access key id verbatim; only agent_name actually changed.
+            "litellm_params": {
+                "aws_access_key_id": SENTINEL_AWS_ACCESS_KEY_ID,
+                "aws_secret_access_key": REDACTED_BY_LITELM_STRING,
+                "model": "bedrock/agentcore/my-agent",
+            },
+        },
+        prisma_client=mock_prisma,
+        updated_by="test-user",
+    )
+
+    stored_params: Final = json.loads(mock_update.call_args.kwargs["data"]["litellm_params"])
+    assert stored_params["aws_secret_access_key"] == SENTINEL_AWS_SECRET_ACCESS_KEY
+    assert stored_params["aws_access_key_id"] == SENTINEL_AWS_ACCESS_KEY_ID
+    assert stored_params["model"] == "bedrock/agentcore/my-agent"
+
+
+@pytest.mark.asyncio
+async def test_update_agent_in_db_preserves_secret_when_key_omitted_entirely():
+    """Omitting the sensitive key altogether must fall back to the stored
+    value too, not just an explicit redaction-marker round-trip."""
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            litellm_params={"aws_secret_access_key": SENTINEL_AWS_SECRET_ACCESS_KEY},
+            object_permission_id=None,
+        )
+    )
+    updated_agent = MagicMock()
+    updated_agent.model_dump.return_value = {
+        "agent_id": "agent-123",
+        "agent_name": "Test Agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "litellm_params": {},
+        "object_permission": None,
+    }
+    updated_agent.object_permission = None
+    mock_update = AsyncMock(return_value=updated_agent)
+    mock_prisma.db.litellm_agentstable.update = mock_update
+
+    await registry.update_agent_in_db(
+        agent_id="agent-123",
+        agent={
+            "agent_name": "Test Agent",
+            "agent_card_params": _sample_agent_card_params(),
+            "litellm_params": {"model": "bedrock/agentcore/my-agent"},
+        },
+        prisma_client=mock_prisma,
+        updated_by="test-user",
+    )
+
+    stored_params: Final = json.loads(mock_update.call_args.kwargs["data"]["litellm_params"])
+    assert stored_params["aws_secret_access_key"] == SENTINEL_AWS_SECRET_ACCESS_KEY
+
+
+@pytest.mark.asyncio
+async def test_update_agent_in_db_preserves_secret_nested_under_a_non_sensitive_key():
+    """A secret nested inside a dict held by a non-sensitively-named key
+    (e.g. a per-provider sub-config) must also survive an echoed-back
+    redaction marker, not just top-level secret keys."""
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            litellm_params={
+                "provider_config": {
+                    "aws_secret_access_key": SENTINEL_AWS_SECRET_ACCESS_KEY,
+                    "region": "us-east-1",
+                }
+            },
+            object_permission_id=None,
+        )
+    )
+    updated_agent = MagicMock()
+    updated_agent.model_dump.return_value = {
+        "agent_id": "agent-123",
+        "agent_name": "Test Agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "litellm_params": {},
+        "object_permission": None,
+    }
+    updated_agent.object_permission = None
+    mock_update = AsyncMock(return_value=updated_agent)
+    mock_prisma.db.litellm_agentstable.update = mock_update
+
+    await registry.update_agent_in_db(
+        agent_id="agent-123",
+        agent={
+            "agent_name": "Test Agent",
+            "agent_card_params": _sample_agent_card_params(),
+            "litellm_params": {
+                # The GET response redacted the nested secret; the caller
+                # round-trips it verbatim while changing nothing.
+                "provider_config": {
+                    "aws_secret_access_key": REDACTED_BY_LITELM_STRING,
+                    "region": "us-west-2",
+                }
+            },
+        },
+        prisma_client=mock_prisma,
+        updated_by="test-user",
+    )
+
+    stored_params: Final = json.loads(mock_update.call_args.kwargs["data"]["litellm_params"])
+    assert stored_params["provider_config"]["aws_secret_access_key"] == SENTINEL_AWS_SECRET_ACCESS_KEY
+    assert stored_params["provider_config"]["region"] == "us-west-2"
+
+
+@pytest.mark.asyncio
+async def test_update_agent_in_db_clears_secret_on_explicit_empty_value():
+    """An explicit empty string is a deliberate clear, distinct from an omitted
+    key or the redaction marker, and must actually clear the stored secret."""
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            litellm_params={"aws_secret_access_key": SENTINEL_AWS_SECRET_ACCESS_KEY},
+            object_permission_id=None,
+        )
+    )
+    updated_agent = MagicMock()
+    updated_agent.model_dump.return_value = {
+        "agent_id": "agent-123",
+        "agent_name": "Test Agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "litellm_params": {},
+        "object_permission": None,
+    }
+    updated_agent.object_permission = None
+    mock_update = AsyncMock(return_value=updated_agent)
+    mock_prisma.db.litellm_agentstable.update = mock_update
+
+    await registry.update_agent_in_db(
+        agent_id="agent-123",
+        agent={
+            "agent_name": "Test Agent",
+            "agent_card_params": _sample_agent_card_params(),
+            "litellm_params": {"aws_secret_access_key": ""},
+        },
+        prisma_client=mock_prisma,
+        updated_by="test-user",
+    )
+
+    stored_params: Final = json.loads(mock_update.call_args.kwargs["data"]["litellm_params"])
+    assert stored_params["aws_secret_access_key"] == ""
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_in_db_preserves_secret_when_litellm_params_omitted():
+    """A PATCH that only renames the agent must not touch (let alone drop) the
+    stored litellm_params secret."""
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value={
+            "agent_id": "agent-123",
+            "agent_name": "Old Name",
+            "litellm_params": {"aws_secret_access_key": SENTINEL_AWS_SECRET_ACCESS_KEY},
+            "object_permission_id": None,
+        }
+    )
+    patched_agent = MagicMock()
+    patched_agent.model_dump.return_value = {
+        "agent_id": "agent-123",
+        "agent_name": "New Name",
+        "agent_card_params": _sample_agent_card_params(),
+        "litellm_params": {"aws_secret_access_key": SENTINEL_AWS_SECRET_ACCESS_KEY},
+        "object_permission": None,
+    }
+    patched_agent.object_permission = None
+    mock_update = AsyncMock(return_value=patched_agent)
+    mock_prisma.db.litellm_agentstable.update = mock_update
+
+    await registry.patch_agent_in_db(
+        agent_id="agent-123",
+        agent={"agent_name": "New Name"},
+        prisma_client=mock_prisma,
+        updated_by="test-user",
+    )
+
+    update_data: Final = mock_update.call_args.kwargs["data"]
+    assert "litellm_params" not in update_data
+
+
+@pytest.mark.asyncio
+async def test_patch_agent_in_db_preserves_secret_when_echoed_back_redacted():
+    """A PATCH that includes litellm_params (e.g. to flip an unrelated flag)
+    with the secret round-tripped as the redaction marker must not clobber
+    the stored credential."""
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value={
+            "agent_id": "agent-123",
+            "agent_name": "Test Agent",
+            "litellm_params": {
+                "aws_secret_access_key": SENTINEL_AWS_SECRET_ACCESS_KEY,
+                "is_public": False,
+            },
+            "object_permission_id": None,
+        }
+    )
+    patched_agent = MagicMock()
+    patched_agent.model_dump.return_value = {
+        "agent_id": "agent-123",
+        "agent_name": "Test Agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "litellm_params": {},
+        "object_permission": None,
+    }
+    patched_agent.object_permission = None
+    mock_update = AsyncMock(return_value=patched_agent)
+    mock_prisma.db.litellm_agentstable.update = mock_update
+
+    await registry.patch_agent_in_db(
+        agent_id="agent-123",
+        agent={
+            "litellm_params": {
+                "aws_secret_access_key": REDACTED_BY_LITELM_STRING,
+                "is_public": True,
+            }
+        },
+        prisma_client=mock_prisma,
+        updated_by="test-user",
+    )
+
+    stored_params: Final = json.loads(mock_update.call_args.kwargs["data"]["litellm_params"])
+    assert stored_params["aws_secret_access_key"] == SENTINEL_AWS_SECRET_ACCESS_KEY
+    assert stored_params["is_public"] is True

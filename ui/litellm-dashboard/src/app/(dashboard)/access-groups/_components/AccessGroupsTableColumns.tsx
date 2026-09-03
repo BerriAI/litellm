@@ -22,9 +22,13 @@ interface ResourceTone {
 }
 
 const RESOURCE_TONES: Record<"models" | "mcpServers" | "agents", ResourceTone> = {
-  models: { icon: Layers, className: "bg-blue-50 text-blue-700 ring-blue-600/20" },
-  mcpServers: { icon: Server, className: "bg-cyan-50 text-cyan-700 ring-cyan-600/20" },
-  agents: { icon: Bot, className: "bg-purple-50 text-purple-700 ring-purple-600/20" },
+  models: { icon: Layers, className: "bg-info/10 text-info ring-blue-600/20" },
+  mcpServers: { icon: Server, className: "bg-info/10 text-info ring-cyan-600/20" },
+  agents: {
+    icon: Bot,
+    className:
+      "bg-purple-50 text-purple-700 ring-purple-600/20 dark:bg-purple-950 dark:text-purple-300 dark:ring-purple-400/30",
+  },
 };
 
 function ResourcesCell({ group }: { group: AccessGroup }) {

@@ -7,11 +7,9 @@ arbitrary local image paths working while refusing non-image files like
 """
 
 import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy.common_utils.static_asset_utils import (
     detect_local_image_media_type,

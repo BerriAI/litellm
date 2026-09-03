@@ -1,11 +1,9 @@
 import os
-import sys
 
 import pytest
 from fastapi import HTTPException
 from httpx import ConnectError, Request, Response
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import DualCache
@@ -93,24 +91,24 @@ class TestRepelloAIInitialization:
         with pytest.raises(ValueError, match="asset_id"):
             RepelloAIGuardrail(api_key="test-api-key", guardrail_name="t")
 
-    def test_api_key_from_env(self):
-        os.environ["REPELLOAI_API_KEY"] = "env-key"
+    def test_api_key_from_env(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("REPELLOAI_API_KEY", "env-key")
         guardrail = RepelloAIGuardrail(asset_id="asset-123", guardrail_name="t")
         assert guardrail.repelloai_api_key == "env-key"
 
-    def test_api_key_from_argus_env(self):
-        os.environ["ARGUS_API_KEY"] = "argus-key"
+    def test_api_key_from_argus_env(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ARGUS_API_KEY", "argus-key")
         guardrail = RepelloAIGuardrail(asset_id="asset-123", guardrail_name="t")
         assert guardrail.repelloai_api_key == "argus-key"
 
-    def test_argus_env_preferred_over_legacy(self):
-        os.environ["ARGUS_API_KEY"] = "argus-key"
-        os.environ["REPELLOAI_API_KEY"] = "legacy-key"
+    def test_argus_env_preferred_over_legacy(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ARGUS_API_KEY", "argus-key")
+        monkeypatch.setenv("REPELLOAI_API_KEY", "legacy-key")
         guardrail = RepelloAIGuardrail(asset_id="asset-123", guardrail_name="t")
         assert guardrail.repelloai_api_key == "argus-key"
 
-    def test_explicit_api_key_preferred_over_env(self):
-        os.environ["ARGUS_API_KEY"] = "argus-key"
+    def test_explicit_api_key_preferred_over_env(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ARGUS_API_KEY", "argus-key")
         guardrail = RepelloAIGuardrail(
             api_key="explicit-key", asset_id="asset-123", guardrail_name="t"
         )
@@ -145,10 +143,10 @@ class TestRepelloAIInitialization:
         assert guardrail.api_base == DEFAULT_REPELLOAI_API_BASE
         assert guardrail.unreachable_fallback == "fail_closed"
 
-    def test_init_guardrails_v2_wiring(self):
+    def test_init_guardrails_v2_wiring(self, monkeypatch: pytest.MonkeyPatch):
         """The guardrail registers and constructs via the config.yaml path."""
-        litellm.guardrail_name_config_map = {}
-        os.environ["REPELLOAI_API_KEY"] = "test-key"
+        monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
+        monkeypatch.setenv("REPELLOAI_API_KEY", "test-key")
         init_guardrails_v2(
             all_guardrails=[
                 {

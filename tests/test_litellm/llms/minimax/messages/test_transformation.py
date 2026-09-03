@@ -3,14 +3,10 @@ Test MiniMax Anthropic-compatible API support
 """
 
 import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm import completion
@@ -146,3 +142,33 @@ if __name__ == "__main__":
     print("✓ Provider config manager test passed")
 
     print("\n✅ All basic tests passed!")
+
+
+def test_minimax_messages_env_key_attached(monkeypatch):
+    """Regression: an env-only MINIMAX_API_KEY must be attached on /v1/messages validation"""
+    monkeypatch.setenv("MINIMAX_API_KEY", "test-minimax-env-key")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    config = MinimaxMessagesConfig()
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={},
+        model="MiniMax-M2.1",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+    )
+    assert headers["x-api-key"] == "test-minimax-env-key"
+
+
+def test_minimax_messages_explicit_key_wins_over_env(monkeypatch):
+    monkeypatch.setenv("MINIMAX_API_KEY", "env-key")
+    config = MinimaxMessagesConfig()
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={},
+        model="MiniMax-M2.1",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        api_key="param-key",
+    )
+    assert headers["x-api-key"] == "param-key"

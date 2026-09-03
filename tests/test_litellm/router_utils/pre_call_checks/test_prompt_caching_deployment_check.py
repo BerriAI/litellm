@@ -1,14 +1,15 @@
-import os
-import sys
+import asyncio
+import copy
 from typing import List, cast
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
     _get_min_token_count_for_deployments,
@@ -22,25 +23,12 @@ OPUS_4_6_MIN_TOKENS = 4096
 
 
 @pytest.fixture(autouse=True)
-def local_model_cost_map(monkeypatch):
-    """
-    The remote cost map does not carry `prompt_cache_min_tokens` yet, so a test that reads the
-    default map would pass here and flake in CI. Force the in-repo map.
+def _local_model_cost_map_autouse(local_model_cost_map):
+    """Every test here reads `prompt_cache_min_tokens`, which only the in-repo map
+    carries, so the shared local_model_cost_map fixture (conftest.py) is autouse
+    for the whole file."""
+    yield
 
-    `get_model_info` is lru_cached, so swapping `model_cost` is not enough on its own: an earlier
-    test that resolved these models against the remote map leaves entries with no
-    `prompt_cache_min_tokens`, and the stale hit resolves to the default. Clear on the way out too,
-    so the entries these tests warm against the local map do not leak into later tests.
-    """
-    original_model_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
 
 
 def _deployments(*models: str) -> List[dict]:
@@ -163,6 +151,25 @@ async def test_async_filter_deployments_narrows_prompt_above_model_minimum():
 
 
 @pytest.mark.asyncio
+async def test_async_filter_deployments_does_not_pin_when_target_order_is_set():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
+    messages = _messages(word_count=5000)
+
+    await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-2", messages=messages, tools=None)
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs={"_target_order": 2},
+    )
+
+    assert filtered == deployments
+
+
+@pytest.mark.asyncio
 async def test_async_filter_deployments_narrows_for_group_whose_model_minimum_is_lower():
     """
     Same ~1400-token prompt that must not pin an Opus 4.6 group, on an Opus 4.8 group whose real
@@ -185,6 +192,210 @@ async def test_async_filter_deployments_narrows_for_group_whose_model_minimum_is
     )
 
     assert filtered == [deployments[1]]
+
+
+AUTO_CACHING_MODEL = "anthropic/claude-sonnet-4-5"
+
+
+def _auto_caching_messages() -> List[AllMessageValues]:
+    """A prompt over the model minimum that carries no client cache_control."""
+    return cast(
+        List[AllMessageValues],
+        [
+            {"role": "system", "content": "word " * 3000},
+            {"role": "user", "content": "hello"},
+        ],
+    )
+
+
+def _affinity_messages(messages: List[AllMessageValues]) -> List[AllMessageValues]:
+    """The messages the check keys deployment affinity on, for a group of `AUTO_CACHING_MODEL`."""
+    return AnthropicCacheControlHook.messages_with_default_injections(
+        messages=messages,
+        models=(AUTO_CACHING_MODEL,),
+    )
+
+
+class _SentMessagesCapture(CustomLogger):
+    def __init__(self):
+        self.messages: List[AllMessageValues] | None = None
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        standard_logging_object = kwargs.get("standard_logging_object")
+        if standard_logging_object is not None:
+            self.messages = standard_logging_object["messages"]
+
+
+async def _eventually(predicate, timeout: float = 10.0):
+    """Success callbacks run as tasks, so give the write a bounded window to land."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        result = predicate()
+        if result:
+            return result
+        await asyncio.sleep(0.05)
+    return predicate()
+
+
+@pytest.mark.asyncio
+async def test_affinity_key_matches_the_messages_auto_caching_actually_sends(monkeypatch, local_model_cost_map):
+    """
+    The regression. `enable_anthropic_prompt_caching` injects cache_control inside
+    `litellm.acompletion`, which runs after routing, so at filter time the messages carried no
+    marker, `extract_cacheable_prefix` returned [], the key was None, and the check no-opped on
+    every request. Routing must derive the same key the success event writes from the messages the
+    request was actually sent with, otherwise auto-injected caching gets no affinity at all.
+    """
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    capture = _SentMessagesCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    messages = _auto_caching_messages()
+
+    await litellm.acompletion(
+        model=AUTO_CACHING_MODEL,
+        messages=copy.deepcopy(messages),
+        mock_response="ok",
+        api_key="sk-fake",
+    )
+    sent_messages = await _eventually(lambda: capture.messages)
+    assert sent_messages is not None
+
+    routing_key = PromptCachingCache.get_prompt_caching_cache_key(_affinity_messages(messages), None)
+
+    assert routing_key is not None
+    assert routing_key == PromptCachingCache.get_prompt_caching_cache_key(sent_messages, None)
+
+
+@pytest.mark.asyncio
+async def test_repeated_auto_cached_prefix_pins_to_one_deployment(monkeypatch, local_model_cost_map):
+    """
+    End to end over the router: identical requests with no client cache_control must stop bouncing
+    across a multi-deployment group once one deployment has cached the prefix. Bedrock and Anthropic
+    caches are per account and region, so every bounce paid the cache write premium and never read.
+    """
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP_ALIAS,
+                "litellm_params": {"model": AUTO_CACHING_MODEL, "api_key": "sk-fake"},
+                "model_info": {"id": model_id},
+            }
+            for model_id in ("dep-1", "dep-2")
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+    messages = _auto_caching_messages()
+
+    first = await router.acompletion(model=MODEL_GROUP_ALIAS, messages=messages, mock_response="ok")
+    served_by = first._hidden_params["model_id"]
+
+    affinity_key = PromptCachingCache.get_prompt_caching_cache_key(_affinity_messages(messages), None)
+    assert await _eventually(lambda: router.cache.get_cache(key=affinity_key)) is not None
+
+    subsequent = [
+        (await router.acompletion(model=MODEL_GROUP_ALIAS, messages=messages, mock_response="ok"))._hidden_params[
+            "model_id"
+        ]
+        for _ in range(4)
+    ]
+
+    assert subsequent == [served_by] * 4
+
+
+@pytest.mark.asyncio
+async def test_per_request_enable_prompt_caching_reaches_the_affinity_key(monkeypatch, local_model_cost_map):
+    """
+    `enable_prompt_caching` turns auto-injection on for a single request while the global flag stays
+    off, so routing has to read it too. Ignore it and the key comes off unmarked messages, which is
+    never what the request goes on to send, and the pin is lost for every per-key enablement.
+    """
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", False)
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+    messages = _auto_caching_messages()
+
+    sent = AnthropicCacheControlHook.messages_with_default_injections(
+        messages=messages, models=(AUTO_CACHING_MODEL,), enable_prompt_caching=True
+    )
+    assert sent != messages
+    await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-2", messages=sent, tools=None)
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs={"enable_prompt_caching": True},
+    )
+
+    assert filtered == [deployments[1]]
+
+
+@pytest.mark.asyncio
+async def test_tool_marked_cache_control_keeps_routing_off_another_requests_prefix(monkeypatch, local_model_cost_map):
+    """
+    Tools carrying the client's own cache_control make auto-injection stand down, so this request
+    will not carry litellm's breakpoints. Routing must see the tools as well. Ignore them and it
+    keys off the injected prefix, pinning the request to whichever deployment cached a different,
+    tool-less request whose prefix it can never actually reuse.
+    """
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+    messages = _auto_caching_messages()
+    cache_marked_tools = [
+        {
+            "type": "function",
+            "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+    await PromptCachingCache(cache=cache).async_add_model_id(
+        model_id="dep-2", messages=_affinity_messages(messages), tools=None
+    )
+
+    without_tools = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS, healthy_deployments=deployments, messages=messages
+    )
+    assert without_tools == [deployments[1]]
+
+    with_tools = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs={"tools": cache_marked_tools},
+    )
+
+    assert with_tools == deployments
+
+
+def test_client_supplied_cache_control_keeps_its_own_prefix_boundary(monkeypatch, local_model_cost_map):
+    """
+    Auto-injection stands down when the client marks its own breakpoints, so the affinity key must
+    keep keying off the client's boundary. Injecting on top would push the boundary to the trailing
+    turn and break affinity for prompts that already worked.
+    """
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    messages = cast(
+        List[AllMessageValues],
+        [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "word " * 3000, "cache_control": {"type": "ephemeral"}},
+                ],
+            },
+            {"role": "user", "content": "hello"},
+        ],
+    )
+
+    for_key = _affinity_messages(messages)
+
+    assert for_key is messages
+    assert PromptCachingCache.extract_cacheable_prefix(for_key) == messages[:1]
 
 
 @pytest.mark.asyncio

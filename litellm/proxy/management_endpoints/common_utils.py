@@ -22,6 +22,35 @@ def validate_finite_spend(spend: float | None) -> None:
         )
 
 
+def validate_budget_duration(budget_duration: str | None) -> None:
+    """Reject budget durations that can't be parsed, are non-positive, or
+    overflow date math, so a bad value can't be persisted and later crash the
+    budget reset job.
+
+    A non-positive duration also resolves to a reset time of "now", which leaves
+    the row permanently due: the reset job re-reads it every tick and, once
+    enough of them exist, they fill each batch and starve every other tenant's
+    reset.
+    """
+    if budget_duration is None:
+        return
+
+    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+    try:
+        if duration_in_seconds(budget_duration) <= 0:
+            raise ValueError("budget_duration must be positive")
+        get_budget_reset_time(budget_duration=budget_duration)
+    except (ValueError, OverflowError):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid budget_duration '{budget_duration}'. Use a format like '1h', '24h', '7d', or '30d'."
+            },
+        )
+
+
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.proxy._types import (

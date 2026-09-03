@@ -119,8 +119,14 @@ describe("UsersTable", () => {
       "Created At",
       "Updated At",
     ].forEach((header) => {
-      expect(headerRow.textContent).toContain(header);
+      expect(headerRow).toHaveTextContent(header);
     });
+  });
+
+  it("renders spend with two decimal places", () => {
+    render(<Harness data={[makeUser({ spend: 98.854 })]} />);
+
+    expect(screen.getByText("$98.85")).toBeInTheDocument();
   });
 
   // Sorting is server-side and the backend only accepts these five keys, so a sort
@@ -245,7 +251,7 @@ describe("UsersTable", () => {
 
       await user.click(screen.getByTestId("datatable-select-row-user-1"));
 
-      expect(screen.getByTestId("datatable-select-all")).toHaveAttribute("aria-checked", "mixed");
+      expect(screen.getByTestId("datatable-select-all")).toBePartiallyChecked();
     });
   });
 

@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 
 import jwt
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import SecretStr, ValidationError
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
@@ -13,6 +15,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     SESSION_REFRESH_TTL_SECONDS,
     SESSION_TOKEN_PREFIX,
     SESSION_TTL_SECONDS,
+    AsymmetricSessionKeys,
     MintedSessionToken,
     NotASessionToken,
     OpenedSessionToken,
@@ -21,6 +24,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     SessionKeys,
     SessionMalformed,
     SessionPrincipal,
+    SessionRotatedPublicKey,
     SessionTokenTooLarge,
     is_session_refresh_token,
     is_session_token,
@@ -28,7 +32,21 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     mint_session_token,
     open_session_refresh_token,
     open_session_token,
+    session_public_key_pem,
 )
+
+
+def _rsa_private_pem(bits: int = 2048) -> str:
+    key = rsa.generate_private_key(public_exponent=65537, key_size=bits)
+    return key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+
+
+_RSA_PEM_A = _rsa_private_pem()
+_RSA_PEM_B = _rsa_private_pem()
 
 NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 KEYS = SessionKeys(signing_key=SecretStr("k" * 32))
@@ -212,3 +230,224 @@ def test_minted_token_repr_never_leaks_value():
     minted = mint_session_token(PRINCIPAL, KEYS, NOW)
     assert isinstance(minted, MintedSessionToken)
     assert minted.token.get_secret_value() not in repr(minted)
+
+
+def _decoded_claims(token: str, prefix: str) -> dict:
+    return jwt.decode(
+        token.removeprefix(prefix),
+        KEYS.signing_key.get_secret_value(),
+        algorithms=["HS256"],
+        options={"verify_exp": False},
+    )
+
+
+def test_mcp_principal_wire_claims_carry_no_audience_or_team_keys():
+    access_claims = _decoded_claims(_mint_access(), SESSION_TOKEN_PREFIX)
+    refresh_claims = _decoded_claims(_mint_refresh(), SESSION_REFRESH_PREFIX)
+    for claims in (access_claims, refresh_claims):
+        assert "audience" not in claims
+        assert "team_id" not in claims
+
+
+def test_legacy_signed_claims_open_with_no_audience_and_no_team():
+    opened = open_session_token(_sign_claims(_valid_claims()), KEYS, NOW)
+    assert isinstance(opened, OpenedSessionToken)
+    assert opened.principal.audience is None
+    assert opened.principal.team_id is None
+
+
+def test_proxy_api_audience_and_team_round_trip_through_the_refresh_token():
+    principal = SessionPrincipal(user_id="user-123", client_id="llm_client_abc", audience="proxy_api", team_id="team-b")
+    minted = mint_session_refresh_token(principal, KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    token = minted.token.get_secret_value()
+    claims = _decoded_claims(token, SESSION_REFRESH_PREFIX)
+    assert claims["audience"] == "proxy_api"
+    assert claims["team_id"] == "team-b"
+    opened = open_session_refresh_token(token, KEYS, NOW)
+    assert isinstance(opened, OpenedSessionToken)
+    assert opened.principal == principal
+
+
+def test_signed_claims_with_an_unknown_audience_are_rejected():
+    token = _sign_claims(_valid_claims(audience="bogus"))
+    assert isinstance(open_session_token(token, KEYS, NOW), SessionMalformed)
+
+
+def test_signed_claims_with_a_non_string_team_are_rejected():
+    token = _sign_claims(_valid_claims(team_id=42))
+    assert isinstance(open_session_token(token, KEYS, NOW), SessionMalformed)
+
+
+def test_principal_rejects_an_unknown_audience_at_construction():
+    with pytest.raises(ValidationError):
+        SessionPrincipal(user_id="user-123", client_id="llm_client_abc", audience="mcp")
+
+
+RSA_KEYS = AsymmetricSessionKeys(private_key_pem=SecretStr(_RSA_PEM_A), kid="2026-01")
+OTHER_RSA_KEYS = AsymmetricSessionKeys(private_key_pem=SecretStr(_RSA_PEM_B), kid="2025-06")
+
+
+def test_rs256_access_round_trip_with_kid_and_alg_pinned_in_header():
+    minted = mint_session_token(PRINCIPAL, RSA_KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    token = minted.token.get_secret_value()
+    header = jwt.get_unverified_header(token.removeprefix(SESSION_TOKEN_PREFIX))
+    assert header["alg"] == "RS256"
+    assert header["kid"] == "2026-01"
+    opened = open_session_token(token, RSA_KEYS, NOW)
+    assert isinstance(opened, OpenedSessionToken)
+    assert opened.principal == PRINCIPAL
+
+
+def test_rs256_refresh_round_trip():
+    minted = mint_session_refresh_token(PRINCIPAL, RSA_KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    token = minted.token.get_secret_value()
+    opened = open_session_refresh_token(token, RSA_KEYS, NOW)
+    assert isinstance(opened, OpenedSessionToken)
+    assert opened.principal == PRINCIPAL
+
+
+def test_rs256_token_verifies_with_public_key_only():
+    minted = mint_session_token(PRINCIPAL, RSA_KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    public_pem = session_public_key_pem(RSA_KEYS)
+    assert "PUBLIC KEY" in public_pem
+    assert "PRIVATE" not in public_pem
+    claims = jwt.decode(
+        minted.token.get_secret_value().removeprefix(SESSION_TOKEN_PREFIX),
+        public_pem,
+        algorithms=["RS256"],
+        issuer=SESSION_ISSUER,
+        options={"verify_exp": False},
+    )
+    assert claims["user_id"] == "user-123"
+
+
+def test_rs256_tampered_signature_is_bad_signature():
+    minted = mint_session_token(PRINCIPAL, RSA_KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    token = minted.token.get_secret_value()
+    tampered = token[:-2] + ("aa" if not token.endswith("aa") else "bb")
+    assert isinstance(open_session_token(tampered, RSA_KEYS, NOW), SessionBadSignature)
+
+
+def test_rs256_expired_token_is_expired():
+    minted = mint_session_token(PRINCIPAL, RSA_KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    after = NOW + timedelta(seconds=SESSION_TTL_SECONDS + 1)
+    assert isinstance(open_session_token(minted.token.get_secret_value(), RSA_KEYS, after), SessionExpired)
+
+
+def test_hs256_token_is_rejected_in_rs256_mode():
+    assert isinstance(open_session_token(_mint_access(), RSA_KEYS, NOW), SessionBadSignature)
+
+
+def test_hs256_token_claiming_the_current_kid_is_rejected_by_alg_pinning():
+    token = SESSION_TOKEN_PREFIX + jwt.encode(
+        _valid_claims(),
+        KEYS.signing_key.get_secret_value(),
+        algorithm="HS256",
+        headers={"kid": RSA_KEYS.kid},
+    )
+    assert isinstance(open_session_token(token, RSA_KEYS, NOW), SessionMalformed)
+
+
+def test_rs256_token_is_rejected_in_hs256_mode():
+    minted = mint_session_token(PRINCIPAL, RSA_KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    assert isinstance(open_session_token(minted.token.get_secret_value(), KEYS, NOW), SessionMalformed)
+
+
+def test_rs256_token_from_an_unknown_kid_is_bad_signature():
+    minted = mint_session_token(PRINCIPAL, OTHER_RSA_KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    assert isinstance(open_session_token(minted.token.get_secret_value(), RSA_KEYS, NOW), SessionBadSignature)
+
+
+def test_rs256_token_signed_by_a_foreign_key_claiming_the_current_kid_is_bad_signature():
+    token = SESSION_TOKEN_PREFIX + jwt.encode(
+        _valid_claims(),
+        _RSA_PEM_B,
+        algorithm="RS256",
+        headers={"kid": RSA_KEYS.kid},
+    )
+    assert isinstance(open_session_token(token, RSA_KEYS, NOW), SessionBadSignature)
+
+
+def test_alg_none_token_with_the_current_kid_is_rejected_in_rs256_mode():
+    unsigned = jwt.api_jws.encode(
+        b'{"iss":"litellm-mcp-gateway"}', key=None, algorithm="none", headers={"kid": RSA_KEYS.kid}
+    )
+    assert isinstance(open_session_token(SESSION_TOKEN_PREFIX + unsigned, RSA_KEYS, NOW), SessionMalformed)
+
+
+def test_rotation_previous_public_key_still_verifies_until_removed():
+    minted = mint_session_token(PRINCIPAL, OTHER_RSA_KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    token = minted.token.get_secret_value()
+    rotated = AsymmetricSessionKeys(
+        private_key_pem=SecretStr(_RSA_PEM_A),
+        kid="2026-01",
+        previous_public_keys=(
+            SessionRotatedPublicKey(kid="2025-06", public_key_pem=session_public_key_pem(OTHER_RSA_KEYS)),
+        ),
+    )
+    opened = open_session_token(token, rotated, NOW)
+    assert isinstance(opened, OpenedSessionToken)
+    assert opened.principal == PRINCIPAL
+    assert isinstance(open_session_token(token, RSA_KEYS, NOW), SessionBadSignature)
+
+
+def test_rotation_window_still_enforces_expiry_and_tamper_on_the_previous_key():
+    minted = mint_session_token(PRINCIPAL, OTHER_RSA_KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    token = minted.token.get_secret_value()
+    rotated = AsymmetricSessionKeys(
+        private_key_pem=SecretStr(_RSA_PEM_A),
+        kid="2026-01",
+        previous_public_keys=(
+            SessionRotatedPublicKey(kid="2025-06", public_key_pem=session_public_key_pem(OTHER_RSA_KEYS)),
+        ),
+    )
+    after = NOW + timedelta(seconds=SESSION_TTL_SECONDS + 1)
+    assert isinstance(open_session_token(token, rotated, after), SessionExpired)
+    tampered = token[:-2] + ("aa" if not token.endswith("aa") else "bb")
+    assert isinstance(open_session_token(tampered, rotated, NOW), SessionBadSignature)
+
+
+def test_weak_or_garbage_private_key_pem_rejected_at_construction():
+    with pytest.raises(ValidationError):
+        AsymmetricSessionKeys(private_key_pem=SecretStr(_rsa_private_pem(bits=1024)), kid="weak")
+    with pytest.raises(ValidationError):
+        AsymmetricSessionKeys(private_key_pem=SecretStr("not a pem"), kid="junk")
+    with pytest.raises(ValidationError):
+        SessionRotatedPublicKey(kid="junk", public_key_pem="not a pem")
+    with pytest.raises(ValidationError):
+        SessionRotatedPublicKey(kid="private-half", public_key_pem=_RSA_PEM_A)
+
+
+def test_weak_rotated_public_key_rejected_at_construction():
+    weak_public = (
+        serialization.load_pem_private_key(_rsa_private_pem(bits=1024).encode(), password=None)
+        .public_key()
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        .decode()
+    )
+    with pytest.raises(ValidationError):
+        SessionRotatedPublicKey(kid="2024-01", public_key_pem=weak_public)
+
+
+def test_duplicate_kids_rejected_at_construction():
+    previous = SessionRotatedPublicKey(kid="2025-06", public_key_pem=session_public_key_pem(OTHER_RSA_KEYS))
+    with pytest.raises(ValidationError):
+        AsymmetricSessionKeys(private_key_pem=SecretStr(_RSA_PEM_A), kid="2025-06", previous_public_keys=(previous,))
+    with pytest.raises(ValidationError):
+        AsymmetricSessionKeys(
+            private_key_pem=SecretStr(_RSA_PEM_A), kid="2026-01", previous_public_keys=(previous, previous)
+        )
+
+
+def test_asymmetric_keys_repr_never_leaks_the_private_key():
+    assert _RSA_PEM_A not in repr(RSA_KEYS)

@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import sys
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock
 
@@ -9,7 +7,6 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 

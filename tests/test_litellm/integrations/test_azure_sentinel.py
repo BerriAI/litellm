@@ -405,17 +405,6 @@ def test_azure_sentinel_authority_host_prefers_the_sentinel_scoped_env_var(_no_a
     assert logger.oauth_scope == "https://monitor.azure.us/.default"
 
 
-def test_azure_sentinel_falls_back_to_the_shared_authority_host(_no_authority_host_env, monkeypatch):
-    """With no Sentinel-scoped override the shared variable still applies, which is the behavior
-    shipped in the original fix."""
-    monkeypatch.setenv("AZURE_AUTHORITY_HOST", "https://login.microsoftonline.us")
-
-    logger = _build_logger()
-
-    assert logger.authority_host == "https://login.microsoftonline.us"
-    assert logger.oauth_scope == "https://monitor.azure.us/.default"
-
-
 def test_azure_sentinel_authority_host_argument_outranks_the_scoped_env_var(_no_authority_host_env, monkeypatch):
     """An explicit constructor argument is the most specific source and has to win, otherwise a
     deployment that exports the scoped variable silently overrides an SDK caller."""

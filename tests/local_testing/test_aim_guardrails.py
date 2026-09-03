@@ -1,8 +1,6 @@
 import asyncio
 import contextlib
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, patch, call
 
 import pytest
@@ -17,9 +15,6 @@ from litellm.proxy.guardrails.guardrail_hooks.aim.aim import (
 from litellm.proxy.proxy_server import StreamingCallbackError, UserAPIKeyAuth
 from litellm.types.utils import ModelResponseStream, ModelResponse
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
@@ -101,26 +96,26 @@ async def test_block_callback(mode: str):
         ],
     }
 
-    with pytest.raises(ProxyException, match="Jailbreak detected") as exc_info:
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            return_value=Response(
-                json={
-                    "analysis_result": {
-                        "analysis_time_ms": 212,
-                        "policy_drill_down": {},
-                        "session_entities": [],
-                    },
-                    "required_action": {
-                        "action_type": "block_action",
-                        "detection_message": "Jailbreak detected",
-                        "policy_name": "blocking policy",
-                    },
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=Response(
+            json={
+                "analysis_result": {
+                    "analysis_time_ms": 212,
+                    "policy_drill_down": {},
+                    "session_entities": [],
                 },
-                status_code=200,
-                request=Request(method="POST", url="http://aim"),
-            ),
-        ):
+                "required_action": {
+                    "action_type": "block_action",
+                    "detection_message": "Jailbreak detected",
+                    "policy_name": "blocking policy",
+                },
+            },
+            status_code=200,
+            request=Request(method="POST", url="http://aim"),
+        ),
+    ):
+        async def _call_guardrail():
             if mode == "pre_call":
                 await aim_guardrail.async_pre_call_hook(
                     data=data,
@@ -134,6 +129,9 @@ async def test_block_callback(mode: str):
                     user_api_key_dict=UserAPIKeyAuth(),
                     call_type="completion",
                 )
+
+        with pytest.raises(ProxyException, match="Jailbreak detected") as exc_info:
+            await _call_guardrail()
 
     exc = exc_info.value
     assert exc.code == "400"
@@ -460,7 +458,6 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
 
 @pytest.mark.asyncio
 async def test_post_call_stream__blocked_chunks(monkeypatch):
-    from litellm.proxy.proxy_server import StreamingCallbackError
 
     init_guardrails_v2(
         all_guardrails=[

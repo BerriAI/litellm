@@ -4,16 +4,6 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { RealtimePrettyView, isRealtimeResponse } from "./RealtimePrettyView";
 
-vi.mock("antd", async () => {
-  const actual = await vi.importActual<typeof import("antd")>("antd");
-  return {
-    ...actual,
-    message: {
-      success: vi.fn(),
-    },
-  };
-});
-
 const sampleRealtimeResponse = {
   usage: {
     total_tokens: 587,

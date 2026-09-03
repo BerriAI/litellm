@@ -8,6 +8,7 @@ making actual network calls.
 
 import asyncio
 import json
+from collections.abc import AsyncIterable, Iterable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Final, cast
@@ -140,7 +141,7 @@ def create_mock_client_factory(config: MockClientConfig):
         stream=False,
         logging_obj=None,
         files=None,
-        content=None,
+        content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
     ):
         """Monkey-patched AsyncHTTPHandler.post that intercepts API calls."""
         if isinstance(url, str) and _is_mock_url(url):
@@ -193,7 +194,7 @@ def create_mock_client_factory(config: MockClientConfig):
         timeout=None,
         stream=False,
         files=None,
-        content=None,
+        content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
         logging_obj=None,
     ):
         """Monkey-patched HTTPHandler.post that intercepts API calls."""

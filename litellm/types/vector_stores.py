@@ -277,6 +277,11 @@ class LiteLLM_ManagedVectorStoreIndex(BaseModel):
     updated_by: str | None = None
 
 
+class IndexListResponse(BaseModel):
+    object: Literal["list"] = "list"
+    data: tuple[LiteLLM_ManagedVectorStoreIndex, ...]
+
+
 class VectorStoreIndexType(str, Enum):
     """Type of vector store index"""
 

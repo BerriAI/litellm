@@ -12,14 +12,13 @@ This test suite verifies:
 """
 
 from base_llm_unit_tests import BaseLLMChatTest
+import httpx
 import pytest
-import sys
 import os
 import json
 from typing import Optional
 from unittest.mock import AsyncMock, Mock, patch
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -208,14 +207,6 @@ class TestBedrockMoonshotInvoke(BaseLLMChatTest):
         endpoint with the messages body. Iteration of the stream itself is
         not exercised here — moonshot streaming delegates to the OpenAI
         parser and is covered by the OpenAI test suite.
-
-        Note: bedrock invoke streaming cannot be intercepted by patching
-        the caller-supplied client, because ``CustomStreamWrapper.fetch_sync_stream``
-        at streaming_handler.py invokes the stored ``make_call`` partial with
-        ``client=litellm.module_level_client``, which overrides any client the
-        caller passed. Patch ``make_sync_call`` at its import site in
-        ``base_invoke_transformation`` so we observe the exact kwargs the
-        partial was built with at stream-wrapper construction time.
         """
         from litellm.utils import CustomStreamWrapper
 
@@ -225,7 +216,7 @@ class TestBedrockMoonshotInvoke(BaseLLMChatTest):
             captured.update(kwargs)
             # Return an empty iterator so the stream wrapper's iteration
             # doesn't try to parse real bytes.
-            return iter([])
+            return iter([]), httpx.Headers()
 
         with patch(
             "litellm.llms.bedrock.chat.invoke_transformations."
@@ -246,11 +237,6 @@ class TestBedrockMoonshotInvoke(BaseLLMChatTest):
                 aws_region_name="us-west-2",
             )
             assert isinstance(response, CustomStreamWrapper)
-            # Trigger fetch_sync_stream → make_call(...) → fake_make_sync_call.
-            try:
-                next(iter(response))
-            except StopIteration:
-                pass
 
         assert captured, "make_sync_call was never invoked"
         assert captured["api_base"].endswith("/invoke-with-response-stream")

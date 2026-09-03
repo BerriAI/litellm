@@ -1,5 +1,3 @@
-import { ComplexityTiers } from "./ComplexityRouterConfig";
-
 export type AutoRouterTestMode = "chat" | "embedding";
 
 export interface AutoRouterTestTarget {
@@ -9,32 +7,37 @@ export interface AutoRouterTestTarget {
 }
 
 export interface BuildAutoRouterTestTargetsParams {
-  tiers: ComplexityTiers;
+  /** Ordered [tier name, model groups] entries of the active tier set. */
+  tiers: readonly (readonly [string, string[]])[];
   semanticMatchingEnabled: boolean;
   embeddingModel: string | undefined;
+  /** The resolved default model - see resolveComplexityDefaultModel. A live fallback destination,
+   * so it is probed even when no tier lists it. */
+  defaultModel?: string;
 }
-
-// Keys drive iteration order; `satisfies Record<keyof ComplexityTiers, null>` makes it a
-// compile error to add a tier to ComplexityTiers without listing it here (and vice versa).
-const TIER_ORDER = Object.keys({
-  SIMPLE: null,
-  MEDIUM: null,
-  COMPLEX: null,
-  REASONING: null,
-} satisfies Record<keyof ComplexityTiers, null>) as (keyof ComplexityTiers)[];
 
 export const buildAutoRouterTestTargets = ({
   tiers,
   semanticMatchingEnabled,
   embeddingModel,
+  defaultModel,
 }: BuildAutoRouterTestTargetsParams): AutoRouterTestTarget[] => {
-  const groupedByModel = TIER_ORDER.reduce<Record<string, string[]>>((acc, tier) => {
-    return (tiers[tier] ?? []).reduce((tierAcc, rawModel) => {
+  const tieredByModel = tiers.reduce<Record<string, string[]>>((acc, [tier, models]) => {
+    return models.reduce((tierAcc, rawModel) => {
       const modelGroup = rawModel?.trim();
       if (!modelGroup) return tierAcc;
       return { ...tierAcc, [modelGroup]: [...(tierAcc[modelGroup] ?? []), tier] };
     }, acc);
   }, {});
+
+  // The default is a live destination whenever the chosen tier has no model, and when an LLM
+  // classifier fails with "Route to the default model", so a green test that skipped it would be
+  // reporting on a router it had not fully reached.
+  const resolvedDefault = defaultModel?.trim();
+  const groupedByModel =
+    resolvedDefault && !(resolvedDefault in tieredByModel)
+      ? { ...tieredByModel, [resolvedDefault]: ["Default"] }
+      : tieredByModel;
 
   const tierTargets: AutoRouterTestTarget[] = Object.entries(groupedByModel).map(([modelGroup, labels]) => ({
     labels,

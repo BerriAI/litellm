@@ -239,8 +239,8 @@ class TestAPISerpentSearchIntegration:
         return mock_response
 
     @pytest.mark.asyncio
-    async def test_asearch_quick_default(self):
-        os.environ["APISERPENT_API_KEY"] = "test-api-key"
+    async def test_asearch_quick_default(self, monkeypatch):
+        monkeypatch.setenv("APISERPENT_API_KEY", "test-api-key")
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get",
             new_callable=AsyncMock,
@@ -269,8 +269,8 @@ class TestAPISerpentSearchIntegration:
             assert response.results[0].title == "Test Result"
 
     @pytest.mark.asyncio
-    async def test_asearch_deep(self):
-        os.environ["APISERPENT_API_KEY"] = "test-api-key"
+    async def test_asearch_deep(self, monkeypatch):
+        monkeypatch.setenv("APISERPENT_API_KEY", "test-api-key")
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get",
             new_callable=AsyncMock,

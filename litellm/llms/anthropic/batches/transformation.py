@@ -1,9 +1,11 @@
 import json
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 from httpx import Headers, Response
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
@@ -12,11 +14,36 @@ from litellm.types.llms.openai import AllMessageValues, CreateBatchRequest
 from litellm.types.utils import LiteLLMBatch, LlmProviders, ModelResponse
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+
+class AnthropicBatchRequestCounts(TypedDict, total=False):
+    """The ``request_counts`` object of an Anthropic Message Batch."""
+
+    processing: ReadOnly[int]
+    succeeded: ReadOnly[int]
+    errored: ReadOnly[int]
+    canceled: ReadOnly[int]
+    expired: ReadOnly[int]
+
+
+class AnthropicMessageBatch(TypedDict, total=False):
+    """The fields of an Anthropic Message Batch that map onto an OpenAI Batch."""
+
+    id: ReadOnly[str]
+    processing_status: ReadOnly[str]
+    created_at: ReadOnly[str | None]
+    ended_at: ReadOnly[str | None]
+    expires_at: ReadOnly[str | None]
+    cancel_initiated_at: ReadOnly[str | None]
+    archived_at: ReadOnly[str | None]
+    request_counts: ReadOnly[AnthropicBatchRequestCounts]
 
 
 class AnthropicBatchesConfig(BaseBatchesConfig):
@@ -83,7 +110,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         create_batch_data: CreateBatchRequest,
         optional_params: dict,
         litellm_params: dict,
-    ) -> bytes | str | dict[str, Any]:
+    ) -> bytes | str | dict[str, object]:
         """
         Transform the batch creation request to Anthropic format.
 
@@ -133,7 +160,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         batch_id: str,
         optional_params: dict,
         litellm_params: dict,
-    ) -> bytes | str | dict[str, Any]:
+    ) -> bytes | str | dict[str, object]:
         """
         Transform batch retrieval request for Anthropic.
 
@@ -152,7 +179,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
     ) -> LiteLLMBatch:
         """Transform Anthropic MessageBatch retrieval response to LiteLLM format."""
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final[AnthropicMessageBatch] = raw_response.json()
         except Exception as e:
             raise ValueError(f"Failed to parse Anthropic batch response: {e}")
 
@@ -161,18 +188,20 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         processing_status: Final = response_data.get("processing_status", "in_progress")
 
         # Map Anthropic processing_status to OpenAI status
-        status_mapping: dict[
-            str,
-            Literal[
-                "validating",
-                "failed",
-                "in_progress",
-                "finalizing",
-                "completed",
-                "expired",
-                "cancelling",
-                "cancelled",
-            ],
+        status_mapping: Final[
+            Mapping[
+                str,
+                Literal[
+                    "validating",
+                    "failed",
+                    "in_progress",
+                    "finalizing",
+                    "completed",
+                    "expired",
+                    "cancelling",
+                    "cancelled",
+                ],
+            ]
         ] = {
             "in_progress": "in_progress",
             "canceling": "cancelling",
@@ -261,7 +290,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -279,7 +308,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
                 if not line:
                     continue
                 try:
-                    response_json = json.loads(line)
+                    response_json: Mapping[str, Mapping[str, dict[str, object]]] = json.loads(line)
                     # Update model_response with the parsed JSON
                     completion_response = response_json["result"]["message"]
                     transformed_response = self.anthropic_chat_config.transform_parsed_response(

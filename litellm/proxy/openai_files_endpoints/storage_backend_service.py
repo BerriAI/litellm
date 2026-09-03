@@ -68,6 +68,16 @@ class StorageBackendFileService:
                 code=400,
             )
 
+        if target_model_names:
+            managed_files_hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+            if not isinstance(managed_files_hook, BaseFileEndpoints):
+                raise ProxyException(
+                    message="Uploading with target_model_names requires a database-connected proxy, and this proxy has no database configured",
+                    type="invalid_request_error",
+                    param="target_model_names",
+                    code=400,
+                )
+
         # Extract file information
         file_content: Final = file_data["content"]
         filename: Final = file_data.get("filename", "file")
