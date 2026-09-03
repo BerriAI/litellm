@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-LEDGER_PATH = Path(__file__).parent / "validate_sub_methods" / "ocr_test_ledger.json"
+LEDGER_PATH = Path(__file__).parent / "core" / "ocr" / "ocr_test_ledger.json"
 
 
 @dataclass(frozen=True, slots=True)
