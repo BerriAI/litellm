@@ -7589,7 +7589,7 @@ class ProxyConfig:
         return create_versioned_prompt_spec(db_prompt=db_prompt)
 
     async def _init_prompts_in_db(self, prisma_client: PrismaClient):
-        from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+        from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY, registry_key_for_prompt
         from litellm.types.prompts.init_prompts import PromptSpec
 
         def parse_row(db_prompt: object) -> PromptSpec | None:
@@ -7604,21 +7604,12 @@ class ProxyConfig:
                 return None
 
         try:
-            prompt_ids_loaded_before_db_read: Final = frozenset(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS)
+            registry_keys_loaded_before_db_read: Final = frozenset(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS)
             prompts_in_db: Final[Sequence[object]] = await PromptRepository(prisma_client).table.find_many()
             parsed_specs: Final[tuple[PromptSpec, ...]] = tuple(
                 spec for row in prompts_in_db if (spec := parse_row(row)) is not None
             )
-            newest_spec_per_id: Final[Mapping[str, PromptSpec]] = MappingProxyType(
-                {
-                    spec.prompt_id: spec
-                    for spec in sorted(
-                        parsed_specs,
-                        key=lambda s: s.updated_at.timestamp() if s.updated_at else float("-inf"),
-                    )
-                }
-            )
-            for prompt_spec in newest_spec_per_id.values():
+            for prompt_spec in parsed_specs:
                 try:
                     IN_MEMORY_PROMPT_REGISTRY.sync_prompt_from_db(prompt=prompt_spec)
                 except Exception as prompt_sync_error:  # noqa: BLE001  # one poisoned row must not block syncing the remaining prompts
@@ -7630,15 +7621,16 @@ class ProxyConfig:
             # An unparsable row still exists in the DB, so skip the sweep rather than unload its in-memory copy
             every_row_parsed: Final = len(parsed_specs) == len(prompts_in_db)
             if every_row_parsed:
-                deleted_db_prompt_ids: Final = tuple(
-                    prompt_id
-                    for prompt_id in prompt_ids_loaded_before_db_read
-                    if (loaded_spec := IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.get(prompt_id)) is not None
+                db_registry_keys: Final = frozenset(registry_key_for_prompt(spec) for spec in parsed_specs)
+                deleted_db_registry_keys: Final = tuple(
+                    registry_key
+                    for registry_key in registry_keys_loaded_before_db_read
+                    if (loaded_spec := IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.get(registry_key)) is not None
                     and loaded_spec.prompt_info.prompt_type == "db"
-                    and prompt_id not in newest_spec_per_id
+                    and registry_key not in db_registry_keys
                 )
-                for deleted_prompt_id in deleted_db_prompt_ids:
-                    IN_MEMORY_PROMPT_REGISTRY.remove_prompt(prompt_id=deleted_prompt_id)
+                for deleted_registry_key in deleted_db_registry_keys:
+                    IN_MEMORY_PROMPT_REGISTRY.remove_prompt(registry_key=deleted_registry_key)
         except Exception as e:
             verbose_proxy_logger.debug("litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - %s", e)
 
