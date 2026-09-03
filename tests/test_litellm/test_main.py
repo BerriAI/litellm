@@ -3332,3 +3332,22 @@ def test_speech_azure_sends_the_provider_scoped_key(monkeypatch: pytest.MonkeyPa
     assert response.content == b"ID3\x04\x00\x00\x00fake-mp3-payload"
     assert len(received) == 1
     assert received[0]["api-key"] == "azure-ai-scoped-key"
+
+
+def test_speech_keeps_an_explicitly_passed_api_key_over_the_provider_scoped_one(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setenv("HOSTED_VLLM_API_KEY", "hosted-vllm-scoped-key")
+
+    with _recording_tts_server() as (api_base, received):
+        litellm.speech(
+            model="hosted_vllm/tts-1",
+            input="which key goes out",
+            voice="alloy",
+            api_base=api_base,
+            api_key="caller-supplied-key",
+        )
+
+    assert len(received) == 1
+    assert received[0]["authorization"] == "Bearer caller-supplied-key"
