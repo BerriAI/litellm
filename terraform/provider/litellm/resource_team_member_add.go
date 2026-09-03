@@ -49,8 +49,98 @@ func resourceLiteLLMTeamMemberAdd() *schema.Resource {
 				Type:     schema.TypeFloat,
 				Optional: true,
 			},
+			"tpm_limit": {
+				Type:     schema.TypeInt,
+				Optional: true,
+			},
+			"rpm_limit": {
+				Type:     schema.TypeInt,
+				Optional: true,
+			},
+			"budget_duration": {
+				Type:     schema.TypeString,
+				Optional: true,
+			},
+			"allowed_models": {
+				Type:     schema.TypeList,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
 		},
 	}
+}
+
+func expandAllowedModels(raw []interface{}) []string {
+	models := make([]string, 0, len(raw))
+	for _, m := range raw {
+		models = append(models, m.(string))
+	}
+	return models
+}
+
+func applyAddOnlySettings(d *schema.ResourceData, payload map[string]interface{}) {
+	if v, ok := d.GetOk("budget_duration"); ok {
+		payload["budget_duration"] = v.(string)
+	}
+	if v, ok := d.GetOk("allowed_models"); ok {
+		payload["allowed_models"] = expandAllowedModels(v.([]interface{}))
+	}
+}
+
+func applyUpdateSettings(d *schema.ResourceData, payload map[string]interface{}) {
+	applyAddOnlySettings(d, payload)
+	if v, ok := d.GetOk("tpm_limit"); ok {
+		payload["tpm_limit"] = v.(int)
+	}
+	if v, ok := d.GetOk("rpm_limit"); ok {
+		payload["rpm_limit"] = v.(int)
+	}
+	if _, ok := d.GetOk("allowed_models"); !ok && d.HasChange("allowed_models") {
+		payload["allowed_models"] = []string{}
+	}
+}
+
+func memberIdentity(member map[string]interface{}, payload map[string]interface{}) {
+	if userID, ok := member["user_id"].(string); ok && userID != "" {
+		payload["user_id"] = userID
+	}
+	if userEmail, ok := member["user_email"].(string); ok && userEmail != "" {
+		payload["user_email"] = userEmail
+	}
+}
+
+// tpm/rpm limits are only accepted by /team/member_update, not /team/member_add
+func setMemberLimits(client *Client, d *schema.ResourceData, teamID string, members []map[string]interface{}) error {
+	_, tpmSet := d.GetOk("tpm_limit")
+	_, rpmSet := d.GetOk("rpm_limit")
+	if !tpmSet && !rpmSet {
+		return nil
+	}
+	for _, member := range members {
+		updateData := map[string]interface{}{
+			"team_id": teamID,
+		}
+		if v, ok := d.GetOk("tpm_limit"); ok {
+			updateData["tpm_limit"] = v.(int)
+		}
+		if v, ok := d.GetOk("rpm_limit"); ok {
+			updateData["rpm_limit"] = v.(int)
+		}
+		memberIdentity(member, updateData)
+
+		log.Printf("[DEBUG] Set team member limits request payload: %+v", updateData)
+
+		resp, err := MakeRequest(client, "POST", "/team/member_update", updateData)
+		if err != nil {
+			return fmt.Errorf("error setting team member limits: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if err := handleResponse(resp, "setting team member limits"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func resourceLiteLLMTeamMemberAddCreate(d *schema.ResourceData, m interface{}) error {
@@ -81,6 +171,7 @@ func resourceLiteLLMTeamMemberAddCreate(d *schema.ResourceData, m interface{}) e
 		"team_id":            teamID,
 		"max_budget_in_team": maxBudget,
 	}
+	applyAddOnlySettings(d, memberData)
 
 	log.Printf("[DEBUG] Create team members request payload: %+v", memberData)
 
@@ -91,6 +182,10 @@ func resourceLiteLLMTeamMemberAddCreate(d *schema.ResourceData, m interface{}) e
 	defer resp.Body.Close()
 
 	if err := handleResponse(resp, "adding team members"); err != nil {
+		return err
+	}
+
+	if err := setMemberLimits(client, d, teamID, membersList); err != nil {
 		return err
 	}
 
@@ -140,11 +235,13 @@ func resourceLiteLLMTeamMemberAddUpdate(d *schema.ResourceData, m interface{}) e
 	// Track which members have been updated to avoid duplicates
 	updatedMembers := make(map[string]bool)
 
-	// Check if max_budget_in_team has changed
-	if d.HasChange("max_budget_in_team") {
-		log.Printf("[DEBUG] max_budget_in_team changed, updating all existing members with new budget: %f", maxBudget)
+	// Check if any team-wide member setting has changed
+	settingsChanged := d.HasChange("max_budget_in_team") || d.HasChange("tpm_limit") || d.HasChange("rpm_limit") ||
+		d.HasChange("budget_duration") || d.HasChange("allowed_models")
+	if settingsChanged {
+		log.Printf("[DEBUG] Member settings changed, updating all existing members")
 
-		// Update ALL existing members with the new budget
+		// Update ALL existing members with the new settings
 		for key, newMember := range newMemberMap {
 			if _, exists := oldMemberMap[key]; exists {
 				updateData := map[string]interface{}{
@@ -152,22 +249,18 @@ func resourceLiteLLMTeamMemberAddUpdate(d *schema.ResourceData, m interface{}) e
 					"role":               newMember["role"].(string),
 					"max_budget_in_team": maxBudget,
 				}
-				if userID, ok := newMember["user_id"].(string); ok && userID != "" {
-					updateData["user_id"] = userID
-				}
-				if userEmail, ok := newMember["user_email"].(string); ok && userEmail != "" {
-					updateData["user_email"] = userEmail
-				}
+				applyUpdateSettings(d, updateData)
+				memberIdentity(newMember, updateData)
 
-				log.Printf("[DEBUG] Update team member budget request payload: %+v", updateData)
+				log.Printf("[DEBUG] Update team member settings request payload: %+v", updateData)
 
 				resp, err := MakeRequest(client, "POST", "/team/member_update", updateData)
 				if err != nil {
-					return fmt.Errorf("error updating team member budget: %v", err)
+					return fmt.Errorf("error updating team member settings: %v", err)
 				}
 				defer resp.Body.Close()
 
-				if err := handleResponse(resp, "updating team member budget"); err != nil {
+				if err := handleResponse(resp, "updating team member settings"); err != nil {
 					return err
 				}
 
@@ -220,12 +313,8 @@ func resourceLiteLLMTeamMemberAddUpdate(d *schema.ResourceData, m interface{}) e
 					"role":               newMember["role"].(string),
 					"max_budget_in_team": maxBudget,
 				}
-				if userID, ok := newMember["user_id"].(string); ok && userID != "" {
-					updateData["user_id"] = userID
-				}
-				if userEmail, ok := newMember["user_email"].(string); ok && userEmail != "" {
-					updateData["user_email"] = userEmail
-				}
+				applyUpdateSettings(d, updateData)
+				memberIdentity(newMember, updateData)
 
 				log.Printf("[DEBUG] Update team member request payload: %+v", updateData)
 
@@ -265,6 +354,7 @@ func resourceLiteLLMTeamMemberAddUpdate(d *schema.ResourceData, m interface{}) e
 			"team_id":            teamID,
 			"max_budget_in_team": maxBudget,
 		}
+		applyAddOnlySettings(d, memberData)
 
 		log.Printf("[DEBUG] Adding new team members request payload: %+v", memberData)
 
@@ -275,6 +365,10 @@ func resourceLiteLLMTeamMemberAddUpdate(d *schema.ResourceData, m interface{}) e
 		defer resp.Body.Close()
 
 		if err := handleResponse(resp, "adding team members"); err != nil {
+			return err
+		}
+
+		if err := setMemberLimits(client, d, teamID, membersToAdd); err != nil {
 			return err
 		}
 	}
