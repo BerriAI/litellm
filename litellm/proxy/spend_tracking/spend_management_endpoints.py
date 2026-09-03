@@ -173,6 +173,9 @@ class _SessionSpendRow(TypedDict):
     session_cache_hit_count: ReadOnly[int]
     session_llm_count: ReadOnly[int]
     session_agent_count: ReadOnly[int]
+    session_total_prompt_tokens: ReadOnly[int]
+    session_total_completion_tokens: ReadOnly[int]
+    session_total_tokens: ReadOnly[int]
     session_models: ReadOnly[Sequence[str]]
 
 
@@ -188,6 +191,9 @@ class _SessionSpendStats(NamedTuple):
     session_cache_hit_count: int
     session_llm_count: int
     session_agent_count: int
+    session_total_prompt_tokens: int
+    session_total_completion_tokens: int
+    session_total_tokens: int
     session_models: Sequence[str]
     session_models_truncated: bool
 
@@ -4287,8 +4293,8 @@ async def _build_ui_spend_logs_response(
     Build the paginated response for the UI spend-logs endpoint.
 
     When ``enrich_session_counts`` is ``True`` (the default for the v1/UI
-    endpoint), each row is enriched with ``session_total_count`` plus spend
-    and call-type aggregates so the frontend knows which sessions are
+    endpoint), each row is enriched with ``session_total_count`` plus spend,
+    token and call-type aggregates so the frontend knows which sessions are
     expandable (multi-call sessions).  One ``GROUP BY (session_id, api_key)``
     query serves every referenced session, keyed per api key so two callers
     reusing a session id never see each other's totals.  Rows without a
@@ -4356,7 +4362,10 @@ async def _build_ui_spend_logs_response(
                            COUNT(*) FILTER (
                                WHERE call_type NOT IN {_MCP_CALL_TYPES_SQL} AND call_type != {_AGENT_CALL_TYPE_SQL}
                            )::int AS session_llm_count,
-                           COUNT(*) FILTER (WHERE call_type = {_AGENT_CALL_TYPE_SQL})::int AS session_agent_count
+                           COUNT(*) FILTER (WHERE call_type = {_AGENT_CALL_TYPE_SQL})::int AS session_agent_count,
+                           COALESCE(SUM(prompt_tokens), 0)::bigint AS session_total_prompt_tokens,
+                           COALESCE(SUM(completion_tokens), 0)::bigint AS session_total_completion_tokens,
+                           COALESCE(SUM(total_tokens), 0)::bigint AS session_total_tokens
                     FROM "LiteLLM_SpendLogs"
                     WHERE session_id = ANY($1::text[])
                       AND api_key = ANY($2::text[])
@@ -4389,6 +4398,9 @@ async def _build_ui_spend_logs_response(
                     session_cache_hit_count=int(row.get("session_cache_hit_count") or 0),
                     session_llm_count=int(row.get("session_llm_count") or 0),
                     session_agent_count=int(row.get("session_agent_count") or 0),
+                    session_total_prompt_tokens=int(row.get("session_total_prompt_tokens") or 0),
+                    session_total_completion_tokens=int(row.get("session_total_completion_tokens") or 0),
+                    session_total_tokens=int(row.get("session_total_tokens") or 0),
                     session_models=models[:_SESSION_MODELS_LIMIT],
                     session_models_truncated=len(models) > _SESSION_MODELS_LIMIT,
                 )
@@ -4418,6 +4430,9 @@ async def _build_ui_spend_logs_response(
                 row_dict["session_cache_hit_count"] = session_stats.session_cache_hit_count
                 row_dict["session_llm_count"] = session_stats.session_llm_count
                 row_dict["session_agent_count"] = session_stats.session_agent_count
+                row_dict["session_total_prompt_tokens"] = session_stats.session_total_prompt_tokens
+                row_dict["session_total_completion_tokens"] = session_stats.session_total_completion_tokens
+                row_dict["session_total_tokens"] = session_stats.session_total_tokens
                 row_dict["session_models"] = session_stats.session_models
                 row_dict["session_models_truncated"] = session_stats.session_models_truncated
             enriched.append(row_dict)

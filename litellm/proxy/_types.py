@@ -1216,7 +1216,7 @@ class GenerateKeyRequest(KeyRequestBase):
     organization_id: str | None = None
     project_id: str | None = None
 
-    @field_validator("team_id", "organization_id", mode="before")
+    @field_validator("team_id", "organization_id", "project_id", mode="before")
     @classmethod
     def treat_cleared_id_as_unset(cls, v: object) -> object:
         if v == "":
@@ -4239,6 +4239,8 @@ class TeamAccessGroupModelGrant(LiteLLMPydanticObjectBase):
     access_group_id: str
     access_group_name: str
     models: tuple[str, ...]
+    mcp_server_ids: tuple[str, ...] = ()
+    agent_ids: tuple[str, ...] = ()
 
 
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):

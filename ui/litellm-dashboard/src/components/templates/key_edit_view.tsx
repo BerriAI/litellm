@@ -303,9 +303,9 @@ export function KeyEditView({
     }
   };
 
-  const handleOrganizationChange = (setField: (value: string | null) => void, orgId: string | undefined) => {
-    setField(orgId || null);
-    setSelectedOrganizationId(orgId || null);
+  const handleOrganizationChange = (setField: (value: string | null) => void, orgId: string | null) => {
+    setField(orgId);
+    setSelectedOrganizationId(orgId);
     form.setValue("team_id", undefined);
   };
 
