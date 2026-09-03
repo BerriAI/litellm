@@ -5,6 +5,8 @@ Auto-Routing Strategy that works with a Semantic Router Config
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional
 
+from pydantic import BaseModel, ConfigDict
+
 from litellm._logging import verbose_router_logger
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 from litellm.integrations.custom_logger import CustomLogger
@@ -28,6 +30,13 @@ else:
     Route = Any
     SemanticRouter = Any
     LiteLLMRouterEncoder = Any
+
+
+class _CallerMetadata(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    metadata: Mapping[str, object] | None = None
+    litellm_metadata: Mapping[str, object] | None = None
 
 
 class AutoRouter(CustomLogger):
@@ -176,7 +185,7 @@ class AutoRouter(CustomLogger):
         )
 
     async def _matched_route_name(
-        self, routelayer: "SemanticRouter", text: str, request_kwargs: Mapping[str, Any]
+        self, routelayer: "SemanticRouter", text: str, request_kwargs: Mapping[str, object]
     ) -> str | None:
         """Name of the route `text` matches, or None when nothing matched or the match failed.
 
@@ -189,14 +198,13 @@ class AutoRouter(CustomLogger):
         from semantic_router.schema import RouteChoice
 
         try:
+            caller: Final = _CallerMetadata.model_validate(request_kwargs)
             query_vector: Final = (
                 await self.encoder.aencode_queries(
                     [text],
-                    metadata=forwarded_internal_call_metadata(
-                        request_kwargs.get("metadata"), AUTOROUTER_CLASSIFIER_CALL_ORIGIN
-                    ),
+                    metadata=forwarded_internal_call_metadata(caller.metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN),
                     litellm_metadata=forwarded_internal_call_metadata(
-                        request_kwargs.get("litellm_metadata"), AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+                        caller.litellm_metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN
                     ),
                     proxy_server_request={"body": {"model": self.embedding_model, "input": [text]}},
                     turn_off_message_logging=effective_turn_off_message_logging(request_kwargs),
