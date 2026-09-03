@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import datetime
 from typing import Any, Final, Protocol, runtime_checkable
 
@@ -174,17 +174,6 @@ def _try_claim_detached_drain_slot() -> bool:
         _DETACHED_STREAM_DRAINS.add(current_task)
         current_task.add_done_callback(_DETACHED_STREAM_DRAINS.discard)
     return True
-
-
-def _exception_left_unconsumed(queue: "asyncio.Queue[bytes | None | BaseException]", exc: BaseException) -> bool:
-    """After client detach the relay never reads the queue again, so drain it here.
-
-    The forwarded exception still sitting in the queue means the relay tore
-    down before re-raising it, so the proxy's failure handling never ran and
-    the caller must salvage spend itself.
-    """
-    remaining: Final = tuple(queue.get_nowait() for _ in range(queue.qsize()))
-    return any(item is exc for item in remaining)
 
 
 def _sse_event(event_type: str, payload: Mapping[str, object]) -> bytes:
@@ -671,27 +660,25 @@ class BaseAnthropicMessagesStreamingIterator:
         self,
         queue: "asyncio.Queue[bytes | None | BaseException]",
         client_detached: "asyncio.Event",
-        collected_chunks: list[bytes],  # mutable-ok: SSE buffer forwarded to list-typed _bill_collected_chunks
-        exc: BaseException,
+        collected_chunks: Sequence[bytes],
+        exc: Exception,
     ) -> None:
-        """Forward a provider error to a still-connected client, else salvage partial spend.
+        """Forward a provider error to a still-connected client and log the request as failed.
 
-        Handing the original exception to the client-facing generator lets it
-        re-raise so the proxy's failure handling keeps the provider status and
-        owns logging (no success-bill). If the client already went away, or
-        disconnects before ever consuming the queued exception, no failure hook
-        runs, so bill the partial instead of dropping the request.
+        The relay re-raises the forwarded exception so the proxy's failure hook
+        keeps the provider status; the logging object's failure handlers fire
+        here either way, carrying the partial usage the provider already
+        billed, so a client that left before consuming the exception still
+        gets a failure row rather than a success one.
         """
-        from litellm._logging import verbose_proxy_logger
+        from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
 
-        if not client_detached.is_set() and await self._enqueue_for_client(queue, client_detached, exc):
-            await client_detached.wait()
-            if not _exception_left_unconsumed(queue, exc):
-                return
-        verbose_proxy_logger.warning(
-            "async_sse_wrapper upstream pump failed after client disconnect (%d chunks): %s(%s)",
-            len(collected_chunks),
-            type(exc).__name__,
-            exc,
+        if not client_detached.is_set():
+            await self._enqueue_for_client(queue, client_detached, exc)
+        PassThroughStreamingHandler.schedule_stream_failure_logging(
+            litellm_logging_obj=self.litellm_logging_obj,
+            endpoint_type=EndpointType.ANTHROPIC,
+            request_body=self.request_body or {},
+            raw_bytes=collected_chunks,
+            exception=exc,
         )
-        await self._bill_collected_chunks(collected_chunks, stream_teardown=True)
