@@ -321,6 +321,17 @@ def test_fixture_fields_match_provider_config(
     assert _provider_fields(fixture_model) == _supported_params(provider_config, model)
 
 
+@pytest.mark.parametrize("model", ("deepseek-ocr-maas", "deepseek-ai/deepseek-ocr-maas"))
+def test_vertex_deepseek_request_has_one_publisher_prefix(model: str) -> None:
+    request: Final = VertexAIDeepSeekOCRConfig().transform_ocr_request(
+        model=model,
+        document={"type": "image_url", "image_url": "data:image/png;base64,AA=="},
+        optional_params={},
+        headers={},
+    )
+    assert request.data["model"] == "deepseek-ai/deepseek-ocr-maas"
+
+
 @pytest.mark.parametrize(
     "sdk_input",
     (

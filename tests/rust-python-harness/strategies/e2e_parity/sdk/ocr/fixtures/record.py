@@ -19,7 +19,7 @@ from .azure import (
 )
 from .base import OcrSdkInputBase
 from .common import OcrFixtureClient, OcrRecordingTarget, OcrSdkCall
-from .config import DEFAULT_FIXTURE_DIRECTORY, FIXTURE_DIR_ENV
+from .config import DEFAULT_FIXTURE_DIRECTORY, FIXTURE_DIR_ENV, recording_environment
 from .mistral import mistral_recording_targets
 from .models import OcrParityCase
 from .reducto import reducto_recording_targets
@@ -60,7 +60,8 @@ def main() -> int:
     args: Final = parse_recording_args()
     client: Final = LiteLLMOcrFixtureClient(cast(OcrSdkCall, litellm.ocr))
     inline_image_data_uri: Final = structured_image_data_uri()
-    targets: Final = require_targets(discover_targets(os.environ, client, inline_image_data_uri))
+    environ: Final = recording_environment(os.environ)
+    targets: Final = require_targets(discover_targets(environ, client, inline_image_data_uri))
     root: Final = fixture_directory(
         args.fixture_dir,
         os.environ.get(FIXTURE_DIR_ENV),
