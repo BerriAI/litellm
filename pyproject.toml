@@ -156,6 +156,7 @@ proxy-runtime = [
     "opentelemetry-sdk==1.28.0",
     "opentelemetry-exporter-otlp==1.28.0",
     "opentelemetry-instrumentation-fastapi==0.49b0",
+    "opentelemetry-propagator-b3==1.28.0",
     "ddtrace>=4.8.2,<5.0",
     "sentry-sdk>=2.21.0,<3.0",
     "mangum>=0.17.0,<1.0",
@@ -200,6 +201,7 @@ dev = [
     "opentelemetry-sdk==1.28.0",
     "opentelemetry-exporter-otlp==1.28.0",
     "opentelemetry-instrumentation-fastapi==0.49b0",
+    "opentelemetry-propagator-b3==1.28.0",
     "langfuse==2.59.7",
     "fastapi-offline==1.7.6",
     "fakeredis==2.34.1",
@@ -225,6 +227,7 @@ proxy-dev = [
     "opentelemetry-sdk==1.28.0",
     "opentelemetry-exporter-otlp==1.28.0",
     "opentelemetry-instrumentation-fastapi==0.49b0",
+    "opentelemetry-propagator-b3==1.28.0",
     "azure-identity==1.25.2",
     "a2a-sdk==1.1.0",
 ]

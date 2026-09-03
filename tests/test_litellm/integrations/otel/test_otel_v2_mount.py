@@ -96,6 +96,40 @@ def test_instrumented_app_emits_server_span():
     assert any("route" in k or "method" in k for k in attrs)
 
 
+def test_server_span_joins_caller_trace_from_b3_headers():
+    """Which formats a caller can join a trace with is the operator's choice
+    (OTEL_PROPAGATORS); the instrumentor reads whatever is configured. The b3
+    propagator ships with the proxy, so naming it does not break startup."""
+    from opentelemetry.propagate import get_global_textmap, set_global_textmap
+    from opentelemetry.propagators.b3 import B3MultiFormat
+    from opentelemetry.propagators.composite import CompositePropagator
+
+    trace_id, span_id = "80f198ee56343ba864fe8b2a57d3eff7", "e457b5a2e4d86bd1"
+    app, logger = _instrumented_app()
+    exporter = InMemorySpanExporter()
+    logger._tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    previous = get_global_textmap()
+    set_global_textmap(CompositePropagator([B3MultiFormat()]))
+    try:
+        TestClient(app).get(
+            "/ping",
+            headers={
+                "X-B3-TraceId": trace_id,
+                "X-B3-SpanId": span_id,
+                "X-B3-Sampled": "1",
+            },
+        )
+    finally:
+        set_global_textmap(previous)
+
+    server_span = next(
+        s for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER
+    )
+    assert format(server_span.context.trace_id, "032x") == trace_id
+    assert format(server_span.parent.span_id, "016x") == span_id
+
+
 def test_logger_and_instrumentor_share_provider():
     """Gen-ai spans (logger) and server spans (instrumentor) write to one provider."""
     _, logger = _instrumented_app()
