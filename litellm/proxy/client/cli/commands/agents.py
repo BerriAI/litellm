@@ -73,20 +73,26 @@ def build_agent_env(
     defaults to 1 so Claude Code (v2.1.129+) fills its /model picker from the
     proxy's /v1/models; likewise left alone when already set.
     """
-    env: Final = dict(base_env)
     root: Final = base_url.rstrip("/")
-    if PROFILE_ANTHROPIC in profiles:
-        env[ANTHROPIC_BASE_URL_ENV] = root
-        env[ANTHROPIC_AUTH_TOKEN_ENV] = api_key
-        env.pop(ANTHROPIC_API_KEY_ENV, None)
-        if ENABLE_TOOL_SEARCH_ENV not in env:
-            env[ENABLE_TOOL_SEARCH_ENV] = ENABLE_TOOL_SEARCH_VALUE
-        if ENABLE_GATEWAY_MODEL_DISCOVERY_ENV not in env:
-            env[ENABLE_GATEWAY_MODEL_DISCOVERY_ENV] = ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE
-    if PROFILE_OPENAI in profiles:
-        env[OPENAI_BASE_URL_ENV] = root + "/v1"
-        env[OPENAI_API_KEY_ENV] = api_key
-    return env
+    anthropic: Final = PROFILE_ANTHROPIC in profiles
+    anthropic_defaults: Final = (
+        {
+            ENABLE_TOOL_SEARCH_ENV: ENABLE_TOOL_SEARCH_VALUE,
+            ENABLE_GATEWAY_MODEL_DISCOVERY_ENV: ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE,
+        }
+        if anthropic
+        else {}
+    )
+    anthropic_env: Final = {ANTHROPIC_BASE_URL_ENV: root, ANTHROPIC_AUTH_TOKEN_ENV: api_key} if anthropic else {}
+    openai_env: Final = (
+        {OPENAI_BASE_URL_ENV: root + "/v1", OPENAI_API_KEY_ENV: api_key} if PROFILE_OPENAI in profiles else {}
+    )
+    return {
+        **anthropic_defaults,
+        **{key: value for key, value in base_env.items() if not (anthropic and key == ANTHROPIC_API_KEY_ENV)},
+        **anthropic_env,
+        **openai_env,
+    }
 
 
 def _codex_proxy_args(base_url: str) -> list[str]:
