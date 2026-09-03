@@ -16,7 +16,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cast
 from urllib.parse import ParseResult, urlparse
 
 import anyio

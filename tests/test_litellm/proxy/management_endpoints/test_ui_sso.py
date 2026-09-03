@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import sys
 from contextlib import ExitStack
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
