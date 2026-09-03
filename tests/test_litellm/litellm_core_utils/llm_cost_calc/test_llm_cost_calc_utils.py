@@ -815,8 +815,6 @@ def _off_peak_reasoning_usage() -> Usage:
 
 
 def test_generic_cost_per_token_off_peak_reasoning_rate():
-    """Regression (LIT-6887): the block's output_cost_per_reasoning_token used to be ignored, so
-    reasoning tokens billed at the model's standard reasoning rate all through the window."""
     from datetime import datetime, timezone
 
     model_name = "litellm-test-off-peak-reasoning"
@@ -843,8 +841,6 @@ def test_generic_cost_per_token_off_peak_reasoning_rate():
 
 
 def test_generic_cost_per_token_off_peak_block_without_reasoning_rate():
-    """A block that leaves output_cost_per_reasoning_token unset keeps the model's own reasoning
-    rate, and a model with no reasoning rate at all follows the off-peak output rate."""
     from datetime import datetime, timezone
 
     inside_window = datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc)
@@ -870,7 +866,6 @@ def test_generic_cost_per_token_off_peak_block_without_reasoning_rate():
 
 
 def test_generic_cost_per_token_off_peak_reasoning_rate_wins_over_the_tier():
-    """Tiered models resolve reasoning on their own path, so the block has to win there too."""
     from datetime import datetime, timezone
 
     model_name = "litellm-test-off-peak-tiered-reasoning"
@@ -914,8 +909,6 @@ def test_generic_cost_per_token_off_peak_reasoning_rate_wins_over_the_tier():
 
 
 def test_generic_cost_per_token_off_peak_reasoning_rate_wins_over_the_service_tier():
-    """A priority request bills its service-tier reasoning rate outside the window and the block's
-    rate inside it."""
     from datetime import datetime, timezone
 
     model_name = "litellm-test-off-peak-reasoning-service-tier"
@@ -946,7 +939,6 @@ def test_generic_cost_per_token_off_peak_reasoning_rate_wins_over_the_service_ti
 
 
 def test_apply_off_peak_pricing_treats_bool_as_unset_and_parses_strings():
-    """A YAML true never turns into a rate of 1.0, and a quoted number still counts."""
     from datetime import datetime, timezone
 
     model_name = "litellm-test-off-peak-odd-values"
@@ -972,9 +964,6 @@ def test_apply_off_peak_pricing_treats_bool_as_unset_and_parses_strings():
 
 
 def test_get_token_base_cost_off_peak_cache_creation_rate():
-    """Regression (LIT-6887): the block's cache_creation_input_token_cost used to be ignored. It
-    replaces the five-minute cache-creation rate inside the window; the one-hour rate, and a
-    block without the key, keep the standard rate."""
     from datetime import datetime, timezone
     from typing import cast
 
@@ -1008,8 +997,6 @@ def test_get_token_base_cost_off_peak_cache_creation_rate():
 
 
 def test_get_token_type_cost_breakdown_reflects_off_peak_reasoning_and_cache_creation_rates():
-    """The per-token-type breakdown feeds the spend logs, so it has to bill the new keys the same
-    way the total does."""
     from datetime import datetime, timezone
 
     model_name = "litellm-test-off-peak-breakdown"
