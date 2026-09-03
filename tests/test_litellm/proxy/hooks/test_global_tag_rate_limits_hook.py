@@ -1232,46 +1232,128 @@ async def test_concurrent_requests_do_not_share_each_others_reservation_state(ti
 
 
 # ---------------------------------------------------------------------------
-# Batch dispatch (Router.abatch_completion via a comma-separated `model`):
-# every branch shares the identical litellm_logging_obj/model_call_details
-# the proxy attaches before the dispatch. Verified against the real pipeline
-# (common_processing_pre_call_logic -> route_request -> abatch_completion,
-# not a hand-built abatch_completion call with its own fresh kwargs, which
-# never shares that object and looks like independent per-branch firing):
-# Logging.should_run_logging gates each event type on that shared dict's own
-# has_logged_{event_type} flag, so at most one success event and at most one
-# failure event ever fire for the whole dispatch, never one per branch.
-# Reserving a single unit for the whole dispatch and releasing it on
-# whichever of those fires is correct -- the same model already used for the
-# racing abatch_completion_fastest_response variant, whose cancelled losing
-# branches never fire a terminal event at all.
+# Batch dispatch (Router.abatch_completion/abatch_completion_fastest_response
+# via a comma-separated `model`): every branch genuinely runs concurrently
+# as a real, independent LLM call below this hook entirely (it never re-runs
+# async_pre_call_hook per branch the way model_based_tag_rate_limits_hook's
+# per-Router-hop admission does) -- confirmed live: branches sharing an
+# identical mock delay complete in that one delay's time, not N times it --
+# so admission reserves one unit per real branch to keep the cap honest
+# about that concurrent load.
+#
+# Every branch also shares the identical litellm_logging_obj/model_call_details
+# the proxy attaches before the dispatch, and Logging.should_run_logging
+# gates each event type on that shared dict's own has_logged_{event_type}
+# flag (confirmed against the real pipeline: common_processing_pre_call_logic
+# -> route_request -> abatch_completion), so at most one success event and
+# at most one failure event ever fire for the whole dispatch, never one per
+# branch (fastest_response cancels every losing branch instead, which never
+# fires a terminal event either way). Releasing everything pending on
+# whichever of those fires is therefore correct, even though it may release
+# the batch's units before every real branch has finished -- an accepted
+# tradeoff, since no per-branch completion signal is ever available here.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_batch_dispatch_reserves_a_single_concurrency_unit(time_controller, monkeypatch):
-    """Reserving one unit per comma-separated model would reject this
-    3-model batch outright against a cap of 1, since the real dispatch only
-    ever produces at most one real terminal event total (see module
-    docstring), not one per model."""
+async def test_batch_dispatch_reserves_one_unit_per_real_branch(time_controller, monkeypatch):
+    """A caller whose tag is capped at N concurrent calls can submit
+    model=a,b,c and drive 3 real simultaneous provider calls -- admission
+    must reserve 3 units, not 1, or the cap doesn't reflect real load."""
     monkeypatch.setattr(
         litellm,
         "global_tag_rate_limits",
         {
             "concurrency_limits": {
-                "limits": [{"name": "conc", "tag_id": "end_user_id", "limit": 1, "period_seconds": 60}]
+                "limits": [{"name": "conc", "tag_id": "end_user_id", "limit": 3, "period_seconds": 60}]
             }
         },
     )
     hook = _make_hook(time_controller)
 
-    result = await hook.async_pre_call_hook(
+    await hook.async_pre_call_hook(
         user_api_key_dict=_key(),
         cache=DualCache(),
         data={**_data(["end_user_id:u1"], call_id="call-1"), "model": "model-a,model-b,model-c"},
         call_type="acompletion",
     )
-    assert result is not None
+    # The batch alone already occupies every unit of the cap of 3.
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_key(),
+            cache=DualCache(),
+            data=_data(["end_user_id:u1"], call_id="call-2"),
+            call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
+async def test_batch_dispatch_accounts_for_nested_message_lists(time_controller, monkeypatch):
+    """Router.abatch_completion's "N requests to M models" mode (a nested
+    messages: list[list[...]]) dispatches one real branch per (message,
+    model) pair, not one per model -- admission must reserve
+    model_count * message_list_count units."""
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "concurrency_limits": {
+                "limits": [{"name": "conc", "tag_id": "end_user_id", "limit": 4, "period_seconds": 60}]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    data = {
+        **_data(["end_user_id:u1"], call_id="call-1"),
+        "model": "model-a,model-b",
+        "messages": [[{"role": "user", "content": "q1"}], [{"role": "user", "content": "q2"}]],
+    }
+    await hook.async_pre_call_hook(user_api_key_dict=_key(), cache=DualCache(), data=data, call_type="acompletion")
+
+    # 2 models x 2 message-lists = 4 real branches, exactly at the cap of 4.
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_key(),
+            cache=DualCache(),
+            data=_data(["end_user_id:u1"], call_id="call-2"),
+            call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
+async def test_fastest_response_batch_also_reserves_one_unit_per_branch(time_controller, monkeypatch):
+    """abatch_completion_fastest_response's own comma-separated `model` also
+    starts every branch as a real provider call before the race is
+    resolved, so it must reserve one unit per branch too."""
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "concurrency_limits": {
+                "limits": [{"name": "conc", "tag_id": "end_user_id", "limit": 2, "period_seconds": 60}]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={
+            **_data(["end_user_id:u1"], call_id="call-1"),
+            "model": "model-a,model-b",
+            "fastest_response": True,
+        },
+        call_type="acompletion",
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_key(),
+            cache=DualCache(),
+            data=_data(["end_user_id:u1"], call_id="call-2"),
+            call_type="completion",
+        )
 
 
 @pytest.mark.asyncio
@@ -1279,14 +1361,15 @@ async def test_batch_dispatch_release_is_safe_across_both_real_terminal_events(t
     """has_logged_async_success and has_logged_async_failure gate
     independently, so a mixed-outcome dispatch (one branch succeeds,
     another fails) can fire both a real success event and a real failure
-    event for the same shared reservation. Releasing on the first must
-    leave the second nothing to release, not double-release or error."""
+    event for the same shared reservation. Releasing everything on the
+    first must leave the second nothing to release, not double-release or
+    error."""
     monkeypatch.setattr(
         litellm,
         "global_tag_rate_limits",
         {
             "concurrency_limits": {
-                "limits": [{"name": "conc", "tag_id": "end_user_id", "limit": 1, "period_seconds": 60}]
+                "limits": [{"name": "conc", "tag_id": "end_user_id", "limit": 2, "period_seconds": 60}]
             }
         },
     )
@@ -1312,34 +1395,6 @@ async def test_batch_dispatch_release_is_safe_across_both_real_terminal_events(t
     assert result is not None
 
     await hook.async_log_failure_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
-
-
-@pytest.mark.asyncio
-async def test_fastest_response_batch_also_reserves_a_single_unit(time_controller, monkeypatch):
-    """abatch_completion_fastest_response's own comma-separated `model` must
-    reserve exactly one unit too, same as the non-racing dispatch above."""
-    monkeypatch.setattr(
-        litellm,
-        "global_tag_rate_limits",
-        {
-            "concurrency_limits": {
-                "limits": [{"name": "conc", "tag_id": "end_user_id", "limit": 1, "period_seconds": 60}]
-            }
-        },
-    )
-    hook = _make_hook(time_controller)
-
-    result = await hook.async_pre_call_hook(
-        user_api_key_dict=_key(),
-        cache=DualCache(),
-        data={
-            **_data(["end_user_id:u1"], call_id="call-1"),
-            "model": "model-a,model-b",
-            "fastest_response": True,
-        },
-        call_type="acompletion",
-    )
-    assert result is not None
 
 
 @pytest.mark.asyncio

@@ -33,23 +33,33 @@ isolated entry instead of releasing the outer call's still-pending
 reservation early. Confirmed live: a real streaming client disconnect
 correctly releases its concurrency reservation through this mechanism.
 
-`Router.abatch_completion`'s comma-separated `model` fans this one admission
-out into several real, independent LLM calls below this hook entirely (it
-never re-runs `async_pre_call_hook` per branch the way
-`model_based_tag_rate_limits_hook`'s per-Router-hop admission does). Every
-branch shares the identical `litellm_logging_obj`/`model_call_details` the
-proxy attached before the dispatch, and `Logging.should_run_logging` gates
-each event type (`async_success`, `async_failure`) on that same shared
-dict's own `has_logged_{event_type}` flag -- confirmed live against the real
-pipeline (`common_processing_pre_call_logic` -> `route_request` ->
+`Router.abatch_completion`/`abatch_completion_fastest_response`'s
+comma-separated `model` fans this one admission out into several real,
+independent LLM calls below this hook entirely (it never re-runs
+`async_pre_call_hook` per branch the way `model_based_tag_rate_limits_hook`'s
+per-Router-hop admission does), and every one of those branches genuinely
+runs concurrently -- confirmed live: N branches sharing an identical mock
+delay complete in that one delay's time, not N times it -- so admission
+reserves one unit per real branch (see `_batch_branch_count`) to keep the
+cap honest about that real concurrent load, independent of how many
+terminal events survive to release it.
+
+Every branch shares the identical `litellm_logging_obj`/`model_call_details`
+the proxy attached before the dispatch, and `Logging.should_run_logging`
+gates each event type (`async_success`, `async_failure`) on that same
+shared dict's own `has_logged_{event_type}` flag -- confirmed live against
+the real pipeline (`common_processing_pre_call_logic` -> `route_request` ->
 `abatch_completion`, not a hand-built `abatch_completion` call with its own
-fresh kwargs, which never shares that flag and was mistaken for per-branch
-firing in an earlier round): at most one success event and at most one
-failure event ever fire for the whole dispatch, never one per branch.
-Reserving a single unit for the whole dispatch and releasing it on whichever
-of those fires is therefore correct and sufficient -- the same model already
-used for the racing `abatch_completion_fastest_response` variant, whose
-cancelled losing branches never fire a terminal event at all.
+fresh kwargs, which never shares that flag): at most one success event and
+at most one failure event ever fire for the whole dispatch, never one per
+branch (the racing `abatch_completion_fastest_response` variant cancels
+every losing branch instead, which never fires a terminal event at all
+either way). Since there is only ever one admission's own reservations
+pending under one call_id, releasing everything pending on whichever
+terminal event fires is exactly right -- it may release the whole batch's
+units before every real branch has actually finished, which is an accepted
+tradeoff: there is no per-branch completion signal available to wait for
+instead.
 """
 
 import asyncio
@@ -162,30 +172,6 @@ def _entry_applies_any_candidate_model(
     return any(_entry_applies(entry, tags, key_alias, model) for model in candidate_models)
 
 
-def _own_concurrency_keys(
-    config: TagRateLimits,
-    tags: Sequence[str],
-    key_alias: str | None,
-    key_hash: str | None,
-    candidate_models: frozenset[str],
-) -> frozenset[str]:
-    """The exact `_inflight_key`s this hop's own admission would have
-    reserved, mirroring `_classify`'s own concurrency-unit matching. A
-    request can match more than one concurrency-scoped `TagRateLimitEntry`
-    (e.g. a global cap and a named per-team cap on the same tag), and each
-    match is its own key -- a terminal event must release every one of
-    them, not just one."""
-    group: Final = getattr(config, _UNIT_TO_GROUP_FIELD["concurrency"])
-    if group is None:
-        return frozenset()
-    return frozenset(
-        _inflight_key(entry, "concurrency", tag_value, key_hash=key_hash if entry.scope_by_key_hash else None)
-        for entry in group.limits
-        if (tag_value := _extract_identity(tags, entry.tag_id)) is not None
-        and _entry_applies_any_candidate_model(entry, tags, key_alias, candidate_models)
-    )
-
-
 def _individual_model_names(model: str | None, call_type: str) -> tuple[str, ...]:
     """`route_llm_request.py` splits a comma-separated `model` on this exact
     condition before fanning out through `Router.abatch_completion`/
@@ -199,6 +185,32 @@ def _individual_model_names(model: str | None, call_type: str) -> tuple[str, ...
     if call_type != "acompletion" or "," not in model:
         return (model,)
     return tuple(m.strip() for m in model.split(","))
+
+
+def _batch_branch_count(data: Mapping[str, object], call_type: str) -> int:
+    """`Router.abatch_completion`/`abatch_completion_fastest_response` both
+    fan a comma-separated `model` out into one real, concurrently-running
+    provider call per branch -- confirmed live: three branches with the
+    identical mock delay complete in that one delay's time, not three times
+    it. `abatch_completion`'s own nested `messages: list[list[...]]` mode
+    ("N requests to M models") multiplies that further, one branch per
+    (message, model) pair. This is real simultaneous provider load
+    admission must reserve against, independent of how many terminal
+    events later survive to release it (see `_release_pending_for_call_id`'s
+    own docstring for why release doesn't need to match this count)."""
+    if call_type != "acompletion":
+        return 1
+    model_field: Final = data.get("model")
+    if not isinstance(model_field, str) or "," not in model_field:
+        return 1
+    model_count: Final = len(model_field.split(","))
+    messages_field: Final = data.get("messages")
+    message_list_count: Final = (
+        len(messages_field)
+        if isinstance(messages_field, list) and messages_field and all(isinstance(m, list) for m in messages_field)
+        else 1
+    )
+    return model_count * message_list_count
 
 
 def _hash_tag(entry: TagRateLimitEntry, unit: _LimitUnit, tag_value: str, key_hash: str | None) -> str:
@@ -254,11 +266,12 @@ class _GlobalTagRateLimitStash:
     # an earlier attempt must still get its accounting at success time even
     # though the request ultimately serves from a later attempt's model.
     admitted_models: frozenset[str] = field(default_factory=frozenset)
-    # One entry per matching concurrency-scoped policy, not one entry total:
-    # a request can match more than one concurrency entry (a global cap and
-    # a named per-team cap on the same tag, for example), and the terminal
-    # event that releases this admission must release every one of them --
-    # see _release_own_share.
+    # One entry per reserved unit, not one entry per distinct key: a batch
+    # dispatch (see _batch_branch_count) reserves and appends
+    # batch_branch_count entries per matching policy, and a terminal event
+    # releases every entry pending for this call_id at once (see
+    # _release_pending_for_call_id) -- there is never more than one
+    # admission's own reservations pending here.
     pending_concurrency_keys: list[tuple[str, _PartitionKey]] = field(default_factory=list)  # mutable-ok: queue
     # Keys already charged for this call_id, so a fallback retry (same
     # litellm_call_id, different model) renews instead of double-charging.
@@ -659,6 +672,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
             already_reserved_concurrency_keys: Final = frozenset(
                 key for key, _partition_key in stash.pending_concurrency_keys
             )
+            batch_branch_count: Final = _batch_branch_count(data, call_type)
             failing_index, values = await self._atomic_check_and_increment(
                 tuple(
                     (
@@ -668,13 +682,17 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                         # A key already charged/reserved for this call_id (an
                         # earlier fallback attempt for the same request) renews
                         # at zero net cost instead of charging a second unit.
+                        # Otherwise a concurrency check reserves one unit per
+                        # real concurrent branch this dispatch fans out into
+                        # (see _batch_branch_count), not just one for the
+                        # whole dispatch.
                         0.0
                         if renewal_allowed
                         and (
                             (check.unit == "requests" and check.key in stash.charged_request_keys)
                             or (check.unit == "concurrency" and check.key in already_reserved_concurrency_keys)
                         )
-                        else 1.0,
+                        else (float(batch_branch_count) if check.unit == "concurrency" else 1.0),
                         self._ttl_for(check.unit, check.entry),
                         check.unit == "concurrency",
                     )
@@ -689,11 +707,14 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
 
             # Exclude already_reserved_concurrency_keys: that key renewed at
             # zero cost above, so re-adding it would make release decrement
-            # twice for a counter only ever incremented once.
+            # twice for a counter only ever incremented once. One entry per
+            # reserved unit (batch_branch_count of them, ordinarily 1) --
+            # see pending_concurrency_keys's own docstring for why.
             concurrency_reservations: Final = tuple(
                 (check.key, _partition_key(check.entry))
                 for check in atomic_checks
                 if check.unit == "concurrency" and check.key not in already_reserved_concurrency_keys
+                for _ in range(batch_branch_count)
             )
             if concurrency_reservations:
                 stash.pending_concurrency_keys.extend(concurrency_reservations)  # mutable-ok: see field's own docstring
@@ -718,86 +739,23 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
 
     async def _release_pending_for_call_id(self, request_kwargs: Mapping[str, object]) -> None:
         """Releases every reservation still pending for this call_id at once.
-        A single admission per call_id reserves at most one concurrency
-        entry per matching policy (see pending_concurrency_keys's own
-        docstring), never more than once per policy, so releasing everything
-        pending here is always exactly this one admission's own share --
-        correct for a disconnect, a chain-exhausted failure, or as the
-        fallback in _release_own_share when this hop's own identity can't be
-        resolved at release time."""
+        There is never more than one admission's own reservations pending
+        under one call_id (renewal reuses the same entries instead of
+        stacking a second admission's worth -- see charged_request_keys),
+        so releasing everything here is always exactly right, whichever of
+        success, failure, disconnect, or chain-exhausted-failure triggers
+        it. A terminal event releasing the whole batch as soon as it fires,
+        even while other real branches are still genuinely running, is an
+        accepted tradeoff: litellm's own has_logged_{event_type} gating (or,
+        for the racing abatch_completion_fastest_response variant,
+        cancellation of every losing branch) means no per-branch completion
+        signal ever reaches this hook to wait for instead."""
         stash: Final = _stash_for_call(_call_id_from_kwargs(request_kwargs))
         if stash is None or not stash.pending_concurrency_keys:
             return
         release_keys: Final = tuple(stash.pending_concurrency_keys)
         stash.pending_concurrency_keys.clear()
         await self._release_keys(release_keys)
-
-    async def _pop_matching_keys_for_call_id(
-        self, request_kwargs: Mapping[str, object], only_keys: frozenset[str]
-    ) -> tuple[tuple[str, _PartitionKey], ...]:
-        """Pops at most one reservation per key in only_keys, not every
-        reservation currently pending: a request can match more than one
-        concurrency-scoped entry (see _own_concurrency_keys), and each
-        terminal event must release every one of its own matches, not just
-        one. An empty only_keys means this hop's own identity resolved to
-        zero matching policies, so it pops nothing."""
-        stash: Final = _stash_for_call(_call_id_from_kwargs(request_kwargs))
-        if stash is None or not stash.pending_concurrency_keys:
-            return ()
-        pending: Final = stash.pending_concurrency_keys
-        matched_indices: Final = tuple(
-            idx
-            for key in only_keys
-            if (idx := next((i for i, entry in enumerate(pending) if entry[0] == key), None)) is not None
-        )
-        released: Final = tuple(pending[idx] for idx in matched_indices)
-        for entry in released:
-            try:
-                pending.remove(entry)  # mutable-ok: see field's own docstring
-            except ValueError:
-                pass
-        return released
-
-    def _own_concurrency_keys_for_release(self, kwargs: Mapping[str, object]) -> frozenset[str] | None:
-        """The keys `_own_concurrency_keys` would compute for this hop, or
-        `None` if identity/config can't be resolved at all -- distinct from
-        resolving to zero matching policies, which is a real, releasable
-        answer of "nothing to release here"."""
-        config: Final = self._refresh_config()
-        if config is None:
-            return None
-        litellm_params_raw: Final = kwargs.get("litellm_params")
-        litellm_params_for_metadata: Final[Mapping[str, object]] = (
-            litellm_params_raw if isinstance(litellm_params_raw, Mapping) else kwargs
-        )
-        metadata_variable_name: Final = _resolve_authoritative_metadata_variable_name(litellm_params_for_metadata)
-        key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
-        key_alias: Final = _extract_key_alias(litellm_params_for_metadata, metadata_variable_name)
-        tags: Final = _order_tags_for_identity_resolution(
-            _get_tags_from_request_kwargs(litellm_params_for_metadata, metadata_variable_name=metadata_variable_name),
-            litellm_params_for_metadata,
-            metadata_variable_name,
-        )
-        if not tags:
-            return None
-        model_raw: Final = kwargs.get("model")
-        standard_logging_object: Final = kwargs.get("standard_logging_object")
-        model: Final = (
-            model_raw
-            if isinstance(model_raw, str)
-            else standard_logging_object.get("model")
-            if isinstance(standard_logging_object, dict)
-            else None
-        )
-        candidate_models: Final = frozenset((model,)) if isinstance(model, str) else frozenset()
-        return _own_concurrency_keys(config, tags, key_alias, key_hash, candidate_models)
-
-    async def _release_own_share(self, kwargs: Mapping[str, object]) -> tuple[tuple[str, _PartitionKey], ...]:
-        own_concurrency_keys: Final = self._own_concurrency_keys_for_release(kwargs)
-        if own_concurrency_keys is not None:
-            return await self._pop_matching_keys_for_call_id(kwargs, own_concurrency_keys)
-        await self._release_pending_for_call_id(kwargs)
-        return ()
 
     async def async_release_disconnect_state_hook(self, request_data: Mapping[str, object]) -> None:
         await self._release_pending_for_call_id(request_data)
@@ -833,11 +791,8 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         # rejection never reserves a slot, so there is nothing to pop in
         # that case; a rejection from model_based_tag_rate_limits_hook (same
         # error marker) can still land after this hook already reserved its
-        # own slot. Every concurrency policy this admission matched, not
-        # just one -- see _release_own_share.
-        released_entries: Final = await self._release_own_share(kwargs)
-        if released_entries:
-            await self._release_keys(released_entries)
+        # own slot.
+        await self._release_pending_for_call_id(kwargs)
 
     async def async_log_success_event(
         self,
@@ -846,11 +801,9 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         start_time: datetime | None,
         end_time: datetime | None,
     ) -> None:
-        released_entries: Final = await self._release_own_share(kwargs)
-        if released_entries:
-            release_task: Final = asyncio.create_task(self._release_keys(released_entries))
-            _BACKGROUND_TASKS.add(release_task)  # mutable-ok: see _BACKGROUND_TASKS's own docstring
-            release_task.add_done_callback(_BACKGROUND_TASKS.discard)
+        release_task: Final = asyncio.create_task(self._release_pending_for_call_id(kwargs))
+        _BACKGROUND_TASKS.add(release_task)  # mutable-ok: see _BACKGROUND_TASKS's own docstring
+        release_task.add_done_callback(_BACKGROUND_TASKS.discard)
 
         stash: Final = _stash_for_call(_call_id_from_kwargs(kwargs))
         config: Final = self._refresh_config()
