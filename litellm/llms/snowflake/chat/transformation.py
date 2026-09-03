@@ -337,11 +337,9 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                     )
             elif role == "assistant":
                 tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
+                thinking_blocks = _signed_thinking_blocks(msg)
                 if tool_calls:
-                    content_blocks: list[dict[str, object]] = []  # mutable-ok: JSON wire blocks
-                    # Anthropic verifies thinking signatures by position, so a signed block
-                    # has to lead the turn it belongs to or Cortex rejects the next request.
-                    content_blocks.extend(_signed_thinking_blocks(msg))
+                    content_blocks: list[dict[str, object]] = list(thinking_blocks)  # mutable-ok: JSON wire blocks
                     if content:
                         content_blocks.append({"type": "text", "text": content})
                     for tc in tool_calls:
@@ -364,6 +362,16 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                             }
                         )
                     conversation.append({"role": "assistant", "content": content_blocks})
+                elif thinking_blocks:
+                    conversation.append(
+                        {
+                            "role": "assistant",
+                            "content": [
+                                *thinking_blocks,
+                                *([{"type": "text", "text": content}] if content else []),
+                            ],
+                        }
+                    )
                 else:
                     conversation.append({"role": "assistant", "content": content})
             elif role == "tool":
