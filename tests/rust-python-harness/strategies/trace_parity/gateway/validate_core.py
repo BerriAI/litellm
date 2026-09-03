@@ -1,13 +1,10 @@
-"""Validate 1:1 mapping between Python core and Rust core.
-
-Maps litellm-rust/crates/core/ functions to Python implementations.
-"""
+"""Validate gateway endpoints that map to Rust core."""
 from fastapi.testclient import TestClient
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from tracer import ExecutionTracer, print_trace_table
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+from shared.tracing.tracer import ExecutionTracer, print_trace_table
 
 
 RUST_IMPLEMENTATIONS = {
