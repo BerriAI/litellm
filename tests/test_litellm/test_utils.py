@@ -330,6 +330,37 @@ def test_get_optional_params_image_gen():
     assert optional_params["n"] == 3
 
 
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+def test_get_optional_params_image_gen_keeps_gpt_image_supported_params(custom_llm_provider):
+    """https://github.com/BerriAI/litellm/issues/38649"""
+    from litellm.types.utils import LlmProviders
+
+    provider_config = ProviderConfigManager.get_provider_image_generation_config(
+        model="gpt-image-2", provider=LlmProviders(custom_llm_provider)
+    )
+    optional_params = get_optional_params_image_gen(
+        model="gpt-image-2",
+        n=1,
+        size="1024x1024",
+        custom_llm_provider=custom_llm_provider,
+        provider_config=provider_config,
+        background="transparent",
+        output_format="png",
+        moderation="low",
+        output_compression=50,
+        unknown_param="kept-in-extra-body",
+    )
+    assert optional_params == {
+        "n": 1,
+        "size": "1024x1024",
+        "background": "transparent",
+        "output_format": "png",
+        "moderation": "low",
+        "output_compression": 50,
+        "extra_body": {"unknown_param": "kept-in-extra-body"},
+    }
+
+
 def test_get_optional_params_image_gen_vertex_ai_size():
     """Test that Vertex AI image generation properly handles size parameter and maps it to aspectRatio"""
     # Test with various size parameters
