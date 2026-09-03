@@ -100,8 +100,7 @@ class BudgetManager:
         return self.user_dict[user]
 
     def projected_cost(self, model: str, messages: list, user: str):
-        text: Final = "".join(message["content"] for message in messages)
-        prompt_tokens: Final = litellm.token_counter(model=model, text=text)
+        prompt_tokens: Final = litellm.token_counter(model=model, messages=messages)
         prompt_cost, _ = litellm.cost_per_token(model=model, prompt_tokens=prompt_tokens, completion_tokens=0)
         current_cost: Final = self.user_dict[user].get("current_cost", 0)
         projected_cost: Final = prompt_cost + current_cost
