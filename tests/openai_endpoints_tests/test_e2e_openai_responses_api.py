@@ -154,42 +154,36 @@ def test_cancel_response():
 
 
 def test_cancel_streaming_response():
-    try:
-        client = get_test_client()
-        from litellm.types.llms.openai import ResponsesAPIResponse
+    """Cancel a background streaming response while it is still generating.
 
-        stream = client.responses.create(
-            model="gpt-5.5",
-            input="just respond with the word 'ping'",
-            stream=True,
-            background=True,
-        )
+    The prompt is deliberately long-running and the stream is abandoned at the first
+    chunk carrying a response id, so the response is provably still in flight when the
+    cancel lands. Draining the stream first would finish the response, making the cancel
+    fail and leaving nothing but the provider's error wording to assert on.
+    """
+    client = get_test_client()
 
-        collected_chunks = []
+    with client.responses.create(
+        model="gpt-5.5",
+        input="write a 2000 word essay on the history of the printing press",
+        stream=True,
+        background=True,
+    ) as stream:
+        chunk_count = 0
         response_id = None
         for chunk in stream:
-            print("stream chunk=", chunk)
-            collected_chunks.append(chunk)
-            # Extract response ID from the first chunk that has it
-            if (
-                response_id is None
-                and hasattr(chunk, "response")
-                and hasattr(chunk.response, "id")
-            ):
-                response_id = chunk.response.id
+            chunk_count += 1
+            response_id = getattr(getattr(chunk, "response", None), "id", None)
+            if response_id is not None:
+                break
 
-        assert len(collected_chunks) > 0
+    assert chunk_count > 0, "stream produced no chunks"
+    assert response_id is not None, "no streamed chunk carried a response id to cancel"
 
-        # cancel the response if we got a response ID
-        if response_id:
-            cancel_response = client.responses.cancel(response_id)
-            print("CANCEL streaming response=", cancel_response)
-            assert hasattr(cancel_response, "id")
-    except Exception as e:
-        if "Cannot cancel a completed response" in str(e):
-            pass
-        else:
-            raise e
+    cancel_response = client.responses.cancel(response_id)
+    print("CANCEL streaming response=", cancel_response)
+    assert cancel_response.id == response_id
+    assert cancel_response.status == "cancelled"
 
 
 def test_cancel_invalid_response_id():
