@@ -324,6 +324,32 @@ mod tests {
     }
 
     #[test]
+    fn blank_session_id_and_model_keep_the_gateway_fallbacks() {
+        let mut streaming = RealTimeStreaming::new(
+            Vec::new(),
+            "call_fallback".to_string(),
+            "gpt-realtime".to_string(),
+            RequestMetadata::default(),
+        );
+
+        streaming.observe(&event(
+            r#"{"type":"session.created","session":{"id":"","model":""}}"#,
+        ));
+        let payload = streaming.build_payload();
+        assert_eq!(payload.id, "call_fallback");
+        assert_eq!(payload.litellm_call_id, "call_fallback");
+        assert_eq!(payload.model, "gpt-realtime");
+
+        streaming.observe(&event(
+            r#"{"type":"session.updated","session":{"id":"sess_002","model":""}}"#,
+        ));
+        let payload = streaming.build_payload();
+        assert_eq!(payload.id, "sess_002");
+        assert_eq!(payload.litellm_call_id, "sess_002");
+        assert_eq!(payload.model, "gpt-realtime");
+    }
+
+    #[test]
     fn payload_serializes_with_camelcase_times_and_realtime_call_type() {
         let mut streaming = RealTimeStreaming::new(
             Vec::new(),
