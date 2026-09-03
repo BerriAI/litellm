@@ -20,19 +20,13 @@ from litellm.types.secret_managers.get_azure_ad_token_provider import (
 class TestDeploymentIdentityCredential:
     @staticmethod
     def _chain_for(credential_type):
-        built = []
-
-        def record(credential, scope):
-            built.append(credential)
-            return lambda: "token"
-
-        with patch("azure.identity.get_bearer_token_provider", side_effect=record):
+        with patch("azure.identity.get_bearer_token_provider", return_value=lambda: "token") as bearer:
             get_azure_ad_token_provider(
                 azure_scope="https://storage.azure.com/.default",
                 azure_credential=credential_type,
             )
-        assert len(built) == 1
-        with built[0] as chain:
+        bearer.assert_called_once()
+        with bearer.call_args.args[0] as chain:
             return {type(link).__name__ for link in chain.credentials}
 
     @patch.dict(

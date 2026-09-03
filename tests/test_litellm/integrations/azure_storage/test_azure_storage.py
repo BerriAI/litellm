@@ -217,18 +217,12 @@ def test_storage_chain_reaches_only_the_identities_a_deployment_carries(workload
     the storage token must come from workload identity or managed identity or from nothing
     """
     _cached_credential_chain_token_provider.cache_clear()
-    built: list[object] = []
-
-    def record(credential, scope):
-        built.append(credential)
-        return lambda: "chain-token"
-
-    with patch("azure.identity.get_bearer_token_provider", side_effect=record):
+    with patch("azure.identity.get_bearer_token_provider", return_value=lambda: "chain-token") as bearer:
         _cached_credential_chain_token_provider()
     _cached_credential_chain_token_provider.cache_clear()
 
-    assert len(built) == 1
-    with built[0] as chain:
+    bearer.assert_called_once()
+    with bearer.call_args.args[0] as chain:
         assert {type(link).__name__ for link in chain.credentials} == {
             "WorkloadIdentityCredential",
             "ManagedIdentityCredential",
