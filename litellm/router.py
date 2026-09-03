@@ -8073,7 +8073,8 @@ class Router:
             if isinstance(earlier_breadcrumbs, (list, tuple))
             else ()
         )
-        kwargs[_metadata_var]["previous_models"] = (*kept_breadcrumbs, mask_credentials_in_payload(previous_model))
+        breadcrumbs: Final = (*kept_breadcrumbs, mask_credentials_in_payload(previous_model))
+        kwargs[_metadata_var]["previous_models"] = breadcrumbs  # rebind-ok: the logging object already holds this dict
         return kwargs
 
     def _update_usage(self, deployment_id: str, parent_otel_span: Span | None) -> int:
