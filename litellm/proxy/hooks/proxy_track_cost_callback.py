@@ -168,7 +168,8 @@ class _ProxyDBLogger(CustomLogger):
                 "custom_llm_provider"
             ) or request_data.get("custom_llm_provider", "")
 
-        # Propagate standard_logging_object and litellm_trace_id from the Logging instance so the failure row carries the same trace_id Langfuse received.
+        # Propagate standard_logging_object and litellm_trace_id from the Logging
+        # instance so the failure row carries the same trace_id Langfuse received.
         _litellm_logging_obj: Final = request_data.get("litellm_logging_obj")
         if _litellm_logging_obj is not None:
             if not request_data.get("standard_logging_object"):

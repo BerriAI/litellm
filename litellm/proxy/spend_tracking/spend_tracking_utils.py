@@ -578,7 +578,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             ),
             session_id=_get_session_id_for_spend_log(
                 kwargs=kwargs,
-                metadata=metadata,  # pyright: ignore[reportArgumentType]  # legacy metadata helper returns an untyped mapping
+                metadata=metadata,
                 standard_logging_payload=standard_logging_payload,
             ),
             request_duration_ms=_get_request_duration_ms(start_time, end_time),
@@ -605,7 +605,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
 
 def _get_session_id_for_spend_log(
     kwargs: Mapping[str, object],
-    metadata: Mapping[str, object],
+    metadata: Mapping[str, object] | None,
     standard_logging_payload: StandardLoggingPayload | None,
 ) -> str | None:
     """Only a client-established session id is recorded; the same key the Langfuse integration reads."""
@@ -615,7 +615,7 @@ def _get_session_id_for_spend_log(
         sl_session_id,
         kwargs.get("litellm_session_id"),
         litellm_params.get("litellm_session_id") if isinstance(litellm_params, Mapping) else None,
-        metadata.get("session_id"),
+        metadata.get("session_id") if metadata else None,
     )
     return next((str(c) for c in candidates if c), None)
 
