@@ -11,7 +11,7 @@ from litellm.proxy.guardrails.guardrail_hooks.llm_shield.llm_shield import (
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+from litellm.types.utils import Choices, Delta, Message, ModelResponse, ModelResponseStream, StreamingChoices
 
 
 def _guardrail(**overrides: object) -> LLMShieldGuardrail:
@@ -154,6 +154,62 @@ class TestRedaction:
 
         sessions = {call.kwargs["headers"]["X-Session-ID"] for call in mock.call_args_list}
         assert len(sessions) == 1
+
+
+class TestRestoration:
+    @pytest.mark.asyncio
+    async def test_openai_shape_is_restored(self):
+        guardrail = _guardrail(event_hook="post_call")
+        _mock_post(guardrail, {"texts": ["a@b.com"]})
+
+        response = ModelResponse(choices=[Choices(index=0, message=Message(role="assistant", content="[EMAIL_1]"))])
+        result = await guardrail.async_post_call_success_hook(
+            data={"messages": []}, user_api_key_dict=None, response=response
+        )
+
+        assert result.choices[0].message.content == "a@b.com"
+
+    @pytest.mark.asyncio
+    async def test_anthropic_message_shape_is_restored(self):
+        """The /v1/messages reply is a plain dict with no choices.
+
+        Measured against a live provider: without its own branch the reply went
+        back to the caller still carrying the placeholder, even though the
+        request had been redacted correctly.
+        """
+        guardrail = _guardrail(event_hook="post_call")
+        _mock_post(guardrail, {"texts": ["a@b.com"]})
+
+        response = {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "[EMAIL_1]"}],
+        }
+        result = await guardrail.async_post_call_success_hook(
+            data={"messages": []}, user_api_key_dict=None, response=response
+        )
+
+        assert result["content"][0]["text"] == "a@b.com"
+
+    @pytest.mark.asyncio
+    async def test_anthropic_non_text_blocks_are_left_alone(self):
+        guardrail = _guardrail(event_hook="post_call")
+        _mock_post(guardrail, {"texts": ["a@b.com"]})
+
+        response = {
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "[EMAIL_1]"},
+                {"type": "tool_use", "id": "t1", "name": "lookup", "input": {}},
+            ],
+        }
+        result = await guardrail.async_post_call_success_hook(
+            data={"messages": []}, user_api_key_dict=None, response=response
+        )
+
+        assert result["content"][0]["text"] == "a@b.com"
+        assert result["content"][1] == {"type": "tool_use", "id": "t1", "name": "lookup", "input": {}}
 
 
 class TestFailClosed:

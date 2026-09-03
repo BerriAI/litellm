@@ -227,6 +227,9 @@ class LLMShieldGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call) is not True:
             return response
 
+        if self._is_anthropic_message_response(response):
+            return await self._restore_anthropic_response(response, data)
+
         choices = getattr(response, "choices", None)
         if not choices:
             return response
@@ -244,6 +247,34 @@ class LLMShieldGuardrail(CustomGuardrail):
         restored = await self._rehydrate([text for _, text in pending], self._session_id(data))
         for (message, _), replacement in zip(pending, restored):
             message.content = replacement
+        return response
+
+    @staticmethod
+    def _is_anthropic_message_response(response: Any) -> bool:
+        """Anthropic's native /v1/messages reply arrives as a plain dict."""
+        return (
+            isinstance(response, dict)
+            and response.get("type") == "message"
+            and isinstance(response.get("content"), list)
+        )
+
+    async def _restore_anthropic_response(self, response: dict, data: dict) -> dict:
+        """Restores text blocks in an Anthropic native message reply.
+
+        This shape has no `choices`, so without its own branch the reply would go
+        back to the caller still carrying placeholders.
+        """
+        blocks = [
+            block
+            for block in response["content"]
+            if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
+        ]
+        if not blocks:
+            return response
+
+        restored = await self._rehydrate([block["text"] for block in blocks], self._session_id(data))
+        for block, replacement in zip(blocks, restored):
+            block["text"] = replacement
         return response
 
     async def async_post_call_streaming_iterator_hook(
