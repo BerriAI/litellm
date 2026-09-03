@@ -567,6 +567,7 @@ class LiteLLMRoutes(enum.Enum):
 
     apply_guardrail_routes = [
         "/guardrails/apply_guardrail",
+        "/apply_guardrail",
     ]
 
     model_info_routes = [
