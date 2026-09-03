@@ -1192,7 +1192,7 @@ def test_fusion_reservation_does_not_return_a_partial_additive_estimate() -> Non
     def child_estimate(*, model: str, **_: object) -> float | None:
         return None if model == "panel" else 1.0
 
-    with patch(
+    with patch(  # test-quality-ok: isolates one unavailable dependency estimate to verify all-or-nothing Fusion admission
         "litellm.proxy.spend_tracking.budget_reservation._estimate_request_max_cost_for_model",
         side_effect=child_estimate,
     ):
@@ -3443,6 +3443,53 @@ async def test_model_access_group_counter_accumulates_across_calls_without_a_res
     )
     assert counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(2.0)
     assert counter_cache.in_memory_cache.get_cache(key=model_access_group_spend_counter_key("")) is None
+
+
+@pytest.mark.asyncio
+async def test_model_access_group_can_use_its_provider_call_cost_during_fusion_reconciliation(spend_counter_state):
+    counter_cache, key_cache = spend_counter_state
+    await _cache_model_access_group_budget(key_cache, "panel", spend=1.0, max_budget=25.0)
+
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    await increment_spend_counters(
+        token=None,
+        team_id=None,
+        user_id=None,
+        response_cost=0.7,
+        model_access_groups=["panel"],
+        model_access_group_response_cost=0.2,
+    )
+
+    assert counter_cache.in_memory_cache.get_cache(
+        key=model_access_group_spend_counter_key("panel")
+    ) == pytest.approx(1.2)
+
+
+@pytest.mark.asyncio
+async def test_deferred_fusion_access_group_cost_skips_a_group_reserved_by_the_virtual_model(spend_counter_state):
+    counter_cache, key_cache = spend_counter_state
+    await _cache_model_access_group_budget(key_cache, "fusion", spend=1.0, max_budget=25.0)
+    await _cache_model_access_group_budget(key_cache, "panel", spend=2.0, max_budget=25.0)
+    await counter_cache.async_set_cache(key=model_access_group_spend_counter_key("fusion"), value=1.5)
+    reservation = {
+        "entries": [{"counter_key": model_access_group_spend_counter_key("fusion")}],
+    }
+
+    from litellm.proxy.proxy_server import increment_fusion_model_access_group_spend_counters
+
+    await increment_fusion_model_access_group_spend_counters(
+        model_access_groups=["fusion", "panel"],
+        response_cost=0.2,
+        budget_reservation=reservation,
+    )
+
+    assert counter_cache.in_memory_cache.get_cache(
+        key=model_access_group_spend_counter_key("fusion")
+    ) == pytest.approx(1.5)
+    assert counter_cache.in_memory_cache.get_cache(
+        key=model_access_group_spend_counter_key("panel")
+    ) == pytest.approx(2.2)
 
 
 @pytest.mark.asyncio

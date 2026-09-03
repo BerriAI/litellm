@@ -21,7 +21,16 @@ import time
 import traceback
 import weakref
 from collections import defaultdict
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator, Iterator, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Generator,
+    Iterator,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
@@ -68,6 +77,7 @@ from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
@@ -9470,9 +9480,11 @@ class Router:
     async def _authorize_fusion_dependencies(
         self,
         fusion_router: FusionRouter,
-        request_kwargs: Mapping[str, object],
+        request_kwargs: MutableMapping[  # mutable-ok: request-local carrier is enriched before hidden calls dispatch
+            str, object
+        ],
     ) -> None:
-        """Apply the originating proxy caller's model access to every hidden call."""
+        """Apply the originating proxy caller's model access and group budgets to every hidden call."""
         metadata_values: Final = tuple(request_kwargs.get(key) for key in ("litellm_metadata", "metadata"))
         raw_user_api_key_auth: Final = next(
             (
@@ -9512,13 +9524,51 @@ class Router:
                 )
             )
         )
-        for dependency_model in dependency_models:
-            await can_key_call_resolved_model(
-                model=dependency_model,
-                llm_model_list=self.model_list,
-                valid_token=user_api_key_auth,
-                llm_router=self,
+        matched_dependency_groups: Final = await asyncio.gather(
+            *(
+                can_key_call_resolved_model(
+                    model=dependency_model,
+                    llm_model_list=self.model_list,
+                    valid_token=user_api_key_auth,
+                    llm_router=self,
+                )
+                for dependency_model in dependency_models
             )
+        )
+        dependency_access_groups: Final = frozenset(
+            group for matched_groups in matched_dependency_groups for group in matched_groups
+        )
+        if not dependency_access_groups:
+            return
+
+        # Keep the group gating the virtual Fusion model and add every group
+        # gating a hidden dependency. The normal spend writer narrows this
+        # authorization upper bound to groups serving each provider call.
+        all_groups: Final = tuple(
+            dict.fromkeys(
+                (
+                    *(user_api_key_auth.matched_model_access_groups or ()),
+                    *sorted(dependency_access_groups),
+                )
+            )
+        )
+        user_api_key_auth.matched_model_access_groups = list(  # mutable-ok: auth schema requires a list carrier
+            all_groups
+        )
+        for metadata_key in ("litellm_metadata", "metadata"):
+            metadata = request_kwargs.get(metadata_key)
+            if not isinstance(metadata, Mapping):
+                continue
+            mutable_metadata = (
+                metadata
+                if isinstance(metadata, dict)
+                else dict(metadata)  # mutable-ok: SDK metadata boundary requires a native mapping
+            )
+            mutable_metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = list(  # mutable-ok: metadata JSON requires a list
+                all_groups
+            )
+            mutable_metadata["user_api_key_auth"] = user_api_key_auth
+            request_kwargs[metadata_key] = mutable_metadata  # rebind-ok: enrich request-local metadata for dispatch
 
     async def _fusion_asearch(  # kwargs-ok: bridge preserves the Router.asearch keyword surface
         self,

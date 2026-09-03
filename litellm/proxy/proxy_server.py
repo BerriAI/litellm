@@ -2670,6 +2670,7 @@ async def increment_spend_counters(
     tags: list[str] | None = None,
     request_started_at: datetime | None = None,
     model_access_groups: Sequence[str] | None = None,
+    model_access_group_response_cost: float | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -2692,6 +2693,9 @@ async def increment_spend_counters(
         return
 
     cost: Final[float] = response_cost
+    model_access_group_cost: Final = (
+        cost if model_access_group_response_cost is None else model_access_group_response_cost
+    )
 
     async def _key_scope(key_token: str) -> None:
         # key_token arrives pre-hashed from metadata["user_api_key"] (auth flow
@@ -2825,10 +2829,10 @@ async def increment_spend_counters(
             else None,
             _increment_model_access_group_spend_counters(
                 model_access_groups=model_access_groups,
-                response_cost=cost,
+                response_cost=model_access_group_cost,
                 reserved_counter_keys=reserved_counter_keys,
             )
-            if model_access_groups
+            if model_access_groups and model_access_group_cost != 0
             else None,
             _increment_org_spend_counter(
                 org_id=org_id,
@@ -2851,6 +2855,27 @@ async def increment_spend_counters(
 
     if budget_reservation is not None:
         budget_reservation["finalized"] = True
+
+
+async def increment_fusion_model_access_group_spend_counters(
+    model_access_groups: Sequence[str],
+    response_cost: float,
+    budget_reservation: dict | None,  # mutable-ok: shared reservation ledger is read here to avoid duplicate charges
+) -> None:
+    """Charge one deferred Fusion provider call to only its serving access groups.
+
+    Fusion defers the shared key/team/user reservation until its final outer call,
+    but model access groups are deployment-specific. Updating those counters per
+    provider call preserves attribution while skipping any group already reserved
+    for the virtual Fusion model itself.
+    """
+    from litellm.proxy.spend_tracking.budget_reservation import get_reserved_counter_keys
+
+    await _increment_model_access_group_spend_counters(
+        model_access_groups=model_access_groups,
+        response_cost=response_cost,
+        reserved_counter_keys=get_reserved_counter_keys(budget_reservation=budget_reservation),
+    )
 
 
 async def _reconcile_budget_reservation_for_counter_update(

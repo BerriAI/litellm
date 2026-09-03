@@ -741,10 +741,18 @@ async def _update_database_and_spend_counters(
                     )
         raise
 
-    if defer_budget_counter_update:
-        return
-
     try:
+        if defer_budget_counter_update:
+            if model_access_groups:
+                from litellm.proxy.proxy_server import increment_fusion_model_access_group_spend_counters
+
+                await increment_fusion_model_access_group_spend_counters(
+                    model_access_groups=model_access_groups,
+                    response_cost=response_cost,
+                    budget_reservation=budget_reservation,
+                )
+            return
+
         await increment_spend_counters(
             token=user_api_key,
             team_id=team_id,
@@ -756,6 +764,10 @@ async def _update_database_and_spend_counters(
             tags=request_tags,
             request_started_at=start_time,
             model_access_groups=model_access_groups,
+            # Global scopes reconcile the whole logical Fusion request. Access
+            # groups are deployment-specific, so the final provider call must
+            # be charged only its own cost; hidden calls were charged above.
+            model_access_group_response_cost=response_cost,
         )
     except Exception:
         if budget_reservation is not None:

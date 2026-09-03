@@ -607,6 +607,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         tags=["tag-a"],
         request_started_at=start_time,
         model_access_groups=("premium",),
+        model_access_group_response_cost=0.2,
     )
 
 
@@ -730,6 +731,7 @@ async def test_fusion_hidden_costs_accumulate_then_continuation_reconciles_once(
 
         increment.assert_awaited_once()
         assert increment.await_args.kwargs["response_cost"] == pytest.approx(0.7)
+        assert increment.await_args.kwargs["model_access_group_response_cost"] == pytest.approx(0.4)
         assert increment.await_args.kwargs["budget_reservation"] is reservation
 
 

@@ -17,6 +17,7 @@ from litellm.fusion_router import (
     fusion_router_dependencies,
     validate_fusion_router_write,
 )
+from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.router import Router
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponseStream
@@ -683,18 +684,32 @@ async def test_proxy_fusion_authorizes_every_hidden_model(monkeypatch: pytest.Mo
     )
     model_list[-1]["litellm_params"]["fusion_router_config"]["analyst_model"] = "analyst"
     router = Router(model_list=model_list)
-    authorize = AsyncMock(return_value=None)
+    authorize = AsyncMock(side_effect=[("outer-budget",), ("panel-budget",), ("analyst-budget",)])
     monkeypatch.setattr(auth_checks, "can_key_call_resolved_model", authorize)
 
+    auth = UserAPIKeyAuth(models=["*"], matched_model_access_groups=["fusion-budget"])
+    metadata: dict[str, object] = {"user_api_key_auth": auth}
     await router._authorize_fusion_dependencies(  # pyright: ignore[reportPrivateUsage]
         fusion_router=router.fusion_routers["fusion/test"],
         request_kwargs={
-            "metadata": {"user_api_key_auth": UserAPIKeyAuth(models=["*"])},
+            "metadata": metadata,
             "proxy_server_request": {"body": {"model": "fusion/test"}},
         },
     )
 
     assert [call.kwargs["model"] for call in authorize.await_args_list] == ["outer", "panel-a", "analyst"]
+    assert metadata[MODEL_ACCESS_GROUP_METADATA_KEY] == [
+        "fusion-budget",
+        "analyst-budget",
+        "outer-budget",
+        "panel-budget",
+    ]
+    assert auth.matched_model_access_groups == [
+        "fusion-budget",
+        "analyst-budget",
+        "outer-budget",
+        "panel-budget",
+    ]
 
 
 @pytest.mark.asyncio

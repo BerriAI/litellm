@@ -25,6 +25,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     _model_access_group_max_budget_check,
+    can_key_call_resolved_model,
     collect_matched_model_access_groups,
     common_checks,
     stamp_matched_model_access_groups,
@@ -379,6 +380,34 @@ async def test_group_exactly_at_its_max_budget_blocks_the_request():
 
     assert exc_info.value.entity_id == "tier-a"
     assert exc_info.value.current_cost == 10.0
+
+
+@pytest.mark.asyncio
+async def test_resolved_model_authorization_enforces_its_access_group_budget(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.proxy import proxy_server
+
+    cache = await _cache()
+    prisma = _RecordingPrismaClient(_MagBudgetRow("tier-a", spend=10.0, max_budget=10.0))
+    router = Router(model_list=MODEL_LIST)
+    valid_token = UserAPIKeyAuth(api_key="hashed", models=["tier-a"])
+    read, seen = _spend_reader({MODEL_ACCESS_GROUP_COUNTER_KEY: 10.0})
+
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=cache))
+    monkeypatch.setattr(proxy_server, "get_current_spend", read)
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await can_key_call_resolved_model(
+            model="gpt-4o",
+            llm_model_list=MODEL_LIST,
+            valid_token=valid_token,
+            llm_router=router,
+        )
+
+    assert seen == [MODEL_ACCESS_GROUP_COUNTER_KEY]
 
 
 @pytest.mark.asyncio
