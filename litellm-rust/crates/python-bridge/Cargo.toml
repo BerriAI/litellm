@@ -13,10 +13,12 @@ crate-type = ["cdylib"]
 default = ["abi3"]
 abi3 = ["pyo3/abi3-py310"]
 extension-module = ["pyo3/extension-module"]
+mimalloc = ["dep:mimalloc"]
 panic-test = []
 
 [dependencies]
 futures-util.workspace = true
+mimalloc = { workspace = true, optional = true }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 litellm-core = { workspace = true, features = ["bedrock-auth"] }
