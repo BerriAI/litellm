@@ -50,9 +50,16 @@ async def test_ocr_sdk_logs_provider_response_before_normalization(asynchronous:
         ocr_upstream,
     )
 
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    litellm.logging_callback_manager._reset_all_callbacks()  # pyright: ignore[reportPrivateUsage]  # isolate SDK callback registrations
+    GLOBAL_LOGGING_WORKER.start()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), 5)
     success: Final = outcome in ("success", "observer_error")
-    recorder: Final = CallbackRecorder(asynchronous, raises="post" if outcome == "observer_error" else "")
-    follower: Final = CallbackRecorder(asynchronous, name="follower")
+    recorder: Final = CallbackRecorder(
+        asynchronous, raises="post" if outcome == "observer_error" else "", name=f"first-{asynchronous}-{outcome}"
+    )
+    follower: Final = CallbackRecorder(asynchronous, name=f"second-{asynchronous}-{outcome}")
     status: Final = int(outcome) if outcome.isdigit() else 200
     body: Final = "not-json" if outcome == "malformed" else RESPONSE if status == 200 else '{"error":"rejected"}'
     with ocr_upstream(status, body) as upstream:
@@ -65,17 +72,20 @@ async def test_ocr_sdk_logs_provider_response_before_normalization(asynchronous:
             callbacks=[recorder, follower],
             num_retries=0,
         )
-        try:
-            result: Final = (
-                await litellm.aocr(**params) if asynchronous else await asyncio.to_thread(litellm.ocr, **params)
-            )
-        except Exception as error:
-            assert not success
-            if status != 200:
-                assert getattr(error, "status_code", None) == status
-        else:
-            assert success
+        async def invoke():
+            return await litellm.aocr(**params) if asynchronous else await asyncio.to_thread(litellm.ocr, **params)
+
+        if success:
+            result: Final = await invoke()
             assert result.pages[0].markdown == "callback-test"
+        else:
+            with pytest.raises(
+                (litellm.AuthenticationError, litellm.RateLimitError, litellm.InternalServerError, litellm.APIConnectionError)
+            ) as captured:
+                await invoke()
+            if status != 200:
+                assert getattr(captured.value, "status_code", None) == status
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), 5)
         events: Final = await recorder.wait()
         names: Final = tuple(event.name for event in events)
         following_events: Final = await follower.wait()
