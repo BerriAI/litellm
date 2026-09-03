@@ -232,3 +232,45 @@ def test_search_handler_only_exposes_auth_params_to_signing():
         "tool_name": "target___WebSearch",
         "aws_secret_access_key": "secret",
     }
+
+
+@pytest.mark.asyncio
+async def test_async_search_handler_only_exposes_auth_params_to_signing():
+    class CapturingConfig(BaseSearchConfig):
+        def __init__(self):
+            self.transformed_params: dict[str, object] | None = None
+            self.signing_params: dict[str, object] | None = None
+
+        def validate_environment(self, **kwargs):
+            return {}
+
+        def transform_search_request(self, query, optional_params, **kwargs):
+            self.transformed_params = optional_params
+            return {}
+
+        def get_complete_url(self, **kwargs):
+            return "https://gateway.example/mcp"
+
+        def sign_request(self, *, optional_params, **kwargs):
+            self.signing_params = optional_params
+            raise RuntimeError("stop before network")
+
+    config = CapturingConfig()
+    with pytest.raises(RuntimeError, match="stop before network"):
+        await BaseLLMHTTPHandler().async_search(
+            query="test",
+            optional_params={"tool_name": "target___WebSearch"},
+            auth_params={"aws_secret_access_key": "secret"},
+            timeout=1,
+            logging_obj=MagicMock(),
+            api_key=None,
+            api_base="https://gateway.example/mcp",
+            custom_llm_provider="agentcore",
+            provider_config=config,
+        )
+
+    assert config.transformed_params == {"tool_name": "target___WebSearch"}
+    assert config.signing_params == {
+        "tool_name": "target___WebSearch",
+        "aws_secret_access_key": "secret",
+    }
