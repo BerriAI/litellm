@@ -313,23 +313,21 @@ describe("TeamInfoView", () => {
       vi.mocked(networking.getAgentsList).mockResolvedValue({
         agents: [{ agent_id: "agent-support-5678", agent_name: "support_agent" }],
       });
-      vi.mocked(networking.teamInfoCall).mockResolvedValue(
-        createMockTeamData({
-          object_permission: null,
-          access_group_ids: ["ag-1"],
-          access_group_mcp_server_ids: ["mcp-github-1234"],
-          access_group_agent_ids: ["agent-support-5678"],
-          access_group_details: [
-            {
-              access_group_id: "ag-1",
-              access_group_name: "platform-tools",
-              models: [],
-              mcp_server_ids: ["mcp-github-1234"],
-              agent_ids: ["agent-support-5678"],
-            },
-          ],
-        }),
-      );
+      const platformToolsGroup = {
+        access_group_id: "ag-1",
+        access_group_name: "platform-tools",
+        models: [],
+        mcp_server_ids: ["mcp-github-1234"],
+        agent_ids: ["agent-support-5678"],
+      };
+      const inheritedGrants = {
+        object_permission: null,
+        access_group_ids: ["ag-1"],
+        access_group_mcp_server_ids: ["mcp-github-1234"],
+        access_group_agent_ids: ["agent-support-5678"],
+        access_group_details: [platformToolsGroup],
+      };
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData(inheritedGrants));
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
 
