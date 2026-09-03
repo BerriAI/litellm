@@ -69,15 +69,29 @@ async def test_rename_appends_the_new_name_when_a_sibling_row_keeps_the_old_one(
     invalidate.assert_awaited_once_with(("ag-1", "ag-2"))
 
 
+def _router_serving(db_model_by_deployment_id: dict[str, bool]):
+    llm_router = MagicMock()
+    llm_router.get_model_ids.return_value = list(db_model_by_deployment_id)
+    llm_router.get_deployment.side_effect = lambda model_id: SimpleNamespace(
+        model_info=SimpleNamespace(db_model=db_model_by_deployment_id[model_id])
+    )
+    return llm_router
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "router_ids, expected_write",
-    [(["m-1"], "array_replace"), (["m-1", "m-from-config"], "array_append")],
+    "db_model_by_deployment_id, expected_write",
+    [
+        ({"m-1": True}, "array_replace"),
+        ({"m-1": True, "m-from-config": False}, "array_append"),
+        ({"m-1": True, "m-db-sibling-this-worker-has-not-refreshed": True}, "array_replace"),
+    ],
 )
-async def test_rename_counts_router_deployments_with_another_id_as_backing_the_old_name(router_ids, expected_write):
+async def test_rename_counts_only_config_deployments_with_another_id_as_backing_the_old_name(
+    db_model_by_deployment_id, expected_write
+):
     prisma_client, writer_inner, _ = _routed_prisma_client(deployment_count=0)
-    llm_router = MagicMock()
-    llm_router.get_model_ids.return_value = router_ids
+    llm_router = _router_serving(db_model_by_deployment_id)
 
     with patch(_INVALIDATE, new=AsyncMock()):
         await sync_access_groups_for_renamed_model(
@@ -87,6 +101,35 @@ async def test_rename_counts_router_deployments_with_another_id_as_backing_the_o
     llm_router.get_model_ids.assert_called_once_with(model_name="gpt-5.6")
     (update_call,) = _access_group_updates(writer_inner)
     assert expected_write in update_call.args[0]
+
+
+@pytest.mark.asyncio
+async def test_delete_ignores_a_db_sibling_this_worker_has_not_refreshed_yet():
+    prisma_client, writer_inner, _ = _routed_prisma_client(deployment_count=0)
+    llm_router = _router_serving({"m-1": True, "m-renamed-elsewhere": True})
+
+    with patch(_INVALIDATE, new=AsyncMock()) as invalidate:
+        await sync_access_groups_for_deleted_model(
+            prisma_client, model_id="m-1", model_name="gpt-5.6", llm_router=llm_router
+        )
+
+    (update_call,) = _access_group_updates(writer_inner)
+    assert "array_remove" in update_call.args[0]
+    invalidate.assert_awaited_once_with(("ag-1", "ag-2"))
+
+
+@pytest.mark.asyncio
+async def test_delete_keeps_the_name_while_a_config_deployment_still_serves_it():
+    prisma_client, writer_inner, _ = _routed_prisma_client(deployment_count=0)
+    llm_router = _router_serving({"m-1": True, "m-from-config": False})
+
+    with patch(_INVALIDATE, new=AsyncMock()) as invalidate:
+        await sync_access_groups_for_deleted_model(
+            prisma_client, model_id="m-1", model_name="gpt-5.6", llm_router=llm_router
+        )
+
+    assert _access_group_updates(writer_inner) == []
+    invalidate.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -59,14 +59,24 @@ def _raw_executor(prisma_client: object) -> _RawExecutor:
     return WriterPinnedClient(db).db  # pyright: ignore[reportAny, reportReturnType]  # untyped Prisma client behind the pin
 
 
-def _served_by_another_deployment(llm_router: Router | None, model_name: str, model_id: str) -> bool:
+def _config_sourced_sibling(llm_router: Router, deployment_id: str, model_id: str) -> bool:
+    if deployment_id == model_id:
+        return False
+    deployment: Final = llm_router.get_deployment(model_id=deployment_id)
+    return deployment is not None and not deployment.model_info.db_model
+
+
+def _served_by_a_config_deployment(llm_router: Router | None, model_name: str, model_id: str) -> bool:
     if llm_router is None:
         return False
-    return any(deployment_id != model_id for deployment_id in llm_router.get_model_ids(model_name=model_name))
+    return any(
+        _config_sourced_sibling(llm_router, deployment_id, model_id)
+        for deployment_id in llm_router.get_model_ids(model_name=model_name)
+    )
 
 
 async def _still_backed(executor: _RawExecutor, llm_router: Router | None, model_name: str, model_id: str) -> bool:
-    if _served_by_another_deployment(llm_router, model_name, model_id):
+    if _served_by_a_config_deployment(llm_router, model_name, model_id):
         return True
     count_rows: Final = await executor.query_raw(_BACKING_DEPLOYMENTS_SQL, model_name)
     return any(_DeploymentCountRow.model_validate(row).deployment_count > 0 for row in count_rows)
