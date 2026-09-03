@@ -27,7 +27,10 @@ RUN npm run build
 FROM nginx:${NGINX_VERSION} AS runtime
 
 # Drop the upstream default :80 server; we own the config.
-RUN rm -f /etc/nginx/conf.d/default.conf
+RUN rm -f /etc/nginx/conf.d/default.conf && mkdir /etc/nginx/listen-ipv6
+
+# Opt-in IPv6 listen (NGINX_LISTEN_IPV6=true|auto) — see the script header.
+COPY --chmod=755 ui/docker-entrypoint.d/15-listen-on-ipv6.sh /docker-entrypoint.d/
 
 # Static export → web root.
 COPY --from=builder /app/out /usr/share/nginx/html
