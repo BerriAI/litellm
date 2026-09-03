@@ -24,6 +24,8 @@ const ORG_ADMIN_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
   "viewOrganizationUsage",
 ]);
 
+export const capabilityRequiresOrgAdmin = (capability: Capability): boolean => ORG_ADMIN_CAPABILITIES.has(capability);
+
 export const hasCapability = (
   userRole: string | null | undefined,
   capability: Capability,
