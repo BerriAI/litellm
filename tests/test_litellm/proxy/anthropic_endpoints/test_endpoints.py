@@ -350,3 +350,169 @@ class TestStripTotalTokensFeatureFlag(unittest.TestCase):
         import litellm
 
         assert litellm.strip_anthropic_total_tokens is False
+
+
+class TestUpstreamRateLimitHeaderPassthrough:
+    """Issue #37754: on a 429 from an Anthropic-compatible upstream (e.g. GLM),
+    the `/v1/messages` endpoint must forward the upstream's Anthropic-native
+    rate-limit headers (`retry-after`, `anthropic-ratelimit-unified-status`)
+    to the client. Without them, Claude Code treats the 429 as a transient
+    throttle and retries forever.
+    """
+
+    def _build_upstream_ratelimit_exception(self):
+        """Produce the exception the proxy sees when an Anthropic-compatible
+        upstream returns 429, through the REAL litellm exception mapping so
+        `litellm_response_headers` is populated exactly as in production."""
+        import httpx
+
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicError
+
+        upstream_headers = httpx.Headers(
+            {
+                "anthropic-ratelimit-unified-status": "rejected",
+                "retry-after": "287441",
+                "request-id": "20260821091810b67f7ae6443d450c",
+                # A vendor header that MUST be stripped before the proxy
+                # forwards it as its own response header.
+                "set-cookie": "acw_tc=abc; path=/; HttpOnly",
+            }
+        )
+        raw = AnthropicError(
+            status_code=429,
+            message=(
+                '{"type":"error","error":{"type":"rate_limit_error",'
+                '"code":"1310","message":"quota exhausted"}}'
+            ),
+            headers=upstream_headers,
+        )
+        try:
+            litellm.exception_type(
+                model="glm-5.2",
+                original_exception=raw,
+                custom_llm_provider="anthropic",
+            )
+        except Exception as mapped:
+            return mapped
+        raise AssertionError("exception_type did not raise")
+
+    @pytest.mark.asyncio
+    async def test_429_forwards_anthropic_ratelimit_headers(self):
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        mapped = self._build_upstream_ratelimit_exception()
+
+        with (
+            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={"model": "glm"})),
+            patch.object(
+                ep.ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new=AsyncMock(side_effect=mapped),
+            ),
+            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+            with pytest.raises(ProxyException) as exc_info:
+                await ep.anthropic_response(
+                    fastapi_response=MagicMock(),
+                    request=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
+                )
+
+        raised = exc_info.value
+        headers = {k.lower(): v for k, v in (raised.headers or {}).items()}
+        assert raised.code == "429"
+        # The two headers the issue is about — forwarded verbatim (unprefixed).
+        assert headers.get("anthropic-ratelimit-unified-status") == "rejected"
+        assert headers.get("retry-after") == "287441"
+        # Unsafe vendor headers must not leak onto the proxy's own response.
+        assert "set-cookie" not in headers
+        # LiteLLM's own headers are still present.
+        assert "x-litellm-version" in headers
+        mock_logging.post_call_failure_hook.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_upstream_cannot_spoof_litellm_headers(self):
+        """A hostile upstream must not be able to forge proxy-owned x-litellm-*
+        metadata — including via case-variant header names, which HTTP treats as
+        the same header. Only allowlisted Anthropic-native headers pass."""
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        mapped = self._build_upstream_ratelimit_exception()
+        mapped.litellm_response_headers = {
+            "retry-after": "287441",
+            "x-litellm-version": "spoofed",  # exact-case spoof
+            "X-LiteLLM-Model-ID": "forged-model",  # case-variant spoof
+            "X-LiteLLM-Response-Cost": "999.99",
+        }
+
+        with (
+            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={"model": "glm"})),
+            patch.object(
+                ep.ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new=AsyncMock(side_effect=mapped),
+            ),
+            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+            with pytest.raises(ProxyException) as exc_info:
+                await ep.anthropic_response(
+                    fastapi_response=MagicMock(),
+                    request=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
+                )
+
+        raised_headers = exc_info.value.headers or {}
+        headers = {k.lower(): v for k, v in raised_headers.items()}
+        # The legit rate-limit header still passes.
+        assert headers.get("retry-after") == "287441"
+        # No forged value reaches the client, under any casing.
+        assert all(v not in ("spoofed", "forged-model", "999.99") for v in raised_headers.values())
+        # No case-variant duplicate x-litellm-* key survived.
+        assert [k for k in raised_headers if k.lower() == "x-litellm-model-id"] in ([], ["x-litellm-model-id"])
+
+    def test_extract_upstream_headers_empty_when_none(self):
+        """No upstream headers anywhere -> empty dict (no crash)."""
+        from litellm.proxy.anthropic_endpoints.endpoints import (
+            _extract_upstream_anthropic_headers,
+        )
+
+        e = Exception("boom")
+        assert _extract_upstream_anthropic_headers(e) == {}
+
+    def test_extract_upstream_headers_non_mapping_source(self):
+        """A header source that isn't a mapping (no .items()) is tolerated -> {}."""
+        from litellm.proxy.anthropic_endpoints.endpoints import (
+            _extract_upstream_anthropic_headers,
+        )
+
+        e = Exception("boom")
+        e.litellm_response_headers = ["retry-after", "10"]  # list, not a mapping
+        assert _extract_upstream_anthropic_headers(e) == {}
+
+    def test_extract_upstream_headers_strips_unsafe(self):
+        from litellm.proxy.anthropic_endpoints.endpoints import (
+            _extract_upstream_anthropic_headers,
+        )
+
+        e = Exception("boom")
+        e.litellm_response_headers = {
+            "retry-after": "10",
+            "Anthropic-RateLimit-Unified-Status": "rejected",  # case-normalized to lowercase
+            "set-cookie": "x=1",
+            "content-length": "123",
+            "access-control-allow-origin": "*",
+            "X-LiteLLM-Model-ID": "forged",  # proxy-owned namespace, must be dropped
+            "x-process-time": "0.1",  # not allowlisted
+        }
+        out = {k: v for k, v in _extract_upstream_anthropic_headers(e).items()}
+        assert out == {
+            "retry-after": "10",
+            "anthropic-ratelimit-unified-status": "rejected",
+        }

@@ -2,6 +2,7 @@
 Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -28,6 +29,43 @@ from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.types.utils import TokenCountResponse
 
 router: Final = APIRouter()
+
+
+# Upstream response headers forwarded unprefixed on the /v1/messages error
+# path. Restricted to Anthropic-native rate-limit headers so a hostile upstream
+# cannot spoof proxy-owned ``x-litellm-*`` metadata or set browser/framing
+# headers on the proxy's own response.
+_FORWARDABLE_UPSTREAM_HEADERS: Final = frozenset({"retry-after", "request-id"})
+_FORWARDABLE_UPSTREAM_PREFIX: Final = "anthropic-"
+
+
+def _extract_upstream_anthropic_headers(e: Exception) -> Mapping[str, str]:
+    """Return the upstream provider's Anthropic-native rate-limit headers from a
+    mapped LiteLLM exception, so they survive the proxy's error wrapping.
+
+    The ``/v1/messages`` endpoint speaks the Anthropic protocol, so these are
+    forwarded unprefixed — unlike the OpenAI-format path, which namespaces
+    upstream headers under ``llm_provider-``. Keys are lowercased and limited to
+    an allowlist (``retry-after``, ``request-id``, ``anthropic-*``) so a hostile
+    upstream cannot forge case-variant ``x-litellm-*`` headers or inject
+    browser/framing headers. Source order: ``litellm_response_headers`` (set by
+    the exception mapper), then ``e.headers``, then ``e.response.headers``.
+    """
+    raw = getattr(e, "litellm_response_headers", None) or getattr(e, "headers", None)
+    if not raw:
+        _response = getattr(e, "response", None)
+        raw = getattr(_response, "headers", None) if _response is not None else None
+    if not raw:
+        return {}
+    try:
+        items = raw.items()
+    except AttributeError:
+        return {}
+    return {
+        key: str(v)
+        for k, v in items
+        if (key := str(k).lower()) in _FORWARDABLE_UPSTREAM_HEADERS or key.startswith(_FORWARDABLE_UPSTREAM_PREFIX)
+    }
 
 
 def _strip_total_tokens_from_anthropic_response(response: Any) -> None:
@@ -202,7 +240,9 @@ async def anthropic_response(
         model_info: Final = litellm_metadata.get("model_info", {}) or {}
         model_id: Final = model_info.get("id", "") or ""
 
-        # Get headers
+        # Preserve upstream rate-limit headers so clients can fail fast on 429 (#37754).
+        upstream_headers: Final = _extract_upstream_anthropic_headers(e)
+
         headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
             call_id=data.get("litellm_call_id", ""),
@@ -224,7 +264,7 @@ async def anthropic_response(
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
-            headers=headers,
+            headers={**upstream_headers, **headers},  # proxy-owned headers win
         )
 
 
