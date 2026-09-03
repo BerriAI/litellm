@@ -98,6 +98,13 @@ RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/
 RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh && \
     sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
 
+# OpenShift-style platforms run the container as an arbitrary UID that is
+# always in group 0. Aligning group perms with owner perms here (not in the
+# runtime stage) lets the COPY layers below carry them, so that UID can run
+# the DB schema step (prisma generate + migrate) on the stock image without
+# duplicating the venv in an extra runtime chmod layer.
+RUN chgrp -R 0 /app && chmod -R g=u /app
+
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
@@ -113,7 +120,10 @@ RUN echo "https://packages.wolfi.dev/os" >> /etc/apk/repositories
 RUN apk add --no-cache bash openssl tzdata nodejs python-3.13 libsndfile
 
 WORKDIR /app
+# HOME=/app gives arbitrary-UID (OpenShift) runs a writable home for caches
+# that default to $HOME/.cache; /root is unreadable to those UIDs.
 ENV PATH="/app/.venv/bin:${PATH}" \
+    HOME=/app \
     PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     PRISMA_CLI_PATH=/opt/prisma/binaries/node_modules/.bin/prisma \
     PRISMA_CLI_QUERY_ENGINE_TYPE=binary \
@@ -141,6 +151,9 @@ COPY --from=builder /opt/prisma /opt/prisma
 
 RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
     find /app/.venv -type d -path "*/tornado/test" -delete && \
+    mkdir -p /app/.cache && \
+    chgrp 0 /app /app/.cache && \
+    chmod g=u /app /app/.cache && \
     chmod -R a+rX /opt/prisma && \
     test -x /opt/prisma/binaries/node_modules/.bin/prisma && \
     test -f /opt/prisma/binaries/node_modules/prisma/build/index.js && \
