@@ -621,15 +621,47 @@ def test_monitor_spend_logs_queue_flush_survives_an_earlier_event_loop(
     asyncio.run(_flush_once_under_a_monitor())
 
 
-def test_request_spend_log_flush_is_a_no_op_before_the_monitor_starts(mock_prisma_client: Any) -> None:
-    """A Responses row enqueued before the monitor's first pass must not fail the request."""
+@pytest.mark.asyncio
+async def test_flush_requested_before_the_monitor_starts_costs_the_row_nothing(
+    mock_prisma_client: Any,
+    make_spend_log_row: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Responses row enqueued before the monitor exists still reaches the DB on its first
+    pass, so dropping that early request delays nothing.
+    """
+    import litellm.constants as constants_mod
+    import litellm.proxy.utils as utils_mod
     from litellm.proxy.utils import request_spend_log_flush
 
+    monkeypatch.setattr(constants_mod, "SPEND_LOG_QUEUE_POLL_INTERVAL", 30.0, raising=False)
     mock_prisma_client.spend_log_flush_requested = None
+    mock_prisma_client.tool_usage_transactions = []
+    mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="r1")]
+
+    flushed: Final = asyncio.Event()
+
+    async def _fake_job(*args: Any, **kwargs: Any) -> None:
+        flushed.set()
+
+    monkeypatch.setattr(utils_mod, "update_spend_logs_job", _fake_job)
 
     request_spend_log_flush(mock_prisma_client)
-
     assert mock_prisma_client.spend_log_flush_requested is None
+
+    monitor: Final = asyncio.create_task(
+        _monitor_spend_logs_queue(
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=MagicMock(),
+        )
+    )
+    try:
+        await asyncio.wait_for(flushed.wait(), timeout=5.0)
+    finally:
+        monitor.cancel()
+        with suppress(asyncio.CancelledError):
+            await monitor
 
 
 def test_raise_failed_update_spend_exception_emits_failure_handler() -> None:
