@@ -863,12 +863,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         agents: [],
         accessGroups: [],
       };
-      if (agents && agents.length > 0) {
-        updateData.object_permission.agents = agents;
-      }
-      if (agentAccessGroups && agentAccessGroups.length > 0) {
-        updateData.object_permission.agent_access_groups = agentAccessGroups;
-      }
+      updateData.object_permission.agents = agents;
+      updateData.object_permission.agent_access_groups = agentAccessGroups;
       delete values.agents_and_groups;
 
       // Handle vector stores permissions
