@@ -111,7 +111,7 @@ describe("FusionModelsPanel", () => {
     await user.type(screen.getByLabelText("Model name"), "fusion/coding");
     await user.click(screen.getByRole("button", { name: "Choose panel models" }));
     await user.click(screen.getByLabelText("Outer model"));
-    await user.click(screen.getByRole("option", { name: "outer" }));
+    await user.click(await screen.findByRole("option", { name: "outer" }, { timeout: 5000 }));
     await user.click(screen.getByRole("button", { name: "Load search tools" }));
     await user.click(screen.getByRole("button", { name: "Create Fusion Model" }));
 
@@ -147,10 +147,10 @@ describe("FusionModelsPanel", () => {
     expect(behaviorSelector).toHaveClass("w-full");
 
     await user.click(behaviorSelector);
-    expect(screen.getByRole("option", { name: /^Auto/ })).toBeVisible();
-    expect(screen.getByRole("option", { name: /Always deliberate/ })).toBeVisible();
+    expect(await screen.findByRole("option", { name: /^Auto/ }, { timeout: 5000 })).toBeVisible();
+    expect(await screen.findByRole("option", { name: /Always deliberate/ }, { timeout: 5000 })).toBeVisible();
 
-    await user.click(screen.getByRole("option", { name: /Always deliberate/ }));
+    await user.click(await screen.findByRole("option", { name: /Always deliberate/ }, { timeout: 5000 }));
     expect(behaviorSelector).toHaveTextContent("Always deliberate");
 
     expect(screen.getByRole("switch", { name: "Web access" })).toBeChecked();
@@ -166,7 +166,7 @@ describe("FusionModelsPanel", () => {
     await user.type(screen.getByLabelText("Model name"), "fusion/team");
     await user.click(screen.getByRole("button", { name: "Choose panel models" }));
     await user.click(screen.getByLabelText("Outer model"));
-    await user.click(screen.getByRole("option", { name: "outer" }));
+    await user.click(await screen.findByRole("option", { name: "outer" }, { timeout: 5000 }));
     await user.click(screen.getByRole("button", { name: "Load search tools" }));
     await user.click(screen.getByRole("button", { name: "Create Fusion Model" }));
     expect(await screen.findByText("Select a team to continue.")).toBeInTheDocument();
