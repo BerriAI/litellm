@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import time
+from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
@@ -10,9 +11,10 @@ import pytest
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.code_interpreter_interception.handler import (
-    CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
+    CodeInterpreterInterceptionLogger,
 )
+from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -26,7 +28,6 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     _has_pre_call_deployment_hook,
     _rust_responses_websocket_enabled,
 )
-from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
@@ -34,6 +35,70 @@ from litellm.types.utils import TranscriptionResponse
 
 _ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("outcome", ["success", "observer_error", "malformed", "401", "429", "500"])
+async def test_ocr_sdk_logs_provider_response_before_normalization(asynchronous: bool, outcome: str) -> None:
+    from tests.test_litellm.ocr.callback_support import (
+        DOCUMENT,
+        MODEL,
+        RESPONSE,
+        CallbackRecorder,
+        assert_provider_request,
+        ocr_upstream,
+    )
+
+    success: Final = outcome in ("success", "observer_error")
+    recorder: Final = CallbackRecorder(asynchronous, raises="post" if outcome == "observer_error" else "")
+    follower: Final = CallbackRecorder(asynchronous, name="follower")
+    status: Final = int(outcome) if outcome.isdigit() else 200
+    body: Final = "not-json" if outcome == "malformed" else RESPONSE if status == 200 else '{"error":"rejected"}'
+    with ocr_upstream(status, body) as upstream:
+        params: Final = dict(
+            model=MODEL,
+            document=DOCUMENT,
+            api_base=upstream.api_base,
+            api_key="test-key",
+            rust=False,
+            callbacks=[recorder, follower],
+            num_retries=0,
+        )
+        try:
+            result: Final = (
+                await litellm.aocr(**params) if asynchronous else await asyncio.to_thread(litellm.ocr, **params)
+            )
+        except Exception as error:
+            assert not success
+            if status != 200:
+                assert getattr(error, "status_code", None) == status
+        else:
+            assert success
+            assert result.pages[0].markdown == "callback-test"
+        events: Final = await recorder.wait()
+        names: Final = tuple(event.name for event in events)
+        following_events: Final = await follower.wait()
+        assert sorted(event.name for event in following_events) == sorted(names)
+        prefix: Final = ("pre", "post") if status == 200 else ("pre",)
+        assert names[: len(prefix)] == prefix
+        terminal: Final = "success" if success else "failure"
+        expected: Final = (
+            ("async_success",)
+            if asynchronous and success
+            else ((terminal, f"async_{terminal}") if asynchronous else (terminal,))
+        )
+        assert sorted(names[len(prefix) :]) == sorted(expected)
+        assert len({event.call_id for event in events}) == 1
+        if status == 200:
+            assert events[1].original_response == body
+            assert events[1].response_type == "NoneType"
+            assert events[1].start_time is not None
+            assert events[1].end_time is None
+        for event in events[len(prefix) :]:
+            assert event.start_time is not None and event.end_time is not None
+            assert event.end_time >= event.start_time
+        assert_provider_request(upstream)
 
 
 def test_prepare_fake_stream_request():
@@ -1467,6 +1532,7 @@ def _make_responses_handler_call(signed_body):
     signing provider (e.g. Bedrock Mantle).
     """
     from unittest.mock import MagicMock
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.router import GenericLiteLLMParams
@@ -1522,6 +1588,7 @@ def test_responses_handler_signs_after_fake_stream_prep_strips_stream():
     We snapshot request_data at sign time and assert "stream" is already gone.
     """
     from unittest.mock import MagicMock
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.llms.openai import ResponsesAPIResponse
@@ -1585,6 +1652,7 @@ def _make_compact_handler_call(signed_body, is_async):
     signing provider (e.g. Bedrock Mantle SigV4 / bearer).
     """
     from unittest.mock import MagicMock
+
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.router import GenericLiteLLMParams
