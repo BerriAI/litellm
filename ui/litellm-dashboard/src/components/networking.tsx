@@ -2056,6 +2056,7 @@ interface UiSpendLogsParams {
   exclude_internal_health_checks?: boolean;
   group_by_session?: boolean;
   session_cursor?: string;
+  search?: string;
 }
 
 interface UiSpendLogsCallOptions {
@@ -6563,6 +6564,7 @@ interface UiAuditLogsParams {
   changed_by_api_key?: string;
   object_team_id?: string;
   object_key_hash?: string;
+  search?: string | null;
   sort_by?: string;
   sort_order?: "asc" | "desc";
 }
@@ -8061,15 +8063,18 @@ export const fetchMemoryList = async (
   options: {
     key?: string;
     keyPrefix?: string;
+    search?: string;
     page?: number;
     pageSize?: number;
   } = {},
 ): Promise<MemoryListResponse> => {
   const base = proxyBaseUrl ? `${proxyBaseUrl}/v1/memory` : `/v1/memory`;
   const params = new URLSearchParams();
-  // keyPrefix takes precedence — backend also does, but we omit `key`
+  // Backend precedence is search > key_prefix > key; only the winner is sent
   // to keep the URL clean and intent obvious.
-  if (options.keyPrefix) {
+  if (options.search) {
+    params.append("search", options.search);
+  } else if (options.keyPrefix) {
     params.append("key_prefix", options.keyPrefix);
   } else if (options.key) {
     params.append("key", options.key);

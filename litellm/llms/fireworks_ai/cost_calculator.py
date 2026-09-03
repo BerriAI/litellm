@@ -12,7 +12,7 @@ from litellm.constants import (
     FIREWORKS_AI_56_B_MOE,
     FIREWORKS_AI_176_B_MOE,
 )
-from litellm.litellm_core_utils.llm_cost_calc.utils import apply_off_peak_pricing
+from litellm.litellm_core_utils.llm_cost_calc.utils import TokenRates, apply_off_peak_pricing
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
 
@@ -82,14 +82,18 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
     """
     model_info: Final = _resolve_model_info(model)
     standard_cache_read_rate: Final = model_info.get("cache_read_input_token_cost")
-    input_rate, output_rate, cache_read_rate_or_unset = apply_off_peak_pricing(
+    rates: Final = apply_off_peak_pricing(
         model_info,
         current_time,
-        model_info["input_cost_per_token"] or 0.0,
-        model_info["output_cost_per_token"] or 0.0,
-        standard_cache_read_rate if standard_cache_read_rate is not None else NO_CACHE_READ_RATE,
+        TokenRates(
+            input_rate=model_info["input_cost_per_token"] or 0.0,
+            output_rate=model_info["output_cost_per_token"] or 0.0,
+            cache_read_rate=standard_cache_read_rate if standard_cache_read_rate is not None else NO_CACHE_READ_RATE,
+            cache_creation_rate=0.0,
+            reasoning_rate=None,
+        ),
     )
-    cache_read_rate: Final[float] = input_rate if math.isnan(cache_read_rate_or_unset) else cache_read_rate_or_unset
+    cache_read_rate: Final[float] = rates.input_rate if math.isnan(rates.cache_read_rate) else rates.cache_read_rate
 
     prompt_tokens_details: Final = usage.prompt_tokens_details
     cached_tokens: Final[int] = (
@@ -98,7 +102,7 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         else 0
     )
     non_cached_prompt_tokens: Final[int] = max(usage.prompt_tokens - cached_tokens, 0)
-    prompt_cost: Final[float] = non_cached_prompt_tokens * input_rate + cached_tokens * cache_read_rate
-    completion_cost: Final[float] = usage.completion_tokens * output_rate
+    prompt_cost: Final[float] = non_cached_prompt_tokens * rates.input_rate + cached_tokens * cache_read_rate
+    completion_cost: Final[float] = usage.completion_tokens * rates.output_rate
 
     return prompt_cost, completion_cost
