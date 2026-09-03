@@ -176,8 +176,10 @@ const keysResult = (keys: KeyResponse[], data: Partial<KeysResponse> = {}, extra
 
 const openFilters = () => fireEvent.click(screen.getByRole("button", { name: "Filters" }));
 
-const lastKeyParam = (onUrlUpdate: Mock<OnUrlUpdateFunction>) =>
-  onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("key");
+const lastSearchParam = (onUrlUpdate: Mock<OnUrlUpdateFunction>, name: string) =>
+  onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get(name);
+
+const lastKeyParam = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => lastSearchParam(onUrlUpdate, "key");
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -510,7 +512,8 @@ describe("server-side filtering – the LIT-4080 regression guard", () => {
   });
 
   it("drops the filter from the useKeys query when it is cleared", async () => {
-    renderWithProviders(<VirtualKeysTable />);
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
 
     openFilters();
     const userIdInput = await screen.findByPlaceholderText(/Enter User ID/);
@@ -519,6 +522,11 @@ describe("server-side filtering – the LIT-4080 regression guard", () => {
 
     await waitFor(() => {
       expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: "user-42" }));
+    });
+    // Let the filter reach the URL first: NuqsTestingAdapter replays a throttled
+    // write over a same-tick follow-up, which no real click sequence can hit.
+    await waitFor(() => {
+      expect(lastSearchParam(onUrlUpdate, "user_id")).toBe("user-42");
     });
 
     fireEvent.click(screen.getByTestId("datatable-clear-filters"));
@@ -636,5 +644,103 @@ describe("Status column reflects blocked / expiry / scim metadata", () => {
     await waitFor(() => {
       expect(screen.getByText(/Blocked by SCIM/i)).toBeInTheDocument();
     });
+  });
+});
+
+describe("table state lives in the URL so it survives leaving and returning to the page", () => {
+  it("restores the search term, sort and pagination from the URL on mount", async () => {
+    renderWithProviders(<VirtualKeysTable />, {
+      searchParams: { key_search: "prod", sort_by: "spend", sort_order: "asc", page: "3", page_size: "25" },
+    });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(
+        3,
+        25,
+        expect.objectContaining({ selectedKeyAlias: "prod", sortBy: "spend", sortOrder: "asc" }),
+      );
+    });
+    expect(screen.getByPlaceholderText(/Search by key alias/)).toHaveValue("prod");
+  });
+
+  it("restores the drawer filters from the URL on mount", async () => {
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { team_id: "team-1", user_id: "user-42" } });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(
+        1,
+        50,
+        expect.objectContaining({ teamID: "team-1", userID: "user-42" }),
+      );
+    });
+    expect(screen.getByTestId("filter-chip-team_id")).toHaveTextContent("Test Team");
+  });
+
+  it("writes the search term to the URL", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
+
+    fireEvent.change(screen.getByPlaceholderText(/Search by key alias/), { target: { value: "prod" } });
+
+    await waitFor(() => {
+      expect(lastSearchParam(onUrlUpdate, "key_search")).toBe("prod");
+    });
+  });
+
+  it("writes the sort field and direction to the URL", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
+
+    fireEvent.click(screen.getByRole("button", { name: "Key" }));
+
+    await waitFor(() => {
+      expect(lastSearchParam(onUrlUpdate, "sort_by")).toBe("key_alias");
+    });
+    expect(lastSearchParam(onUrlUpdate, "sort_order")).toBe("asc");
+  });
+
+  it("writes an applied drawer filter to the URL and clears it again", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
+
+    openFilters();
+    fireEvent.change(await screen.findByPlaceholderText(/Enter User ID/), { target: { value: "user-42" } });
+    fireEvent.click(screen.getByTestId("filter-drawer-apply"));
+
+    await waitFor(() => {
+      expect(lastSearchParam(onUrlUpdate, "user_id")).toBe("user-42");
+    });
+
+    fireEvent.click(screen.getByTestId("datatable-clear-filters"));
+
+    await waitFor(() => {
+      expect(lastSearchParam(onUrlUpdate, "user_id")).toBeNull();
+    });
+    expect(screen.queryByTestId("filter-chip-user_id")).not.toBeInTheDocument();
+  });
+
+  it("returns to page 1 when the search term changes", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { page: "3" }, onUrlUpdate });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(3, 50, expect.anything());
+    });
+
+    fireEvent.change(screen.getByPlaceholderText(/Search by key alias/), { target: { value: "prod" } });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ selectedKeyAlias: "prod" }));
+    });
+    await waitFor(() => {
+      expect(lastSearchParam(onUrlUpdate, "page")).toBeNull();
+    });
+  });
+
+  it("leaves the URL untouched while the table sits in its default state", () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
+
+    expect(onUrlUpdate).not.toHaveBeenCalled();
   });
 });
