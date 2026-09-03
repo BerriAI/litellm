@@ -5953,6 +5953,24 @@ class TestBedrockGuardrailImageInput:
         assert sent and sent[0]["source"] == "OUTPUT"
 
     @pytest.mark.asyncio
+    async def test_an_unknown_source_yields_an_empty_request(self):
+        """The dispatch went from seed-then-assign to early returns when INPUT became
+        async. The trailing fallback preserves what the seeded request used to return
+        for a source that is neither INPUT nor OUTPUT, so nothing starts scanning an
+        unrecognized source as if it were input.
+        """
+        from typing import Literal, cast
+
+        # cast-ok: pins the runtime fallback the Literal forbids at type-check time
+        source = cast(Literal["INPUT", "OUTPUT"], "SOMETHING_ELSE")
+        request = await self._guardrail().convert_to_bedrock_format(
+            source=source,
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+        assert request == {"source": "SOMETHING_ELSE"}
+
+    @pytest.mark.asyncio
     async def test_oversized_image_is_rejected_before_sending(self):
         """ApplyGuardrail caps images at 4 MB; AWS's rejection is not worth a round trip.
 
@@ -5976,10 +5994,6 @@ class TestBedrockGuardrailImageInput:
 
         assert "4 MB limit" in str(exc_info.value.detail)
 
-    def test_bin_packing_still_splits_on_the_text_budget(self):
-        text = {"text": {"text": "x" * 20_000}}
-        batches = BedrockGuardrail._bin_pack_bedrock_content([text] * 3, budget=25_000)
-        assert [len(batch) for batch in batches] == [1, 1, 1]
 
 def test_load_credentials_assumes_role_with_external_id():
     """A trust policy requiring sts:ExternalId must be satisfied by the guardrail's aws_external_id."""

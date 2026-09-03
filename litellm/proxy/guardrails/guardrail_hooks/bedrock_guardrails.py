@@ -1649,7 +1649,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         def assign(carried: tuple[int, int], length: int) -> tuple[int, int]:
             batch_index, used = carried
-            return (batch_index, used + length) if used + length <= budget else (batch_index + 1, length)
+            if used + length <= budget:
+                return batch_index, used + length
+            return batch_index + 1, length
 
         batch_numbers: Final = (index for index, _ in tuple(accumulate(lengths, assign, initial=(0, 0)))[1:])
         return tuple(
