@@ -49,11 +49,6 @@ function per top-level route, mirroring the core entrypoints.
 
 ## Checks
 
-Run these before pushing Rust changes. GitHub Actions runs the same checks for
-changes under `litellm-rust/`.
-
-```bash
-cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-```
+Run the commands under "Checks" in [CLAUDE.md](CLAUDE.md) before pushing Rust
+changes. That list is the single source of truth and matches what GitHub Actions
+runs for changes under `litellm-rust/`.
