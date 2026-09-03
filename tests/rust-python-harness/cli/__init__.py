@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import sys
 from collections.abc import Sequence
 from typing import Annotated, Final, TypeAlias
 
-import pytest
 from pydantic import Field, TypeAdapter, ValidationError
 
 from ..shared.reporting.models import SDK_FUNCTIONS, SdkFunction, Strategy
@@ -71,16 +69,11 @@ def _build_parser(strategies: Sequence[Strategy]) -> argparse.ArgumentParser:
         help="disable the interactive terminal dashboard",
     )
     run_parser.add_argument(
-        "--coverage",
-        action="store_true",
-        help="write Python reference LOC reports (HTML, JSON, and XML)",
-    )
-    run_parser.add_argument(
-        "--pytest-arg",
+        "--runner-arg",
         action="append",
         default=[],
         metavar="ARG",
-        help="append an argument to pytest (repeatable, for example --pytest-arg=-x)",
+        help="append an argument to the selected strategy runners",
     )
 
     subparsers.add_parser(
@@ -110,11 +103,6 @@ def _main(argv: Sequence[str] | None = None) -> int:
         args: Final = _ARGS_ADAPTER.validate_python(vars(namespace))
     except ValidationError as error:
         parser.error(str(error))
-    if args.verb == "run" and args.coverage and importlib.util.find_spec("pytest_cov") is None:
-        parser.error(
-            "--coverage requires the project's pytest-cov dependency; run with "
-            "`poetry run python -m tests.rust-python-harness run --coverage`"
-        )
     strategy_ids: Final = frozenset(args.strategy)
     sdk_functions: Final = frozenset(args.sdk_functions)
     picked: Final[tuple[frozenset[str], frozenset[SdkFunction]]] = (
@@ -146,7 +134,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except KeyboardInterrupt:
         sys.stderr.write("\nInterrupted\n")
         return _INTERRUPTED_EXIT_CODE
-    if exit_code == int(pytest.ExitCode.INTERRUPTED):
+    if exit_code == _INTERRUPTED_EXIT_CODE:
         sys.stderr.write("Interrupted\n")
         return _INTERRUPTED_EXIT_CODE
     return exit_code

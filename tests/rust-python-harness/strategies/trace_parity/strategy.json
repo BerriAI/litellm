@@ -6,28 +6,26 @@
   "functions": {
     "ocr": {
       "coverage": "partial",
-      "selectors": ["tests/rust-python-harness/strategies/trace_parity/sdk/ocr/test_trace_parity.py"]
+      "module": "tests.rust-python-harness.strategies.trace_parity.sdk.ocr.test_trace_parity"
     },
     "messages": {
       "coverage": "partial",
-      "selectors": ["tests/rust-python-harness/strategies/trace_parity/sdk/messages/test_trace_parity.py"],
-      "note": "Sync is a strict xfail until anthropic_messages_handler supports sync calls."
+      "module": "tests.rust-python-harness.strategies.trace_parity.sdk.messages.test_trace_parity",
+      "note": "Async only until anthropic_messages_handler supports sync calls."
     },
     "chat_completions": {
       "coverage": "partial",
-      "selectors": ["tests/rust-python-harness/strategies/trace_parity/sdk/chat_completions/test_trace_parity.py"]
+      "module": "tests.rust-python-harness.strategies.trace_parity.sdk.chat_completions.test_trace_parity"
     },
     "responses": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "planned"
     },
     "count_tokens": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "planned"
     },
     "transcription": {
       "coverage": "partial",
-      "selectors": ["tests/rust-python-harness/strategies/trace_parity/sdk/transcription/test_trace_parity.py"],
+      "module": "tests.rust-python-harness.strategies.trace_parity.sdk.transcription.test_trace_parity",
       "note": "The Python SDK delegates this provider to the Rust pipeline, so only dispatch is visible to the Python profiler."
     }
   },

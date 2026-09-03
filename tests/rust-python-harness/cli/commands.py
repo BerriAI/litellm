@@ -5,16 +5,14 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Final, Literal
 
-import pytest
 from pydantic import BaseModel, ConfigDict
 
 from ..shared.reporting.models import HarnessCase, SdkFunction, Strategy, Surface
 from ..shared.reporting.orchestration import run_strategies
-from ..shared.reporting.strategy import SelectorCaseSpec, SuiteCaseSpec
+from ..shared.reporting.strategy import ModuleCaseSpec, SuiteCaseSpec
 from ..shared.reporting.ui import make_dashboard
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
-COVERAGE_ROOT: Final = REPO_ROOT / "target" / "rust-python-harness"
 
 
 class RunArgs(BaseModel):
@@ -26,8 +24,7 @@ class RunArgs(BaseModel):
     surface: Surface | None
     interactive: bool
     plain: bool
-    coverage: bool
-    pytest_arg: tuple[str, ...]
+    runner_arg: tuple[str, ...]
 
 
 class ListArgs(BaseModel):
@@ -51,17 +48,6 @@ class CheckArgs(BaseModel):
     verbose: bool
 
 
-def _coverage_pytest_args(output_root: Path = COVERAGE_ROOT) -> tuple[str, ...]:
-    output_root.mkdir(parents=True, exist_ok=True)
-    return (
-        "--cov=litellm",
-        "--cov-context=test",
-        f"--cov-report=json:{output_root / 'python.json'}",
-        f"--cov-report=xml:{output_root / 'python.xml'}",
-        f"--cov-report=html:{output_root / 'python-html'}",
-    )
-
-
 def _grouped_cases(cases: Sequence[HarnessCase]) -> dict[str, tuple[HarnessCase, ...]]:
     grouped: dict[str, list[HarnessCase]] = {}
     for case in cases:
@@ -74,9 +60,6 @@ def run_command(
     strategies: Sequence[Strategy],
     cases: Sequence[HarnessCase],
 ) -> int:
-    pytest_args = [*args.pytest_arg]
-    if args.coverage:
-        pytest_args.extend(_coverage_pytest_args())
     grouped: Final = _grouped_cases(cases)
     visible: Final = tuple(
         strategy for strategy in strategies if strategy.id in grouped
@@ -87,29 +70,25 @@ def run_command(
     dashboard = make_dashboard(
         visible,
         plain=args.plain,
-        confidence_strategies=strategies,
     )
     with dashboard:
         exit_code, run = run_strategies(
             runners,
             REPO_ROOT,
             dashboard.update,
-            pytest_args,
+            args.runner_arg,
         )
-        if exit_code != int(pytest.ExitCode.INTERRUPTED):
+        if exit_code != 130:
             dashboard.finish(run, exit_code)
-    if args.coverage and (COVERAGE_ROOT / "python.json").exists():
-        print(f"Python LOC heatmap: {COVERAGE_ROOT / 'python-html' / 'index.html'}")
-        print(f"Machine-readable coverage: {COVERAGE_ROOT / 'python.json'}")
     return exit_code
 
 
 def _case_detail(case: HarnessCase) -> str:
     spec = case.spec
-    if isinstance(spec, SelectorCaseSpec) and spec.selectors:
-        return ", ".join(spec.selectors)
     if isinstance(spec, SuiteCaseSpec) and spec.suite is not None:
         return spec.suite
+    if isinstance(spec, ModuleCaseSpec) and spec.module is not None:
+        return spec.module
     return "no test configured"
 
 

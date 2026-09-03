@@ -1,7 +1,10 @@
-use std::future::Future;
 use std::sync::{Arc, Mutex};
 
+#[cfg(feature = "trace-parity")]
+use std::future::Future;
+
 use serde::Serialize;
+#[cfg(feature = "trace-parity")]
 use tracing::instrument::WithSubscriber;
 use tracing::span::{Attributes, Id};
 use tracing::{Dispatch, Level, Subscriber};
@@ -13,26 +16,20 @@ use tracing_subscriber::{Layer, Registry};
 
 use crate::constants::FUNCTION_TRACE_TARGET;
 
+#[cfg(feature = "trace-parity")]
 #[derive(Serialize)]
-#[serde(untagged)]
-pub(crate) enum TraceResponse<T> {
-    Plain(T),
-    Traced {
-        response: T,
-        trace: Vec<FunctionTraceEvent>,
-    },
+pub(crate) struct TracedResponse<T> {
+    response: T,
+    trace: Vec<FunctionTraceEvent>,
 }
 
-pub(crate) async fn trace_call<T, E>(
+#[cfg(feature = "trace-parity")]
+pub(crate) async fn capture<T, E>(
     future: impl Future<Output = Result<T, E>>,
-    enabled: bool,
-) -> Result<TraceResponse<T>, E> {
-    if !enabled {
-        return future.await.map(TraceResponse::Plain);
-    }
+) -> Result<TracedResponse<T>, E> {
     let trace = FunctionTrace::default();
     let response = future.with_subscriber(trace.dispatcher()).await?;
-    Ok(TraceResponse::Traced {
+    Ok(TracedResponse {
         response,
         trace: trace.events(),
     })

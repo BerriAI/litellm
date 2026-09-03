@@ -1,40 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
+from typing import Final, Protocol, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from .models import Coverage, HarnessCase, HarnessRun
-
-if TYPE_CHECKING:
-    from .pytest_runner import UpdateCallback
+from .rendering import StrategyRenderer
 
 _INERT_COVERAGE: Final = frozenset({Coverage.PLANNED, Coverage.NOT_APPLICABLE})
-
-
-class SelectorCaseSpec(BaseModel):
-    """A pytest-driven strategy cell configured with pytest selectors."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    coverage: Coverage
-    selectors: tuple[str, ...] = ()
-    note: str = ""
-
-    @property
-    def configured(self) -> bool:
-        return bool(self.selectors)
-
-    @model_validator(mode="after")
-    def _validate_inert_and_blank_selectors(self) -> SelectorCaseSpec:
-        if self.coverage in _INERT_COVERAGE and self.selectors:
-            raise ValueError(f"{self.coverage.value} case cannot configure tests")
-        if any(not selector.strip() for selector in self.selectors):
-            raise ValueError("case selectors cannot be blank")
-        return self
+UpdateCallback: TypeAlias = Callable[[HarnessRun], None]
 
 
 class SuiteCaseSpec(BaseModel):
@@ -57,7 +34,27 @@ class SuiteCaseSpec(BaseModel):
         return self
 
 
-CaseSpec: TypeAlias = SelectorCaseSpec | SuiteCaseSpec
+class ModuleCaseSpec(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    coverage: Coverage
+    module: str | None = None
+    note: str = ""
+
+    @property
+    def configured(self) -> bool:
+        return self.module is not None
+
+    @model_validator(mode="after")
+    def _validate_inert_coverage(self) -> ModuleCaseSpec:
+        if self.coverage in _INERT_COVERAGE and self.module is not None:
+            raise ValueError(f"{self.coverage.value} case cannot configure a module")
+        if self.module is not None and not self.module.strip():
+            raise ValueError("case module cannot be blank")
+        return self
+
+
+CaseSpec: TypeAlias = SuiteCaseSpec | ModuleCaseSpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +70,7 @@ class StrategyRunner(Protocol):
         cases: Sequence[HarnessCase],
         repo_root: Path,
         on_update: UpdateCallback,
-        pytest_args: Sequence[str] = (),
+        runner_args: Sequence[str] = (),
     ) -> tuple[int, HarnessRun]: ...
 
 
@@ -86,6 +83,7 @@ class StrategyChecker(Protocol):
 @dataclass(frozen=True, slots=True)
 class StrategyDefinition:
     directory: Path
-    case_spec: type[SelectorCaseSpec] | type[SuiteCaseSpec]
+    case_spec: type[SuiteCaseSpec] | type[ModuleCaseSpec]
     run: StrategyRunner
+    render: StrategyRenderer
     check: StrategyChecker | None = None

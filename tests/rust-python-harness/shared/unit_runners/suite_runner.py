@@ -8,8 +8,7 @@ from typing import TypeVar
 from pydantic import BaseModel
 
 from ..reporting.models import HarnessCase, HarnessRun, RunStatus
-from ..reporting.pytest_runner import UpdateCallback
-from ..reporting.strategy import SuiteCaseSpec
+from ..reporting.strategy import SuiteCaseSpec, UpdateCallback
 
 S = TypeVar("S", bound=BaseModel)
 
@@ -27,7 +26,7 @@ def run_suites(
     cases: Sequence[HarnessCase],
     repo_root: Path,
     on_update: UpdateCallback,
-    pytest_args: Sequence[str] = (),
+    runner_args: Sequence[str] = (),
     *,
     load: SuiteLoader[S],
     execute: SuiteExecutor[S],
@@ -45,7 +44,7 @@ def run_suites(
         on_update(report)
         try:
             suite = load(repo_root / spec.suite)
-            problems = execute(suite, repo_root, pytest_args)
+            problems = execute(suite, repo_root, runner_args)
         except (OSError, ValueError) as error:
             result.record(nodeid, RunStatus.ERROR)
             report.failures.append((nodeid, str(error)))

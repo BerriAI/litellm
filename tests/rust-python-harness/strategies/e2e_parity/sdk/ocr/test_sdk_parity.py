@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import tempfile
 import traceback
 from collections.abc import Awaitable, Callable, Coroutine, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
+from functools import partial
 from pathlib import Path
 from typing import Final, cast
-
-import pytest
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import get_native_bridge
@@ -18,7 +18,7 @@ from litellm.rust_bridge import ocr as rust_ocr_bridge
 from litellm.rust_bridge.ocr import RustAocr, RustOcr
 
 from .....shared.parity.compare import assert_model_parity, assert_parity, assert_request_parity
-from .....shared.parity.fixtures.store import recorded_fixtures
+from .....shared.parity.fixtures.store import fixture_id, recorded_fixtures
 from .....shared.parity.inprocess import run_in_process
 from .....shared.parity.models import (
     SDKCommand,
@@ -40,6 +40,7 @@ from .....shared.parity.runner import (
 )
 from .fixtures.config import configured_fixture_directory
 from .fixtures.models import OcrParityCase, OcrSdkInput
+from ...runner import E2ECheck
 
 API_KEY: Final = "test-key"
 PYTHON_HTTP_SENTINEL: Final = "python-ocr-parity-fallback"
@@ -308,34 +309,13 @@ def _restore_rust_ocr_state() -> Generator[None]:
 def _native_spies() -> tuple[_RustOcrSpy, _RustAocrSpy]:
     native_bridge: Final = get_native_bridge()
     if native_bridge is None:
-        pytest.fail("native Rust bridge is required for OCR parity testing")
+        raise RuntimeError("native Rust bridge is required for OCR parity testing")
     sync_spy: Final = _RustOcrSpy(cast(RustOcr, getattr(native_bridge, "ocr")))
     async_spy: Final = _RustAocrSpy(cast(RustAocr, getattr(native_bridge, "aocr")))
     return sync_spy, async_spy
 
 
-@pytest.fixture(scope="module")
-def sdk_workers() -> Generator[tuple[SubprocessWorker, SubprocessWorker]]:
-    runner: Final = SubprocessRunner(
-        entrypoint=Path(__file__),
-        baseline_user_agent=PYTHON_HTTP_SENTINEL,
-        route_label="OCR",
-    )
-    with execution_worker_pair(runner, PYTHON_VARIANT, RUST_VARIANT) as workers:
-        yield workers
-
-
-@pytest.fixture(scope="module")
-def startup_ocr_fixture() -> OcrParityCase:
-    directory: Final = configured_fixture_directory()
-    fixtures: Final = recorded_fixtures(directory, OcrParityCase)
-    if not fixtures:
-        pytest.skip(f"no recorded fixtures in {directory}")
-    return fixtures[0]
-
-
-@pytest.mark.parametrize("route", tuple(SDKRoute), ids=tuple(route.value for route in SDKRoute))
-def test_recorded_ocr_sdk_parity(
+def _check_recorded_ocr_sdk_parity(
     ocr_fixture: OcrParityCase,
     route: SDKRoute,
 ) -> None:
@@ -374,9 +354,7 @@ def test_recorded_ocr_sdk_parity(
         assert_model_parity(python.response, rust.response)
 
 
-@pytest.mark.parametrize("case", INVALID_OCR_CASES, ids=tuple(case.name for case in INVALID_OCR_CASES))
-@pytest.mark.parametrize("route", tuple(SDKRoute), ids=tuple(route.value for route in SDKRoute))
-def test_invalid_ocr_sdk_parity(case: InvalidOcrCase, route: SDKRoute) -> None:
+def _check_invalid_ocr_sdk_parity(case: InvalidOcrCase, route: SDKRoute) -> None:
     sync_spy, async_spy = _native_spies()
     event_loop: Final = asyncio.new_event_loop()
     try:
@@ -411,7 +389,7 @@ def test_invalid_ocr_sdk_parity(case: InvalidOcrCase, route: SDKRoute) -> None:
     assert case.expected_message in python.response.message
 
 
-def test_ocr_subprocess_startup_smoke(
+def _check_ocr_subprocess_startup_smoke(
     startup_ocr_fixture: OcrParityCase,
     tmp_path: Path,
     sdk_workers: tuple[SubprocessWorker, SubprocessWorker],
@@ -431,6 +409,50 @@ def test_ocr_subprocess_startup_smoke(
     )
 
     assert_parity(python, rust, PYTHON_HTTP_SENTINEL)
+
+
+def _startup_check(fixture: OcrParityCase) -> None:
+    runner: Final = SubprocessRunner(
+        entrypoint=Path(__file__),
+        baseline_user_agent=PYTHON_HTTP_SENTINEL,
+        route_label="OCR",
+    )
+    with tempfile.TemporaryDirectory(prefix="litellm-ocr-startup-") as directory:
+        with execution_worker_pair(runner, PYTHON_VARIANT, RUST_VARIANT) as workers:
+            _check_ocr_subprocess_startup_smoke(fixture, Path(directory), workers)
+
+
+def _recorded_check_name(fixture: OcrParityCase, route: SDKRoute) -> str:
+    case_input: Final = fixture.litellm_input
+    provider: Final = case_input.custom_llm_provider
+    prefix: Final = f"{provider}/{case_input.model}" if provider else case_input.model
+    return f"recorded:{route.value}:{fixture_id(case_input, prefix)}"
+
+
+def parity_checks() -> tuple[E2ECheck, ...]:
+    fixtures: Final = tuple(
+        fixture
+        for fixture in recorded_fixtures(configured_fixture_directory(), OcrParityCase)
+        if fixture.litellm_input.contract not in {"reducto_v3", "reducto_legacy"}
+    )
+    recorded: Final = tuple(
+        E2ECheck(
+            _recorded_check_name(fixture, route),
+            partial(_check_recorded_ocr_sdk_parity, fixture, route),
+        )
+        for fixture in fixtures
+        for route in SDKRoute
+    )
+    invalid: Final = tuple(
+        E2ECheck(
+            f"invalid:{route.value}:{case.name}",
+            partial(_check_invalid_ocr_sdk_parity, case, route),
+        )
+        for case in INVALID_OCR_CASES
+        for route in SDKRoute
+    )
+    startup: Final = (E2ECheck("startup:ocr", partial(_startup_check, fixtures[0])),) if fixtures else ()
+    return (*recorded, *invalid, *startup)
 
 
 def _execute_worker_command(

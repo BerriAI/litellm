@@ -12,22 +12,23 @@ from ..shared.reporting.models import SDK_FUNCTIONS, HarnessRun, Strategy
 from ..shared.reporting.strategy import StrategyDefinition
 from . import main
 from .catalog import STRATEGIES_ROOT, load_catalog
-from .commands import _coverage_pytest_args
 from .selection import pick_values, select
 
-_SELECTOR_STRATEGY_INIT: Final = (
+_MODULE_STRATEGY_INIT: Final = (
     "import importlib\n"
     "from pathlib import Path\n"
     "strategy = importlib.import_module('tests.rust-python-harness.shared.reporting.strategy')\n"
-    "pytest_runner = importlib.import_module('tests.rust-python-harness.shared.reporting.pytest_runner')\n"
-    "STRATEGY = strategy.StrategyDefinition(Path(__file__).parent, strategy.SelectorCaseSpec, pytest_runner.run_pytest)\n"
+    "runner = importlib.import_module('tests.rust-python-harness.strategies.trace_parity.runner')\n"
+    "rendering = importlib.import_module('tests.rust-python-harness.shared.reporting.rendering')\n"
+    "STRATEGY = strategy.StrategyDefinition(Path(__file__).parent, strategy.ModuleCaseSpec, runner.run_trace_cases, rendering.render_outcomes)\n"
 )
 _SUITE_STRATEGY_INIT: Final = (
     "import importlib\n"
     "from pathlib import Path\n"
     "strategy = importlib.import_module('tests.rust-python-harness.shared.reporting.strategy')\n"
-    "pytest_runner = importlib.import_module('tests.rust-python-harness.shared.reporting.pytest_runner')\n"
-    "STRATEGY = strategy.StrategyDefinition(Path(__file__).parent, strategy.SuiteCaseSpec, pytest_runner.run_pytest)\n"
+    "runner = importlib.import_module('tests.rust-python-harness.strategies.trace_parity.runner')\n"
+    "rendering = importlib.import_module('tests.rust-python-harness.shared.reporting.rendering')\n"
+    "STRATEGY = strategy.StrategyDefinition(Path(__file__).parent, strategy.SuiteCaseSpec, runner.run_trace_cases, rendering.render_outcomes)\n"
 )
 
 
@@ -53,7 +54,7 @@ def _write_strategy_folder(
     name: str = "example",
     *,
     manifest: dict[str, object],
-    init_source: str = _SELECTOR_STRATEGY_INIT,
+    init_source: str = _MODULE_STRATEGY_INIT,
 ) -> Path:
     folder = root / name
     folder.mkdir(parents=True)
@@ -123,24 +124,24 @@ def test_should_reject_a_manifest_id_that_differs_from_its_folder(tmp_path: Path
         load_catalog(tmp_path)
 
 
-def test_should_reject_selectors_in_a_suite_strategy_manifest(tmp_path: Path) -> None:
+def test_should_reject_modules_in_a_suite_strategy_manifest(tmp_path: Path) -> None:
     _write_strategy_folder(
         tmp_path,
-        manifest=_manifest(ocr={"coverage": "partial", "selectors": ["tests/test_api.py"]}),
+        manifest=_manifest(ocr={"coverage": "partial", "module": "tests.example"}),
         init_source=_SUITE_STRATEGY_INIT,
     )
 
-    with pytest.raises(ValueError, match="selectors"):
+    with pytest.raises(ValueError, match="module"):
         load_catalog(tmp_path)
 
 
-def test_should_reject_a_planned_cell_that_configures_tests(tmp_path: Path) -> None:
+def test_should_reject_a_planned_cell_that_configures_a_module(tmp_path: Path) -> None:
     _write_strategy_folder(
         tmp_path,
-        manifest=_manifest(ocr={"coverage": "planned", "selectors": ["tests/test_api.py"]}),
+        manifest=_manifest(ocr={"coverage": "planned", "module": "tests.example"}),
     )
 
-    with pytest.raises(ValueError, match="planned case cannot configure tests"):
+    with pytest.raises(ValueError, match="planned case cannot configure a module"):
         load_catalog(tmp_path)
 
 
@@ -179,19 +180,6 @@ def test_should_pick_multiple_interactive_filters() -> None:
     assert selected == {"one", "three"}
 
 
-def test_should_build_python_coverage_reports_below_the_target_directory(
-    tmp_path: Path,
-) -> None:
-    args = _coverage_pytest_args(tmp_path)
-
-    assert tmp_path.is_dir()
-    assert "--cov=litellm" in args
-    assert "--cov-context=test" in args
-    assert f"--cov-report=json:{tmp_path / 'python.json'}" in args
-    assert f"--cov-report=xml:{tmp_path / 'python.xml'}" in args
-    assert f"--cov-report=html:{tmp_path / 'python-html'}" in args
-
-
 def test_list_honors_strategy_and_function_filters(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -209,7 +197,15 @@ def test_run_reports_planned_cells_as_success(capsys: pytest.CaptureFixture[str]
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "Harness finished with exit code 0" in captured.out
+    assert "Rust <-> Python parity report" in captured.out
+    assert "Status: PASSED" in captured.out
+    assert "Exit code: 0" in captured.out
+    assert "Trace comparisons" not in captured.out
+    assert "Port confidence" not in captured.out
+    assert "Slowest tests" not in captured.out
+    assert "Strategy × API" not in captured.out
+    assert "╭" not in captured.out
+    assert "✓" not in captured.out
 
 
 def test_run_rejects_an_unknown_strategy(
@@ -257,7 +253,7 @@ def test_keyboard_interrupt_exits_cleanly(
     assert captured.err == "\nInterrupted\n"
 
 
-def test_pytest_interrupt_skips_the_completion_report(
+def test_runner_interrupt_skips_the_completion_report(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -267,13 +263,13 @@ def test_pytest_interrupt_skips_the_completion_report(
         strategies: Sequence[Strategy],
         repo_root: Path,
         on_update: Callable[[HarnessRun], None],
-        pytest_args: Sequence[str] = (),
+        runner_args: Sequence[str] = (),
     ) -> tuple[int, HarnessRun]:
-        del repo_root, on_update, pytest_args
+        del repo_root, on_update, runner_args
         run: Final = HarnessRun.from_cases(
             case for strategy in strategies for case in strategy.cases
         )
-        return int(pytest.ExitCode.INTERRUPTED), run
+        return 130, run
 
     monkeypatch.setattr(commands, "run_strategies", interrupt_run)
 
@@ -283,7 +279,7 @@ def test_pytest_interrupt_skips_the_completion_report(
 
     captured: Final = capsys.readouterr()
     assert exit_code == 130
-    assert "Harness finished" not in captured.out
+    assert "Rust <-> Python parity report" not in captured.out
     assert captured.err == "Interrupted\n"
 
 

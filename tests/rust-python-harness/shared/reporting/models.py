@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from time import monotonic
-from typing import TYPE_CHECKING, Final, Iterable, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 if TYPE_CHECKING:
     from .strategy import CaseSpec, StrategyDefinition
@@ -30,12 +31,6 @@ class RunStatus(str, Enum):
     NOT_APPLICABLE = "not_applicable"
 
 
-class ConfidenceLevel(str, Enum):
-    HIGH = "HIGH"
-    MEDIUM = "MEDIUM"
-    LOW = "LOW"
-
-
 SdkFunction: TypeAlias = Literal["ocr", "messages", "responses", "count_tokens", "chat_completions", "transcription"]
 Surface: TypeAlias = Literal["sdk", "gateway"]
 SDK_FUNCTIONS: Final[tuple[SdkFunction, ...]] = (
@@ -58,7 +53,11 @@ class HarnessCase:
 
     @property
     def key(self) -> str:
-        return f"{self.strategy_id}:{self.sdk_function}" if self.surface == "sdk" else f"{self.strategy_id}:gateway:{self.sdk_function}"
+        return (
+            f"{self.strategy_id}:{self.sdk_function}"
+            if self.surface == "sdk"
+            else f"{self.strategy_id}:gateway:{self.sdk_function}"
+        )
 
     @property
     def coverage(self) -> Coverage:
@@ -88,6 +87,7 @@ class CaseResult:
     errors: int = 0
     outcomes: dict[str, RunStatus] = field(default_factory=dict)
     durations: dict[str, float] = field(default_factory=dict)
+    artifacts: dict[str, tuple[ResultArtifact, ...]] = field(default_factory=dict)
 
     @property
     def total(self) -> int:
@@ -97,10 +97,18 @@ class CaseResult:
     def duration(self) -> float:
         return sum(self.durations.values())
 
-    def record(self, nodeid: str, status: RunStatus, duration: float = 0.0) -> None:
+    def record(
+        self,
+        nodeid: str,
+        status: RunStatus,
+        duration: float = 0.0,
+        artifacts: tuple[ResultArtifact, ...] = (),
+    ) -> None:
         """Record a terminal outcome, allowing teardown errors to replace a pass."""
         self.outcomes[nodeid] = status
         self.add_duration(nodeid, duration)
+        if artifacts:
+            self.artifacts[nodeid] = artifacts
         self.completed = set(self.outcomes)
         values = tuple(self.outcomes.values())
         self.passed = values.count(RunStatus.PASSED)
@@ -135,11 +143,18 @@ class CaseResult:
             self.status = RunStatus.SKIPPED
 
 
+@dataclass(frozen=True, slots=True)
+class ResultArtifact:
+    kind: str
+    body: str
+
+
 @dataclass
 class HarnessRun:
     results: dict[str, CaseResult]
     current_nodeid: str | None = None
     failures: list[tuple[str, str]] = field(default_factory=list)
+    strategy_durations: dict[str, float] = field(default_factory=dict)
     started_at: float = field(default_factory=monotonic)
     finished_at: float | None = None
 
@@ -160,80 +175,9 @@ class HarnessRun:
         )
 
     @classmethod
-    def from_cases(cls, cases: Iterable[HarnessCase]) -> "HarnessRun":
+    def from_cases(cls, cases: Iterable[HarnessCase]) -> HarnessRun:
         results = {case.key: CaseResult(case=case) for case in cases}
         for result in results.values():
             result.set_initial_status()
         return cls(results=results)
 
-
-@dataclass(frozen=True)
-class SectionConfidence:
-    sdk_function: str
-    verified_strategies: int
-    required_strategies: int
-    level: ConfidenceLevel
-    details: tuple[str, ...]
-
-    @property
-    def percentage(self) -> int:
-        if not self.required_strategies:
-            return 0
-        return round(100 * self.verified_strategies / self.required_strategies)
-
-
-def section_confidence(
-    run: HarnessRun, strategies: Iterable[Strategy]
-) -> tuple[SectionConfidence, ...]:
-    strategy_list = tuple(strategies)
-    scores: list[SectionConfidence] = []
-    sections = tuple(dict.fromkeys((case.surface, case.sdk_function) for strategy in strategy_list for case in strategy.cases))
-    for surface, sdk_function in sections:
-        cases = tuple(
-            case
-            for strategy in strategy_list
-            for case in strategy.cases
-            if case.sdk_function == sdk_function and case.surface == surface
-            and case.coverage is not Coverage.NOT_APPLICABLE
-        )
-        verified = 0
-        details: list[str] = []
-        for case in cases:
-            result = run.results.get(case.key)
-            status = result.status if result is not None else RunStatus.NOT_RUN
-            if status is RunStatus.PASSED:
-                verified += 1
-            details.append(
-                f"{STATUS_LABELS[status]} {case.strategy_id} ({case.coverage.value})"
-            )
-        required = len(cases)
-        if required and verified == required:
-            level = ConfidenceLevel.HIGH
-        elif verified:
-            level = ConfidenceLevel.MEDIUM
-        else:
-            level = ConfidenceLevel.LOW
-        scores.append(
-            SectionConfidence(
-                sdk_function=sdk_function if surface == "sdk" else f"gateway/{sdk_function}",
-                verified_strategies=verified,
-                required_strategies=required,
-                level=level,
-                details=tuple(details),
-            )
-        )
-    return tuple(scores)
-
-
-STATUS_LABELS = {
-    RunStatus.NOT_RUN: "·",
-    RunStatus.QUEUED: "○",
-    RunStatus.RUNNING: "◉",
-    RunStatus.PASSED: "✓",
-    RunStatus.FAILED: "✗",
-    RunStatus.SKIPPED: "↷",
-    RunStatus.ERROR: "!",
-    RunStatus.MISSING: "?",
-    RunStatus.PLANNED: "—",
-    RunStatus.NOT_APPLICABLE: "n/a",
-}

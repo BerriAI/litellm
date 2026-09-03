@@ -1,1 +1,1 @@
-Compares observable Python and Rust behavior for SDK objects, exceptions, callbacks, and streams, or gateway HTTP responses, over generated and recorded inputs.
+Switches between the Rust implementation and the existing Python core, then compares their observable behavior for parity across SDK objects, exceptions, callbacks, streams, and gateway HTTP responses using generated and recorded inputs.

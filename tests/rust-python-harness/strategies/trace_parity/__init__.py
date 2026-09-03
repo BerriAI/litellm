@@ -1,11 +1,13 @@
 from pathlib import Path
 from typing import Final
 
-from ...shared.reporting.pytest_runner import run_pytest
-from ...shared.reporting.strategy import SelectorCaseSpec, StrategyDefinition
+from ...shared.reporting.strategy import ModuleCaseSpec, StrategyDefinition
+from .reporting import render_trace_results
+from .runner import run_trace_cases
 
 STRATEGY: Final = StrategyDefinition(
     directory=Path(__file__).parent,
-    case_spec=SelectorCaseSpec,
-    run=run_pytest,
+    case_spec=ModuleCaseSpec,
+    run=run_trace_cases,
+    render=render_trace_results,
 )

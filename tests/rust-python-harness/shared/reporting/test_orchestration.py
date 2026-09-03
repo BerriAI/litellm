@@ -1,54 +1,100 @@
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from time import monotonic
 from typing import Final
 
-from .models import Coverage, HarnessCase, RunStatus, Strategy
+from .models import CaseResult, Coverage, HarnessCase, HarnessRun, RunStatus, Strategy
 from .orchestration import run_strategies
-from .pytest_runner import run_pytest
-from .strategy import SelectorCaseSpec, StrategyDefinition
+from .rendering import ReportSection, StrategyRenderer, render_outcomes
+from .strategy import ModuleCaseSpec, StrategyDefinition, UpdateCallback
+from .ui import _HarnessOutputFilter, _final_report
 
 
-def _strategy(name: str, selector: str) -> Strategy:
-    definition: Final = StrategyDefinition(Path.cwd(), SelectorCaseSpec, run_pytest)
+def _run_cases(
+    cases: Sequence[HarnessCase],
+    repo_root: Path,
+    on_update: UpdateCallback,
+    runner_args: Sequence[str] = (),
+) -> tuple[int, HarnessRun]:
+    del repo_root, runner_args
+    run: Final = HarnessRun.from_cases(cases)
+    for case in cases:
+        result: Final = run.results[case.key]
+        nodeid: Final = f"check:{case.strategy_id}:{case.sdk_function}"
+        result.collected.add(nodeid)
+        failed: Final = isinstance(case.spec, ModuleCaseSpec) and case.spec.module == "fail"
+        result.record(nodeid, RunStatus.FAILED if failed else RunStatus.PASSED)
+        if failed:
+            run.failures.append((nodeid, "comparison failed"))
+        on_update(run)
+    run.finished_at = monotonic()
+    return int(bool(run.failures)), run
+
+
+def _strategy(name: str, module: str, *, render: StrategyRenderer = render_outcomes) -> Strategy:
+    definition: Final = StrategyDefinition(Path.cwd(), ModuleCaseSpec, _run_cases, render)
     case: Final = HarnessCase(
         strategy_id=name,
         strategy_label=name,
         sdk_function="ocr",
-        spec=SelectorCaseSpec(coverage=Coverage.COMPLETE, selectors=(selector,)),
+        spec=ModuleCaseSpec(coverage=Coverage.COMPLETE, module=module),
     )
     return Strategy(1, name, name, "", Path.cwd(), (case,), definition)
 
 
-def test_combines_independent_strategy_reports_and_keeps_failures(tmp_path: Path) -> None:
-    (tmp_path / "test_first.py").write_text("def test_first():\n    assert 1 == 2\n")
-    (tmp_path / "test_second.py").write_text("def test_second():\n    assert True\n")
-    strategies: Final = (
-        _strategy("first", "test_first.py"),
-        _strategy("second", "test_second.py"),
-    )
-    code, report = run_strategies(strategies, tmp_path, lambda _: None, ())
+def test_combines_strategy_reports_and_delegates_rendering() -> None:
+    strategies: Final = (_strategy("first", "fail"), _strategy("second", "pass"))
+
+    code, report = run_strategies(strategies, Path.cwd(), lambda _: None)
+
     assert code == 1
     assert report.results["first:ocr"].status is RunStatus.FAILED
     assert report.results["second:ocr"].status is RunStatus.PASSED
     assert report.completed_tests == 2
-    assert len(report.failures) == 1
-    assert "assert 1 == 2" in report.failures[0][1]
-    assert "terminalreporter" not in report.failures[0][1]
+    final_report: Final = _final_report(report, code, strategies)
+    assert "Status: FAILED" in final_report
+    assert "first\n- sdk/ocr: failed, 1/1 tests, complete coverage" in final_report
+    assert "second\n- sdk/ocr: passed, 1/1 tests, complete coverage" in final_report
+    assert "Failures (showing 1 of 1)" in final_report
+    assert "Port confidence" not in final_report
+    assert "Slowest tests" not in final_report
 
 
-def test_missing_selector_cannot_hide_behind_a_passing_surface(tmp_path: Path) -> None:
-    (tmp_path / "test_present.py").write_text("def test_present():\n    assert True\n")
-    case: Final = HarnessCase(
-        strategy_id="e2e_parity",
-        strategy_label="End-to-end parity",
-        sdk_function="ocr",
-        surface="gateway",
-        spec=SelectorCaseSpec(
-            coverage=Coverage.PARTIAL, selectors=("test_present.py", "test_missing.py")
-        ),
+def test_strategy_can_replace_the_generic_result_view() -> None:
+    def render_custom(_results: Sequence[CaseResult]) -> tuple[ReportSection, ...]:
+        return (ReportSection("Custom comparison", ("domain-owned diff",)),)
+
+    strategy: Final = _strategy("custom", "pass", render=render_custom)
+    code, report = run_strategies((strategy,), Path.cwd(), lambda _: None)
+
+    final_report: Final = _final_report(report, code, (strategy,))
+    assert "Custom comparison\ndomain-owned diff" in final_report
+    assert "sdk/ocr" not in final_report
+
+
+def test_harness_output_filter_suppresses_only_ocr_cost_warnings() -> None:
+    output_filter: Final = _HarnessOutputFilter()
+    ocr_cost_warning: Final = logging.LogRecord(
+        "LiteLLM",
+        logging.WARNING,
+        "/repo/litellm/cost_calculator.py",
+        1953,
+        "OCR cost: model=%s has no pricing",
+        ("example",),
+        None,
     )
-    code, report = run_pytest((case,), tmp_path, lambda _: None)
-    assert code == 1
-    assert report.results["e2e_parity:gateway:ocr"].status is RunStatus.MISSING
-    assert ("test_missing.py", "Configured selector collected no tests") in report.failures
+    other_warning: Final = logging.LogRecord(
+        "LiteLLM",
+        logging.WARNING,
+        "/repo/litellm/main.py",
+        1,
+        "Provider warning",
+        (),
+        None,
+    )
+
+    assert output_filter.filter(ocr_cost_warning) is False
+    assert output_filter.filter(other_warning) is True

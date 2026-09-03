@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Protocol, cast
-
-import pytest
+from typing import Final, Literal, Protocol, cast
 
 from ....shared.parity.recorded_http import RecordedHttpResponse
 from ....shared.parity.replay import replay_server
+from ....shared.reporting.models import SdkFunction
 from ....shared.tracing.native import native_trace_events
 from ....shared.tracing.profiler import FunctionTraceEvent, profile_python
-from ....shared.tracing.steps import Engine, Step, pipeline_issues, pipeline_steps, trace_diff
+from ....shared.tracing.steps import Engine, Step, pipeline_issues, pipeline_steps
+from ..reporting import TraceComparisonArtifact
+
+TraceMode = Literal["sync", "async"]
+TraceFailureSource = Literal["python", "rust", "harness"]
 
 
 class SdkCall(Protocol):
@@ -27,10 +30,26 @@ class RouteFixture:
 
 @dataclass(frozen=True, slots=True)
 class RouteSpec:
-    route: str
+    route: SdkFunction
     python_entrypoints: tuple[str, str]
     rust_entrypoints: tuple[str, str]
     fixture: Callable[[Engine], RouteFixture]
+
+
+@dataclass(frozen=True, slots=True)
+class TraceCase:
+    route: RouteSpec
+    steps: tuple[Step, ...]
+    edges: tuple[tuple[str, str], ...]
+    modes: tuple[TraceMode, ...] = ("sync", "async")
+    matching_steps: bool = True
+    exact: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class TraceExecutionFailure:
+    engine: TraceFailureSource
+    message: str
 
 
 def _invoke(function: SdkCall, kwargs: dict[str, object], *, asynchronous: bool) -> object:
@@ -42,7 +61,7 @@ def _invoke(function: SdkCall, kwargs: dict[str, object], *, asynchronous: bool)
     return function(**kwargs)
 
 
-def _entrypoint(spec: RouteSpec, engine: Engine, *, asynchronous: bool) -> SdkCall:
+def _entrypoint(spec: RouteSpec, engine: Engine, *, asynchronous: bool) -> SdkCall | TraceExecutionFailure:
     import litellm
     from litellm.anthropic_interface import messages as sdk_messages
     from litellm.rust_bridge import get_native_bridge
@@ -50,8 +69,15 @@ def _entrypoint(spec: RouteSpec, engine: Engine, *, asynchronous: bool) -> SdkCa
     if engine == "rust":
         bridge: Final = get_native_bridge()
         if bridge is None:
-            pytest.fail("native Rust bridge is required for trace parity testing")
-        return cast(SdkCall, getattr(bridge, spec.rust_entrypoints[int(asynchronous)]))
+            return TraceExecutionFailure("rust", "native Rust bridge is required for trace parity")
+        trace_bridge: Final = getattr(bridge, "_trace", None)
+        if trace_bridge is None:
+            return TraceExecutionFailure("rust", "native Rust bridge must include the trace-parity feature")
+        entrypoint: Final = spec.rust_entrypoints[int(asynchronous)]
+        function: Final = getattr(trace_bridge, entrypoint, None)
+        if function is None:
+            return TraceExecutionFailure("rust", f"native Rust trace bridge does not expose {entrypoint}")
+        return cast(SdkCall, function)
     owner: Final = sdk_messages if spec.route == "messages" else litellm
     return cast(SdkCall, getattr(owner, spec.python_entrypoints[int(asynchronous)]))
 
@@ -68,39 +94,49 @@ def _collect(
     return tuple(profiler.events)
 
 
-def collect_trace(spec: RouteSpec, engine: Engine, *, asynchronous: bool) -> tuple[FunctionTraceEvent, ...]:
-    fixture: Final = spec.fixture(engine)
+def collect_trace(
+    spec: RouteSpec, engine: Engine, *, asynchronous: bool
+) -> tuple[FunctionTraceEvent, ...] | TraceExecutionFailure:
     function: Final = _entrypoint(spec, engine, asynchronous=asynchronous)
-    with replay_server() as provider:
-        provider.enqueue_response(fixture.provider_response)
-        kwargs: Final = {
-            **fixture.kwargs,
-            "api_key": "test-key",
-            "api_base": provider.url,
-            **({"trace": True, "timeout_seconds": 5} if engine == "rust" else {"timeout": 5}),
-        }
-        events: Final = _collect(function, kwargs, engine, asynchronous=asynchronous)
-        provider.take_requests(1)
+    if isinstance(function, TraceExecutionFailure):
+        return function
+    try:
+        fixture: Final = spec.fixture(engine)
+        with replay_server() as provider:
+            provider.enqueue_response(fixture.provider_response)
+            kwargs: Final = {
+                **fixture.kwargs,
+                "api_key": "test-key",
+                "api_base": provider.url,
+                **({"timeout_seconds": 5} if engine == "rust" else {"timeout": 5}),
+            }
+            events: Final = _collect(function, kwargs, engine, asynchronous=asynchronous)
+            provider.take_requests(1)
+    except Exception as error:
+        return TraceExecutionFailure(engine, f"{type(error).__name__}: {error}")
     if not events:
-        pytest.fail("native Rust bridge trace is empty; rebuild it with tracing support")
+        return TraceExecutionFailure(engine, "trace is empty")
     return events
 
 
-def assert_trace_parity(
-    spec: RouteSpec,
-    steps: Sequence[Step],
-    edges: Sequence[tuple[str, str]],
-    *,
-    asynchronous: bool,
-    matching_steps: bool = True,
-    exact: bool = False,
-) -> None:
-    python: Final = pipeline_steps("python", collect_trace(spec, "python", asynchronous=asynchronous), steps)
-    rust: Final = pipeline_steps("rust", collect_trace(spec, "rust", asynchronous=asynchronous), steps)
-
-    assert pipeline_issues("python", python, steps, edges) == ()
-    assert pipeline_issues("rust", rust, steps, edges) == ()
-    if matching_steps:
-        assert trace_diff(python, rust).matches
-    if exact:
-        assert python == rust
+def execute_trace(case: TraceCase, mode: TraceMode) -> TraceComparisonArtifact | TraceExecutionFailure:
+    asynchronous: Final = mode == "async"
+    python_trace: Final = collect_trace(case.route, "python", asynchronous=asynchronous)
+    if isinstance(python_trace, TraceExecutionFailure):
+        return python_trace
+    rust_trace: Final = collect_trace(case.route, "rust", asynchronous=asynchronous)
+    if isinstance(rust_trace, TraceExecutionFailure):
+        return rust_trace
+    python: Final = pipeline_steps("python", python_trace, case.steps)
+    rust: Final = pipeline_steps("rust", rust_trace, case.steps)
+    return TraceComparisonArtifact.from_traces(
+        surface="sdk",
+        sdk_function=case.route.route,
+        mode=mode,
+        python=python,
+        rust=rust,
+        python_issues=pipeline_issues("python", python, case.steps, case.edges),
+        rust_issues=pipeline_issues("rust", rust, case.steps, case.edges),
+        requires_matching_steps=case.matching_steps,
+        requires_exact_trace=case.exact,
+    )

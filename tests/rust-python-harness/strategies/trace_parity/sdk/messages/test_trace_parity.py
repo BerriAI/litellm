@@ -3,11 +3,9 @@ from __future__ import annotations
 import json
 from typing import Final
 
-import pytest
-
 from .....shared.parity.recorded_http import HttpHeader, RecordedHttpResponse
 from .....shared.tracing.steps import Engine, step
-from ..execution import RouteFixture, RouteSpec, assert_trace_parity
+from ..execution import RouteFixture, RouteSpec, TraceCase
 
 STEPS: Final = (
     step("messages", r"anthropic_interface/messages/__init__\.py:\d+ a?create$", "messages"),
@@ -60,22 +58,4 @@ def _fixture(engine: Engine) -> RouteFixture:
 
 
 SPEC: Final = RouteSpec("messages", ("create", "acreate"), ("messages", "amessages"), _fixture)
-
-
-@pytest.mark.parametrize(
-    "asynchronous",
-    (
-        pytest.param(
-            False,
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=ValueError,
-                reason="anthropic_messages_handler is not implemented for sync calls",
-            ),
-            id="sync",
-        ),
-        pytest.param(True, id="async"),
-    ),
-)
-def test_trace_parity(asynchronous: bool) -> None:
-    assert_trace_parity(SPEC, STEPS, EDGES, asynchronous=asynchronous)
+TRACE_CASE: Final = TraceCase(route=SPEC, steps=STEPS, edges=EDGES, modes=("async",))

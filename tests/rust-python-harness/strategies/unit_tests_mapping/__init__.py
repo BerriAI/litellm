@@ -4,6 +4,7 @@ from functools import partial
 from pathlib import Path
 from typing import Final
 
+from ...shared.reporting.rendering import render_outcomes
 from ...shared.reporting.strategy import SuiteCaseSpec, StrategyDefinition
 from ...shared.unit_runners.suite_runner import run_suites
 from .ledger_report import check_ledgers
@@ -18,5 +19,6 @@ STRATEGY: Final = StrategyDefinition(
     directory=Path(__file__).parent,
     case_spec=SuiteCaseSpec,
     run=partial(run_suites, load=_load_suite, execute=run_suite),
+    render=render_outcomes,
     check=check_ledgers,
 )

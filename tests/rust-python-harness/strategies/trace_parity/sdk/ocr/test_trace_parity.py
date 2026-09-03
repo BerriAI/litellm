@@ -3,11 +3,9 @@ from __future__ import annotations
 import json
 from typing import Final
 
-import pytest
-
 from .....shared.parity.recorded_http import HttpHeader, RecordedHttpResponse
 from .....shared.tracing.steps import Engine, step
-from ..execution import RouteFixture, RouteSpec, assert_trace_parity
+from ..execution import RouteFixture, RouteSpec, TraceCase
 
 STEPS: Final = (
     step("ocr", r"ocr/main\.py:\d+ a?ocr$", "ocr"),
@@ -57,8 +55,4 @@ def _fixture(engine: Engine) -> RouteFixture:
 
 
 SPEC: Final = RouteSpec("ocr", ("ocr", "aocr"), ("ocr", "aocr"), _fixture)
-
-
-@pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
-def test_trace_parity(asynchronous: bool) -> None:
-    assert_trace_parity(SPEC, STEPS, EDGES, asynchronous=asynchronous, exact=True)
+TRACE_CASE: Final = TraceCase(route=SPEC, steps=STEPS, edges=EDGES, exact=True)
