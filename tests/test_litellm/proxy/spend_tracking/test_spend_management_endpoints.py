@@ -2560,6 +2560,62 @@ async def test_ui_view_spend_logs_request_id_collision_serves_only_callers_rows(
 
 
 @pytest.mark.asyncio
+async def test_ui_view_spend_logs_id_lookup_scopes_every_non_admin_role(client, monkeypatch):
+    """An org admin reaches /spend/logs/ui without the internal-user row scope. An
+    id lookup still fetches only rows they own, so another tenant's row carrying
+    that id as its client-set litellm_call_id neither leaks nor turns the
+    org admin's own lookup into a 403 (Bugbot: non-internal id lookup 403s on collision)."""
+    now_iso = datetime.datetime.now(timezone.utc).isoformat()
+    corpus = [
+        {
+            "id": "log_attacker",
+            "request_id": "attacker-req",
+            "litellm_call_id": "victim-req",
+            "api_key": "sk-attacker-key",
+            "user": "attacker_user",
+            "team_id": None,
+            "spend": 0.05,
+            "startTime": now_iso,
+            "model": "gpt-4",
+        },
+        {
+            "id": "log_victim",
+            "request_id": "victim-req",
+            "litellm_call_id": "victim-call-id",
+            "api_key": "sk-victim-key",
+            "user": "victim_user",
+            "team_id": None,
+            "spend": 0.07,
+            "startTime": now_iso,
+            "model": "gpt-4",
+        },
+    ]
+
+    def filter_fn(where):
+        rid_either = where.get("request_id_or_call_id")
+        rows = [r for r in corpus if rid_either in (r["request_id"], r["litellm_call_id"])]
+        return [r for r in rows if where.get("user") is None or r["user"] == where["user"]]
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", make_ui_spend_logs_mock_prisma(corpus, filter_fn))
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.ORG_ADMIN, user_id="victim_user"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={"request_id": "victim-req"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["total"] == 1
+        assert [row["request_id"] for row in data["data"]] == ["victim-req"]
+        assert "attacker_user" not in response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_ui_view_spend_logs_request_id_rejects_foreign_row_inserted_after_owner_check(client, monkeypatch):
     """The SQL scope keeps foreign rows out of an id lookup; this backstop covers a
     row the scope did not filter (the mock ignores it on purpose). The rows actually
