@@ -4108,6 +4108,7 @@ def pre_process_optional_params(passed_params: dict, non_default_params: dict, c
             if custom_llm_provider == "ollama":
                 # ollama actually supports json output
                 optional_params["format"] = "json"
+                optional_params["function_call_prompted"] = True
                 litellm.add_function_to_prompt = True  # so that main.py adds the function call to the prompt
                 if "tools" in non_default_params:
                     optional_params["functions_unsupported_model"] = non_default_params.pop("tools")

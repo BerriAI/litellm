@@ -1,4 +1,5 @@
 import json
+import re
 import time
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Final
@@ -12,7 +13,6 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    FUNCTION_CALL_PROMPT_PREFIX,
     convert_to_ollama_image,
     custom_prompt,
     ollama_pt,
@@ -382,7 +382,7 @@ class OllamaConfig(BaseConfig):
                 ollama_prompt = modified_prompt
         stream: Final = optional_params.pop("stream", False)
         format: Final = optional_params.pop("format", None)
-        self.function_call_prompted = format == "json" and FUNCTION_CALL_PROMPT_PREFIX in ollama_prompt
+        self.function_call_prompted = optional_params.pop("function_call_prompted", False) is True
         images = optional_params.pop("images", None)
         think: Final = optional_params.pop("think", None)
         data: Final = {
@@ -452,6 +452,11 @@ class OllamaConfig(BaseConfig):
         )
 
 
+_FUNCTION_CALL_OPENING: Final = '{"name":"'
+_FUNCTION_CALL_NAME_HEAD: Final = re.compile(r'^\{"name":"(?:[^"\\]|\\.)*"')
+_FUNCTION_CALL_ARGUMENTS_KEY: Final = ',"arguments":'
+
+
 class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
     def __init__(
         self,
@@ -471,8 +476,13 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
 
     def _could_be_function_call(self, buffered: str) -> bool:
         normalized: Final = "".join(buffered.split())
-        prefix: Final = '{"name"'
-        return normalized.startswith(prefix) or prefix.startswith(normalized)
+        name_head: Final = _FUNCTION_CALL_NAME_HEAD.match(normalized)
+        if name_head is None:
+            return _FUNCTION_CALL_OPENING.startswith(normalized) or normalized.startswith(_FUNCTION_CALL_OPENING)
+        after_name: Final = normalized[name_head.end() :]
+        return _FUNCTION_CALL_ARGUMENTS_KEY.startswith(after_name) or after_name.startswith(
+            _FUNCTION_CALL_ARGUMENTS_KEY
+        )
 
     def _released_text(self, response_text: str) -> str | None:
         """None while a fragment is held back because it may still complete a prompted function call."""

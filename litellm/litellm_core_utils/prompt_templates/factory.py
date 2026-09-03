@@ -5126,15 +5126,9 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
     return tool_block_list
 
 
-FUNCTION_CALL_PROMPT_PREFIX: Final = (
-    'Produce JSON OUTPUT ONLY! Adhere to this format {"name": "function_name", '
-    '"arguments":{"argument_name": "argument_value"}} The following functions are available to you:'
-)
-
-
 # Function call template
 def function_call_prompt(messages: list, functions: list):
-    function_prompt = FUNCTION_CALL_PROMPT_PREFIX
+    function_prompt = """Produce JSON OUTPUT ONLY! Adhere to this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}} The following functions are available to you:"""
     for function in functions:
         function_prompt += f"""\n{function}\n"""
 
