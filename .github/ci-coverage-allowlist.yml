@@ -5,6 +5,11 @@ description: >-
 
 test_paths:
   - reason: >-
+      The Rust/Python parity harness is run manually through its local CLI. Recorded replay,
+      fixture generation, and harness checks are intentionally outside pull request CI
+    paths:
+      - tests/rust-python-harness
+  - reason: >-
       What is left of the caching suite in tests/local_testing that runs nowhere. Every job that
       globs that directory either deselects it (local_testing_part1 and part2 carry `-k "... and
       not caching and not cache"`) or keeps only another keyword (langfuse, router, assistants),

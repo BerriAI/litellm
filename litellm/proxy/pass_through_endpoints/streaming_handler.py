@@ -1,5 +1,5 @@
 import traceback
-from collections.abc import Coroutine, Mapping, Sequence
+from collections.abc import Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final, Protocol
@@ -63,7 +63,7 @@ class PassThroughStreamingHandler:
     def schedule_stream_failure_logging(
         litellm_logging_obj: LiteLLMLoggingObj,
         endpoint_type: EndpointType,
-        request_body: Mapping[str, object],
+        request_body: dict[str, object],
         raw_bytes: Sequence[bytes],
         exception: Exception,
         stream_context: PassThroughStreamContext | None = None,
@@ -88,7 +88,7 @@ class PassThroughStreamingHandler:
     def _record_partial_usage_for_failure(
         litellm_logging_obj: LiteLLMLoggingObj,
         endpoint_type: EndpointType,
-        request_body: Mapping[str, object],
+        request_body: dict[str, object],
         raw_bytes: Sequence[bytes],
         stream_context: PassThroughStreamContext | None,
     ) -> None:
@@ -104,10 +104,10 @@ class PassThroughStreamingHandler:
                 litellm_logging_obj=litellm_logging_obj,
                 passthrough_success_handler_obj=stream_context.passthrough_success_handler_obj,
                 url_route=stream_context.url_route,
-                request_body=dict(request_body),
+                request_body=request_body,
                 endpoint_type=endpoint_type,
                 start_time=stream_context.start_time,
-                raw_bytes=list(raw_bytes),
+                raw_bytes=raw_bytes,
                 end_time=datetime.now(timezone.utc),
                 model=None,
             )
@@ -140,13 +140,14 @@ class PassThroughStreamingHandler:
             route_streaming_logging or PassThroughStreamingHandler._route_streaming_logging_to_handler
         )
         raw_bytes: Final[list[bytes]] = []
+        resolved_request_body: Final[dict[str, object]] = request_body or {}
 
         def _build_logging_coroutine() -> Coroutine[None, None, None]:
             return resolved_route_streaming_logging(
                 litellm_logging_obj=litellm_logging_obj,
                 passthrough_success_handler_obj=passthrough_success_handler_obj,
                 url_route=url_route,
-                request_body=request_body or {},
+                request_body=resolved_request_body,
                 endpoint_type=endpoint_type,
                 start_time=start_time,
                 raw_bytes=raw_bytes,
@@ -224,7 +225,7 @@ class PassThroughStreamingHandler:
                 PassThroughStreamingHandler.schedule_stream_failure_logging(
                     litellm_logging_obj=litellm_logging_obj,
                     endpoint_type=endpoint_type,
-                    request_body=request_body or {},
+                    request_body=resolved_request_body,
                     raw_bytes=raw_bytes,
                     exception=e,
                     stream_context=PassThroughStreamContext(
@@ -257,7 +258,7 @@ class PassThroughStreamingHandler:
         request_body: dict,
         endpoint_type: EndpointType,
         start_time: datetime,
-        raw_bytes: list[bytes],
+        raw_bytes: Sequence[bytes],
         end_time: datetime,
         model: str | None = None,
     ):
@@ -307,7 +308,7 @@ class PassThroughStreamingHandler:
         request_body: dict,
         endpoint_type: EndpointType,
         start_time: datetime,
-        raw_bytes: list[bytes],
+        raw_bytes: Sequence[bytes],
         end_time: datetime,
         model: str | None,
     ) -> tuple[PassThroughEndpointLoggingResultValues, dict]:
@@ -425,7 +426,7 @@ class PassThroughStreamingHandler:
         return None
 
     @staticmethod
-    def _convert_raw_bytes_to_str_lines(raw_bytes: list[bytes]) -> list[str]:
+    def _convert_raw_bytes_to_str_lines(raw_bytes: Sequence[bytes]) -> list[str]:
         """
         Converts a list of raw bytes into a list of string lines, similar to aiter_lines()
 

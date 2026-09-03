@@ -5,10 +5,13 @@ Handles agent permission checking for keys and teams using object_permission_id.
 Follows the same pattern as MCP permission handling.
 """
 
+import asyncio
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Final, TypeAlias
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.ui_session_utils import build_effective_auth_contexts
 from litellm.proxy._types import (
     UI_TEAM_ID,
     LiteLLM_ObjectPermissionTable,
@@ -443,15 +446,47 @@ class AgentRequestHandler:
             return []
 
 
-async def accessible_agents(user_api_key_auth: UserAPIKeyAuth) -> tuple[AgentResponse, ...]:
-    """Every registry agent for proxy admins, else the agents the key's and team's grants reach."""
+def _granted_ids(access: AgentAccess) -> frozenset[str]:
+    match access:
+        case UnrestrictedAgentAccess():
+            return frozenset()
+        case RestrictedAgentAccess(agent_ids):
+            return agent_ids
+
+
+ResolveAgentAccess: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[AgentAccess]]
+EffectiveAuthContexts: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[Sequence[UserAPIKeyAuth]]]
+
+
+async def _granted_agent_ids(
+    user_api_key_auth: UserAPIKeyAuth,
+    resolve_access: ResolveAgentAccess,
+    effective_contexts: EffectiveAuthContexts,
+) -> frozenset[str]:
+    """Union of the explicit grants reachable from the key, its team, or (for a dashboard session)
+    the user's real teams and user row. No grant anywhere yields the empty set, unlike the
+    open-by-default ``resolve_agent_access`` that guards direct access."""
+    accesses: Final = await asyncio.gather(
+        *(resolve_access(auth_context) for auth_context in await effective_contexts(user_api_key_auth))
+    )
+    return frozenset().union(*(_granted_ids(access) for access in accesses))
+
+
+async def accessible_agents(
+    user_api_key_auth: UserAPIKeyAuth,
+    all_agents: tuple[AgentResponse, ...] | None = None,
+    resolve_access: ResolveAgentAccess | None = None,
+    effective_contexts: EffectiveAuthContexts = build_effective_auth_contexts,
+) -> tuple[AgentResponse, ...]:
+    """Every registry agent for proxy admins, else only the agents the caller was granted."""
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
-    all_agents: Final = global_agent_registry.get_agent_list()
+    agents: Final = global_agent_registry.get_agent_list() if all_agents is None else all_agents
     if user_api_key_auth.user_role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN.value):
-        return all_agents
-    match await AgentRequestHandler.resolve_agent_access(user_api_key_auth=user_api_key_auth):
-        case UnrestrictedAgentAccess():
-            return all_agents
-        case RestrictedAgentAccess(allowed_agent_ids):
-            return tuple(agent for agent in all_agents if agent.agent_id in allowed_agent_ids)
+        return agents
+    allowed_agent_ids: Final = await _granted_agent_ids(
+        user_api_key_auth,
+        AgentRequestHandler.resolve_agent_access if resolve_access is None else resolve_access,
+        effective_contexts,
+    )
+    return tuple(agent for agent in agents if agent.agent_id in allowed_agent_ids)
