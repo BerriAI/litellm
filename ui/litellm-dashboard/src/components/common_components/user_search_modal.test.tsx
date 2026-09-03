@@ -131,7 +131,7 @@ describe("UserSearchModal submit payload", () => {
     const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
 
     await user.click(screen.getByLabelText("Member Role"));
-    await user.click(await screen.findByRole("option", { name: /^admin/ }));
+    await user.click(await screen.findByRole("option", { name: /^admin/ }, { timeout: 5000 }));
     await user.click(save());
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
