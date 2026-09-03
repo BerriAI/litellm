@@ -2617,6 +2617,92 @@
         "default_value": null
       }
     ],
+    "credential_variants": {
+      "selector_label": "Authentication method",
+      "default_variant": "api_key",
+      "field_definitions": [
+        {
+          "key": "api_base",
+          "label": "API Base",
+          "placeholder": "https://api.openai.com/v1",
+          "tooltip": "Common endpoints: https://api.openai.com/v1, https://eu.api.openai.com, https://us.api.openai.com",
+          "required": false,
+          "field_type": "text",
+          "options": null,
+          "default_value": "https://api.openai.com/v1"
+        },
+        {
+          "key": "organization",
+          "label": "OpenAI Organization ID",
+          "placeholder": "[OPTIONAL] my-unique-org",
+          "tooltip": null,
+          "required": false,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "api_key",
+          "label": "OpenAI API Key",
+          "placeholder": null,
+          "tooltip": null,
+          "required": true,
+          "field_type": "password",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "openai_identity_provider_id",
+          "label": "Identity Provider ID",
+          "placeholder": "idp_...",
+          "tooltip": "The identity provider id from the OpenAI platform's workload identity federation settings.",
+          "required": true,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "openai_service_account_id",
+          "label": "Service Account ID",
+          "placeholder": "user-...",
+          "tooltip": "The OpenAI service account the federated workload authenticates as.",
+          "required": true,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        },
+        {
+          "key": "openai_identity_token_file",
+          "label": "Identity Token File Path",
+          "placeholder": "/var/run/secrets/tokens/openai",
+          "tooltip": "Absolute path to a mounted file containing the workload's OIDC identity token. Federation only activates when no static OpenAI API key is set on the deployment or in OPENAI_API_KEY.",
+          "required": true,
+          "field_type": "text",
+          "options": null,
+          "default_value": null
+        }
+      ],
+      "variants": [
+        {
+          "id": "api_key",
+          "label": "API Key",
+          "field_keys": ["api_base", "organization", "api_key"],
+          "fixed_values": {}
+        },
+        {
+          "id": "wif_token_file",
+          "label": "Workload Identity Federation (token file)",
+          "field_keys": [
+            "api_base",
+            "organization",
+            "openai_identity_provider_id",
+            "openai_service_account_id",
+            "openai_identity_token_file"
+          ],
+          "fixed_values": {}
+        }
+      ]
+    },
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {

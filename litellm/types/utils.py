@@ -3596,13 +3596,16 @@ bedrock_batch_litellm_params: Final = (
 # already bound on the partially-initialized module.
 from ..litellm_core_utils.get_litellm_params import (  # noqa: E402  # deferred past CallTypes to break the import cycle
     ANTHROPIC_WIF_KWARGS_KEYS,
+    OPENAI_WIF_KWARGS_KEYS,
 )
 
 anthropic_wif_litellm_params: Final = tuple(sorted(ANTHROPIC_WIF_KWARGS_KEYS))
+openai_wif_litellm_params: Final = tuple(sorted(OPENAI_WIF_KWARGS_KEYS))
+server_owned_wif_litellm_params: Final = anthropic_wif_litellm_params + openai_wif_litellm_params
 
 all_litellm_params = (
     agentic_loop_internal_litellm_params
-    + [TRUSTED_CALLBACK_VARS_FIELD, *bedrock_batch_litellm_params, *anthropic_wif_litellm_params]
+    + [TRUSTED_CALLBACK_VARS_FIELD, *bedrock_batch_litellm_params, *server_owned_wif_litellm_params]
     + [
         "metadata",
         "litellm_metadata",

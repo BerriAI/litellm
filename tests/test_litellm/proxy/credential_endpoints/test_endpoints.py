@@ -502,6 +502,40 @@ class TestNonAdminCannotPersistWifFieldsOnCredential:
         assert response.status_code == 200, response.text
         repository.create.assert_awaited_once()
 
+    def test_non_admin_cannot_create_a_credential_with_an_openai_token_file(self):
+        with patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ):
+            response = _post_credential(
+                {
+                    "credential_name": "attacker-cred",
+                    "credential_values": {"openai_identity_token_file": "/var/run/secrets/tokens/attacker"},
+                    "credential_info": {"custom_llm_provider": "openai"},
+                },
+                auth=_as_non_admin,
+            )
+
+        assert response.status_code == 403, response.text
+        assert "openai_identity_token_file" in response.json()["error"]["message"]
+
+    def test_proxy_admin_can_create_a_credential_with_the_openai_identity_trio(self, restore_credential_list):
+        with _repository_holding(None) as repository:
+            response = _post_credential(
+                {
+                    "credential_name": "openai-wif",
+                    "credential_values": {
+                        "openai_identity_provider_id": "idp_1",
+                        "openai_service_account_id": "user-1",
+                        "openai_identity_token_file": "/var/run/secrets/tokens/openai",
+                    },
+                    "credential_info": {"custom_llm_provider": "openai"},
+                },
+                auth=_as_admin,
+            )
+
+        assert response.status_code == 200, response.text
+        repository.create.assert_awaited_once()
+
     def test_non_admin_cannot_update_a_credential_to_add_a_wif_destination(self):
         stored = CredentialItem(
             credential_name="existing",

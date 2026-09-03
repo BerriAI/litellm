@@ -3509,10 +3509,12 @@ class TestWifParamsAreNotClientSettable:
         The workspace id was once carved out here as inert; it is not. It is the scope of the
         minted org credential, and the router merges request kwargs over deployment params, so a
         caller who set it picked the scope instead of the administrator."""
-        from litellm.proxy.auth.auth_utils import _ANTHROPIC_WIF_UNCONDITIONAL_BANNED
-        from litellm.types.utils import anthropic_wif_litellm_params
+        from litellm.proxy.auth.auth_utils import _SERVER_OWNED_WIF_UNCONDITIONAL_BANNED
+        from litellm.types.utils import anthropic_wif_litellm_params, openai_wif_litellm_params
 
-        assert set(_ANTHROPIC_WIF_UNCONDITIONAL_BANNED) == set(anthropic_wif_litellm_params)
+        assert set(_SERVER_OWNED_WIF_UNCONDITIONAL_BANNED) == set(anthropic_wif_litellm_params) | set(
+            openai_wif_litellm_params
+        )
 
 
 class TestWifServerOwnedParamsAreUnconditional:

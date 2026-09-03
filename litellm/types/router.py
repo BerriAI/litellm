@@ -29,7 +29,7 @@ from .utils import (
 )
 from .utils import (
     # private alias: `from .types.router import *` would rebind a public Final in litellm/__init__.py
-    anthropic_wif_litellm_params as _anthropic_wif_litellm_params,
+    server_owned_wif_litellm_params as _server_owned_wif_litellm_params,
 )
 
 
@@ -324,40 +324,43 @@ class CredentialLiteLLMParams(BaseModel):
     # other federation fields above are declared for, rather than being rebuilt away in transit.
     anthropic_disable_workload_identity_federation: bool | None = None
 
+    ## OPENAI WORKLOAD IDENTITY FEDERATION ##
+    openai_identity_provider_id: str | None = None
+    openai_service_account_id: str | None = None
+    openai_identity_token_file: str | None = None
 
-def anthropic_wif_fields_present(fields: Mapping[str, object]) -> tuple[str, ...]:
-    """Server-owned Anthropic workload identity federation field names set in ``fields``.
+
+def server_owned_wif_fields_present(fields: Mapping[str, object]) -> tuple[str, ...]:
+    """Server-owned workload identity federation field names set in ``fields``.
 
     ``fields`` is a ``litellm_params`` dict (or a credential's ``credential_values`` mapping,
     which feeds the same resolution when referenced by name). Derived from
-    ``anthropic_wif_litellm_params`` rather than hand-copied, so a persistence gate built on
+    ``server_owned_wif_litellm_params`` rather than hand-copied, so a persistence gate built on
     this stays correct when a new WIF field is added there.
     """
-    return tuple(name for name in _anthropic_wif_litellm_params if fields.get(name) is not None)
+    return tuple(name for name in _server_owned_wif_litellm_params if fields.get(name) is not None)
 
 
-def anthropic_wif_fields_named(keys: Container[str]) -> tuple[str, ...]:
-    """Server-owned Anthropic workload identity federation field names that appear in ``keys``,
-    whatever value they carry.
+def server_owned_wif_fields_named(keys: Container[str]) -> tuple[str, ...]:
+    """Server-owned workload identity federation field names that appear in ``keys``, whatever
+    value they carry.
 
-    The write gates on credentials need this key-based sibling of ``anthropic_wif_fields_present``:
+    The write gates on credentials need this key-based sibling of ``server_owned_wif_fields_present``:
     ``get_litellm_params`` forwards a WIF kwarg on key presence and the federation resolver rejects
     a foreign variant's field by key, so a persisted ``{"anthropic_issuer_url": None}`` wedges every
     deployment that references the credential even though no value is set. Pass a mapping (its keys
     are tested) or a plain collection of key names.
     """
-    return tuple(name for name in _anthropic_wif_litellm_params if name in keys)
+    return tuple(name for name in _server_owned_wif_litellm_params if name in keys)
 
 
-_ANTHROPIC_WIF_POINTER_FIELDS: Final = frozenset(
-    name for name in _anthropic_wif_litellm_params if name.endswith("_ref")
-)
+_WIF_POINTER_FIELDS: Final = frozenset(name for name in _server_owned_wif_litellm_params if name.endswith("_ref"))
 
 
 def holds_secret_pointer(param_name: str) -> bool:
     """A ``*_ref`` federation field is a secret POINTER the identity source dereferences at use
     time, so a loader expanding ``os.environ/`` values must leave it as written."""
-    return param_name in _ANTHROPIC_WIF_POINTER_FIELDS
+    return param_name in _WIF_POINTER_FIELDS
 
 
 _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
@@ -1142,7 +1145,7 @@ def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
     opt-in. This lives here rather than under ``litellm.proxy`` so the router can call it on a
     post-authentication merge without core importing from the proxy package.
     """
-    for param in _anthropic_wif_litellm_params:
+    for param in _server_owned_wif_litellm_params:
         if param in body:
             raise ValueError(
                 f"Rejected Request: {param} is a server-owned workload identity federation parameter "

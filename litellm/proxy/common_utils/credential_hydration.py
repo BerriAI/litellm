@@ -17,8 +17,8 @@ from litellm.proxy.utils import PrismaClient
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.router import (
     GenericLiteLLMParams,
-    anthropic_wif_fields_named,
-    anthropic_wif_fields_present,
+    server_owned_wif_fields_named,
+    server_owned_wif_fields_present,
 )
 from litellm.types.utils import CredentialItem
 
@@ -87,16 +87,16 @@ async def named_credential_wif_fields(
         name
         for credential in litellm.credential_list
         if credential.credential_name == credential_name
-        for name in anthropic_wif_fields_named(credential.credential_values)
+        for name in server_owned_wif_fields_named(credential.credential_values)
     )
     if prisma_client is None:
         return in_memory
     db_credential: Final = await CredentialsRepository(prisma_client).find_by_name(credential_name)
-    stored: Final = () if db_credential is None else anthropic_wif_fields_named(db_credential.credential_values)
+    stored: Final = () if db_credential is None else server_owned_wif_fields_named(db_credential.credential_values)
     return tuple(dict.fromkeys(in_memory + stored))
 
 
-async def effective_anthropic_wif_fields(
+async def effective_server_owned_wif_fields(
     stored: Mapping[str, object] | None,
     incoming: GenericLiteLLMParams | None,
     prisma_client: PrismaClient | None,
@@ -108,12 +108,12 @@ async def effective_anthropic_wif_fields(
     attaches ``litellm_credential_name`` inherits whatever that credential holds.
 
     The two sides are matched differently on purpose. ``stored`` is matched by VALUE, because
-    ``GenericLiteLLMParams`` declares every ``anthropic_*`` field, so matching it by key would
+    ``GenericLiteLLMParams`` declares every federation field, so matching it by key would
     report every deployment on the proxy as federated. ``incoming`` is matched by the keys the
     write actually set, so an explicit null still counts as touching the field.
     """
-    from_stored: Final = () if stored is None else anthropic_wif_fields_present(stored)
-    from_incoming: Final = () if incoming is None else anthropic_wif_fields_named(incoming.model_fields_set)
+    from_stored: Final = () if stored is None else server_owned_wif_fields_present(stored)
+    from_incoming: Final = () if incoming is None else server_owned_wif_fields_named(incoming.model_fields_set)
     from_credential: Final = tuple(
         chain.from_iterable(
             await asyncio.gather(

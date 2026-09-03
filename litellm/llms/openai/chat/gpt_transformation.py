@@ -54,6 +54,7 @@ from litellm.types.utils import (
 from litellm.utils import convert_to_model_response_object
 
 from ..common_utils import OpenAIError
+from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 if TYPE_CHECKING:
     import tiktoken
@@ -68,6 +69,11 @@ else:
 
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -> str | None:
+    value: Final = litellm_params.get(key) if litellm_params is not None else None
+    return value if isinstance(value, str) else None
 
 
 class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
@@ -747,28 +753,39 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         """
         Calls OpenAI's `/v1/models` endpoint and returns the list of models.
         """
-
-        if api_base is None:
-            api_base = "https://api.openai.com"
-        if api_key is None:
-            api_key = get_secret_str("OPENAI_API_KEY")
-
-        # Strip api_base to just the base URL (scheme + host + port)
-        parsed_url: Final = httpx.URL(api_base)
-        base_url = f"{parsed_url.scheme}://{parsed_url.host}"
-        if parsed_url.port:
-            base_url += f":{parsed_url.port}"
-
-        response: Final = litellm.module_level_client.get(
-            url=f"{base_url}/v1/models",
-            headers={"Authorization": f"Bearer {api_key}"},
+        return self._fetch_model_ids(
+            api_base=api_base, bearer_token=get_secret_str("OPENAI_API_KEY") if api_key is None else api_key
         )
 
+    def discover_models(
+        self, litellm_params: Mapping[str, object] | None = None
+    ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
+        if type(self) is not OpenAIGPTConfig:
+            return super().discover_models(litellm_params)
+        api_key: Final = _litellm_params_str(litellm_params, "api_key")
+        api_base: Final = _litellm_params_str(litellm_params, "api_base")
+        workload_identity_config: Final = resolve_openai_workload_identity_config(
+            api_key=api_key, api_base=api_base, litellm_params=litellm_params
+        )
+        if workload_identity_config is None:
+            return self.get_models(api_key=api_key, api_base=api_base)
+        return self._fetch_model_ids(
+            api_base=api_base, bearer_token=get_workload_identity_bearer_token(workload_identity_config)
+        )
+
+    @staticmethod
+    def _fetch_model_ids(
+        api_base: str | None, bearer_token: str | None
+    ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
+        parsed_url: Final = httpx.URL("https://api.openai.com" if api_base is None else api_base)
+        port_suffix: Final = f":{parsed_url.port}" if parsed_url.port else ""
+        response: Final = litellm.module_level_client.get(
+            url=f"{parsed_url.scheme}://{parsed_url.host}{port_suffix}/v1/models",
+            headers={"Authorization": f"Bearer {bearer_token}"},
+        )
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")
-
-        models: Final = response.json()["data"]
-        return [model["id"] for model in models]
+        return [model["id"] for model in response.json()["data"]]
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:

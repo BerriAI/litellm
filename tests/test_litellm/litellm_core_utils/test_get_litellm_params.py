@@ -332,3 +332,41 @@ class TestAnthropicWifIdentitySourceKeys:
         params = get_litellm_params()
         for key in self.NEW_KEYS:
             assert key not in params
+
+
+class TestOpenAIWifKeys:
+    """The three openai_* WIF keys carry a deployment's federation identity through the kwargs
+    funnel into litellm_params (where the OpenAI client factory reads them) and stay out of the
+    provider body, exactly like the anthropic_* keys above."""
+
+    THREE_KEYS = {
+        "openai_identity_provider_id": "idp_1",
+        "openai_service_account_id": "user-1",
+        "openai_identity_token_file": "/var/run/secrets/tokens/openai",
+    }
+
+    def test_keys_are_exactly_the_registered_set(self):
+        from litellm.litellm_core_utils.get_litellm_params import OPENAI_WIF_KWARGS_KEYS
+
+        assert set(self.THREE_KEYS) == OPENAI_WIF_KWARGS_KEYS
+
+    def test_keys_survive_into_litellm_params(self):
+        params = get_litellm_params(**self.THREE_KEYS)
+        for key, value in self.THREE_KEYS.items():
+            assert params[key] == value
+
+    def test_keys_are_forwarded_from_completion_kwargs(self):
+        from litellm.litellm_core_utils.get_litellm_params import FORWARDED_KWARGS_KEYS
+
+        assert set(self.THREE_KEYS) <= FORWARDED_KWARGS_KEYS
+
+    def test_keys_stay_out_of_the_provider_body(self):
+        from litellm.types.utils import all_litellm_params
+
+        for key in self.THREE_KEYS:
+            assert key in all_litellm_params
+
+    def test_keys_absent_when_not_configured(self):
+        params = get_litellm_params()
+        for key in self.THREE_KEYS:
+            assert key not in params
