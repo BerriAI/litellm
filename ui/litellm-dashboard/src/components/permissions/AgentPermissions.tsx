@@ -3,6 +3,7 @@ import { UserGroupIcon } from "@heroicons/react/outline";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { getAgentsList } from "../networking";
+import { InheritedGrant, inheritedGrantTooltip } from "./inheritedGrants";
 
 interface Agent {
   agent_id: string;
@@ -14,16 +15,24 @@ interface Agent {
 interface AgentPermissionsProps {
   agents: string[];
   agentAccessGroups?: string[];
+  inheritedAgents?: InheritedGrant[];
   accessToken?: string | null;
 }
 
-export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }: AgentPermissionsProps) {
+export function AgentPermissions({
+  agents,
+  agentAccessGroups = [],
+  inheritedAgents = [],
+  accessToken,
+}: AgentPermissionsProps) {
   const [agentDetails, setAgentDetails] = useState<Agent[]>([]);
+  const inheritedOnlyAgents = inheritedAgents.filter((grant) => !agents.includes(grant.id));
+  const agentIdCount = agents.length + inheritedOnlyAgents.length;
 
   // Fetch agent details when component mounts
   useEffect(() => {
     const fetchAgentDetails = async () => {
-      if (accessToken && agents.length > 0) {
+      if (accessToken && agentIdCount > 0) {
         try {
           const response = await getAgentsList(accessToken);
           if (response && response.agents && Array.isArray(response.agents)) {
@@ -35,7 +44,7 @@ export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }
       }
     };
     fetchAgentDetails();
-  }, [accessToken, agents.length]);
+  }, [accessToken, agentIdCount]);
 
   // Function to get display name for agent
   const getAgentDisplayName = (agentId: string) => {
@@ -47,10 +56,10 @@ export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }
     return agentId;
   };
 
-  // Merge agents and access groups into one list
   const mergedItems = [
-    ...agents.map((agent) => ({ type: "agent", value: agent })),
-    ...agentAccessGroups.map((group) => ({ type: "accessGroup", value: group })),
+    ...agents.map((agent) => ({ type: "agent", value: agent, tooltip: `Full ID: ${agent}` })),
+    ...inheritedOnlyAgents.map((grant) => ({ type: "agent", value: grant.id, tooltip: inheritedGrantTooltip(grant) })),
+    ...agentAccessGroups.map((group) => ({ type: "accessGroup", value: group, tooltip: "" })),
   ];
   const totalCount = mergedItems.length;
 
@@ -77,7 +86,7 @@ export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }
                             {getAgentDisplayName(item.value)}
                           </span>
                         </TooltipTrigger>
-                        <TooltipContent>{`Full ID: ${item.value}`}</TooltipContent>
+                        <TooltipContent>{item.tooltip}</TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
                   ) : (
