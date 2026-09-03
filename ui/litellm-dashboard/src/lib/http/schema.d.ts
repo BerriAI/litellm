@@ -16648,6 +16648,8 @@ export interface paths {
          *             Get list of users by sso_ids. Comma separated list of sso_ids.
          *         user_email: Optional[str]
          *             Filter users by partial email match
+         *         search: Optional[str]
+         *             Combined search: matches users whose user_id or user_email contains the value (case-insensitive)
          *         team: Optional[str]
          *             Filter users by team id. Will match if user has this team in their teams array.
          *         page: int
@@ -44282,7 +44284,11 @@ export interface operations {
     };
     list_containers_containers_get: {
         parameters: {
-            query?: never;
+            query?: {
+                after?: string | null;
+                limit?: number | null;
+                order?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -44296,6 +44302,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -60114,6 +60129,8 @@ export interface operations {
                 sso_user_ids?: string | null;
                 /** @description Filter users by partial email match */
                 user_email?: string | null;
+                /** @description Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive). */
+                search?: string | null;
                 /** @description Filter users by team id */
                 team?: string | null;
                 /** @description Page number */
@@ -61389,7 +61406,11 @@ export interface operations {
     };
     list_containers_v1_containers_get: {
         parameters: {
-            query?: never;
+            query?: {
+                after?: string | null;
+                limit?: number | null;
+                order?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -61403,6 +61424,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

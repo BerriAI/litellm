@@ -567,7 +567,7 @@ class TestResolveAllMigrationsLedger:
                 return _FakeCompleted()
             return _FakeCompleted()
 
-        monkeypatch.setattr(utils_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fake_run)
         ProxyExtrasDBManager._resolve_all_migrations(str(tmp_path), "schema.prisma")
         return calls
 
@@ -604,9 +604,9 @@ class TestPartitionedSpendLogsPushGuard:
         import litellm_proxy_extras.utils as utils_module
 
         def fail_run(cmd, **kwargs):
-            raise AssertionError(f"subprocess.run should not be called, got: {cmd}")
+            raise AssertionError(f"run_prisma should not be called, got: {cmd}")
 
-        monkeypatch.setattr(utils_module.subprocess, "run", fail_run)
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fail_run)
 
     def test_v1_db_push_fails_fast_with_guidance(self, monkeypatch):
         monkeypatch.setattr(

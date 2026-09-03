@@ -1097,6 +1097,7 @@ export const userListCall = async (
   sortBy: string | null = null,
   sortOrder: "asc" | "desc" | null = null,
   organizationIds: string[] | null = null,
+  search: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -1115,6 +1116,7 @@ export const userListCall = async (
         sort_by: sortBy || undefined,
         sort_order: sortOrder || undefined,
         organization_ids: organizationIds && organizationIds.length > 0 ? organizationIds.join(",") : undefined,
+        search: search || undefined,
       },
     })) as UserListResponse;
     return data;
@@ -4772,9 +4774,12 @@ export const updatePromptCall = async (accessToken: string, promptId: string, pr
   }
 };
 
-export const deletePromptCall = async (accessToken: string, promptId: string) => {
+export const deletePromptCall = async (accessToken: string, promptId: string, environment?: string) => {
   try {
-    const data = await apiClient.delete(`/prompts/${promptId}`, { accessToken });
+    const data = await apiClient.delete(`/prompts/${promptId}`, {
+      accessToken,
+      query: { environment: environment || undefined },
+    });
     return data;
   } catch (error) {
     console.error("Failed to delete prompt:", error);

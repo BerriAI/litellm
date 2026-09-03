@@ -3,7 +3,7 @@
     "limit": 14074
   },
   "reportArgumentType": {
-    "limit": 2215
+    "limit": 2214
   },
   "reportAssignmentType": {
     "limit": 319
@@ -42,7 +42,7 @@
     "limit": 12
   },
   "reportIndexIssue": {
-    "limit": 25
+    "limit": 24
   },
   "reportInvalidTypeForm": {
     "limit": 34
