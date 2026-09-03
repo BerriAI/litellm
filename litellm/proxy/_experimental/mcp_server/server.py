@@ -1414,13 +1414,10 @@ if MCP_AVAILABLE:
                 server_name_matched = False
 
                 for server in allowed_mcp_servers:
-                    if server:
-                        match_list = [s.lower() for s in iter_known_server_prefixes(server) if s]
-
-                        if server_or_group.lower() in match_list:
-                            filtered_server[server.server_id] = server
-                            server_name_matched = True
-                            break
+                    if server and _server_answers_to(server, server_or_group):
+                        filtered_server[server.server_id] = server
+                        server_name_matched = True
+                        break
 
                 if not server_name_matched:
                     try:
@@ -1450,6 +1447,10 @@ if MCP_AVAILABLE:
 
         return allowed_mcp_servers
 
+    def _server_answers_to(server: MCPServer, name: str) -> bool:
+        requested: Final = name.lower()
+        return any(requested == known.lower() for known in iter_known_server_prefixes(server) if known)
+
     class _McpDeniedDetail(TypedDict):
         error: ReadOnly[str]
 
@@ -1470,15 +1471,11 @@ if MCP_AVAILABLE:
                 mcp_servers=requested_names,
                 client_ip=client_ip,
             )
-            resolved_ids: Final = frozenset(server.server_id for server in resolved_without_agent)
 
-            def _registered_server_id(name: str) -> str | None:
-                server: Final = global_mcp_server_manager.get_mcp_server_by_name(name, client_ip=client_ip)
-                return server.server_id if server is not None else None
+            def _resolved_to_server(name: str) -> bool:
+                return any(_server_answers_to(server, name) for server in resolved_without_agent)
 
-            vetoed_server: Final = next(
-                (name for name in requested_names if _registered_server_id(name) in resolved_ids), None
-            )
+            vetoed_server: Final = next((name for name in requested_names if _resolved_to_server(name)), None)
             if vetoed_server is not None:
                 agent_denial: Final[_McpDeniedDetail] = {
                     "error": (
@@ -1493,7 +1490,7 @@ if MCP_AVAILABLE:
                 (
                     name
                     for name in requested_names
-                    if _registered_server_id(name) is None
+                    if not _resolved_to_server(name)
                     and any(name in (server.access_groups or ()) for server in resolved_without_agent)
                 ),
                 None,

@@ -2,6 +2,7 @@ import asyncio
 import contextvars
 import os
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1336,12 +1337,19 @@ def _denied_scope_manager(known_server_names_to_ids: dict[str, str]) -> MagicMoc
     return manager
 
 
-def _scope_resolver(resolved_without_agent: list[str], access_groups: tuple[str, ...] = ()) -> AsyncMock:
+def _scope_resolver(resolved_without_agent: dict[str, str], access_groups: tuple[str, ...] = ()) -> AsyncMock:
     async def resolve(user_api_key_auth, mcp_servers, client_ip=None):
         if user_api_key_auth is not None and user_api_key_auth.agent_id:
             return []
         return [
-            MagicMock(server_id=server_id, access_groups=list(access_groups)) for server_id in resolved_without_agent
+            SimpleNamespace(
+                server_id=server_id,
+                server_name=server_name,
+                alias=None,
+                short_prefix=None,
+                access_groups=list(access_groups),
+            )
+            for server_name, server_id in resolved_without_agent.items()
         ]
 
     return AsyncMock(side_effect=resolve)
@@ -1380,7 +1388,7 @@ async def test_scoped_list_denied_by_agent_binding_raises_403_naming_agent():
     pytest.importorskip("litellm.proxy._experimental.mcp_server.server")
 
     user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user", agent_id="agent-123")
-    resolver = _scope_resolver(resolved_without_agent=["srv-github"])
+    resolver = _scope_resolver(resolved_without_agent={"github": "srv-github"})
 
     denial = await _denied_scoped_list(
         user_api_key_auth, ["github"], _denied_scope_manager({"github": "srv-github"}), resolver
@@ -1452,13 +1460,13 @@ async def test_scoped_list_unknown_name_raises_same_generic_403_as_unauthorized(
     user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user", agent_id="agent-123")
 
     unknown = await _denied_scoped_list(
-        user_api_key_auth, ["github"], _denied_scope_manager({}), _scope_resolver(resolved_without_agent=[])
+        user_api_key_auth, ["github"], _denied_scope_manager({}), _scope_resolver(resolved_without_agent={})
     )
     unauthorized = await _denied_scoped_list(
         user_api_key_auth,
         ["github"],
         _denied_scope_manager({"github": "srv-github"}),
-        _scope_resolver(resolved_without_agent=[]),
+        _scope_resolver(resolved_without_agent={}),
     )
 
     assert unknown.status_code == unauthorized.status_code == 403
@@ -1479,7 +1487,7 @@ async def test_scoped_list_access_group_vetoed_by_agent_names_agent_and_group():
         user_api_key_auth,
         ["prod-group"],
         _denied_scope_manager({}),
-        _scope_resolver(resolved_without_agent=["srv-github"], access_groups=("prod-group",)),
+        _scope_resolver(resolved_without_agent={"github": "srv-github"}, access_groups=("prod-group",)),
     )
 
     assert denial.status_code == 403
@@ -1502,7 +1510,7 @@ async def test_scoped_list_mixed_unknown_and_vetoed_group_names_the_group_that_r
         user_api_key_auth,
         ["no-such-group", "prod-group"],
         _denied_scope_manager({}),
-        _scope_resolver(resolved_without_agent=["srv-github"], access_groups=("prod-group",)),
+        _scope_resolver(resolved_without_agent={"github": "srv-github"}, access_groups=("prod-group",)),
     )
 
     assert denial.status_code == 403
@@ -1519,7 +1527,7 @@ async def test_scoped_list_agent_key_denied_by_key_grants_raises_generic_403():
     pytest.importorskip("litellm.proxy._experimental.mcp_server.server")
 
     user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user", agent_id="agent-123")
-    resolver = _scope_resolver(resolved_without_agent=[])
+    resolver = _scope_resolver(resolved_without_agent={})
 
     denial = await _denied_scoped_list(
         user_api_key_auth, ["github"], _denied_scope_manager({"github": "srv-github"}), resolver
@@ -1530,6 +1538,27 @@ async def test_scoped_list_agent_key_denied_by_key_grants_raises_generic_403():
     assert "github" in message
     assert "agent" not in message
     assert resolver.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_scoped_list_agent_veto_attributed_for_differently_cased_server_name():
+    """The scope filter matches `/mcp/GitHub` to a server named `github` case-insensitively, so the
+    agent-attributed 403 must match the same way instead of falling back to the generic denial."""
+    pytest.importorskip("litellm.proxy._experimental.mcp_server.server")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user", agent_id="agent-123")
+
+    denial = await _denied_scoped_list(
+        user_api_key_auth,
+        ["GitHub"],
+        _denied_scope_manager({"github": "srv-github"}),
+        _scope_resolver(resolved_without_agent={"github": "srv-github"}),
+    )
+
+    assert denial.status_code == 403
+    message = denial.detail["error"]
+    assert "MCP server 'GitHub'" in message
+    assert "agent 'agent-123'" in message
 
 
 @pytest.mark.asyncio
