@@ -85,6 +85,10 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_credentials_in_payload,
     mask_sensitive_structure,
 )
+from litellm.llms.base_llm.vector_store.transformation import (
+    RouterVectorStoreEmbeddingExecutor,
+    vector_store_request_metadata,
+)
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
@@ -6481,11 +6485,24 @@ class Router:
                     if custom_llm_provider and "custom_llm_provider" not in kwargs
                     else MappingProxyType(kwargs)
                 )
-                if provider_kwargs.get("model"):
-                    return self._generic_api_call_with_fallbacks(original_function=original_function, **provider_kwargs)
+                search_kwargs: Final = (
+                    MappingProxyType(
+                        {
+                            **provider_kwargs,
+                            "_direct_vector_store_embedding_executor": RouterVectorStoreEmbeddingExecutor(
+                                router=self,
+                                metadata=self._vector_store_request_metadata(kwargs),
+                            ),
+                        }
+                    )
+                    if call_type == "vector_store_search"
+                    else provider_kwargs
+                )
+                if search_kwargs.get("model"):
+                    return self._generic_api_call_with_fallbacks(original_function=original_function, **search_kwargs)
                 if call_type == "vector_store_search":
-                    return original_function(**MappingProxyType({**provider_kwargs, "router": self}))
-                return original_function(**provider_kwargs)
+                    return original_function(**MappingProxyType({**search_kwargs, "router": self}))
+                return original_function(**search_kwargs)
 
             return vector_store_sync_wrapper
 
@@ -6658,11 +6675,22 @@ class Router:
                 "avector_store_update",
                 "avector_store_delete",
             ):
+                vector_store_kwargs: Final = (
+                    {  # mutable-ok: the async routed request requires dynamic keyword arguments
+                        **kwargs,
+                        "_direct_vector_store_embedding_executor": RouterVectorStoreEmbeddingExecutor(
+                            router=self,
+                            metadata=self._vector_store_request_metadata(kwargs),
+                        ),
+                    }
+                    if call_type == "avector_store_search"
+                    else kwargs
+                )
                 return await self._init_vector_store_api_endpoints(
                     original_function=original_function,
                     custom_llm_provider=custom_llm_provider,
                     call_type=call_type,
-                    **kwargs,
+                    **vector_store_kwargs,
                 )
             elif call_type in ("afile_delete", "afile_content"):
                 return await self._ageneric_api_call_with_fallbacks(
@@ -6697,6 +6725,10 @@ class Router:
                 )
 
         return async_wrapper
+
+    @staticmethod
+    def _vector_store_request_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+        return vector_store_request_metadata(kwargs)
 
     async def _init_vector_store_api_endpoints(
         self,
