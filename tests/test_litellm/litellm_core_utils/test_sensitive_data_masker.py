@@ -348,3 +348,27 @@ def test_redact_credentials_in_payload_leaves_no_fragment_of_the_secret():
     assert result["max_tokens"] == 17
     assert result["temperature"] == 0.25
     assert result["api_base"] is None
+
+
+def test_redact_credentials_in_payload_reaches_credentials_nested_in_sequences():
+    """Free-form kwargs like extra_body and metadata routinely carry lists of dicts, so a
+    credential hiding one level inside a list or tuple must be replaced too, while the
+    surrounding container keeps its type and every ordinary element stays verbatim."""
+    from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+
+    result = redact_credentials_in_payload(
+        {
+            "extra_body": {"providers": [{"name": "openai", "api_key": "sk-fake-lit6823-in-a-list"}]},
+            "metadata": {"upstreams": ({"aws_secret_access_key": "fake-aws-in-a-tuple"},)},
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+    )
+
+    assert "sk-fake-lit6823-in-a-list" not in str(result)
+    assert "fake-aws-in-a-tuple" not in str(result)
+    assert result["extra_body"]["providers"][0]["api_key"] == "REDACTED"
+    assert result["extra_body"]["providers"][0]["name"] == "openai"
+    assert isinstance(result["extra_body"]["providers"], list)
+    assert result["metadata"]["upstreams"][0]["aws_secret_access_key"] == "REDACTED"
+    assert isinstance(result["metadata"]["upstreams"], tuple)
+    assert result["messages"] == [{"role": "user", "content": "hello"}]

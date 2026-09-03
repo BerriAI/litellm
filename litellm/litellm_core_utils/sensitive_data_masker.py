@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 from pydantic import BaseModel
@@ -225,8 +225,8 @@ def redact_credentials_in_payload(data: Mapping[str, object]) -> Mapping[str, ob
     :func:`mask_credentials_in_payload`, no prefix or suffix of the secret survives
     and non-string secrets are covered too, which is what a payload rendered
     straight to stdout needs. ``None`` is preserved so an unset credential still
-    reads as unset, and non-mapping containers are left alone so the caller's
-    ``repr`` is unchanged.
+    reads as unset, and lists and tuples are rebuilt element by element so a
+    credential nested inside one is caught as well.
     """
     return _redact_mapping(data, 0)
 
@@ -242,7 +242,16 @@ def _redact_entry(key: str, value: object, depth: int) -> object:
         return REDACTED
     if isinstance(value, Mapping):
         return _redact_mapping(value, depth + 1)
+    if isinstance(value, (list, tuple)):
+        return _redact_sequence(value, depth + 1)
     return value
+
+
+def _redact_sequence(values: Sequence[object], depth: int) -> Sequence[object]:
+    if depth >= DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER:
+        return values
+    redacted: Final = tuple(_redact_entry("", item, depth) for item in values)
+    return redacted if isinstance(values, tuple) else list(redacted)
 
 
 # Usage example:
