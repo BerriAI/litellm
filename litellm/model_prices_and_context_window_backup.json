@@ -40381,7 +40381,8 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_reasoning": false
     },
     "snowflake/deepseek-r1": {
         "litellm_provider": "snowflake",
@@ -53622,7 +53623,8 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_response_schema": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "supports_reasoning": false
     },
     "snowflake/claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
@@ -53640,7 +53642,8 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_response_schema": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "supports_reasoning": true
     },
     "snowflake/claude-4-sonnet": {
         "max_tokens": 16384,
@@ -53656,7 +53659,8 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_response_schema": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "supports_reasoning": false
     },
     "snowflake/claude-4-opus": {
         "max_tokens": 16384,
@@ -53671,7 +53675,7 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_reasoning": true,
+        "supports_reasoning": false,
         "supports_response_schema": true,
         "prompt_cache_min_tokens": 1024
     },
@@ -53689,7 +53693,8 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_response_schema": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "supports_reasoning": false
     },
     "snowflake/claude-3-7-sonnet": {
         "max_tokens": 16384,
@@ -53704,7 +53709,7 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_reasoning": true,
+        "supports_reasoning": false,
         "supports_response_schema": true
     },
     "snowflake/openai-gpt-4.1": {

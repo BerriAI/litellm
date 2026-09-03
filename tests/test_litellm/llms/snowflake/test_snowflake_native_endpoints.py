@@ -338,7 +338,7 @@ class TestAnthropicConfigRequest:
             litellm_params={},
             headers={},
         )
-        assert body["system"] == "You are helpful."
+        assert body["system"] == [{"type": "text", "text": "You are helpful."}]
         assert all(m["role"] != "system" for m in body["messages"])
         assert body["messages"][0] == {"role": "user", "content": "Hello"}
 

@@ -17,7 +17,7 @@ import pytest
 import litellm
 from litellm import completion, acompletion
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.snowflake.chat.transformation import SnowflakeConfig
+from litellm.llms.snowflake.chat.transformation import SnowflakeConfig, SnowflakeStreamingHandler
 from litellm.types.utils import ModelResponse
 
 
@@ -316,6 +316,224 @@ class TestSnowflakeToolTransformation:
         assert "tool_choice" in supported_params
         assert "temperature" in supported_params
         assert "max_tokens" in supported_params
+
+class TestSnowflakeCortexClaudeFixes:
+    def setup_method(self):
+        self.config = SnowflakeConfig()
+
+    @staticmethod
+    def _transform(messages, optional_params=None):
+        return SnowflakeConfig().transform_request(
+            model="snowflake/claude-sonnet-4-6",
+            messages=messages,
+            optional_params=optional_params or {},
+            litellm_params={},
+            headers={},
+        )
+
+    def test_supported_thinking_is_catalog_gated(self):
+        assert "thinking" in self.config.get_supported_openai_params("snowflake/claude-sonnet-4-6")
+        assert "thinking" not in self.config.get_supported_openai_params("snowflake/claude-sonnet-4-5")
+        assert "thinking" not in self.config.get_supported_openai_params("snowflake/claude-3-7-sonnet")
+        assert "thinking" not in self.config.get_supported_openai_params("snowflake/claude-4-opus")
+
+    def test_system_blocks_preserve_cache_control_and_strip_ttl(self):
+        body = self._transform(
+            [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You are helpful",
+                            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                        }
+                    ],
+                },
+                {"role": "user", "content": "hi"},
+            ]
+        )
+        assert body["system"] == [{"type": "text", "text": "You are helpful", "cache_control": {"type": "ephemeral"}}]
+
+    def test_direct_system_param_is_normalized(self):
+        body = self._transform(
+            [{"role": "user", "content": "hi"}],
+            {"system": [{"type": "text", "text": "direct", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]},
+        )
+        assert body["system"] == [{"type": "text", "text": "direct", "cache_control": {"type": "ephemeral"}}]
+
+    def test_message_and_tool_cache_control_are_normalized(self):
+        body = self._transform(
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                }
+            ],
+            {
+                "tools": [
+                    {
+                        "name": "f",
+                        "input_schema": {"type": "object", "properties": {}},
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ]
+            },
+        )
+        assert body["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+        assert body["tools"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_extra_body_message_override_is_normalized(self):
+        body = self._transform(
+            [{"role": "user", "content": "original"}],
+            {
+                "extra_body": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "override",
+                                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+        )
+        assert body["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_image_blocks_are_converted_to_anthropic_source(self):
+        body = self._transform(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,ZmFrZQ==", "format": "image/jpeg"},
+                        }
+                    ],
+                }
+            ]
+        )
+        assert body["messages"][0]["content"] == [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "ZmFrZQ=="}}
+        ]
+
+    def test_tool_result_image_list_is_converted(self):
+        body = self._transform(
+            [
+                {"role": "user", "content": "look"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,ZmFrZQ=="}}],
+                },
+            ]
+        )
+        assert body["messages"][2]["content"][0]["content"] == [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "ZmFrZQ=="}}
+        ]
+
+    def test_multipart_tool_result_preserves_text_and_converts_image(self):
+        body = self._transform(
+            [
+                {"role": "user", "content": "look"},
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [
+                        {"type": "text", "text": "first"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,ZmFrZQ=="}},
+                        {"type": "text", "text": "last"},
+                    ],
+                },
+            ]
+        )
+        assert body["messages"][1]["content"][0]["content"] == [
+            {"type": "text", "text": "first"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "ZmFrZQ=="}},
+            {"type": "text", "text": "last"},
+        ]
+
+    def test_plain_text_tool_result_remains_string(self):
+        body = self._transform(
+            [{"role": "user", "content": "look"}, {"role": "tool", "tool_call_id": "call_1", "content": "done"}]
+        )
+        assert body["messages"][1]["content"][0]["content"] == "done"
+
+    def test_anthropic_tool_schema_strips_only_top_level_schema_key(self):
+        tools = [
+            {
+                "name": "f",
+                "input_schema": {"$schema": "schema", "type": "object", "properties": {"$schema": {"type": "string"}}},
+            }
+        ]
+        body = self._transform([{"role": "user", "content": "hi"}], {"tools": tools})
+        schema = body["tools"][0]["input_schema"]
+        assert "$schema" not in schema
+        assert "$schema" in schema["properties"]
+
+    def test_tool_schema_strips_only_top_level_schema_key(self):
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "f",
+                    "parameters": {
+                        "$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "type": "object",
+                        "properties": {"$schema": {"type": "string"}},
+                    },
+                },
+            }
+        ]
+        body = self._transform([{"role": "user", "content": "hi"}], {"tools": tools})
+        schema = body["tools"][0]["input_schema"]
+        assert "$schema" not in schema
+        assert "$schema" in schema["properties"]
+
+    def test_streaming_tool_identity_is_emitted_only_on_start(self):
+        handler = SnowflakeStreamingHandler(streaming_response=[], sync_stream=True)
+        start = handler.chunk_parser(
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "tool_1", "name": "read"},
+            }
+        )
+        first_delta = handler.chunk_parser(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"path":'},
+            }
+        )
+        second_delta = handler.chunk_parser(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '"/tmp"}'},
+            }
+        )
+        assert start["tool_use"]["id"] == "tool_1"
+        assert start["tool_use"]["function"]["name"] == "read"
+        assert first_delta["tool_use"]["id"] is None
+        assert first_delta["tool_use"]["function"]["name"] is None
+        assert second_delta["tool_use"]["id"] is None
+        assert second_delta["tool_use"]["function"]["name"] is None
+        assert first_delta["tool_use"]["function"]["arguments"] == '{"path":'
+        assert second_delta["tool_use"]["function"]["arguments"] == '"/tmp"}'
 
 
 class TestSnowFlakeCompletion:
