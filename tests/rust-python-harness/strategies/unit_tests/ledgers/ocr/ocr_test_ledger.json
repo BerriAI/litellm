@@ -146,6 +146,7 @@
     {"python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_cost.py", "python_test": "test_ocr3_bills_annotation_only_response", "status": "unmapped", "reason": "cost-calc: annotation-only billing math is Python-only"},
     {"python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_cost.py", "python_test": "test_ocr3_bills_annotation_pages_when_pages_processed_missing", "status": "unmapped", "reason": "cost-calc: fallback billing math is Python-only"},
     {"python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_cost.py", "python_test": "test_azure_doc_ai_annotation_pages_fall_back_to_ocr_rate", "status": "unmapped", "reason": "cost-calc: fallback billing math is Python-only"},
+    {"python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_cost.py", "python_test": "test_azure_ocr4_bills_ocr_and_annotation_pages_at_their_own_rates", "status": "unmapped", "reason": "cost-calc: mixed-rate billing math is Python-only"},
 
     {"python_file": "tests/test_litellm/ocr/test_ocr_native_format.py", "python_test": "test_rust_ocr_serves_default_format", "status": "unmapped", "reason": "request-format gating decision is made in Python before the Rust bridge is ever invoked"},
     {"python_file": "tests/test_litellm/ocr/test_ocr_native_format.py", "python_test": "test_rust_ocr_skipped_for_native_format", "status": "unmapped", "reason": "request-format gating decision is made in Python before the Rust bridge is ever invoked"},
