@@ -21,7 +21,7 @@ from typing_extensions import TypedDict
 
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY
+from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import AllMessageValues
@@ -265,7 +265,7 @@ class DeploymentAffinityCheck(CustomLogger):
     @staticmethod
     def _get_session_id_from_metadata_dict(metadata: dict) -> str | None:
         session_id: Final = metadata.get("session_id")
-        if session_id is None:
+        if session_id is None or metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
             return None
         return str(session_id)
 
