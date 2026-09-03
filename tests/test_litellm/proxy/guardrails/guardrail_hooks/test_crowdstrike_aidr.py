@@ -1703,8 +1703,8 @@ async def _guard_calls_for_stream(handler: CrowdStrikeAIDRHandler, chunk_texts: 
 @pytest.mark.parametrize(
     ("configured", "expected_calls"),
     [
-        ({}, 3),
-        ({"streaming_sampling_rate": 2}, 6),
+        ({}, 2),
+        ({"streaming_sampling_rate": 2}, 5),
         ({"streaming_end_of_stream_only": True}, 1),
         ({"streaming_end_of_stream_only": True, "streaming_sampling_rate": 2}, 1),
     ],
@@ -1712,7 +1712,8 @@ async def _guard_calls_for_stream(handler: CrowdStrikeAIDRHandler, chunk_texts: 
 async def test_streaming_params_from_config_control_output_scan_cadence(
     configured: dict[str, object], expected_calls: int
 ) -> None:
-    """10 chunks: default samples at 5 and 10 plus the final pass, rate 2 samples 5 times plus final, end-of-stream scans once."""
+    """10 chunks: default samples at 5 and 10, rate 2 samples at 2/4/6/8/10; the chunk-10 sample already
+    covers the full answer, so the end-of-stream round is skipped as redundant in both cases."""
     handler = _initialize_from_config(mode="post_call", **configured)
 
     assert await _guard_calls_for_stream(handler, list("ABCDEFGHIJ")) == expected_calls
