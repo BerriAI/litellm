@@ -63,6 +63,14 @@ class ProjectQuotaCallback(Protocol):
     ) -> None: ...
 
 
+class ResponseIdAuthorizer(Protocol):
+    def response_id_ownership_refusal(
+        self,
+        response_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> str | None: ...
+
+
 @lru_cache(maxsize=1)
 def _get_openai_response_types():
     from litellm.types.llms import openai as openai_types
@@ -1534,6 +1542,62 @@ async def _enforce_frame_project_quota(
         )
 
 
+def _frame_previous_response_ids(raw_message: str) -> tuple[str, ...]:
+    """Read every ``previous_response_id`` a ``response.create`` frame carries, across
+    both wire shapes:
+      flat:   {"type": "response.create", "previous_response_id": "..."}
+      nested: {"type": "response.create", "response": {"previous_response_id": "..."}}
+
+    A frame may carry both placements at once, and the native relay forwards the frame
+    to the provider close to verbatim, so every placement is reported rather than only
+    the one this proxy would itself read. ``_enforce_authorized_model`` defends the
+    ``model`` field across both placements for the same reason.
+    """
+    try:
+        msg_obj: Final = _load_json_value(raw_message)
+    except (json.JSONDecodeError, TypeError):
+        return ()
+    if not _is_json_object(msg_obj) or msg_obj.get("type") != "response.create":
+        return ()
+    nested: Final = msg_obj.get("response")
+    nested_params: Final[Mapping[str, object]] = nested if _is_json_object(nested) else {}
+    return tuple(
+        dict.fromkeys(
+            candidate
+            for candidate in (
+                _optional_str(msg_obj.get("previous_response_id")),
+                _optional_str(nested_params.get("previous_response_id")),
+            )
+            if candidate is not None
+        )
+    )
+
+
+def _previous_response_ids_refusal(
+    authorizers: Sequence[ResponseIdAuthorizer],
+    user_api_key_dict: UserAPIKeyAuth | None,
+    previous_response_ids: Sequence[str],
+) -> str | None:
+    """Run the shared Responses id authorization step, the one the HTTP routes run,
+    against ids this connection was not itself handed.
+
+    Returns the first refusal message when the connection's key may not address one
+    of the ids, and None when it may address all of them. Every discovered authorizer
+    is consulted, so an unrelated callback answering to the same method name can only
+    add refusals, never shadow the proxy hook that owns this check. Without an
+    authorizer or an authenticated key there is no proxy in front of this socket and
+    nothing to authorize against.
+    """
+    if not authorizers or user_api_key_dict is None:
+        return None
+    refusals: Final = (
+        authorizer.response_id_ownership_refusal(previous_response_id, user_api_key_dict)
+        for previous_response_id in previous_response_ids
+        for authorizer in authorizers
+    )
+    return next((refusal for refusal in refusals if refusal is not None), None)
+
+
 RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
     "response.created",
     "response.completed",
@@ -1570,6 +1634,7 @@ class ResponsesWebSocketStreaming:
         output_guardrail_callbacks: list[PresidioGuardrailCallback] | None = None,
         quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
         authorized_model: str | None = None,
+        response_id_authorizers: Sequence[ResponseIdAuthorizer] | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -1585,6 +1650,13 @@ class ResponsesWebSocketStreaming:
         # Model name authorized at connection time; enforced on every
         # response.create frame to prevent deployment-substitution attacks.
         self.authorized_model: str | None = authorized_model
+        self.response_id_authorizers: tuple[ResponseIdAuthorizer, ...] = (
+            tuple(response_id_authorizers) if response_id_authorizers else ()
+        )
+        # Response ids this connection handed the client. A connection carries
+        # exactly one authenticated key, so continuing one of these needs no
+        # further authorization; any other id does.
+        self._issued_response_ids: frozenset[str] = frozenset()
 
     def _should_store_event(self, event_obj: _MutableJsonObject) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
@@ -1602,6 +1674,20 @@ class ResponsesWebSocketStreaming:
 
         if self._should_store_event(event_obj):
             self.messages.append(event_obj)
+
+    def _record_issued_response_id(self, event: str) -> None:
+        """Remember a response id this connection handed the client, so the client
+        can keep continuing its own conversation without re-authorizing every frame."""
+        try:
+            event_obj: Final = _load_json_object(event)
+        except (json.JSONDecodeError, TypeError):
+            return
+        response_obj: Final = event_obj.get("response")
+        if not _is_json_object(response_obj):
+            return
+        response_id: Final = _optional_str(response_obj.get("id"))
+        if response_id is not None:
+            self._issued_response_ids = self._issued_response_ids | {response_id}
 
     def _collect_input_from_client_event(self, message: object) -> None:
         """Extract user input content from response.create for logging."""
@@ -1690,6 +1776,7 @@ class ResponsesWebSocketStreaming:
                 # Log the output-masked form so PII redacted by apply_to_output
                 # guardrails does not appear in success logs.
                 self._store_event(output_masked_str)
+                self._record_issued_response_id(output_masked_str)
 
                 await self.websocket.send_text(output_masked_str)
 
@@ -1992,32 +2079,54 @@ class ResponsesWebSocketStreaming:
 
         return json.dumps(evt_obj) if modified else response_str
 
+    async def _send_error_frame(self, error_type: str, message: str) -> None:
+        try:
+            await self.websocket.send_text(
+                json.dumps(  # mutable-ok: WebSocket wire payload requires JSON objects
+                    {  # mutable-ok: WebSocket wire payload requires JSON objects
+                        "type": "error",
+                        "error": {  # mutable-ok: nested WebSocket error object
+                            "type": error_type,
+                            "message": message,
+                        },
+                    }
+                )
+            )
+        except Exception:  # noqa: BLE001, S110  # client may already be gone
+            pass
+
+    def _unauthorized_previous_response_id(self, message: str) -> str | None:
+        """Return why this connection's key may not continue the frame's
+        ``previous_response_id``, or None when it may.
+
+        The frame reaches the provider close to verbatim, so every placement the
+        frame carries is checked, not only the one this proxy would read itself.
+        """
+        unowned_ids: Final = tuple(
+            previous_response_id
+            for previous_response_id in _frame_previous_response_ids(message)
+            if previous_response_id not in self._issued_response_ids
+        )
+        return _previous_response_ids_refusal(self.response_id_authorizers, self.user_api_key_dict, unowned_ids)
+
     async def _enforce_or_reject_frame(self, message: str) -> bool:
-        """Run the per-frame project quota check.
+        """Run the per-frame ownership and project quota checks.
 
         On rejection, sends an ``error`` event to the client and reports that
         the frame must be dropped instead of forwarded, so the connection
-        stays open for the client to retry once the window resets.
+        stays open for the client to retry with an id it owns or once the
+        rate-limit window resets.
         """
+        ownership_refusal: Final = self._unauthorized_previous_response_id(message)
+        if ownership_refusal is not None:
+            await self._send_error_frame("permission_denied", ownership_refusal)
+            return False
         try:
             await _enforce_frame_project_quota(
                 self.quota_callbacks, self.user_api_key_dict, self.authorized_model, message
             )
         except RateLimitError as e:
-            try:
-                await self.websocket.send_text(
-                    json.dumps(  # mutable-ok: WebSocket wire payload requires JSON objects
-                        {  # mutable-ok: WebSocket wire payload requires JSON objects
-                            "type": "error",
-                            "error": {  # mutable-ok: nested WebSocket error object
-                                "type": "rate_limit_exceeded",
-                                "message": str(e),
-                            },
-                        }
-                    )
-                )
-            except Exception:  # noqa: BLE001, S110  # client may already be gone
-                pass
+            await self._send_error_frame("rate_limit_exceeded", str(e))
             return False
         return True
 
@@ -2114,6 +2223,7 @@ class ManagedResponsesWebSocketHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
+        response_id_authorizers: Sequence[ResponseIdAuthorizer] | None = None,
         **kwargs: object,
     ) -> None:
         self.websocket = websocket
@@ -2132,6 +2242,9 @@ class ManagedResponsesWebSocketHandler:
         self._connection_provider = self._resolve_provider(model) or custom_llm_provider
         self.first_message = first_message
         self.quota_callbacks: tuple[ProjectQuotaCallback, ...] = tuple(quota_callbacks) if quota_callbacks else ()
+        self.response_id_authorizers: tuple[ResponseIdAuthorizer, ...] = (
+            tuple(response_id_authorizers) if response_id_authorizers else ()
+        )
         # Carry through safe pass-through kwargs (e.g. extra_headers)
         self.extra_kwargs: dict[str, object] = {k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS}
         # In-memory session history: response_id → full accumulated message list.
@@ -2358,16 +2471,20 @@ class ManagedResponsesWebSocketHandler:
         previous_response_id: str | None,
         current_messages: list[dict[str, object]],
         prior_history: list[dict[str, object]],
-    ) -> None:
-        """Prepend in-memory turn history, or fall back to DB-based reconstruction."""
+    ) -> str | None:
+        """Prepend in-memory turn history, or fall back to DB-based reconstruction.
+
+        Returns the ownership refusal message when the connection's key may not
+        address an id this connection never issued, and None otherwise.
+        """
         if not previous_response_id:
-            return
+            return None
         if self._is_warmup_response_id(previous_response_id):
             verbose_logger.debug(
                 "ManagedResponsesWS: ignoring synthetic warmup previous_response_id=%s",
                 previous_response_id,
             )
-            return
+            return None
         if prior_history:
             call_kwargs["input"] = prior_history + current_messages
             verbose_logger.debug(
@@ -2375,15 +2492,25 @@ class ManagedResponsesWebSocketHandler:
                 len(prior_history),
                 previous_response_id,
             )
-        else:
-            verbose_logger.debug(
-                "ManagedResponsesWS: no in-memory history for previous_response_id=%s; "
-                "falling back to DB-based session reconstruction",
-                previous_response_id,
-            )
-            # Fall back to DB-based session reconstruction (may work for
-            # cross-connection multi-turn when spend logs are committed)
-            call_kwargs["previous_response_id"] = previous_response_id
+            return None
+
+        # No history on this connection, so the id was issued elsewhere: it goes
+        # through the same authorization step the HTTP routes run before the
+        # session is reconstructed from anywhere else.
+        refusal: Final = _previous_response_ids_refusal(
+            self.response_id_authorizers, self.user_api_key_dict, (previous_response_id,)
+        )
+        if refusal is not None:
+            return refusal
+        verbose_logger.debug(
+            "ManagedResponsesWS: no in-memory history for previous_response_id=%s; "
+            "falling back to DB-based session reconstruction",
+            previous_response_id,
+        )
+        # Fall back to DB-based session reconstruction (may work for
+        # cross-connection multi-turn when spend logs are committed)
+        call_kwargs["previous_response_id"] = previous_response_id
+        return None
 
     @staticmethod
     def _resolve_provider(model: str | None) -> str | None:
@@ -2563,7 +2690,13 @@ class ManagedResponsesWebSocketHandler:
         # Fetch history once; reused in both _apply_history and _save_turn_history
         prior_history: Final = self._get_history_messages(previous_response_id) if previous_response_id else []
 
-        self._apply_history(call_kwargs, previous_response_id, current_messages, prior_history)
+        ownership_refusal: Final = self._apply_history(
+            call_kwargs, previous_response_id, current_messages, prior_history
+        )
+        if ownership_refusal is not None:
+            await self._send_error(ownership_refusal, error_type="permission_denied")
+            return
+
         self._inject_credentials(call_kwargs, model=model)
         self._update_proxy_request(call_kwargs, requested_model or self.model_group or model)
         call_kwargs.update(self.extra_kwargs)

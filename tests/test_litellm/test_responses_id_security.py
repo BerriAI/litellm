@@ -972,3 +972,39 @@ class TestClientSuppliedRetainedIdCannotBypassAuthorization:
 
         assert result["response_id"] == "resp_strangerownprovideridcccccccc"
         assert result["response_id"] != victim_provider_id
+
+
+class TestResponseIdOwnershipRefusalIsTheSameStep:
+    """The WebSocket surface answers with an error frame, not a status code, so it reads
+    the very same authorization step as a value. Its verdicts must not drift from the
+    exception the HTTP routes raise."""
+
+    def test_refusal_text_matches_the_exception_the_http_routes_raise(self, salt_key_env):
+        hook = _hook()
+
+        with pytest.raises(HTTPException) as exc_info:
+            hook.authorize_response_id(_FABRICATED_UNMANAGED_ID, _auth())
+
+        assert hook.response_id_ownership_refusal(_FABRICATED_UNMANAGED_ID, _auth()) == exc_info.value.detail
+
+    def test_owner_addressing_an_id_the_proxy_issued_is_not_refused(self, salt_key_env):
+        hook = _hook()
+        owner = _auth()
+
+        assert hook.response_id_ownership_refusal(_issue_managed_id(hook, owner), owner) is None
+
+    def test_stranger_addressing_someone_elses_issued_id_is_refused(self, salt_key_env):
+        hook = _hook()
+        issued_id = _issue_managed_id(hook, _auth())
+        stranger = _auth(user_id="stranger-user", team_id="stranger-team")
+
+        assert hook.response_id_ownership_refusal(issued_id, stranger) is not None
+
+    @pytest.mark.parametrize(
+        "general_settings",
+        [{"allow_unmanaged_response_ids": True}, {"disable_responses_id_security": True}],
+    )
+    def test_escape_hatches_refuse_nothing(self, salt_key_env, general_settings):
+        hook = _hook(general_settings=general_settings)
+
+        assert hook.response_id_ownership_refusal(_FABRICATED_UNMANAGED_ID, _auth()) is None

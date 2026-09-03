@@ -22,6 +22,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
     _collect_ws_project_quota_callbacks,
+    _collect_ws_response_id_authorizers,
     _google_genai_streaming_hidden_params,
     _has_pre_call_deployment_hook,
     _rust_responses_websocket_enabled,
@@ -2765,6 +2766,36 @@ def test_only_callbacks_that_can_charge_a_frame_are_collected_for_ws_quota(monke
 
     monkeypatch.setattr(litellm, "callbacks", [plain, quota, decoy])
     assert _collect_ws_project_quota_callbacks() == (quota,)
+
+
+def test_websocket_surface_finds_the_proxy_hook_that_authorizes_response_ids(monkeypatch):
+    """The WebSocket surface must reach the same authorization step the HTTP routes run,
+    and it finds it by duck-typing the callback registry rather than importing the proxy
+    hook into the SDK layer."""
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity
+
+    class _PlainLogger(CustomLogger):
+        pass
+
+    class _NotCallableAttribute:
+        response_id_ownership_refusal = "not a method"
+
+    plain, decoy, hook = _PlainLogger(), _NotCallableAttribute(), ResponsesIDSecurity()
+
+    monkeypatch.setattr(litellm, "callbacks", [plain, decoy])
+    assert _collect_ws_response_id_authorizers() == ()
+
+    monkeypatch.setattr(litellm, "callbacks", [plain, decoy, hook])
+    assert _collect_ws_response_id_authorizers() == (hook,)
+
+    class _Impostor:
+        def response_id_ownership_refusal(self, response_id, user_api_key_dict):
+            return None
+
+    impostor = _Impostor()
+    monkeypatch.setattr(litellm, "callbacks", [impostor, hook])
+    assert _collect_ws_response_id_authorizers() == (impostor, hook)
 
 
 @pytest.mark.asyncio
