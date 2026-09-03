@@ -1175,7 +1175,6 @@ class RedisCache(BaseCache):
         async_redis_client: Final = self.init_async_client()
         return await async_redis_client.mget(keys=keys)
 
-    @_redis_circuit_breaker_guard_sync
     def batch_get_cache(
         self,
         key_list: list[str] | list[str | None],
@@ -1196,11 +1195,10 @@ class RedisCache(BaseCache):
         start_time: Final = time.time()
 
         try:
-            _keys: Final = []
-            for cache_key in _key_list:
-                cache_key = self.check_and_fix_namespace(key=cache_key or "")
-                _keys.append(cache_key)
+            swallowed_before: Final = _enter_circuit_breaker(self._circuit_breaker, "batch_get_cache")
+            _keys: Final = [self.check_and_fix_namespace(key=cache_key or "") for cache_key in _key_list]
             results: Final = self._run_redis_mget_operation(keys=_keys)
+            _exit_circuit_breaker(self._circuit_breaker, swallowed_before)
             end_time: Final = time.time()
             _duration: Final = end_time - start_time
             self.service_logger_obj.service_success_hook(

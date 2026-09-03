@@ -515,15 +515,14 @@ async def test_circuit_breaker_opens_when_method_swallows_redis_failure(redis_no
         await call_method(cache)
 
 
-def test_circuit_breaker_opens_when_sync_batch_get_cache_swallows_redis_failure(sync_batch_redis_cache):
-    """A sync batch read that swallows a Redis failure must still open the breaker."""
+def test_circuit_breaker_open_keeps_sync_batch_get_cache_as_a_miss(sync_batch_redis_cache):
+    """An open breaker must preserve the sync batch read's dictionary fallback."""
     from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 
     for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
         assert sync_batch_redis_cache.batch_get_cache(key_list=["lit6729"]) == {}
 
-    with pytest.raises(Exception, match="circuit breaker is open"):
-        sync_batch_redis_cache.batch_get_cache(key_list=["lit6729"])
+    assert sync_batch_redis_cache.batch_get_cache(key_list=["lit6729"]) == {}
 
 
 @pytest.fixture
@@ -618,8 +617,7 @@ def test_sync_batch_get_cache_survives_a_service_callback_that_raises(
         with ThreadPoolExecutor(max_workers=1) as pool:
             assert pool.submit(cache.batch_get_cache, key_list=["lit6729"]).result() == {}
 
-    with pytest.raises(Exception, match="circuit breaker is open"):
-        cache.batch_get_cache(key_list=["lit6729"])
+    assert cache.batch_get_cache(key_list=["lit6729"]) == {}
 
 
 def test_call_stack_info_skips_breaker_guard_frames():
