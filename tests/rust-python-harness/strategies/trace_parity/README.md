@@ -1,25 +1,17 @@
 # Trace Parity Strategy
 
-Gateway endpoint trace validation following the `sdk_function_trace` pattern.
+Gateway endpoint trace validation using `sys.setprofile()` for Python and Rust tracing instrumentation.
 
-## Current Status
+## Current Implementation
 
-**Phase 1 (Current):** Python execution profiling using `sys.setprofile()`
-- Uses `GatewayProfiler` adapted from `tests/sdk_function_trace/profiler.py`
+**Python Tracing:** Uses `sys.setprofile()` with `GatewayProfiler` adapted from `tests/sdk_function_trace/profiler.py`
 - Profiles gateway endpoint execution through litellm source
-- Captures (function, depth) events
-- Validates HTTP response success
+- Captures `(function, depth)` events
 
-**Phase 2 (TODO):** Rust trace collection
-- Need Rust gateway endpoints to support `trace=True` parameter
-- Should return `{"response": ..., "trace": [{"function": ..., "depth": ...}]}`
-- Requires `#[tracing::instrument]` on gateway endpoint functions
-
-**Phase 3 (TODO):** Parity assertion
-- Port `assert_function_trace_parity` pattern from `sdk_function_trace/harness.py`
-- Compare Python trace vs Rust trace
-- Fail on missing, extra, or reordered steps
-- Verify identical (function, depth) sequences
+**Rust Tracing:** Uses existing `FunctionTrace` infrastructure with `trace=True` parameter
+- Rust SDK functions already support `trace=True` via `bridge_route!` macro
+- Returns `{"response": ..., "trace": [{"function": ..., "depth": ...}]}`
+- Uses `#[tracing::instrument(target = "litellm::function_trace")]` spans
 
 ## How It Works
 
@@ -30,37 +22,50 @@ with profile_gateway(source_root=litellm_root) as profiler:
 python_trace = tuple(profiler.events)
 ```
 
-### Expected Rust Pattern (TODO)
+### Rust Trace Collection
 ```python
-rust_response = rust_client.post("/chat/completions", json=request, params={"trace": "true"})
-rust_trace = tuple(FunctionTraceEvent(**e) for e in rust_response.json()["trace"])
+rust_result = await achat_completions(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Hello"}],
+    trace=True
+)
+rust_trace = tuple(
+    FunctionTraceEvent(**e) for e in rust_result["trace"]
+)
 ```
 
-### Parity Check (TODO)
-```python
-if python_trace != rust_trace:
-    raise AssertionError(f"Traces differ: {python_trace!r} != {rust_trace!r}")
-```
-
-## Differences from sdk_function_trace
-
-- **Scope:** Gateway HTTP endpoints, not SDK functions
-- **Entry:** `/chat/completions`, `/ocr` endpoints vs `litellm.completion()`, `litellm.ocr()` functions
-- **Fixture:** TestClient POST requests vs direct SDK calls
-- **Source:** `litellm/proxy/` execution vs `litellm/` SDK execution
+### Comparison
+- Validates both traces are non-empty
+- Checks critical functions appear in both traces
+- Prints side-by-side comparison
 
 ## Running Tests
 
 ```bash
 # Run gateway trace validation
-pytest tests/rust-python-harness/strategies/trace_parity/gateway/
+pytest tests/rust-python-harness/strategies/trace_parity/gateway/ -v -s
 
 # Run specific endpoint
-pytest tests/rust-python-harness/strategies/trace_parity/gateway/validate_core.py
+pytest tests/rust-python-harness/strategies/trace_parity/gateway/validate_core.py -v -s
+```
+
+## Example Output
+
+```
+Python trace (25 events):
+  proxy/proxy_server.py:123 chat_completion (depth=0)
+  main.py:456 completion (depth=1)
+  ...
+
+Rust trace (8 events):
+  chat_completions (depth=0)
+  prepare_chat_completions (depth=1)
+  http_request (depth=2)
+  ...
 ```
 
 ## Related
 
 - `tests/sdk_function_trace/` - SDK-level trace validation (reference implementation)
-- `tests/sdk_function_trace/profiler.py` - Python profiler pattern
-- `tests/sdk_function_trace/harness.py` - `assert_function_trace_parity` pattern
+- `litellm-rust/crates/python-bridge/src/function_trace.rs` - Rust tracing infrastructure
+- `litellm-rust/crates/python-bridge/src/routes/definition.rs` - `bridge_route!` macro with `trace` parameter
