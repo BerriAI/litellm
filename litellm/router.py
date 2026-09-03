@@ -9468,7 +9468,7 @@ class Router:
     ) -> object:
         """Late-bound Search API bridge with the originating caller's permissions."""
         metadata_values: Final = tuple(kwargs.get(key) for key in ("litellm_metadata", "metadata"))
-        user_api_key_auth: Final = next(
+        raw_user_api_key_auth: Final = next(
             (
                 metadata.get("user_api_key_auth")
                 for metadata in metadata_values
@@ -9476,17 +9476,32 @@ class Router:
             ),
             None,
         )
-        if user_api_key_auth is not None:
-            from litellm.proxy._types import UserAPIKeyAuth
+        # Direct Router usage has no proxy identity. The Fusion caller sets this
+        # private flag only when the originating request came through the proxy.
+        proxy_auth_required: Final = kwargs.pop("_fusion_proxy_auth_required", False) is True
+        if raw_user_api_key_auth is not None or proxy_auth_required:
+            from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
             from litellm.proxy.search_endpoints.endpoints import (
                 authorize_search_tool_call,
             )
 
-            if isinstance(user_api_key_auth, UserAPIKeyAuth):
-                await authorize_search_tool_call(
-                    search_tool_name=model,
-                    user_api_key_dict=user_api_key_auth,
+            try:
+                user_api_key_auth = (
+                    raw_user_api_key_auth
+                    if isinstance(raw_user_api_key_auth, UserAPIKeyAuth)
+                    else UserAPIKeyAuth.model_validate(raw_user_api_key_auth)
                 )
+            except ValidationError as exc:
+                raise ProxyException(
+                    message="Fusion Search Tool authorization context is missing or invalid",
+                    type=ProxyErrorTypes.auth_error,
+                    param=None,
+                    code=403,
+                ) from exc
+            await authorize_search_tool_call(
+                search_tool_name=model,
+                user_api_key_dict=user_api_key_auth,
+            )
         return await self.asearch(model=model, query=query, **kwargs)
 
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:

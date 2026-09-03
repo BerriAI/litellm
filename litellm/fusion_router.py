@@ -36,6 +36,24 @@ FUSION_PROTOCOL_VERSION: Final = "fusion-tool-v1"
 _OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _OBJECT_MAPPINGS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _BUDGET_RESERVATION_METADATA_KEY: Final = "user_api_key_budget_reservation"
+_RESPONSES_ONLY_REQUEST_KEYS: Final = frozenset(
+    {
+        "background",
+        "include",
+        "input",
+        "instructions",
+        "max_output_tokens",
+        "max_tool_calls",
+        "partial_images",
+        "previous_response_id",
+        "prompt",
+        "prompt_cache_options",
+        "reasoning",
+        "stream_options",
+        "text",
+        "truncation",
+    }
+)
 
 
 def is_fusion_router_model(model: str) -> bool:
@@ -283,7 +301,9 @@ def _internal_kwargs(
     kwargs = {
         key: value
         for key, value in request_kwargs.items()
-        if key not in _INTERNAL_REQUEST_KEYS and key not in _INTERNAL_RESPONSE_KEYS
+        if key not in _INTERNAL_REQUEST_KEYS
+        and key not in _INTERNAL_RESPONSE_KEYS
+        and key not in _RESPONSES_ONLY_REQUEST_KEYS
     }
     kwargs.pop("metadata", None)
     kwargs.pop("litellm_metadata", None)
@@ -348,6 +368,60 @@ def _fusion_tool_call(response: ModelResponse) -> ChatCompletionMessageToolCall 
         if isinstance(tool_call, ChatCompletionMessageToolCall) and tool_call.function.name == FUSION_TOOL_NAME:
             return tool_call
     return None
+
+
+def _mixed_tool_call_indexes(response: ModelResponse) -> tuple[frozenset[int], tuple[int, ...]]:
+    if not response.choices:
+        return frozenset(), ()
+    tool_calls = response.choices[0].message.tool_calls or ()
+    fusion_indexes = frozenset(
+        index
+        for index, tool_call in enumerate(tool_calls)
+        if isinstance(tool_call, ChatCompletionMessageToolCall) and tool_call.function.name == FUSION_TOOL_NAME
+    )
+    client_indexes = tuple(index for index in range(len(tool_calls)) if index not in fusion_indexes)
+    return fusion_indexes, client_indexes
+
+
+def _without_mixed_fusion_tool_call(response: ModelResponse) -> tuple[ModelResponse, frozenset[int]]:
+    """Prefer executable client calls when a provider violates the one-path contract."""
+    fusion_indexes, client_indexes = _mixed_tool_call_indexes(response)
+    if not fusion_indexes or not client_indexes:
+        return response, frozenset()
+    sanitized = response.model_copy(deep=True)
+    tool_calls = sanitized.choices[0].message.tool_calls or ()
+    sanitized.choices[0].message.tool_calls = [tool_calls[index] for index in client_indexes]
+    return sanitized, fusion_indexes
+
+
+def _without_stream_tool_call_indexes(
+    chunks: Sequence[ModelResponseStream],
+    removed_indexes: frozenset[int],
+) -> list[ModelResponseStream]:
+    if not removed_indexes:
+        return list(chunks)
+    kept_indexes = sorted(
+        {
+            tool_call.index
+            for chunk in chunks
+            for choice in chunk.choices
+            for tool_call in (choice.delta.tool_calls or ())
+            if tool_call.index not in removed_indexes
+        }
+    )
+    index_map = {old_index: new_index for new_index, old_index in enumerate(kept_indexes)}
+    sanitized_chunks: list[ModelResponseStream] = []
+    for chunk in chunks:
+        sanitized = chunk.model_copy(deep=True)
+        for choice in sanitized.choices:
+            tool_calls = choice.delta.tool_calls or ()
+            choice.delta.tool_calls = [
+                tool_call.model_copy(update={"index": index_map[tool_call.index]})
+                for tool_call in tool_calls
+                if tool_call.index in index_map
+            ] or None
+        sanitized_chunks.append(sanitized)
+    return sanitized_chunks
 
 
 def _fusion_query(tool_call: ChatCompletionMessageToolCall) -> str | None:
@@ -584,7 +658,8 @@ def _outer_kwargs(request_kwargs: Mapping[str, object]) -> dict[str, object]:
     return {
         key: value
         for key, value in request_kwargs.items()
-        if key
+        if key not in _RESPONSES_ONLY_REQUEST_KEYS
+        and key
         not in frozenset(
             {
                 "_fusion_depth",
@@ -671,6 +746,7 @@ class FusionRouter:
                     # from spend reconciliation.
                     litellm_metadata=metadata,
                     max_tokens_per_page=1024,
+                    _fusion_proxy_auth_required=isinstance(request_kwargs.get("proxy_server_request"), Mapping),
                 )
                 if isinstance(result, BaseModel):
                     result = result.model_dump()
@@ -754,7 +830,8 @@ class FusionRouter:
             **kwargs,
         )
         if isinstance(response, ModelResponse):
-            return response, None
+            sanitized_response, _ = _without_mixed_fusion_tool_call(response)
+            return sanitized_response, None
 
         chunks: list[ModelResponseStream] = []
         try:
@@ -774,9 +851,10 @@ class FusionRouter:
                 llm_provider="",
                 model=self.config.outer_model,
             )
+        built, removed_indexes = _without_mixed_fusion_tool_call(built)
         replay = FusionReplayStream(
             source=response,
-            chunks=chunks,
+            chunks=_without_stream_tool_call_indexes(chunks, removed_indexes),
             fusion_metadata={"invoked": False, "protocol": FUSION_PROTOCOL_VERSION},
         )
         return built, replay

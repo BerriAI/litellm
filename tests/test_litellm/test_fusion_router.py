@@ -12,12 +12,14 @@ import litellm
 from litellm.fusion_router import (
     FUSION_TOOL_NAME,
     FusionRouterConfig,
+    _without_stream_tool_call_indexes,
     build_fusion_router,
     fusion_router_dependencies,
     validate_fusion_router_write,
 )
 from litellm.router import Router
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponseStream
 from litellm.utils import CustomStreamWrapper, ModelResponse
 
 
@@ -161,6 +163,99 @@ async def test_outer_client_tool_call_is_returned_without_running_panel_or_secon
     assert isinstance(response, ModelResponse)
     assert response.choices[0].message.tool_calls[0].function.name == "send_email"
     assert [call["model"] for call in completion.calls] == ["outer"]
+
+
+@pytest.mark.asyncio
+async def test_mixed_fusion_and_client_tool_calls_return_only_executable_client_calls() -> None:
+    client_call = {
+        "id": "email-1",
+        "type": "function",
+        "function": {"name": "send_email", "arguments": '{"to":"user@example.com"}'},
+    }
+    mixed_response = _response(
+        None,
+        [
+            {
+                "id": "fusion-call-1",
+                "type": "function",
+                "function": {"name": FUSION_TOOL_NAME, "arguments": '{"query":"Investigate this"}'},
+            },
+            client_call,
+        ],
+    )
+    completion = RecordingCompletion({"outer": [mixed_response]})
+
+    response = await _router(completion).acompletion(
+        messages=[{"role": "user", "content": "Research and send the update"}],
+        stream=False,
+        request_kwargs={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "send_email", "parameters": {"type": "object"}},
+                }
+            ]
+        },
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert [call.function.name for call in response.choices[0].message.tool_calls] == ["send_email"]
+    assert [call["model"] for call in completion.calls] == ["outer"]
+    assert response._hidden_params["fusion"]["invoked"] is False
+
+
+def test_mixed_stream_removes_private_call_and_reindexes_client_call() -> None:
+    chunks = [
+        ModelResponseStream(
+            choices=[
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "fusion-call-1",
+                                "type": "function",
+                                "function": {"name": FUSION_TOOL_NAME, "arguments": '{"query":"test"}'},
+                            },
+                            {
+                                "index": 1,
+                                "id": "email-1",
+                                "type": "function",
+                                "function": {"name": "send_email", "arguments": '{"to":"user@example.com"}'},
+                            },
+                        ]
+                    }
+                }
+            ]
+        )
+    ]
+
+    sanitized = _without_stream_tool_call_indexes(chunks, frozenset({0}))
+
+    tool_calls = sanitized[0].choices[0].delta.tool_calls
+    assert len(tool_calls) == 1
+    assert tool_calls[0].index == 0
+    assert tool_calls[0].function.name == "send_email"
+
+
+@pytest.mark.asyncio
+async def test_responses_only_kwargs_never_reach_fusion_chat_calls() -> None:
+    completion = RecordingCompletion({"outer": [_response("Final")]})
+
+    await _router(completion).acompletion(
+        messages=[{"role": "system", "content": "Follow instructions"}, {"role": "user", "content": "Answer"}],
+        stream=False,
+        request_kwargs={
+            "input": "raw Responses input",
+            "instructions": "Follow instructions",
+            "previous_response_id": "resp-1",
+            "include": ["reasoning.encrypted_content"],
+            "text": {"format": {"type": "text"}},
+        },
+    )
+
+    outer_call = completion.calls[0]
+    assert not {"input", "instructions", "previous_response_id", "include", "text"} & outer_call.keys()
 
 
 @pytest.mark.asyncio
@@ -415,12 +510,16 @@ async def test_configured_search_tool_is_private_to_panel_and_analyst() -> None:
     response = await _router(completion, search=search, search_tool_name="web-search", max_tool_calls=4).acompletion(
         messages=[{"role": "user", "content": "Research this"}],
         stream=False,
-        request_kwargs={"litellm_metadata": {"user_api_key_budget_reservation": reservation}},
+        request_kwargs={
+            "litellm_metadata": {"user_api_key_budget_reservation": reservation},
+            "proxy_server_request": {"body": {}},
+        },
     )
 
     assert isinstance(response, ModelResponse)
     assert search_calls[0]["model"] == "web-search"
     assert search_calls[0]["query"] == "current evidence"
+    assert search_calls[0]["_fusion_proxy_auth_required"] is True
     assert search_calls[0]["litellm_metadata"]["internal_call_origin"] == "fusion_research"
     assert search_calls[0]["litellm_metadata"]["user_api_key_budget_reservation"] is reservation
     second_panel_call = [call for call in completion.calls if call["model"] == "panel-a"][1]
@@ -637,10 +736,29 @@ async def test_fusion_search_checks_proxy_permissions_before_router_search(monke
         await router._fusion_asearch(  # pyright: ignore[reportPrivateUsage]
             model="restricted-search",
             query="evidence",
-            litellm_metadata={"user_api_key_auth": user_api_key_auth},
+            litellm_metadata={"user_api_key_auth": user_api_key_auth.model_dump()},
         )
 
     get_team_object.assert_awaited_once()
+    raw_search.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fusion_search_fails_closed_when_proxy_auth_context_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._types import ProxyException
+
+    router = Router(model_list=[])
+    raw_search = AsyncMock(return_value={"results": []})
+    monkeypatch.setattr(router, "asearch", raw_search)
+
+    with pytest.raises(ProxyException, match="authorization context is missing or invalid"):
+        await router._fusion_asearch(  # pyright: ignore[reportPrivateUsage]
+            model="restricted-search",
+            query="evidence",
+            litellm_metadata={},
+            _fusion_proxy_auth_required=True,
+        )
+
     raw_search.assert_not_awaited()
 
 
