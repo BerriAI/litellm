@@ -55,3 +55,17 @@ def test_migrate_diff_stops_at_its_budget_and_takes_its_process_tree_with_it(fak
          "--to-schema-datamodel", "./schema.prisma", "--script"]
     ]
     assert fake_prisma_cli.grandchild_is_gone(within_seconds=5)
+
+
+def test_migrate_diff_without_the_prisma_runner_skips_instead_of_crashing_boot(monkeypatch):
+    """
+    Boot calls this helper directly, so an ImportError here takes the proxy down before
+    uvicorn starts. An install without the runner must lose the diagnostic, not the proxy.
+    """
+    import sys
+
+    from litellm.proxy.db.check_migration import check_prisma_schema_diff_helper
+
+    monkeypatch.setitem(sys.modules, "litellm_proxy_extras.prisma_toolchain", None)
+
+    assert check_prisma_schema_diff_helper("postgresql://u:p@localhost:9/x") == (False, [])

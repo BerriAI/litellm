@@ -387,3 +387,16 @@ def test_db_push_timeout_takes_its_process_tree_with_it(fake_prisma_cli, unset_d
     assert PrismaManager.setup_database(use_migrate=False) is True
     assert fake_prisma_cli.calls == [DB_PUSH_ARGV, DB_PUSH_ARGV]
     assert fake_prisma_cli.grandchild_is_gone(within_seconds=5)
+
+
+def test_db_push_without_the_prisma_runner_fails_the_migration_instead_of_crashing_boot(
+    fake_prisma_cli, unset_database_url, monkeypatch
+):
+    """
+    An ImportError out of setup_database escapes the caller's RuntimeError handler and
+    kills boot, bypassing the operator's enforce_prisma_migration_check choice.
+    """
+    monkeypatch.setitem(sys.modules, "litellm_proxy_extras.prisma_toolchain", None)
+
+    assert PrismaManager.setup_database(use_migrate=False) is False
+    assert fake_prisma_cli.calls == []

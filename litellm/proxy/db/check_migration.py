@@ -47,19 +47,26 @@ def extract_sql_commands(diff_output: str) -> list[str]:
 def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
     """Checks for differences between current database and Prisma schema.
 
-    Never raises: a diff that cannot be produced, because the command failed or
-    because it outlived its budget, is reported as "no diff" so boot continues.
+    Never raises: a diff that cannot be produced, because the runner is missing,
+    because the command failed, or because it outlived its budget, is reported as
+    "no diff" so boot continues.
 
     Returns:
         A tuple containing:
         - A boolean indicating if differences were found (True) or not (False).
         - The SQL commands that would close the diff, empty when there is none.
     """
-    from litellm_proxy_extras.prisma_toolchain import (
-        PRISMA_COMMAND_TIMEOUT_ENV_VAR,
-        prisma_command_timeout,
-        run_prisma,
-    )
+    try:
+        from litellm_proxy_extras.prisma_toolchain import (
+            PRISMA_COMMAND_TIMEOUT_ENV_VAR,
+            prisma_command_timeout,
+            run_prisma,
+        )
+    except ImportError as e:
+        print(  # noqa: T201  # boot-time operator output, same channel as this helper's other messages
+            f"Skipping the migration diff: litellm-proxy-extras has no Prisma runner. Error: {e}"
+        )
+        return False, []
 
     verbose_logger.debug("Checking for Prisma schema diff...")
     timeout: Final = prisma_command_timeout()

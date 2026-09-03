@@ -937,10 +937,14 @@ class PrismaManager:
                         use_v2_resolver=use_v2_resolver,
                     )
                 else:
-                    from litellm_proxy_extras.prisma_toolchain import (
-                        prisma_command_timeout,
-                        run_prisma,
-                    )
+                    try:
+                        from litellm_proxy_extras.prisma_toolchain import (
+                            prisma_command_timeout,
+                            run_prisma,
+                        )
+                    except ImportError as e:
+                        verbose_proxy_logger.error("\x1b[1;31mLiteLLM: Failed to import proxy extras. Got %s\x1b[0m", e)
+                        return False
 
                     PrismaManager._raise_if_partitioned_spend_logs()
                     run_prisma(
