@@ -56863,6 +56863,8 @@ export interface operations {
                 exclude_internal_health_checks?: boolean;
                 /** @description Paginate over sessions instead of raw logs: one representative row per session, total counts sessions */
                 group_by_session?: boolean;
+                /** @description Keyset cursor '<last_activity>|<api_key>|<session_key>' from a previous group_by_session page. UI route only, honored when sorting by startTime */
+                session_cursor?: string | null;
             };
             header?: never;
             path?: never;
@@ -56977,6 +56979,8 @@ export interface operations {
                 exclude_internal_health_checks?: boolean;
                 /** @description Paginate over sessions instead of raw logs: one representative row per session, total counts sessions */
                 group_by_session?: boolean;
+                /** @description Keyset cursor '<last_activity>|<api_key>|<session_key>' from a previous group_by_session page. UI route only, honored when sorting by startTime */
+                session_cursor?: string | null;
             };
             header?: never;
             path?: never;
