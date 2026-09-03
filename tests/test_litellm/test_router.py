@@ -280,6 +280,25 @@ def test_service_tier_routing_direct_model_id_nonmatch_raises():
     assert "flex" in str(exc_info.value)
 
 
+def test_service_tier_routing_direct_model_id_match_returns_deployment():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "service-tier-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"},
+                "model_info": {"id": "flex-only", "supported_service_tiers": ["flex"]},
+            }
+        ]
+    )
+
+    deployment = router.get_available_deployment(
+        model="flex-only",
+        request_kwargs={"service_tier": "flex"},
+    )
+
+    assert deployment["model_info"]["id"] == "flex-only"
+
+
 def test_model_info_supported_service_tiers_serialization():
     from litellm.types.router import ModelInfo
 
