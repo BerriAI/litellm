@@ -12,6 +12,7 @@ from typing import Annotated, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation, field_serializer, field_validator, model_validator
 
+from litellm.types.llms.openai import REASONING_EFFORT
 from litellm.types.router import AdaptiveRouterWeights, ClassifierPlugin, RoutingPlugin
 
 from .tier_predictor import TrainedTierArtifact
@@ -431,6 +432,13 @@ class ClassifierLLMConfig(BaseModel):
 
     model: str = Field(
         description="Model name (from the router's model_list) to call for classification",
+    )
+    reasoning_effort: REASONING_EFFORT | None = Field(
+        default=None,
+        description=(
+            "Reasoning effort override for classifier calls. Leave unset to use "
+            "the classifier deployment or provider default."
+        ),
     )
     timeout_ms: int = Field(
         default=3000,

@@ -2,92 +2,74 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Final
 
-from .models import Coverage, HarnessCase, SDK_FUNCTIONS, Strategy
+from pydantic import BaseModel, ConfigDict, ValidationError
 
-STRATEGIES_ROOT = Path(__file__).parent
+from .shared.reporting.models import Coverage, HarnessCase, SDK_FUNCTIONS, Strategy
+
+STRATEGIES_ROOT: Final = Path(__file__).parent / "strategies"
 
 
-def _require_string(value: Any, field: str, source: Path) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{source}: {field} must be a non-empty string")
-    return value
+class CaseSpec(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    coverage: Coverage
+    selectors: tuple[str, ...] = ()
+    note: str = ""
+    unit_suite: str | None = None
+
+
+class StrategySpec(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    order: int
+    id: str
+    label: str
+    description: str
+    functions: dict[str, CaseSpec]
+    gateway: dict[str, CaseSpec] = {}
 
 
 def _load_strategy(source: Path) -> Strategy:
-    with source.open(encoding="utf-8") as stream:
-        data = json.load(stream)
-
-    strategy_id = _require_string(data.get("id"), "id", source)
-    label = _require_string(data.get("label"), "label", source)
-    description = _require_string(data.get("description"), "description", source)
-    order = data.get("order")
-    if not isinstance(order, int):
-        raise ValueError(f"{source}: order must be an integer")
-    function_data = data.get("functions")
-    if not isinstance(function_data, dict):
-        raise ValueError(f"{source}: functions must be an object")
-
-    missing = set(SDK_FUNCTIONS) - set(function_data)
-    extra = set(function_data) - set(SDK_FUNCTIONS)
-    if missing or extra:
-        raise ValueError(
-            f"{source}: functions must exactly match {SDK_FUNCTIONS}; missing={missing}, extra={extra}"
+    data: Final = StrategySpec.model_validate_json(source.read_text(encoding="utf-8"))
+    if set(data.functions) != set(SDK_FUNCTIONS):
+        raise ValueError(f"{source}: functions must exactly match {SDK_FUNCTIONS}")
+    cases: Final = tuple(
+        HarnessCase(
+            strategy_id=data.id,
+            strategy_label=data.label,
+            sdk_function=name,
+            coverage=case.coverage,
+            selectors=case.selectors,
+            note=case.note,
+            surface=surface,
+            unit_suite=case.unit_suite,
         )
-
-    cases: list[HarnessCase] = []
-    for sdk_function in SDK_FUNCTIONS:
-        case_data = function_data[sdk_function]
-        if not isinstance(case_data, dict):
-            raise ValueError(f"{source}: functions.{sdk_function} must be an object")
-        try:
-            coverage = Coverage(case_data.get("coverage"))
-        except ValueError as exc:
-            raise ValueError(f"{source}: invalid coverage for {sdk_function}") from exc
-        selectors = case_data.get("selectors", [])
-        if not isinstance(selectors, list) or not all(
-            isinstance(item, str) and item for item in selectors
-        ):
-            raise ValueError(
-                f"{source}: selectors for {sdk_function} must be a list of strings"
-            )
-        if coverage is Coverage.NOT_APPLICABLE and selectors:
-            raise ValueError(
-                f"{source}: not_applicable case {sdk_function} cannot have selectors"
-            )
-        cases.append(
-            HarnessCase(
-                strategy_id=strategy_id,
-                strategy_label=label,
-                sdk_function=sdk_function,
-                coverage=coverage,
-                selectors=tuple(selectors),
-                note=str(case_data.get("note", "")),
-            )
-        )
-
-    return Strategy(
-        order=order,
-        id=strategy_id,
-        label=label,
-        description=description,
-        directory=source.parent,
-        cases=tuple(cases),
+        for surface, functions in (("sdk", data.functions), ("gateway", data.gateway))
+        for name in (SDK_FUNCTIONS if surface == "sdk" else functions)
+        for case in (functions[name],)
     )
+    for case in cases:
+        if case.coverage in {Coverage.PLANNED, Coverage.NOT_APPLICABLE} and (case.selectors or case.unit_suite):
+            raise ValueError(f"{source}: {case.coverage.value} case {case.key} cannot configure tests")
+        if any(not selector.strip() for selector in case.selectors):
+            raise ValueError(f"{source}: empty selector in {case.key}")
+        if data.id == "unit_tests" and case.selectors:
+            raise ValueError(f"{source}: unit_tests must configure unit_suite instead of pytest selectors")
+        if data.id != "unit_tests" and case.unit_suite:
+            raise ValueError(f"{source}: unit_suite is only valid for unit_tests")
+    return Strategy(data.order, data.id, data.label, data.description, source.parent, cases)
 
 
 def load_catalog(root: Path = STRATEGIES_ROOT) -> tuple[Strategy, ...]:
-    sources = sorted(root.glob("*/strategy.json"))
+    sources: Final = tuple(sorted(root.glob("*/strategy.json")))
     if not sources:
         raise ValueError(f"No strategy manifests found below {root}")
-    strategies = tuple(
-        sorted(
-            (_load_strategy(source) for source in sources),
-            key=lambda strategy: strategy.order,
-        )
-    )
-    ids = [strategy.id for strategy in strategies]
-    if len(ids) != len(set(ids)):
+    try:
+        strategies: Final = tuple(sorted((_load_strategy(source) for source in sources), key=lambda item: item.order))
+    except (ValidationError, json.JSONDecodeError) as error:
+        raise ValueError(str(error)) from error
+    if len({strategy.id for strategy in strategies}) != len(strategies):
         raise ValueError(f"Duplicate strategy id in {root}")
     return strategies

@@ -68,6 +68,10 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 from litellm.proxy.management_endpoints.team_endpoints import (
     update_team as _legacy_update_team,
 )
+from litellm.proxy.management_helpers.access_group_model_sync import (
+    sync_access_groups_for_deleted_model,
+    sync_access_groups_for_renamed_model,
+)
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.spend_tracking.ptu_feature_flag import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
@@ -715,6 +719,7 @@ async def patch_model(
             existing_params=db_model.litellm_params,
         )
 
+        requested_model_name: Final = patch_data.model_name
         # Handle team model updates with proper alias management
         update_data: Final = await _update_team_model_in_db(
             db_model=db_model,
@@ -739,6 +744,20 @@ async def patch_model(
                 type=ProxyErrorTypes.not_found_error,
                 code=status.HTTP_404_NOT_FOUND,
                 param=None,
+            )
+
+        stored_model_name: Final = update_data.get("model_name")
+        if (
+            stored_model_name is not None
+            and stored_model_name == requested_model_name
+            and stored_model_name != db_model.model_name
+        ):
+            await sync_access_groups_for_renamed_model(
+                prisma_client=prisma_client,
+                model_id=model_id,
+                old_name=db_model.model_name,
+                new_name=stored_model_name,
+                llm_router=llm_router,
             )
 
         # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
@@ -1673,6 +1692,12 @@ async def delete_model(
                     proxy_logging_obj=proxy_logging_obj,
                     llm_router=llm_router,
                 )
+            await sync_access_groups_for_deleted_model(
+                prisma_client=prisma_client,
+                model_id=model_info.id,
+                model_name=model_params.model_name,
+                llm_router=llm_router,
+            )
 
             ## CREATE AUDIT LOG ##
             asyncio.create_task(
@@ -2027,25 +2052,36 @@ async def update_model(
                 model_params.litellm_params[k] = encrypted_value
 
             ### MERGE WITH EXISTING DATA ###
-            merged_dictionary: Final = {}
             _mp: Final[dict[str, object]] = model_params.litellm_params.dict()
+            merged_dictionary: Final = {
+                key: _existing_litellm_params_dict[key] if value is None else value
+                for key, value in _mp.items()
+                if value is not None or _existing_litellm_params_dict.get(key) is not None
+            }
 
-            for key, value in _mp.items():
-                if value is not None:
-                    merged_dictionary[key] = value
-                elif key in _existing_litellm_params_dict and _existing_litellm_params_dict[key] is not None:
-                    merged_dictionary[key] = _existing_litellm_params_dict[key]
-                else:
-                    pass
-
+            renamed_to: Final = (
+                model_params.model_name
+                if model_params.model_name not in (None, deployment.model_name)
+                and deployment.model_info.team_id is None
+                else None
+            )
             _data: Final[dict[str, str]] = {
                 "litellm_params": json.dumps(merged_dictionary),
                 "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+                **({} if renamed_to is None else {"model_name": renamed_to}),
             }
             model_response: Final = await _proxy_model_table(prisma_client).update(
                 where={"model_id": _model_id},
                 data=_data,
             )
+            if renamed_to is not None:
+                await sync_access_groups_for_renamed_model(
+                    prisma_client=prisma_client,
+                    model_id=_model_id,
+                    old_name=deployment.model_name,
+                    new_name=renamed_to,
+                    llm_router=llm_router,
+                )
 
             # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
             live_before_reload: Final = live_model_ids_snapshot()
