@@ -3,7 +3,9 @@ import time
 from collections.abc import Iterator, Mapping, Sequence
 from itertools import groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypedDict, Union, cast
+
+from typing_extensions import ReadOnly, Required
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import (
@@ -14,6 +16,9 @@ from litellm.types.utils import (
     CacheCreationTokenDetails,
     ChatCompletionAudioResponse,
     ChatCompletionCustomToolCallPayload,
+    ChatCompletionDeltaCustomToolCall,
+    ChatCompletionDeltaCustomToolCallPayload,
+    ChatCompletionDeltaToolCall,
     ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     Choices,
@@ -25,11 +30,14 @@ from litellm.types.utils import (
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     ServerToolUse,
+    StreamingChoices,
     Usage,
 )
 from litellm.utils import print_verbose, token_counter
 
 if TYPE_CHECKING:
+    from openai.types.completion_usage import CompletionUsage
+
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.litellm_core_utils.streaming_chunk_builder_utils import (
         UsagePerChunk,
@@ -67,6 +75,18 @@ class _ContentChunk(TypedDict):
     choices: Sequence[_ContentChoice]
 
 
+class _FunctionCallDelta(TypedDict):
+    function_call: ReadOnly[FunctionCall]
+
+
+class _FunctionCallChoice(TypedDict):
+    delta: ReadOnly[_FunctionCallDelta]
+
+
+class _FunctionCallChunk(TypedDict):
+    choices: ReadOnly[Sequence[_FunctionCallChoice]]
+
+
 class _AudioDelta(TypedDict, total=False):
     audio: ChatCompletionAudioDelta | None
 
@@ -77,6 +97,51 @@ class _AudioChoice(TypedDict, total=False):
 
 class _AudioChunk(TypedDict):
     choices: Sequence[_AudioChoice]
+
+
+_ChunkHiddenParams: TypeAlias = dict[str, object]
+
+
+class _BaseChunk(TypedDict, total=False):
+    id: ReadOnly[str]
+    object: ReadOnly[str]
+    created: ReadOnly[int]
+    model: ReadOnly[str]
+    system_fingerprint: ReadOnly[str | None]
+    choices: ReadOnly[Required[Sequence[StreamingChoices]]]
+    _hidden_params: ReadOnly[_ChunkHiddenParams]
+
+
+class _ToolCallFunctionFragment(TypedDict, total=False):
+    name: ReadOnly[str]
+    arguments: ReadOnly[str]
+    provider_specific_fields: ReadOnly[dict[str, object]]
+
+
+class _ToolCallCustomFragment(TypedDict, total=False):
+    name: ReadOnly[str]
+    input: ReadOnly[str]
+
+
+class _ToolCallFragment(TypedDict, total=False):
+    index: ReadOnly[int]
+    id: ReadOnly[str | None]
+    type: ReadOnly[str | None]
+    function: ReadOnly[_ToolCallFunctionFragment | Function | None]
+    custom: ReadOnly[_ToolCallCustomFragment | None]
+    provider_specific_fields: ReadOnly[dict[str, object] | None]
+
+
+class _ToolCallDelta(TypedDict, total=False):
+    tool_calls: ReadOnly[Sequence[_ToolCallFragment | ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall]]
+
+
+class _ToolCallChoice(TypedDict, total=False):
+    delta: ReadOnly[_ToolCallDelta]
+
+
+class _ToolCallChunk(TypedDict):
+    choices: ReadOnly[Sequence[_ToolCallChoice]]
 
 
 class _UsageBearingChunk(TypedDict, total=False):
@@ -122,6 +187,27 @@ def attach_cache_creation_token_details(
     return prompt_tokens_details.model_copy(update={"cache_creation_token_details": cache_creation_token_details})
 
 
+def apply_grounding_request_counts(
+    prompt_tokens_details: PromptTokensDetailsWrapper | None,
+    web_search_requests: int | None,
+    google_maps_grounding_requests: int | None,
+) -> PromptTokensDetailsWrapper | None:
+    updates: Final = MappingProxyType(
+        {
+            field: value
+            for field, value in (
+                ("web_search_requests", web_search_requests),
+                ("google_maps_grounding_requests", google_maps_grounding_requests),
+            )
+            if value is not None
+        }
+    )
+    if not updates:
+        return prompt_tokens_details
+    counted: Final = prompt_tokens_details if prompt_tokens_details is not None else PromptTokensDetailsWrapper()
+    return counted.model_copy(update=updates)
+
+
 class ChunkProcessor:
     def __init__(self, chunks: list, messages: list | None = None):
         self.chunks = self._sort_chunks(chunks)
@@ -158,7 +244,7 @@ class ChunkProcessor:
         return chunks
 
     def update_model_response_with_hidden_params(
-        self, model_response: ModelResponse, chunk: Mapping[str, dict[str, object]] | None = None
+        self, model_response: ModelResponse, chunk: "_BaseChunk | None" = None
     ) -> ModelResponse:
         if chunk is None:
             return model_response
@@ -166,6 +252,22 @@ class ChunkProcessor:
         if model_response is not None and hasattr(model_response, "_hidden_params"):
             model_response._hidden_params = chunk.get("_hidden_params", {})
         return model_response
+
+    @staticmethod
+    def _get_provider_response_model(
+        chunks: Sequence["_BaseChunk"],
+        first_chunk_model: str,
+    ) -> str | None:
+        models: Final = tuple(
+            model
+            for chunk in chunks
+            if isinstance((hidden_params := chunk.get("_hidden_params")), Mapping)
+            if isinstance((model := hidden_params.get("provider_response_model")), str) and model
+        )
+        return next(
+            (model for model in models if model != first_chunk_model),
+            models[0] if models else None,
+        )
 
     @staticmethod
     def apply_provider_assembled_streaming_metadata(
@@ -214,18 +316,18 @@ class ChunkProcessor:
             )
 
     @staticmethod
-    def _get_chunk_id(chunks: Sequence[Mapping[str, str]]) -> str:
+    def _get_chunk_id(chunks: Sequence["_BaseChunk"]) -> str:
         """
         Chunks:
         [{"id": ""}, {"id": "1"}, {"id": "1"}]
         """
         for chunk in chunks:
-            if chunk.get("id"):
-                return chunk["id"]
+            if chunk_id := chunk.get("id"):
+                return chunk_id
         return ""
 
     @staticmethod
-    def _get_model_from_chunks(chunks: Sequence[Mapping[str, str]], first_chunk_model: str) -> str:
+    def _get_model_from_chunks(chunks: Sequence["_BaseChunk"], first_chunk_model: str) -> str:
         """
         Get the actual model from chunks, preferring a model that differs from the first chunk.
 
@@ -241,7 +343,7 @@ class ChunkProcessor:
         # Fall back to first chunk's model if no different model found
         return first_chunk_model
 
-    def build_base_response(self, chunks: list[dict[str, Any]]) -> ModelResponse:
+    def build_base_response(self, chunks: Sequence["_BaseChunk"]) -> ModelResponse:
         chunk = self.first_chunk
         id: Final = ChunkProcessor._get_chunk_id(chunks)
         object: Final = chunk["object"]
@@ -288,11 +390,20 @@ class ChunkProcessor:
         )
 
         response = self.update_model_response_with_hidden_params(model_response=response, chunk=chunk)
+        provider_response_model: Final = self._get_provider_response_model(
+            chunks,
+            first_chunk_model,
+        )
+        if provider_response_model is not None:
+            response._hidden_params = dict(  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params setter
+                response._hidden_params,  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params getter
+                provider_response_model=provider_response_model,
+            )
         return response
 
     @staticmethod
     def _iter_tool_call_fragments(
-        tool_call_chunks: Sequence[Mapping[str, Any]],
+        tool_call_chunks: Sequence["_ToolCallChunk"],
     ) -> Iterator[tuple[int, str, str]]:
         for chunk in tool_call_chunks:
             for choice in chunk["choices"]:
@@ -306,21 +417,21 @@ class ChunkProcessor:
                         index = tool_call.get("index", 0)
                         function = tool_call.get("function")
                         if isinstance(function, dict):
-                            if function.get("arguments"):
-                                yield index, "arguments", function["arguments"]
-                        elif getattr(function, "arguments", None):
-                            yield index, "arguments", function.arguments
+                            if fragment_arguments := function.get("arguments"):
+                                yield index, "arguments", fragment_arguments
+                        elif function_arguments := getattr(function, "arguments", None):
+                            yield index, "arguments", function_arguments
                         custom = tool_call.get("custom")
-                        if isinstance(custom, dict) and custom.get("input"):
-                            yield index, "custom_input", custom["input"]
+                        if isinstance(custom, dict) and (custom_input := custom.get("input")):
+                            yield index, "custom_input", custom_input
                     else:
                         index = getattr(tool_call, "index", 0)
                         function = getattr(tool_call, "function", None)
-                        if getattr(function, "arguments", None):
-                            yield index, "arguments", function.arguments
+                        if object_arguments := getattr(function, "arguments", None):
+                            yield index, "arguments", object_arguments
                         custom = getattr(tool_call, "custom", None)
-                        if getattr(custom, "input", None):
-                            yield index, "custom_input", custom.input
+                        if object_custom_input := getattr(custom, "input", None):
+                            yield index, "custom_input", object_custom_input
 
     @staticmethod
     def _join_fragments_by_index_and_field(
@@ -337,7 +448,7 @@ class ChunkProcessor:
         )
 
     def get_combined_tool_content(
-        self, tool_call_chunks: Sequence[Mapping[str, Any]]
+        self, tool_call_chunks: Sequence["_ToolCallChunk"]
     ) -> list[
         ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
     ]:  # mutable-ok: assigned verbatim to Message.tool_calls, a list field
@@ -364,7 +475,7 @@ class ChunkProcessor:
                         has_function = "function" in tool_call and tool_call["function"] is not None
                         has_custom = "custom" in tool_call and tool_call["custom"] is not None
                     else:
-                        has_function = hasattr(tool_call, "function") and tool_call.function is not None
+                        has_function = getattr(tool_call, "function", None) is not None
                         has_custom = getattr(tool_call, "custom", None) is not None
 
                     if not has_function and not has_custom:
@@ -387,61 +498,67 @@ class ChunkProcessor:
 
                     # Extract id, type, and function data (handle both dict and object)
                     if isinstance(tool_call, dict):
-                        if tool_call.get("id"):
-                            tool_call_map[index]["id"] = tool_call["id"]
-                        if tool_call.get("type"):
-                            tool_call_map[index]["type"] = tool_call["type"]
+                        if fragment_id := tool_call.get("id"):
+                            tool_call_map[index]["id"] = fragment_id
+                        if fragment_type := tool_call.get("type"):
+                            tool_call_map[index]["type"] = fragment_type
 
                         function = tool_call.get("function", {})
                         if isinstance(function, dict):
-                            if function.get("name"):
-                                tool_call_map[index]["name"] = function["name"]
+                            if fragment_name := function.get("name"):
+                                tool_call_map[index]["name"] = fragment_name
                         else:
                             # function is an object
-                            if hasattr(function, "name") and function.name:
-                                tool_call_map[index]["name"] = function.name
+                            if function_name := getattr(function, "name", None):
+                                tool_call_map[index]["name"] = function_name
 
                         custom = tool_call.get("custom")
                         if isinstance(custom, dict):
-                            if custom.get("name"):
-                                tool_call_map[index]["custom_name"] = custom["name"]
+                            if custom_name := custom.get("name"):
+                                tool_call_map[index]["custom_name"] = custom_name
                     else:
                         # tool_call is an object
                         if hasattr(tool_call, "id") and tool_call.id:
                             tool_call_map[index]["id"] = tool_call.id
                         if hasattr(tool_call, "type") and tool_call.type:
                             tool_call_map[index]["type"] = tool_call.type
-                        if hasattr(tool_call, "function"):
-                            if hasattr(tool_call.function, "name") and tool_call.function.name:
-                                tool_call_map[index]["name"] = tool_call.function.name
+                        if object_function_name := getattr(getattr(tool_call, "function", None), "name", None):
+                            tool_call_map[index]["name"] = object_function_name
 
-                        custom = getattr(tool_call, "custom", None)
-                        if custom is not None:
-                            if getattr(custom, "name", None):
-                                tool_call_map[index]["custom_name"] = custom.name
+                        object_custom: ChatCompletionDeltaCustomToolCallPayload | None = getattr(
+                            tool_call, "custom", None
+                        )
+                        if object_custom is not None:
+                            if getattr(object_custom, "name", None):
+                                tool_call_map[index]["custom_name"] = object_custom.name
 
                     # Preserve provider_specific_fields from streaming chunks
-                    provider_fields = None
+                    provider_fields: object = None
                     if isinstance(tool_call, dict):
                         provider_fields = tool_call.get("provider_specific_fields")
-                        if not provider_fields and isinstance(tool_call.get("function"), dict):
-                            provider_fields = tool_call["function"].get("provider_specific_fields")
+                        if not provider_fields and isinstance(fragment_function := tool_call.get("function"), dict):
+                            provider_fields = fragment_function.get("provider_specific_fields")
                     else:
-                        if hasattr(tool_call, "provider_specific_fields") and tool_call.provider_specific_fields:
-                            provider_fields = tool_call.provider_specific_fields
-                        elif (
-                            hasattr(tool_call, "function")
-                            and hasattr(tool_call.function, "provider_specific_fields")
-                            and tool_call.function.provider_specific_fields
-                        ):
-                            provider_fields = tool_call.function.provider_specific_fields
+                        object_provider_fields: object = getattr(tool_call, "provider_specific_fields", None)
+                        if object_provider_fields:
+                            provider_fields = object_provider_fields
+                        else:
+                            function_provider_fields: object = getattr(
+                                getattr(tool_call, "function", None),
+                                "provider_specific_fields",
+                                None,
+                            )
+                            if function_provider_fields:
+                                provider_fields = function_provider_fields
 
                     if provider_fields:
                         # Merge provider_specific_fields if multiple chunks have them
-                        if tool_call_map[index]["provider_specific_fields"] is None:
-                            tool_call_map[index]["provider_specific_fields"] = {}
+                        merged_provider_fields = tool_call_map[index]["provider_specific_fields"]
+                        if merged_provider_fields is None:
+                            merged_provider_fields = {}
+                            tool_call_map[index]["provider_specific_fields"] = merged_provider_fields
                         if isinstance(provider_fields, dict):
-                            tool_call_map[index]["provider_specific_fields"].update(provider_fields)
+                            merged_provider_fields.update(provider_fields)
 
         joined_fragments: Final = self._join_fragments_by_index_and_field(
             self._iter_tool_call_fragments(tool_call_chunks)
@@ -485,7 +602,7 @@ class ChunkProcessor:
 
         return tool_calls_list
 
-    def get_combined_function_call_content(self, function_call_chunks: list[dict[str, Any]]) -> FunctionCall:
+    def get_combined_function_call_content(self, function_call_chunks: Sequence["_FunctionCallChunk"]) -> FunctionCall:
         argument_list: Final = []
         delta = function_call_chunks[0]["choices"][0]["delta"]
         function_call = delta.get("function_call", "")
@@ -666,7 +783,7 @@ class ChunkProcessor:
         for choice in response.choices:
             if (
                 hasattr(cast(Choices, choice).message, "reasoning_content")
-                and cast(Choices, choice).message.reasoning_content is not None
+                and cast(Choices, choice).message.reasoning_content
             ):
                 if reasoning_tokens is None:
                     reasoning_tokens = 0
@@ -679,7 +796,7 @@ class ChunkProcessor:
 
     @staticmethod
     def _extract_usage_chunk(chunk: "_UsageBearingChunk | ModelResponse | ModelResponseStream") -> Usage | None:
-        usage_chunk: Usage | None = None
+        usage_chunk: Usage | CompletionUsage | None = None
         if hasattr(chunk, "usage") and chunk.usage is not None:
             usage_chunk = chunk.usage
         elif "usage" in chunk:
@@ -691,7 +808,9 @@ class ChunkProcessor:
 
         if isinstance(usage_chunk, dict):
             return Usage(**usage_chunk)
-        return usage_chunk
+        if usage_chunk is None or isinstance(usage_chunk, Usage):
+            return usage_chunk
+        return Usage(**usage_chunk.model_dump())
 
     def _calculate_usage_per_chunk(
         self,
@@ -721,6 +840,7 @@ class ChunkProcessor:
 
         server_tool_use: ServerToolUse | None = None
         web_search_requests: int | None = None
+        google_maps_grounding_requests: int | None = None
         completion_tokens_details: CompletionTokensDetails | None = None
         prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         # Anthropic emits the cache-creation TTL breakdown (5m/1h split) only on
@@ -762,19 +882,21 @@ class ChunkProcessor:
                         server_tool_use = usage_chunk.server_tool_use
                     else:
                         server_tool_use = ServerToolUse.model_validate(usage_chunk.server_tool_use)
-                if (
-                    usage_chunk_dict["prompt_tokens_details"] is not None
-                    and getattr(
+                if usage_chunk_dict["prompt_tokens_details"] is not None:
+                    chunk_web_search_requests: int | None = getattr(
                         usage_chunk_dict["prompt_tokens_details"],
                         "web_search_requests",
                         None,
                     )
-                    is not None
-                ):
-                    web_search_requests = getattr(
+                    if chunk_web_search_requests is not None:
+                        web_search_requests = chunk_web_search_requests
+                    chunk_google_maps_grounding_requests: int | None = getattr(
                         usage_chunk_dict["prompt_tokens_details"],
-                        "web_search_requests",
+                        "google_maps_grounding_requests",
+                        None,
                     )
+                    if chunk_google_maps_grounding_requests is not None:
+                        google_maps_grounding_requests = chunk_google_maps_grounding_requests
 
                 prompt_tokens_details = usage_chunk_dict["prompt_tokens_details"] or prompt_tokens_details
 
@@ -800,10 +922,31 @@ class ChunkProcessor:
             cache_read_input_tokens=cache_read_input_tokens,
             server_tool_use=server_tool_use,
             web_search_requests=web_search_requests,
+            google_maps_grounding_requests=google_maps_grounding_requests,
             completion_tokens_details=completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
             cost=cost,
+            inference_geo=self._last_provider_pricing_field(chunks, "inference_geo"),
+            speed=self._last_provider_pricing_field(chunks, "speed"),
         )
+
+    def _last_provider_pricing_field(
+        self,
+        chunks: Sequence["_UsageBearingChunk | ModelResponse"],
+        field: str,
+    ) -> str | None:
+        """
+        Last value of a provider-specific usage field that changes pricing but is not a
+        declared ``Usage`` field, e.g. Anthropic's ``speed`` (fast mode multiplies
+        non-cache token cost) and ``inference_geo``.
+        """
+        values: Final = [
+            value
+            for chunk in chunks
+            if (usage_chunk := self._extract_usage_chunk(chunk)) is not None
+            and isinstance(value := getattr(usage_chunk, field, None), str)
+        ]
+        return values[-1] if values else None
 
     @staticmethod
     def _reset_anthropic_cursor_completion_tokens(
@@ -867,6 +1010,7 @@ class ChunkProcessor:
 
         server_tool_use: Final[ServerToolUse | None] = calculated_usage_per_chunk["server_tool_use"]
         web_search_requests: Final[int | None] = calculated_usage_per_chunk["web_search_requests"]
+        google_maps_grounding_requests: Final[int | None] = calculated_usage_per_chunk["google_maps_grounding_requests"]
         completion_tokens_details: Final[CompletionTokensDetails | None] = calculated_usage_per_chunk[
             "completion_tokens_details"
         ]
@@ -915,26 +1059,38 @@ class ChunkProcessor:
                 returned_usage.completion_tokens_details is not None
                 and returned_usage.completion_tokens_details.reasoning_tokens is None
             ):
-                returned_usage.completion_tokens_details.reasoning_tokens = reasoning_tokens
+                capped_reasoning_tokens: Final = min(max(0, reasoning_tokens), returned_usage.completion_tokens)
+                returned_usage.completion_tokens_details.reasoning_tokens = capped_reasoning_tokens
+                if returned_usage.completion_tokens_details.text_tokens is None:
+                    returned_usage.completion_tokens_details.text_tokens = (
+                        returned_usage.completion_tokens - capped_reasoning_tokens
+                    )
         if prompt_tokens_details is not None:
             returned_usage.prompt_tokens_details = prompt_tokens_details
 
         if server_tool_use is not None:
             returned_usage.server_tool_use = server_tool_use
-        if web_search_requests is not None:
-            if returned_usage.prompt_tokens_details is None:
-                returned_usage.prompt_tokens_details = PromptTokensDetailsWrapper(
-                    web_search_requests=web_search_requests
-                )
-            else:
-                returned_usage.prompt_tokens_details.web_search_requests = web_search_requests
+        returned_usage.prompt_tokens_details = apply_grounding_request_counts(
+            returned_usage.prompt_tokens_details,
+            web_search_requests,
+            google_maps_grounding_requests,
+        )
 
         if cost is not None:
             setattr(returned_usage, "cost", cost)
 
         # Return a new usage object with the new values
 
-        returned_usage = Usage(**returned_usage.model_dump())
+        provider_pricing_fields: Final = {
+            field: value
+            for field, value in (
+                ("inference_geo", calculated_usage_per_chunk["inference_geo"]),
+                ("speed", calculated_usage_per_chunk["speed"]),
+            )
+            if value is not None
+        }
+
+        returned_usage = Usage(**returned_usage.model_dump(), **provider_pricing_fields)
 
         return returned_usage
 

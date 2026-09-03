@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import ViewSwitcher from "./ViewSwitcher";
 
 const { mockUsePluginMode, mockUseUISettings, mockUsePathname, state } = vi.hoisted(() => {
@@ -58,7 +58,7 @@ describe("ViewSwitcher", () => {
     act(() => {
       fireEvent.click(button);
     });
-    await waitFor(() => expect(screen.getByText("Chat")).toBeInTheDocument());
+    expect(await screen.findByText("Chat")).toBeInTheDocument();
     expect(screen.getByText(/Admins can enable in Settings/i)).toBeInTheDocument();
 
     act(() => {
@@ -81,7 +81,7 @@ describe("ViewSwitcher", () => {
     act(() => {
       fireEvent.click(screen.getByRole("button"));
     });
-    await waitFor(() => expect(screen.getByText("AI Gateway")).toBeInTheDocument());
+    expect(await screen.findByText("AI Gateway")).toBeInTheDocument();
     expect(screen.getByText("Observability")).toBeInTheDocument();
   });
 
@@ -93,7 +93,7 @@ describe("ViewSwitcher", () => {
     act(() => {
       fireEvent.click(screen.getByRole("button"));
     });
-    await waitFor(() => expect(screen.getByText("Chat UI")).toBeInTheDocument());
+    expect(await screen.findByText("Chat UI")).toBeInTheDocument();
     act(() => {
       fireEvent.click(screen.getByText("Chat UI"));
     });
@@ -108,7 +108,7 @@ describe("ViewSwitcher", () => {
     act(() => {
       fireEvent.click(screen.getByRole("button"));
     });
-    await waitFor(() => expect(screen.getByText("Chat")).toBeInTheDocument());
+    expect(await screen.findByText("Chat")).toBeInTheDocument();
     expect(screen.queryByText(/Admins can enable in Settings/i)).not.toBeInTheDocument();
 
     act(() => {
@@ -127,7 +127,7 @@ describe("ViewSwitcher", () => {
     act(() => {
       fireEvent.click(screen.getByRole("button"));
     });
-    await waitFor(() => expect(screen.getByText("AI Gateway")).toBeInTheDocument());
+    expect(await screen.findByText("AI Gateway")).toBeInTheDocument();
     act(() => {
       fireEvent.click(screen.getByText("AI Gateway"));
     });
@@ -143,7 +143,7 @@ describe("ViewSwitcher", () => {
     act(() => {
       fireEvent.click(screen.getByRole("button"));
     });
-    await waitFor(() => expect(screen.getByText("Observability")).toBeInTheDocument());
+    expect(await screen.findByText("Observability")).toBeInTheDocument();
     expect(screen.getByText("Chat")).toBeInTheDocument();
     expect(screen.getByText(/Admins can enable in Settings/i)).toBeInTheDocument();
 

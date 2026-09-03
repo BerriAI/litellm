@@ -13,9 +13,11 @@ from litellm.proxy._types import (
     UI_TEAM_ID,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
+    LitellmUserRoles,
     UserAPIKeyAuth,
 )
 from litellm.repositories.table_repositories import AgentsRepository
+from litellm.types.agents import AgentResponse
 
 
 @dataclass(frozen=True, slots=True)
@@ -439,3 +441,17 @@ class AgentRequestHandler:
         except Exception as e:
             verbose_logger.warning("Failed to get agent access groups for team: %s", e)
             return []
+
+
+async def accessible_agents(user_api_key_auth: UserAPIKeyAuth) -> tuple[AgentResponse, ...]:
+    """Every registry agent for proxy admins, else the agents the key's and team's grants reach."""
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+    all_agents: Final = global_agent_registry.get_agent_list()
+    if user_api_key_auth.user_role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN.value):
+        return all_agents
+    match await AgentRequestHandler.resolve_agent_access(user_api_key_auth=user_api_key_auth):
+        case UnrestrictedAgentAccess():
+            return all_agents
+        case RestrictedAgentAccess(allowed_agent_ids):
+            return tuple(agent for agent in all_agents if agent.agent_id in allowed_agent_ids)

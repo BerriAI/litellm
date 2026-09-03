@@ -1,21 +1,15 @@
 import httpx
 import json
 import pytest
-import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
-import os
 from litellm._uuid import uuid
 import time
 import base64
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from abc import ABC, abstractmethod
 from litellm.integrations.custom_logger import CustomLogger
-import json
 from litellm.types.utils import StandardLoggingPayload
 
 

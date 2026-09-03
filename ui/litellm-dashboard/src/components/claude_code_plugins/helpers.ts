@@ -179,13 +179,14 @@ export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourceP
 /**
  * Build the `~/.claude/settings.json` snippet that registers the proxy as a marketplace.
  * Claude Code expects `extraKnownMarketplaces.<name>.source` to be a source object, not a
- * bare `"url"` string, so the url/source pair is nested one level deeper.
+ * bare `"url"` string, so the url/source pair is nested one level deeper. The key must be
+ * "litellm" to match the name the proxy returns in marketplace.json.
  */
 export const buildMarketplaceSettingsSnippet = (proxyOrigin: string): string =>
   JSON.stringify(
     {
       extraKnownMarketplaces: {
-        "my-org": {
+        litellm: {
           source: {
             source: "url",
             url: `${proxyOrigin}/claude-code/marketplace.json`,
@@ -198,20 +199,10 @@ export const buildMarketplaceSettingsSnippet = (proxyOrigin: string): string =>
   );
 
 /**
- * Generate install command for Claude Code CLI
- * Format: /plugin marketplace add org/repo OR /plugin marketplace add url
+ * Generate install command for Claude Code CLI.
+ * Installs the named plugin from the "litellm" marketplace registered in settings.json.
  */
-export const formatInstallCommand = (plugin: { name: string; source: PluginSource }): string => {
-  const { source } = plugin;
-  if (source.source === "github" && source.repo) {
-    return `/plugin marketplace add ${source.repo}`;
-  }
-  if ((source.source === "url" || source.source === "git-subdir") && source.url) {
-    return `/plugin marketplace add ${source.url}`;
-  }
-  // Fallback to plugin name
-  return `/plugin marketplace add ${plugin.name}`;
-};
+export const formatInstallCommand = (plugin: { name: string }): string => `/plugin install ${plugin.name}@litellm`;
 
 /**
  * Extract unique categories from plugins list

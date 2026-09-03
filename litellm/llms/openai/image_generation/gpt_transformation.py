@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -10,6 +10,7 @@ from litellm.types.utils import ImageResponse
 from litellm.utils import convert_to_model_response_object
 
 if TYPE_CHECKING:
+    import tiktoken
     from litellm.litellm_core_utils.logging import Logging as LiteLLMLoggingObj
 
 
@@ -60,7 +61,7 @@ class GPTImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -81,8 +82,8 @@ class GPTImageGenerationConfig(BaseImageGenerationConfig):
         )
 
         # set optional params
-        image_response.size = optional_params.get("size", "1024x1024")  # default is always 1024x1024
-        image_response.quality = optional_params.get("quality", "high")  # always hd for dall-e-3
-        image_response.output_format = optional_params.get("response_format", "png")  # always png for dall-e-3
+        image_response.size = image_response.size or optional_params.get("size", "1024x1024")
+        image_response.quality = image_response.quality or optional_params.get("quality", "high")
+        image_response.output_format = image_response.output_format or optional_params.get("output_format", "png")
 
         return image_response

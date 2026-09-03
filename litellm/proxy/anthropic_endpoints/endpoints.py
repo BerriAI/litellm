@@ -22,6 +22,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     create_response,
+    proxy_exception_from_http_exception,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.types.utils import TokenCountResponse
@@ -179,7 +180,7 @@ async def anthropic_response(
             await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
-                request_data=data,
+                request_data=base_llm_response_processor.data,
             )
         body: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
             status_code=e.status_code,
@@ -189,9 +190,12 @@ async def anthropic_response(
         return JSONResponse(status_code=e.status_code, content=body)
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=base_llm_response_processor.data
         )
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.anthropic_response(): Exception occured - %s", e)
+
+        if isinstance(e, ProxyException):
+            raise
 
         # Extract model_id from request metadata (same as success path)
         litellm_metadata: Final = data.get("litellm_metadata", {}) or {}
@@ -210,6 +214,9 @@ async def anthropic_response(
             timeout=getattr(e, "timeout", None),
             litellm_logging_obj=None,
         )
+
+        if isinstance(e, HTTPException):
+            raise proxy_exception_from_http_exception(e, headers)
 
         error_msg: Final = f"{e}"
         raise ProxyException(

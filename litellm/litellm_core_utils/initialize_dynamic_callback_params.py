@@ -1,3 +1,4 @@
+import re
 from collections.abc import Iterator, Mapping
 from typing import Any, Final
 
@@ -45,12 +46,29 @@ def validate_no_callback_env_reference(param: str, value: object, *, source: str
         _raise_env_reference_error(param, source=source)
 
 
+# Langfuse rejects events whose environment does not match this pattern
+# (lowercase alphanumerics, hyphens, underscores; no "langfuse" prefix).
+# Validating here fails fast at config/init time instead of silently
+# dropping every trace server-side.
+LANGFUSE_ENVIRONMENT_PATTERN: Final = r"^(?!langfuse)[a-z0-9-_]+$"
+
+
+def validate_langfuse_environment_value(value: str) -> None:
+    if not re.match(LANGFUSE_ENVIRONMENT_PATTERN, value):
+        raise ValueError(
+            f"Invalid langfuse_environment {value!r}: must be lowercase "
+            "alphanumerics/hyphens/underscores and must not start with "
+            f"'langfuse' (pattern {LANGFUSE_ENVIRONMENT_PATTERN})"
+        )
+
+
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict
-_supported_callback_params: Final = [
+_supported_callback_params: Final[tuple[str, ...]] = (
     "langfuse_public_key",
     "langfuse_secret",
     "langfuse_secret_key",
     "langfuse_host",
+    "langfuse_environment",
     "langfuse_prompt_version",
     "langsmith_api_key",
     "langsmith_project",
@@ -72,8 +90,10 @@ _supported_callback_params: Final = [
     "dd_site",
     "dd_agent_host",
     "dd_agent_port",
+    "newrelic_api_key",
+    "newrelic_region",
     "turn_off_message_logging",
-]
+)
 
 _request_blocked_callback_params: Final = frozenset(
     {
@@ -83,6 +103,20 @@ _request_blocked_callback_params: Final = frozenset(
         "dd_site",
         "dd_agent_host",
         "dd_agent_port",
+        "newrelic_api_key",
+        "newrelic_region",
+    }
+)
+
+# Request-blocked params that must still reach ``standard_callback_dynamic_params``
+# when the proxy itself stamped them from admin-configured team/key callback
+# settings (the trusted-vars channel). The OTel per-tenant tracer routing reads
+# ``standard_callback_dynamic_params``, so without this overlay a blocked param
+# could never drive routing at all.
+_trusted_overlay_callback_params: Final = frozenset(
+    {
+        "newrelic_api_key",
+        "newrelic_region",
     }
 )
 
@@ -121,7 +155,9 @@ def initialize_standard_callback_dynamic_params(
             if param in kwargs:
                 _param_value = kwargs.get(param)
                 validate_no_callback_env_reference(param, _param_value, source="request body")
-                standard_callback_dynamic_params[param] = _param_value
+                standard_callback_dynamic_params[param] = (  # pyright: ignore[reportGeneralTypeIssues]  # several supported params predate their StandardCallbackDynamicParams fields
+                    _param_value
+                )
 
         for slot_label, metadata in iter_client_callback_metadata_dicts(kwargs):
             for param in _supported_callback_params:
@@ -130,6 +166,12 @@ def initialize_standard_callback_dynamic_params(
                 if param not in standard_callback_dynamic_params and param in metadata:
                     _param_value = metadata.get(param)
                     validate_no_callback_env_reference(param, _param_value, source=slot_label)
-                    standard_callback_dynamic_params[param] = _param_value
+                    standard_callback_dynamic_params[param] = (  # pyright: ignore[reportGeneralTypeIssues]  # several supported params predate their StandardCallbackDynamicParams fields
+                        _param_value
+                    )
+
+        for param, trusted_value in get_trusted_callback_params(kwargs):
+            if param in _trusted_overlay_callback_params:
+                standard_callback_dynamic_params[param] = trusted_value
 
     return standard_callback_dynamic_params

@@ -3,16 +3,13 @@ Unit tests for Tool Permission Guardrail (OpenAI tool_calls semantics)
 """
 
 import json
-import os
 import re
-import sys
 from unittest.mock import patch
 
 import pytest
 
 from litellm.caching.dual_cache import DualCache
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from fastapi import HTTPException
 
@@ -124,7 +121,7 @@ class TestToolPermissionGuardrail:
         assert rule_id is None
 
     def test_rule_requires_name_or_type(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='validation error for ToolPermissionRule'):
             ToolPermissionGuardrail(
                 guardrail_name="invalid-rule",
                 rules=[{"id": "no_target", "decision": "allow"}],
@@ -1042,7 +1039,7 @@ class TestToolPermissionGuardrailInMemoryUpdate:
         assert guardrail._check_tool_permission("Secret")[0] is False
         assert guardrail._check_tool_permission("Other")[0] is True
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Invalid regex for tool_name in rule 'bad': unterminated"):
             guardrail.update_in_memory_litellm_params(
                 LitellmParams(
                     guardrail="tool_permission",
@@ -1214,6 +1211,44 @@ class TestToolPermissionGuardrailAnthropicMessages:
             "dropping every tool_use must end the turn, or the client waits for a tool result that never comes"
         )
         assert '"stop_reason": "tool_use"' not in body
+
+    @pytest.mark.asyncio
+    async def test_rewrite_mode_keeps_the_stream_identity_it_had_before_the_shared_helper(self):
+        """Well-formed SSE must round-trip exactly as it did before the helpers were shared.
+
+        The shared module can stamp the upstream message id and model onto the assembled response
+        for callers that ask for it; this path never did, and a client reads those bytes.
+        """
+        with patch.object(self.rewriting, "should_run_guardrail", return_value=True):
+            out = await self._drain(self.rewriting, self._sse_chunks("Read"))
+
+        body = b"".join(c if isinstance(c, bytes) else str(c).encode() for c in out).decode()
+        message_start = next(
+            json.loads(line[6:])
+            for line in body.splitlines()
+            if line.startswith("data: ") and json.loads(line[6:]).get("type") == "message_start"
+        )["message"]
+        assert message_start["id"].startswith("chatcmpl-"), "the rewritten stream must not adopt the upstream message id"
+        assert message_start["model"] == "unknown-model", "the rewritten stream must not adopt the upstream model"
+
+    @pytest.mark.asyncio
+    async def test_message_start_without_a_dict_message_fails_closed(self):
+        """Malformed SSE must not be forwarded unscanned.
+
+        The shared assembler requires message_start.message to be a dict; the private helper it
+        replaced accepted anything, and assembled a response from it.
+        """
+        events = [
+            {"type": "message_start", "message": "not-a-dict"},
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
+            {"type": "message_stop"},
+        ]
+        chunks = [f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode() for e in events]
+
+        with patch.object(self.rewriting, "should_run_guardrail", return_value=True):
+            with pytest.raises(GuardrailRaisedException):
+                await self._drain(self.rewriting, chunks)
 
     def _resplit(self, chunks, size=7):
         joined = b"".join(chunks)

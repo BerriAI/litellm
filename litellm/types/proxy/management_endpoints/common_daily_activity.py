@@ -26,6 +26,7 @@ class SpendMetrics(BaseModel):
     compression_saved_tokens: int = Field(default=0)
     compression_savings_spend: float = Field(default=0.0)
     prompt_caching_savings_spend: float = Field(default=0.0)
+    gateway_injected_caching_savings_spend: float = Field(default=0.0)
     autorouter_savings_spend: float = Field(default=0.0)
     total_tokens: int = Field(default=0)
     successful_requests: int = Field(default=0)
@@ -88,6 +89,7 @@ class DailySpendMetadata(BaseModel):
     total_compression_saved_tokens: int = Field(default=0)
     total_compression_savings_spend: float = Field(default=0.0)
     total_prompt_caching_savings_spend: float = Field(default=0.0)
+    total_gateway_injected_caching_savings_spend: float = Field(default=0.0)
     total_autorouter_savings_spend: float = Field(default=0.0)
     page: int = Field(default=1)
     total_pages: int = Field(default=1)
@@ -115,6 +117,7 @@ class LiteLLM_DailyUserSpend(BaseModel):
     compression_saved_tokens: int = 0
     compression_savings_spend: float = 0.0
     prompt_caching_savings_spend: float = 0.0
+    gateway_injected_caching_savings_spend: float = 0.0
     autorouter_savings_spend: float = 0.0
     spend: float = 0.0
     api_requests: int = 0

@@ -162,6 +162,34 @@ class TestUnmappedModelBudgetEnforcement:
         # Subsequent call sees the new pricing and enforces budget.
         assert _is_model_cost_zero(model="ramping-model", llm_router=router) is False
 
+    def test_strategy_router_alias_with_zero_pricing_enforces_budget(self):
+        """An auto-router alias is never the deployment that gets called or
+        billed, so zero pricing configured on it must not waive budget checks
+        for requests that route to (and bill as) a real paid deployment."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router/smart-router",
+                        "complexity_router_default_model": "paid-model",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                        "complexity_router_config": {"tiers": {"simple": "paid-model"}},
+                    },
+                    "model_info": {"id": "alias-id"},
+                },
+                {
+                    "model_name": "paid-model",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"},
+                    "model_info": {"id": "paid-id"},
+                },
+            ]
+        )
+
+        assert "input_cost_per_token" not in litellm.model_cost.get("alias-id", {})
+        assert _is_model_cost_zero(model="smart-router", llm_router=router) is False
+
     def test_handles_router_without_zero_cost_cache_attribute(self):
         """Tolerate router-like objects (e.g. ``MagicMock`` stand-ins) that
         do not expose ``_zero_cost_cache`` — the auth check must still

@@ -5,13 +5,10 @@ Verifies that PodLockManager is correctly used to prevent concurrent
 key rotation across multiple pods in a distributed deployment.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import LiteLLM_VerificationToken
 from litellm.proxy.common_utils.key_rotation_manager import KeyRotationManager

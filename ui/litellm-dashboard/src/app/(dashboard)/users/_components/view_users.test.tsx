@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,11 +37,17 @@ vi.mock("./view_users/user_info_view", () => ({
   },
 }));
 
-// Mock NotificationsManager
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
+vi.mock("./default-user-settings/DefaultUserSettingsForm", () => ({
+  DefaultUserSettingsForm: function DefaultUserSettingsFormMock() {
+    const [value, setValue] = React.useState("");
+    return (
+      <section aria-label="Default user settings panel">
+        <label>
+          Default setting
+          <input value={value} onChange={(event) => setValue(event.target.value)} />
+        </label>
+      </section>
+    );
   },
 }));
 
@@ -78,10 +84,10 @@ const defaultProps = {
   teams: [],
 };
 
-const renderDashboard = () =>
+const renderDashboard = (overrides: Partial<typeof defaultProps> = {}) =>
   renderWithProviders(
     <QueryClientProvider client={createQueryClient()}>
-      <ViewUserDashboard {...defaultProps} />
+      <ViewUserDashboard {...defaultProps} {...overrides} />
     </QueryClientProvider>,
   );
 
@@ -105,6 +111,64 @@ describe("ViewUserDashboard", () => {
     });
 
     expect(screen.getAllByText("Default User Settings").length).toBeGreaterThan(0);
+  });
+
+  it("switches between the users table and default settings tabs for proxy admins", async () => {
+    const user = userEvent.setup();
+    renderDashboard();
+
+    expect(await screen.findByText("test@example.com")).toBeInTheDocument();
+
+    const usersTab = screen.getByRole("tab", { name: "Users" });
+    const settingsTab = screen.getByRole("tab", { name: "Default User Settings" });
+    expect(usersTab).toHaveAttribute("aria-selected", "true");
+
+    await user.click(settingsTab);
+
+    expect(settingsTab).toHaveAttribute("aria-selected", "true");
+    expect(usersTab).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("region", { name: "Default user settings panel" })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Default setting" }), { target: { value: "unsaved change" } });
+
+    await user.click(usersTab);
+
+    expect(usersTab).toHaveAttribute("aria-selected", "true");
+    expect(settingsTab).toHaveAttribute("aria-selected", "false");
+
+    await user.click(settingsTab);
+
+    expect(screen.getByRole("textbox", { name: "Default setting" })).toHaveValue("unsaved change");
+  });
+
+  it("renders invite and bulk invite as toolbar actions alongside the other admin controls", async () => {
+    renderDashboard();
+
+    const inviteButton = await screen.findByRole("button", { name: /\+ invite user/i });
+    const bulkInviteButton = screen.getByRole("button", { name: /\+ bulk invite users/i });
+    const toolbar = screen.getByTestId("toggle-user-selection").parentElement;
+
+    expect(inviteButton.parentElement).toBe(toolbar);
+    expect(bulkInviteButton.parentElement).toBe(toolbar);
+  });
+
+  it("shows the users table without admin controls for non-proxy admins", async () => {
+    renderDashboard({ userRole: "Internal User" });
+
+    expect(await screen.findByText("test@example.com")).toBeInTheDocument();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("toggle-user-selection")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /\+ invite user/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /\+ bulk invite users/i })).not.toBeInTheDocument();
+  });
+
+  it("keeps actions unavailable while the user list is loading", () => {
+    userListCall.mockReturnValue(new Promise(() => undefined));
+
+    renderDashboard();
+
+    expect(screen.getByText("Loading users…")).toBeInTheDocument();
+    expect(screen.queryByTestId("toggle-user-selection")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("bulk-edit-users")).not.toBeInTheDocument();
   });
 
   it("should show delete modal after choosing delete from the row actions menu", async () => {
@@ -201,7 +265,7 @@ describe("ViewUserDashboard", () => {
 
       await user.click(screen.getByTestId("datatable-select-row-user-2"));
       expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (1 selected)");
-      expect(screen.getByTestId("bulk-edit-users")).not.toBeDisabled();
+      expect(screen.getByTestId("bulk-edit-users")).toBeEnabled();
 
       await user.click(screen.getByTestId("datatable-select-all"));
       expect(screen.getByTestId("bulk-edit-users")).toHaveTextContent("Bulk Edit (2 selected)");

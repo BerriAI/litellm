@@ -100,12 +100,12 @@ class TestEncodeUrlPathSegment:
 
     @pytest.mark.parametrize("value", ["", ".", "..", None])
     def test_rejects_empty_and_dot_segments(self, value):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match=r"resource_id (is required|cannot be a dot path segment)"):
             encode_url_path_segment(value, field_name="resource_id")
 
     @pytest.mark.parametrize("value", ["../model", "model/../other", "/model"])
     def test_rejects_dot_segments_in_multi_segment_paths(self, value):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match=r"model (is required|cannot be a dot path segment)"):
             encode_url_path_segments(value, field_name="model")
 
 

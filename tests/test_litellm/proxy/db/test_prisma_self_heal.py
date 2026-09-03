@@ -8,9 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
@@ -507,7 +504,7 @@ async def test_engine_confirmed_dead_persists_across_failed_heavy_reconnect(
     client._reap_all_zombies = MagicMock()
 
     with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
-        with pytest.raises(Exception):
+        with pytest.raises(RuntimeError):
             await client._run_reconnect_cycle(timeout_seconds=5.0)
 
     # The flag must STILL be True so the next attempt re-enters the heavy

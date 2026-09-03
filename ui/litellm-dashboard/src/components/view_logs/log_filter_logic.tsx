@@ -15,11 +15,14 @@ export interface PaginatedResponse {
   page_size: number;
   total_pages: number;
   total_is_capped?: boolean;
+  next_session_cursor?: string | null;
+  has_more?: boolean;
 }
 
 export const LOG_FILTER_IDS = {
   TEAM_ID: "team_id",
   STATUS: "status",
+  CACHE_STATUS: "cache_hit",
   KEY_ALIAS: "key_alias",
   END_USER: "end_user",
   ERROR_CODE: "error_code",
@@ -35,7 +38,9 @@ export const LOG_FILTER_IDS = {
 export const LOG_FILTER_LABELS: Record<string, string> = {
   [LOG_FILTER_IDS.TEAM_ID]: "Team ID",
   [LOG_FILTER_IDS.STATUS]: "Status",
+  [LOG_FILTER_IDS.CACHE_STATUS]: "Cache",
   [LOG_FILTER_IDS.KEY_ALIAS]: "Key Alias",
+  [LOG_FILTER_IDS.USER_ID]: "User ID",
   [LOG_FILTER_IDS.END_USER]: "End User",
   [LOG_FILTER_IDS.ERROR_CODE]: "Error Code",
   [LOG_FILTER_IDS.ERROR_MESSAGE]: "Error Message",
@@ -98,33 +103,37 @@ export function useLogFilterLogic({
   userRole,
   userID,
   columnFilters,
-  filterByCurrentUser,
   activeTab,
   isLiveTail,
+  excludeInternalHealthChecks,
   startTime,
   endTime,
   pagination,
   isCustomDate,
   sorting,
+  sessionCursors = {},
 }: {
   accessToken: string | null;
   token: string | null;
   userRole: string | null;
   userID: string | null;
   columnFilters: ColumnFiltersState;
-  filterByCurrentUser: boolean | null;
   activeTab: string;
   isLiveTail: boolean;
+  excludeInternalHealthChecks: boolean;
   startTime: string;
   endTime: string;
   pagination: PaginationState;
   isCustomDate: boolean;
   sorting: SortingState;
+  sessionCursors?: Record<number, string>;
 }) {
   const pageSize = pagination.pageSize || defaultPageSize;
   const activeSort = sorting[0] ?? DEFAULT_LOGS_SORTING[0];
   const sortBy: LogsSortField = isSortField(activeSort.id) ? activeSort.id : "startTime";
   const sortOrder: "asc" | "desc" = activeSort.desc ? "desc" : "asc";
+  const usesSessionCursor = sortBy === "startTime";
+  const sessionCursor = usesSessionCursor ? sessionCursors[pagination.pageIndex] : undefined;
 
   const logsQueryOptions: UseQueryOptions<PaginatedResponse> = {
     queryKey: [
@@ -136,9 +145,10 @@ export function useLogFilterLogic({
       endTime,
       isCustomDate,
       columnFilters,
-      filterByCurrentUser ? userID : null,
       sortBy,
       sortOrder,
+      excludeInternalHealthChecks,
+      sessionCursor,
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -166,9 +176,10 @@ export function useLogFilterLogic({
           team_id: getFilterValue(columnFilters, LOG_FILTER_IDS.TEAM_ID),
           request_id: getFilterValue(columnFilters, LOG_FILTER_IDS.REQUEST_ID),
           session_id: getFilterValue(columnFilters, LOG_FILTER_IDS.SESSION_ID),
-          user_id: userIdFilter ?? (filterByCurrentUser ? userID ?? undefined : undefined),
+          user_id: userIdFilter,
           end_user: getFilterValue(columnFilters, LOG_FILTER_IDS.END_USER),
           status_filter: getFilterValue(columnFilters, LOG_FILTER_IDS.STATUS),
+          cache_hit_filter: getFilterValue(columnFilters, LOG_FILTER_IDS.CACHE_STATUS),
           model_id: getFilterValue(columnFilters, LOG_FILTER_IDS.MODEL_ID),
           model: getFilterValue(columnFilters, LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL),
           key_alias: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_ALIAS),
@@ -176,6 +187,9 @@ export function useLogFilterLogic({
           error_message: getFilterValue(columnFilters, LOG_FILTER_IDS.ERROR_MESSAGE),
           sort_by: sortBy,
           sort_order: sortOrder,
+          exclude_internal_health_checks: excludeInternalHealthChecks,
+          group_by_session: true,
+          session_cursor: sessionCursor,
         },
       });
     },
@@ -213,5 +227,6 @@ export function useLogFilterLogic({
     logsQuery,
     filteredLogs,
     allTeams,
+    usesSessionCursor,
   };
 }

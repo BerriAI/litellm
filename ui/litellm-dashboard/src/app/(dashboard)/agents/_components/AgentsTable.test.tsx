@@ -74,6 +74,42 @@ describe("AgentsTable", () => {
     expect(onDeleteClick).toHaveBeenCalledWith("agent-9", "Doomed Agent");
   });
 
+  it("filters agents by name or by agent card description", async () => {
+    const user = userEvent.setup();
+    render(
+      <AgentsTable
+        agents={[
+          makeAgent({ agent_id: "a1", agent_name: "Billing Router" }),
+          makeAgent({
+            agent_id: "a2",
+            agent_name: "Second Agent",
+            agent_card_params: { description: "handles support tickets" },
+          }),
+        ]}
+        {...baseProps}
+      />,
+    );
+
+    const search = screen.getByPlaceholderText("Search agent names or descriptions...");
+    await user.type(search, "billing");
+    expect(screen.getByText("Billing Router")).toBeInTheDocument();
+    expect(screen.queryByText("Second Agent")).not.toBeInTheDocument();
+
+    await user.clear(search);
+    await user.type(search, "support tickets");
+    expect(screen.getByText("Second Agent")).toBeInTheDocument();
+    expect(screen.queryByText("Billing Router")).not.toBeInTheDocument();
+  });
+
+  it("shows the no-match empty state when the search matches nothing", async () => {
+    const user = userEvent.setup();
+    render(<AgentsTable agents={[makeAgent()]} {...baseProps} />);
+
+    await user.type(screen.getByPlaceholderText("Search agent names or descriptions..."), "zzzz");
+    expect(screen.queryByText("Test Agent")).not.toBeInTheDocument();
+    expect(screen.getByText("No matching agents")).toBeInTheDocument();
+  });
+
   it("hides the actions column entirely for non-admins", () => {
     const agent = makeAgent({ agent_id: "agent-2" });
     render(<AgentsTable agents={[agent]} {...baseProps} isAdmin={false} />);
@@ -101,8 +137,8 @@ describe("AgentsTable", () => {
     );
 
     const bodyRows = screen.getAllByRole("row").slice(1);
-    expect(bodyRows[0].textContent).toContain("Beta Agent");
-    expect(bodyRows[1].textContent).toContain("Alpha Agent");
+    expect(bodyRows[0]).toHaveTextContent(/Beta Agent/);
+    expect(bodyRows[1]).toHaveTextContent(/Alpha Agent/);
   });
 
   it("sorts agents with no created_at last, never ahead of dated ones", () => {
@@ -118,9 +154,9 @@ describe("AgentsTable", () => {
     );
 
     const bodyRows = screen.getAllByRole("row").slice(1);
-    expect(bodyRows[0].textContent).toContain("Beta Agent");
-    expect(bodyRows[1].textContent).toContain("Alpha Agent");
-    expect(bodyRows[2].textContent).toContain("Undated Agent");
+    expect(bodyRows[0]).toHaveTextContent(/Beta Agent/);
+    expect(bodyRows[1]).toHaveTextContent(/Alpha Agent/);
+    expect(bodyRows[2]).toHaveTextContent(/Undated Agent/);
   });
 
   it("shows a rich empty state when there are no agents", () => {
