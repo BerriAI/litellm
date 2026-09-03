@@ -194,7 +194,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # internal '<=' comparison and surfaces as a misleading api_error.
         self.timeout = float(timeout) if timeout is not None else 10.0
 
-        # Tri-state: None = not set (default-on for Anthropic), True = explicit on, False = explicit off
+        # Tri-state scan-scope flag; resolution semantics in _use_latest_user_only()
         self.experimental_use_latest_role_message_only: bool | None = kwargs.get(
             "experimental_use_latest_role_message_only"
         )
@@ -1568,16 +1568,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     ) -> bool:
         """Resolve whether to scan only the latest user message.
 
-        - Non-Anthropic requests: always False (existing behavior)
-        - Anthropic requests:
-          - Flag explicitly True/False: respect it
-          - Flag None (not set): default to True
+        - Flag explicitly True/False: respect it for every request shape,
+          matching the bedrock guardrail's semantics for the same flag
+        - Flag None (not set): keep the historical defaults - True for
+          Anthropic /v1/messages requests, False for everything else
         """
-        if not self._is_anthropic_request(request_data, logging_obj):
-            return False
-        if self.experimental_use_latest_role_message_only is None:
-            return True  # Default-on for Anthropic
-        return self.experimental_use_latest_role_message_only
+        if self.experimental_use_latest_role_message_only is not None:
+            return self.experimental_use_latest_role_message_only
+        return self._is_anthropic_request(request_data, logging_obj)
 
     @staticmethod
     def _get_latest_user_text_indices(
@@ -1775,7 +1773,6 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if input_type == "request":
             structured_messages: Final = inputs.get("structured_messages")
             if structured_messages:
-                # For Anthropic /v1/messages: default to latest-user-only scanning.
                 # Uses request_data["messages"] (original format), NOT structured_messages
                 # (which has injected system content from adapter translation).
                 if self._use_latest_user_only(request_data, logging_obj):
@@ -1783,7 +1780,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     if original_messages:
                         scannable_indices = self._get_latest_user_text_indices(texts, original_messages)
                 # Fall through to existing role filtering if:
-                # - not Anthropic, OR flag explicitly False, OR
+                # - latest-only not enabled for this request, OR
                 # - no original messages, OR
                 # - latest-user extraction returned None (no user / count mismatch)
                 if scannable_indices is None:
