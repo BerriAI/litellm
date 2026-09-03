@@ -13,6 +13,10 @@ pub struct OcrResponseData {
     pub model: String,
     pub document_annotation: Option<Value>,
     pub usage_info: Option<Value>,
+    pub content: Option<Value>,
+    pub tables: Option<Value>,
+    pub key_value_pairs: Option<Value>,
+    pub provider_native_response: Option<Value>,
     pub object: String,
 }
 
@@ -23,6 +27,10 @@ impl OcrResponseData {
             "model": self.model,
             "document_annotation": self.document_annotation,
             "usage_info": self.usage_info,
+            "content": self.content,
+            "tables": self.tables,
+            "keyValuePairs": self.key_value_pairs,
+            "provider_native_response": self.provider_native_response,
             "object": self.object,
         })
     }
