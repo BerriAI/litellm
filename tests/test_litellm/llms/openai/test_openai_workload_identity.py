@@ -552,6 +552,17 @@ class TestDiscoverModels:
         assert not exchange_route.called
 
 
+    @respx.mock
+    def test_empty_static_key_never_borrows_the_env_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-env-key-that-must-stay-home")
+        foreign_models: Final = respx.get("https://third-party.example/v1/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "other-model"}]})
+        )
+
+        assert OpenAIGPTConfig().get_models(api_key="", api_base="https://third-party.example") == ["other-model"]
+        assert foreign_models.calls.last.request.headers["Authorization"] == "Bearer "
+
+
 class TestClientsideBaseOverride:
     def test_client_api_base_override_clears_deployment_wif(self, deployment_wif: dict[str, str]) -> None:
         from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params

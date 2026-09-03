@@ -753,7 +753,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         """
         Calls OpenAI's `/v1/models` endpoint and returns the list of models.
         """
-        return self._fetch_model_ids(api_base=api_base, bearer_token=api_key or get_secret_str("OPENAI_API_KEY"))
+        return self._fetch_model_ids(
+            api_base=api_base, bearer_token=get_secret_str("OPENAI_API_KEY") if api_key is None else api_key
+        )
 
     def discover_models(
         self, litellm_params: Mapping[str, object] | None = None
@@ -775,7 +777,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def _fetch_model_ids(
         api_base: str | None, bearer_token: str | None
     ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
-        parsed_url: Final = httpx.URL(api_base or "https://api.openai.com")
+        parsed_url: Final = httpx.URL("https://api.openai.com" if api_base is None else api_base)
         port_suffix: Final = f":{parsed_url.port}" if parsed_url.port else ""
         response: Final = litellm.module_level_client.get(
             url=f"{parsed_url.scheme}://{parsed_url.host}{port_suffix}/v1/models",
