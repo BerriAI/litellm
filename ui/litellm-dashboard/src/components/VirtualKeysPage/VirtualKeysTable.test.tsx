@@ -4,6 +4,7 @@ import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { vi, it, expect, beforeEach, describe, Mock, MockedFunction } from "vitest";
 import { chooseSelectOption, renderWithProviders } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
+import { KEY_TABLE_SORT_FIELDS } from "./keyTableColumns";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
@@ -523,8 +524,9 @@ describe("server-side filtering – the LIT-4080 regression guard", () => {
     await waitFor(() => {
       expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: "user-42" }));
     });
-    // Let the filter reach the URL first: NuqsTestingAdapter replays a throttled
-    // write over a same-tick follow-up, which no real click sequence can hit.
+    // Let the filter reach the URL before clearing it: NuqsTestingAdapter runs
+    // resetUrlUpdateQueueOnMount on every render, so a still-queued write can be
+    // aborted by the re-render its own predecessor triggers.
     await waitFor(() => {
       expect(lastSearchParam(onUrlUpdate, "filter_user")).toBe("user-42");
     });
@@ -776,10 +778,53 @@ describe("table state lives in the URL so it survives leaving and returning to t
     });
   });
 
-  it("leaves the URL untouched while the table sits in its default state", () => {
+  it("falls back to the default sort when the URL names a column the table cannot sort by", async () => {
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { sort_by: "totally_unknown_field" } });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(
+        1,
+        50,
+        expect.objectContaining({ sortBy: "created_at", sortOrder: "desc" }),
+      );
+    });
+    expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+  });
+
+  it.each(KEY_TABLE_SORT_FIELDS)("round-trips a %s sort from the URL", async (field) => {
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { sort_by: field, sort_order: "asc" } });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ sortBy: field, sortOrder: "asc" }));
+    });
+  });
+
+  it("clears sort_by from the URL when the Spend / Budget sort is reset", async () => {
+    const user = userEvent.setup();
     const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
     renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
 
-    expect(onUrlUpdate).not.toHaveBeenCalled();
+    await chooseSelectOption(user, screen.getByTestId("sort-trigger-spend"), "Spend ascending", "menuitem");
+    await waitFor(() => {
+      expect(lastSearchParam(onUrlUpdate, "sort_by")).toBe("spend");
+    });
+
+    await chooseSelectOption(user, screen.getByTestId("sort-trigger-spend"), "Reset", "menuitem");
+
+    await waitFor(() => {
+      expect(lastSearchParam(onUrlUpdate, "sort_by")).toBeNull();
+    });
+    expect(lastSearchParam(onUrlUpdate, "sort_order")).toBeNull();
+  });
+
+  it("drops the search param back out of the URL when the search box is cleared", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<VirtualKeysTable />, { searchParams: { key_search: "prod" }, onUrlUpdate });
+
+    fireEvent.change(screen.getByPlaceholderText(/Search by key alias/), { target: { value: "" } });
+
+    await waitFor(() => {
+      expect(lastSearchParam(onUrlUpdate, "key_search")).toBeNull();
+    });
   });
 });

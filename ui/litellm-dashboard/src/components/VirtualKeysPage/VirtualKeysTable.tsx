@@ -22,7 +22,7 @@ import React, { useCallback, useMemo, useState } from "react";
 
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../templates/key_info_view";
-import { getKeyTableColumns, KEY_TABLE_HIDDEN_COLUMNS } from "./keyTableColumns";
+import { getKeyTableColumns, KEY_TABLE_HIDDEN_COLUMNS, KEY_TABLE_SORT_FIELDS } from "./keyTableColumns";
 
 interface VirtualKeysTableProps {
   headerActions?: React.ReactNode;
@@ -70,10 +70,7 @@ const TABLE_STATE = {
 const resolveUpdater = <T,>(updater: Updater<T>, current: T): T =>
   typeof updater === "function" ? updater(current) : updater;
 
-const toSortOrder = (active: SortingState[number] | undefined): "asc" | "desc" => {
-  if (!active) return DEFAULT_SORT_ORDER;
-  return active.desc ? "desc" : "asc";
-};
+const toSortOrder = (active: SortingState[number]): "asc" | "desc" => (active.desc ? "desc" : "asc");
 
 const filterValue = (filters: ColumnFiltersState, column: FilterColumn): string | null => {
   const value = filters.find((filter) => filter.id === column)?.value;
@@ -92,9 +89,11 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const searchInput = tableState.key_search;
   const [searchQuery] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
 
+  // A hand-edited sort_by the table cannot sort by would 400 at /key/list and leave the page loading.
+  const sortBy = KEY_TABLE_SORT_FIELDS.includes(tableState.sort_by) ? tableState.sort_by : DEFAULT_SORT_BY;
   const sorting = useMemo<SortingState>(
-    () => (tableState.sort_by ? [{ id: tableState.sort_by, desc: tableState.sort_order === "desc" }] : []),
-    [tableState.sort_by, tableState.sort_order],
+    () => [{ id: sortBy, desc: tableState.sort_order === "desc" }],
+    [sortBy, tableState.sort_order],
   );
   const tablePagination = useMemo<PaginationState>(
     () => ({ pageIndex: tableState.page - 1, pageSize: tableState.page_size }),
@@ -125,8 +124,8 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     selectedKeyAlias: searchQuery.trim() || undefined,
     userID: appliedFilters.user_id || undefined,
     keyHash: appliedFilters.key_hash || undefined,
-    sortBy: tableState.sort_by || undefined,
-    sortOrder: tableState.sort_by ? tableState.sort_order : undefined,
+    sortBy,
+    sortOrder: tableState.sort_order,
     expand: "user",
   };
 
@@ -150,7 +149,11 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const handleSortingChange = useCallback<OnChangeFn<SortingState>>(
     (updaterOrValue) => {
       const active = resolveUpdater(updaterOrValue, sorting)[0];
-      void setTableState({ sort_by: active?.id ?? "", sort_order: toSortOrder(active), page: null });
+      void setTableState({
+        sort_by: active?.id ?? null,
+        sort_order: active ? toSortOrder(active) : null,
+        page: null,
+      });
     },
     [sorting, setTableState],
   );
