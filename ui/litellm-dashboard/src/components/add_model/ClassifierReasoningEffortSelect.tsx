@@ -1,7 +1,6 @@
 import { Info } from "lucide-react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { ModelGroup } from "@/components/llm_calls/fetch_models";
 import type { ReasoningEffort } from "./complexity_router_tiers";
 
 const PROVIDER_DEFAULT = "__classifier_provider_default__";
@@ -16,11 +15,6 @@ const effortStatusFor = (
   if (!Array.isArray(explicitlySupported)) return "unverified";
   return explicitlySupported.includes(effort) ? "supported" : "unsupported";
 };
-
-export const classifierEffortOptionsForModels = (
-  modelInfo: ModelGroup[],
-): Record<string, string[] | null | undefined> =>
-  Object.fromEntries(modelInfo.map((model) => [model.model_group, model.supported_reasoning_efforts]));
 
 interface ClassifierReasoningEffortSelectProps {
   model: string;

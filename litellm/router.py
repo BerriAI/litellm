@@ -2191,9 +2191,7 @@ class Router:
 
         extra_body: Final = sanitized.get("extra_body")
         if isinstance(extra_body, Mapping):
-            sanitized_extra_body: Final[dict[str, object]] = dict(  # mutable-ok: request-local nested copy
-                extra_body
-            )
+            sanitized_extra_body: Final = dict(extra_body)  # mutable-ok: request-local nested copy
             sanitized_extra_body.pop("reasoning_effort", None)
             sanitized_extra_body.pop("thinking", None)
             Router._pop_effort_from_nested_carrier(sanitized_extra_body, "output_config")
@@ -2278,9 +2276,7 @@ class Router:
                 request_kwargs=kwargs,
             )
             self._drop_unsupported_classifier_reasoning_effort(
-                deployment=cast(  # cast-ok: deployment selection returns a router deployment mapping
-                    DeploymentTypedDict, deployment
-                ),
+                deployment=cast(DeploymentTypedDict, deployment),  # cast-ok: selection returns a router deployment
                 model=model,
                 kwargs=kwargs,
             )
@@ -3300,9 +3296,7 @@ class Router:
                 request_kwargs=kwargs,
             )
             self._drop_unsupported_classifier_reasoning_effort(
-                deployment=cast(  # cast-ok: deployment selection returns a router deployment mapping
-                    DeploymentTypedDict, deployment
-                ),
+                deployment=cast(DeploymentTypedDict, deployment),  # cast-ok: selection returns a router deployment
                 model=model,
                 kwargs=kwargs,
             )
@@ -12419,7 +12413,7 @@ class Router:
             return
         sanitized: Final = {key: value for key, value in nested.items() if key != "effort"}
         if sanitized:
-            request_kwargs[carrier] = sanitized
+            request_kwargs[carrier] = sanitized  # rebind-ok: copy-on-write, so a shared nested carrier is never edited
         else:
             request_kwargs.pop(carrier, None)
 
