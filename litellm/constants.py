@@ -658,6 +658,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "litellm_proxy",
     "hosted_vllm",
     "llamafile",
+    "llmman",
     "lm_studio",
     "galadriel",
     "gradient_ai",
@@ -895,6 +896,7 @@ openai_compatible_providers: Final[list] = [
     "litellm_proxy",
     "hosted_vllm",
     "llamafile",
+    "llmman",
     "lm_studio",
     "galadriel",
     "github_copilot",  # GitHub Copilot Chat API
@@ -943,6 +945,7 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "hosted_vllm",
     "meta_llama",
     "llamafile",
+    "llmman",
     "featherless_ai",
     "nebius",
     "dashscope",
