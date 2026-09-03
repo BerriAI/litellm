@@ -77,6 +77,7 @@ from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkUpdateUserRequest,
     BulkUpdateUserResponse,
     UserListResponse,
+    UserSearchWhere,
     UserUpdateResult,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
@@ -2079,6 +2080,10 @@ async def get_users(
     user_ids: str | None = fastapi.Query(default=None, description="Get list of users by user_ids"),
     sso_user_ids: str | None = fastapi.Query(default=None, description="Get list of users by sso_user_id"),
     user_email: str | None = fastapi.Query(default=None, description="Filter users by partial email match"),
+    search: str | None = fastapi.Query(
+        default=None,
+        description="Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive).",
+    ),
     team: str | None = fastapi.Query(default=None, description="Filter users by team id"),
     page: int = fastapi.Query(default=1, ge=1, description="Page number"),
     page_size: int = fastapi.Query(default=25, ge=1, le=100, description="Number of items per page"),
@@ -2109,6 +2114,8 @@ async def get_users(
             Get list of users by sso_ids. Comma separated list of sso_ids.
         user_email: Optional[str]
             Filter users by partial email match
+        search: Optional[str]
+            Combined search: matches users whose user_id or user_email contains the value (case-insensitive)
         team: Optional[str]
             Filter users by team id. Will match if user has this team in their teams array.
         page: int
@@ -2167,6 +2174,15 @@ async def get_users(
             "contains": user_email,
             "mode": "insensitive",  # Case-insensitive search
         }
+
+    if search:
+        search_where: Final[UserSearchWhere] = {
+            "OR": (
+                {"user_id": {"contains": search, "mode": "insensitive"}},
+                {"user_email": {"contains": search, "mode": "insensitive"}},
+            )
+        }
+        where_conditions["OR"] = search_where["OR"]
 
     if team is not None and isinstance(team, str):
         where_conditions["teams"] = {
