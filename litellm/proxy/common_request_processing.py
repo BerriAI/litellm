@@ -3123,10 +3123,15 @@ class ProxyBaseLLMRequestProcessing:
           its inner CustomStreamWrapper's logging_obj, so it stores the same
           (assembled_response, cache_hit) shape; the closure only dispatches
           success logging, matching the route's pre-existing hook surface.
-        - Native anthropic_messages/aresponses iterators store a single
-          ready-made logging coroutine to enqueue.
+        - Everything else on anthropic_messages/aresponses gets a fallback
+          closure that dispatches on the stored args shape, because both
+          producers are plain async generators the arming site cannot tell
+          apart: native iterators store a ready-made (logging_coroutine,)
+          to enqueue, while bridged /v1/messages (AnthropicStreamWrapper's
+          SSE generator) shares its inner CustomStreamWrapper's logging_obj
+          and stores (assembled_response, cache_hit).
 
-        Raw async generators from passthrough routes bypass all three and
+        Raw async generators from passthrough routes bypass all of these and
         would orphan the closure, so they are not armed here.
 
         The router wraps iterators that cannot carry _hidden_params in
@@ -3182,10 +3187,24 @@ class ProxyBaseLLMRequestProcessing:
 
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-        async def _on_deferred_native_stream_complete(
-            logging_coroutine: Coroutine[object, object, object],
-        ) -> None:
-            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
+        _captured_native_logging_obj: Final = logging_obj
+
+        async def _on_deferred_native_stream_complete(*args: object) -> None:
+            match args:
+                case (Coroutine() as logging_coroutine,):
+                    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
+                case (assembled_response, cache_hit):
+                    await _as_success_dispatcher(_captured_native_logging_obj).dispatch_success_handlers(
+                        assembled_response,
+                        cache_hit=cache_hit,
+                        start_time=None,
+                        end_time=None,
+                        prefer_async_handlers=True,
+                    )
+                case _:
+                    verbose_proxy_logger.warning(
+                        "deferred stream logging dropped: unexpected args shape %s", tuple(map(type, args))
+                    )
 
         logging_obj._on_deferred_stream_complete = _on_deferred_native_stream_complete
 
