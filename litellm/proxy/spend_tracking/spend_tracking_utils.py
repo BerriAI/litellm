@@ -14,6 +14,8 @@ from litellm.constants import (
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+    LITTELM_CLI_SERVICE_ACCOUNT_NAME,
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     REDACTED_BY_LITELM_STRING,
 )
 from litellm.constants import (
@@ -72,13 +74,18 @@ def _is_master_key(api_key: str | None, _master_key: str | None) -> bool:
 
 
 _HASHED_JWT_RE = re.compile(r"hashed-jwt-[a-fA-F0-9]{64}")
+_NON_SECRET_KEY_ALIASES: Final = frozenset(
+    {
+        LITELLM_PROXY_MASTER_KEY_ALIAS,
+        LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+        LITTELM_CLI_SERVICE_ACCOUNT_NAME,
+    }
+)
 
 
 def _is_non_secret_key_value(value: str) -> bool:
     return (
-        value == LITELLM_PROXY_MASTER_KEY_ALIAS
-        or is_valid_sha256_hash(value)
-        or _HASHED_JWT_RE.fullmatch(value) is not None
+        value in _NON_SECRET_KEY_ALIASES or is_valid_sha256_hash(value) or _HASHED_JWT_RE.fullmatch(value) is not None
     )
 
 

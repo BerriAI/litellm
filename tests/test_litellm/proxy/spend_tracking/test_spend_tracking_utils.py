@@ -13,9 +13,13 @@ import litellm
 from litellm.constants import (
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
+    LITTELM_CLI_SERVICE_ACCOUNT_NAME,
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     REDACTED_BY_LITELM_STRING,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_messages_for_spend_logs_payload,
     _get_proxy_server_request_for_spend_logs_payload,
@@ -3042,6 +3046,45 @@ def test_get_logging_payload_keeps_master_key_alias_readable():
     assert payload["api_key"] == LITELLM_PROXY_MASTER_KEY_ALIAS
     parsed_meta = json.loads(payload["metadata"])
     assert parsed_meta["user_api_key"] == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+@pytest.mark.parametrize(
+    "service_account",
+    [LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, LITTELM_CLI_SERVICE_ACCOUNT_NAME],
+)
+def test_get_logging_payload_keeps_internal_service_account_key_readable(service_account: str):
+    data = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data={"metadata": {}},
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=service_account,
+            team_id=service_account,
+            key_alias=service_account,
+            team_alias=service_account,
+        ),
+        _metadata_variable_name="metadata",
+    )
+    kwargs = {
+        "model": "openai/gpt-4.1",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "call_type": "acompletion",
+        "litellm_params": {"metadata": data["metadata"]},
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=Exception("error"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["api_key"] == service_account
+    parsed_meta = json.loads(payload["metadata"])
+    assert parsed_meta["user_api_key"] == service_account
+    assert parsed_meta["user_api_key_alias"] == service_account
+
+
+def test_redact_logged_api_key_service_account_name_without_provenance_is_hashed():
+    result = _redact_logged_api_key(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME)
+    assert result == hash_token(LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME)
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
