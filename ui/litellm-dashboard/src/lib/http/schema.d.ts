@@ -25529,6 +25529,11 @@ export interface components {
              */
             allow_cli_sso_verification_uri_complete?: boolean | null;
             /**
+             * Allow Unmanaged Response Ids
+             * @description If True, lets keys address Responses API ids that this proxy did not issue (raw provider ids, or ids issued before response-id encryption was configured). Such an id carries no owner, so no ownership check can run on it; ids this proxy did issue keep full ownership enforcement. Off by default, in which case an unrecognized response id is rejected with 403
+             */
+            allow_unmanaged_response_ids?: boolean | null;
+            /**
              * Allowed Routes
              * @description Proxy API Endpoints you want users to be able to access
              */
@@ -25642,6 +25647,11 @@ export interface components {
              * @description If True and SSO is configured (MICROSOFT_CLIENT_ID, GOOGLE_CLIENT_ID, GENERIC_CLIENT_ID, or SAML_IDP_METADATA_URL/XML), disables username/password login on /login, /v2/login, and /v3/login so SSO is the only way to reach the Admin UI. An admin locked out of the UI can still administer the proxy over the API with the master key; unset this setting and restart the proxy to restore UI username/password login. Default is False.
              */
             disable_password_login_when_sso_enabled?: boolean | null;
+            /**
+             * Disable Responses Id Security
+             * @description If True, disables ownership enforcement on Responses API ids. Keys may then retrieve, cancel, delete, and chain from any response id, including ids belonging to another user or team and ids this proxy never issued. WARNING: this removes tenant isolation on /v1/responses
+             */
+            disable_responses_id_security?: boolean | null;
             /**
              * Enable Public Model Hub
              * @description Public model hub for users to see what models they have access to, supported openai params, etc.

@@ -5,7 +5,7 @@ This hook uses the DBSpendUpdateWriter to batch-write response IDs to the databa
 instead of writing immediately on each request.
 """
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable, Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from fastapi import HTTPException
@@ -31,6 +31,29 @@ if TYPE_CHECKING:
 _RESPONSES_API_PROVIDER_PREFIX: Final = "/openai"
 _RESPONSES_API_CREATE_ROUTES: Final = frozenset({"/v1/responses", "/responses"})
 
+_AUTHORIZED_RESPONSE_ID_KEY: Final = "_litellm_authorized_response_id"
+_UNMANAGED_RESPONSE_ID_DETAIL: Final = (
+    "Forbidden. This response id was not issued by this proxy, so the proxy cannot tell who owns it. "
+    "To let keys address responses this proxy did not issue, set "
+    "general_settings::allow_unmanaged_response_ids to True in the config.yaml file."
+)
+_PROXY_ADMIN_ROLES: Final = frozenset({LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN.value})
+
+
+def _proxy_general_settings() -> Mapping[str, Any]:
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings
+
+
+def _proxy_signing_key() -> str | None:
+    import os
+
+    from litellm.proxy.proxy_server import master_key
+
+    salt_key: Final = os.getenv("LITELLM_SALT_KEY", None)
+    return master_key if salt_key is None else salt_key
+
 
 def _is_responses_api_create_route(request_route: str | None) -> bool:
     if request_route is None:
@@ -44,8 +67,13 @@ def _is_responses_api_create_route(request_route: str | None) -> bool:
 
 
 class ResponsesIDSecurity(CustomLogger):
-    def __init__(self):
-        pass
+    def __init__(
+        self,
+        general_settings_reader: Callable[[], Mapping[str, Any]] = _proxy_general_settings,
+        signing_key_reader: Callable[[], str | None] = _proxy_signing_key,
+    ) -> None:
+        self._general_settings_reader: Final = general_settings_reader
+        self._signing_key_reader: Final = signing_key_reader
 
     async def async_pre_call_hook(
         self,
@@ -64,22 +92,42 @@ class ResponsesIDSecurity(CustomLogger):
         }
         if call_type not in responses_api_call_types:
             return None
-        if call_type == "aresponses":
-            # check 'previous_response_id' if present in the data
-            previous_response_id: Final = data.get("previous_response_id")
-            if previous_response_id and self._is_encrypted_response_id(previous_response_id):
-                original_response_id, user_id, team_id = self._decrypt_response_id(previous_response_id)
-                self.check_user_access_to_response_id(user_id, team_id, user_api_key_dict)
-                data["previous_response_id"] = original_response_id
-        elif call_type in {"aget_responses", "adelete_responses", "acancel_responses", "alist_input_items"}:
-            response_id: Final = data.get("response_id")
-
-            if response_id and self._is_encrypted_response_id(response_id):
-                original_response_id, user_id, team_id = self._decrypt_response_id(response_id)
-
-                self.check_user_access_to_response_id(user_id, team_id, user_api_key_dict)
-                data["response_id"] = original_response_id
+        addressed_id_field: Final = "previous_response_id" if call_type == "aresponses" else "response_id"
+        addressed_id: Final = data.get(addressed_id_field)
+        if not isinstance(addressed_id, str) or not addressed_id:
+            return data
+        if data.get(_AUTHORIZED_RESPONSE_ID_KEY) == addressed_id:
+            return data
+        authorized_id: Final = self._authorize_response_id(addressed_id, user_api_key_dict)
+        data[addressed_id_field] = authorized_id
+        data[_AUTHORIZED_RESPONSE_ID_KEY] = authorized_id
         return data
+
+    def _authorize_response_id(
+        self,
+        response_id: str,
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> str:
+        if self._is_encrypted_response_id(response_id):
+            original_response_id, user_id, team_id = self._decrypt_response_id(response_id)
+            self.check_user_access_to_response_id(user_id, team_id, user_api_key_dict)
+            return original_response_id
+
+        if self._unmanaged_response_ids_allowed(user_api_key_dict):
+            return response_id
+
+        raise HTTPException(status_code=403, detail=_UNMANAGED_RESPONSE_ID_DETAIL)
+
+    def _unmanaged_response_ids_allowed(self, user_api_key_dict: "UserAPIKeyAuth") -> bool:
+        general_settings: Final = self._general_settings_reader()
+
+        if general_settings.get("disable_responses_id_security", False):
+            return True
+        if general_settings.get("allow_unmanaged_response_ids", False):
+            return True
+        if self._get_signing_key() is None:
+            return True
+        return user_api_key_dict.user_role in _PROXY_ADMIN_ROLES
 
     def check_user_access_to_response_id(
         self,
@@ -87,7 +135,7 @@ class ResponsesIDSecurity(CustomLogger):
         response_id_team_id: str | None,
         user_api_key_dict: "UserAPIKeyAuth",
     ) -> bool:
-        from litellm.proxy.proxy_server import general_settings
+        general_settings: Final = self._general_settings_reader()
 
         if (
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
@@ -180,15 +228,7 @@ class ResponsesIDSecurity(CustomLogger):
         return response_id, None, None
 
     def _get_signing_key(self) -> str | None:
-        """Get the signing key for encryption/decryption."""
-        import os
-
-        from litellm.proxy.proxy_server import master_key
-
-        salt_key = os.getenv("LITELLM_SALT_KEY", None)
-        if salt_key is None:
-            salt_key = master_key
-        return salt_key
+        return self._signing_key_reader()
 
     def _encrypt_response_id(
         self,
@@ -260,7 +300,7 @@ class ResponsesIDSecurity(CustomLogger):
         This method adds response IDs to an in-memory queue, which are then
         batch-processed by the DBSpendUpdateWriter during regular database update cycles.
         """
-        from litellm.proxy.proxy_server import general_settings
+        general_settings: Final = self._general_settings_reader()
 
         if general_settings.get("disable_responses_id_security", False):
             return response
@@ -274,7 +314,7 @@ class ResponsesIDSecurity(CustomLogger):
     async def async_post_call_streaming_iterator_hook(
         self, user_api_key_dict: "UserAPIKeyAuth", response: Any, request_data: dict
     ) -> AsyncGenerator[BaseLiteLLMOpenAIResponseObject, None]:
-        from litellm.proxy.proxy_server import general_settings
+        general_settings: Final = self._general_settings_reader()
 
         # Create a request-scoped cache for consistent encryption across streaming chunks.
         request_encryption_cache: Final[dict[str, str]] = {}
