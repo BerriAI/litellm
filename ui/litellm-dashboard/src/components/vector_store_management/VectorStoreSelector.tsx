@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { Select } from "antd";
 import { VectorStore } from "./types";
 import { vectorStoreListCall } from "../networking";
+import { MultiSelect } from "@/components/shared/MultiSelect";
 interface VectorStoreSelectorProps {
   onChange: (selectedVectorStores: string[]) => void;
   value?: string[];
@@ -43,24 +43,19 @@ const VectorStoreSelector: React.FC<VectorStoreSelectorProps> = ({
   }, [accessToken]);
 
   return (
-    <div>
-      <Select
-        mode="multiple"
+    <div className="min-w-0">
+      <MultiSelect
         placeholder={placeholder}
-        onChange={onChange}
+        onValueChange={onChange}
         value={value}
         loading={loading}
         className={className}
-        allowClear
+        disabled={disabled}
         options={vectorStores.map((store) => ({
           label: `${store.vector_store_name || store.vector_store_id} (${store.vector_store_id})`,
           value: store.vector_store_id,
-          title: store.vector_store_description || store.vector_store_id,
+          description: store.vector_store_description || undefined,
         }))}
-        optionFilterProp="label"
-        showSearch
-        style={{ width: "100%" }}
-        disabled={disabled}
       />
     </div>
   );

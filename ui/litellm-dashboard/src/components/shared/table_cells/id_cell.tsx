@@ -25,12 +25,12 @@ interface IdCellProps {
 
 const VARIANT_CLASS: Record<IdCellVariant, { base: string; clickable: string }> = {
   pill: {
-    base: "font-mono text-xs font-normal px-2 py-0.5 rounded-md text-left bg-blue-50 text-blue-500",
-    clickable: "hover:bg-blue-100 cursor-pointer",
+    base: "font-mono text-xs font-normal px-2 py-0.5 rounded-md text-left bg-info/10 text-info",
+    clickable: "hover:bg-info/15 cursor-pointer",
   },
   plain: {
     base: "font-mono text-xs text-left",
-    clickable: "hover:text-blue-600 cursor-pointer",
+    clickable: "hover:text-info cursor-pointer",
   },
 };
 

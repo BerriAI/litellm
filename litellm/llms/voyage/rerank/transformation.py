@@ -4,7 +4,8 @@ Transformation logic for Voyage AI's /v1/rerank endpoint.
 Docs - https://docs.voyageai.com/docs/reranker
 """
 
-from typing import Any, Dict, List, Tuple, Union
+from collections.abc import Mapping
+from typing import Any, Final
 
 import httpx
 
@@ -32,17 +33,17 @@ class VoyageRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: List[Union[str, Dict[str, Any]]],
+        documents: list[str | dict[str, Any]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
-        rank_fields: List[str] | None = None,
+        rank_fields: list[str] | None = None,
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> Dict:
+    ) -> dict:
         # Voyage AI uses 'top_k' instead of 'top_n'
-        optional_params: Dict[str, Any] = {"query": query, "documents": documents}
+        optional_params: Final[dict[str, Any]] = {"query": query, "documents": documents}
         if top_n is not None:
             optional_params["top_k"] = top_n
         if return_documents is not None:
@@ -70,10 +71,10 @@ class VoyageRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: Dict,
-        headers: Dict,
+        optional_rerank_params: dict,
+        headers: dict,
         litellm_params: dict | None = None,
-    ) -> Dict:
+    ) -> dict:
         return {"model": model, **optional_rerank_params}
 
     def transform_rerank_response(
@@ -83,9 +84,9 @@ class VoyageRerankConfig(BaseRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: Dict = {},
-        optional_params: Dict = {},
-        litellm_params: Dict = {},
+        request_data: dict = {},
+        optional_params: dict = {},
+        litellm_params: dict = {},
     ) -> RerankResponse:
         if raw_response.status_code != 200:
             raise VoyageError(message=raw_response.text, status_code=raw_response.status_code)
@@ -93,7 +94,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         try:
-            _json_response = raw_response.json()
+            _json_response: Final = raw_response.json()
         except Exception:
             raise VoyageError(
                 message=f"Failed to parse response: {raw_response.text}",
@@ -101,14 +102,14 @@ class VoyageRerankConfig(BaseRerankConfig):
             )
 
         # Voyage AI returns results in "data" key, not "results"
-        _results: List[dict] | None = _json_response.get("data")
+        _results: Final[list[dict] | None] = _json_response.get("data")
         if _results is None:
             raise ValueError(f"No results found in the response={_json_response}")
 
         # Transform to LiteLLM format
-        transformed_results = []
+        transformed_results: Final = []
         for result in _results:
-            transformed_result: Dict[str, Any] = {
+            transformed_result: dict[str, Any] = {
                 "index": result["index"],
                 "relevance_score": result["relevance_score"],
             }
@@ -119,25 +120,26 @@ class VoyageRerankConfig(BaseRerankConfig):
                     transformed_result["document"] = result["document"]
             transformed_results.append(transformed_result)
 
-        usage = _json_response.get("usage", {})
-        total_tokens = usage.get("total_tokens", 0)
-        _billed_units = RerankBilledUnits(total_tokens=total_tokens)
-        _tokens = RerankTokens(input_tokens=total_tokens, output_tokens=0)
-        rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
+        usage: Final = _json_response.get("usage", {})
+        total_tokens: Final = usage.get("total_tokens", 0)
+        _billed_units: Final = RerankBilledUnits(total_tokens=total_tokens)
+        _tokens: Final = RerankTokens(input_tokens=total_tokens, output_tokens=0)
+        rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
         return RerankResponse(
             id=_json_response.get("id", f"voyage-rerank-{model}"),
-            results=transformed_results,  # type: ignore
+            results=transformed_results,
             meta=rerank_meta,
         )
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
-    ) -> Dict:
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> dict:
         if api_key is None:
             api_key = get_secret_str("VOYAGE_API_KEY") or get_secret_str("VOYAGE_AI_API_KEY")
         if api_key is None:
@@ -153,7 +155,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         custom_llm_provider: str | None = None,
         billed_units: RerankBilledUnits | None = None,
         model_info: ModelInfo | None = None,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         if (
             model_info is None
             or "input_cost_per_token" not in model_info
@@ -161,10 +163,10 @@ class VoyageRerankConfig(BaseRerankConfig):
             or billed_units is None
         ):
             return 0.0, 0.0
-        total_tokens = billed_units.get("total_tokens")
+        total_tokens: Final = billed_units.get("total_tokens")
         if total_tokens is None:
             return 0.0, 0.0
         return model_info["input_cost_per_token"] * total_tokens, 0.0
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]):
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers):
         return VoyageError(message=error_message, status_code=status_code, headers=headers)

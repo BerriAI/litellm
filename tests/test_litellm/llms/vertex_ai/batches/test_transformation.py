@@ -13,18 +13,16 @@ There are no real I/O seams here; ``uuid.uuid4`` is the only nondeterministic
 dependency and is patched where the displayName is asserted.
 """
 
-import os
-import sys
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.vertex_ai.batches.transformation import (  # noqa: E402
     VertexAIBatchTransformation,
 )
 from litellm.llms.vertex_ai.common_utils import (  # noqa: E402
+    VertexAIError,
     _convert_vertex_datetime_to_openai_datetime,
 )
 from litellm.types.utils import LiteLLMBatch  # noqa: E402
@@ -67,6 +65,24 @@ def test_transform_openai_request_builds_full_vertex_job():
 def test_transform_openai_request_missing_input_file_id_raises():
     with pytest.raises(ValueError, match="input_file_id is required"):
         T.transform_openai_batch_request_to_vertex_ai_batch_request({})
+
+
+@pytest.mark.parametrize(
+    "input_file_id",
+    [
+        "gs://bucket/no-model-here.jsonl",
+        "gs://bucket/publishers/google/gemini-1.5-flash-001/file-uuid",
+        "gs://bucket/publishers/google/models",
+        "gs://bucket/publishers/google/models//file-uuid",
+    ],
+)
+def test_transform_openai_request_unparseable_model_raises_400(input_file_id: str):
+    """An input_file_id with no parseable model path is a client error, not an IndexError -> 500."""
+    with pytest.raises(VertexAIError) as exc_info:
+        T.transform_openai_batch_request_to_vertex_ai_batch_request({"input_file_id": input_file_id})
+
+    assert exc_info.value.status_code == 400
+    assert input_file_id in str(exc_info.value)
 
 
 # =========================================================================== #
@@ -299,9 +315,29 @@ def test_get_model_from_gcs_file_url_encoded():
     assert T._get_model_from_gcs_file(encoded) == "publishers/google/models/gemini-1.5-flash-001"
 
 
-def test_get_model_from_gcs_file_no_publishers_raises():
-    with pytest.raises(IndexError):
+def test_get_model_from_gcs_file_no_publishers_raises_400():
+    with pytest.raises(VertexAIError) as exc_info:
         T._get_model_from_gcs_file("gs://bucket/no-model-here.jsonl")
+    assert exc_info.value.status_code == 400
+
+
+# =========================================================================== #
+# is_unmanaged_gcs_batch_input_file_id
+# =========================================================================== #
+
+
+@pytest.mark.parametrize(
+    "input_file_id, expected",
+    [
+        (INPUT_FILE, True),
+        (None, False),
+        ("file-abc123", False),
+        ("gs://bucket/no-model-here.jsonl", False),
+        ("gs://bucket/publishers/google/gemini-1.5-flash-001/file-uuid", False),
+    ],
+)
+def test_is_unmanaged_gcs_batch_input_file_id(input_file_id, expected):
+    assert T.is_unmanaged_gcs_batch_input_file_id(input_file_id) is expected
 
 
 # =========================================================================== #

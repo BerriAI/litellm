@@ -2,7 +2,8 @@
 Base OCR transformation configuration.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Union
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from pydantic import PrivateAttr
@@ -19,7 +20,27 @@ else:
 # DocumentType for OCR - providers always receive a dict with
 # type="document_url" or type="image_url" (str values only).
 # File-type inputs are preprocessed to this format in litellm/ocr/main.py.
-DocumentType = Dict[str, str]
+DocumentType = dict[str, str]
+
+OCRRequestFormat = Literal["litellm", "native"]
+
+OCR_REQUEST_FORMATS: Final[tuple[OCRRequestFormat, ...]] = ("litellm", "native")
+
+OCR_REQUEST_FORMAT_PARAM: Final = "req_format"
+
+OCR_REQUEST_FORMAT_HEADER: Final = "x-req-format"
+
+PROVIDER_NATIVE_RESPONSE_KEY: Final = "provider_native_response"
+
+
+def parse_ocr_request_format(value: object) -> OCRRequestFormat:
+    if value == "litellm":
+        return "litellm"
+    if value == "native":
+        return "native"
+    raise ValueError(
+        f"Invalid `{OCR_REQUEST_FORMAT_PARAM}`: {value!r}. Expected one of {', '.join(OCR_REQUEST_FORMATS)}."
+    )
 
 
 class OCRPageDimensions(LiteLLMPydanticObjectBase):
@@ -34,7 +55,7 @@ class OCRPageImage(LiteLLMPydanticObjectBase):
     """Image extracted from OCR page."""
 
     image_base64: str | None = None
-    bbox: Dict[str, Any] | None = None
+    bbox: dict[str, Any] | None = None
 
     model_config = {"extra": "allow"}
 
@@ -44,7 +65,7 @@ class OCRPage(LiteLLMPydanticObjectBase):
 
     index: int
     markdown: str
-    images: List[OCRPageImage] | None = None
+    images: list[OCRPageImage] | None = None
     dimensions: OCRPageDimensions | None = None
 
     model_config = {"extra": "allow"}
@@ -54,6 +75,7 @@ class OCRUsageInfo(LiteLLMPydanticObjectBase):
     """Usage information from OCR response."""
 
     pages_processed: int | None = None
+    pages_processed_annotation: int | None = None
     credits: float | None = None
     doc_size_bytes: int | None = None
 
@@ -66,7 +88,7 @@ class OCRResponse(LiteLLMPydanticObjectBase):
     Standardized to Mistral OCR format - other providers should transform to this format.
     """
 
-    pages: List[OCRPage]
+    pages: list[OCRPage]
     model: str
     document_annotation: Any | None = None
     usage_info: OCRUsageInfo | None = None
@@ -80,12 +102,21 @@ class OCRResponse(LiteLLMPydanticObjectBase):
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
+    def set_provider_native_response(self, native_response: Mapping[str, object]) -> None:
+        """Keep the provider's own response payload alongside the normalized one."""
+        self._hidden_params[PROVIDER_NATIVE_RESPONSE_KEY] = native_response
+
+    def get_provider_native_response(self) -> Mapping[str, object] | None:
+        """The provider's own response payload, when `req_format=native` was requested."""
+        native_response: Final = self._hidden_params.get(PROVIDER_NATIVE_RESPONSE_KEY)
+        return native_response if isinstance(native_response, dict) else None
+
 
 class OCRRequestData(LiteLLMPydanticObjectBase):
     """OCR request data structure."""
 
-    data: Union[Dict, bytes] | None = None
-    files: Dict[str, Any] | None = None
+    data: dict | bytes | None = None
+    files: dict[str, Any] | None = None
 
 
 class BaseOCRConfig:
@@ -121,13 +152,13 @@ class BaseOCRConfig:
 
     def validate_environment(
         self,
-        headers: Dict,
+        headers: dict,
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
         litellm_params: dict | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         Override in provider-specific implementations.

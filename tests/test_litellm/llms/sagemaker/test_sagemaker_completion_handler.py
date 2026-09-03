@@ -172,3 +172,50 @@ async def test_async_native_streaming_forwards_each_frame_incrementally():
 
     assert texts == [f"token{i} " for i in range(len(frames))]
     assert consumed_at_token == list(range(1, len(frames) + 1))
+
+
+def test_load_credentials_assumes_role_with_external_id(monkeypatch):
+    """A trust policy requiring sts:ExternalId must be satisfied by the deployment's aws_external_id."""
+    import datetime
+
+    import boto3
+    from botocore.exceptions import ClientError
+    from unittest.mock import patch
+
+    monkeypatch.delenv("AWS_EXTERNAL_ID", raising=False)
+
+    class FakeSTSClient:
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if params.get("ExternalId") != "external-id-sm-completion":
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:AssumeRole"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIASMCOMPROLEKEY",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+                }
+            }
+
+    optional_params = {
+        "aws_access_key_id": "AKIASMCOMPCALLERKEY",
+        "aws_secret_access_key": "pod-caller-secret",
+        "aws_region_name": "us-east-1",
+        "aws_role_name": "arn:aws:iam::999999999999:role/litellm-sm-completion-role",
+        "aws_session_name": "litellm-sm-completion-session",
+        "aws_external_id": "external-id-sm-completion",
+    }
+
+    with patch.object(boto3, "client", return_value=FakeSTSClient()):
+        credentials, aws_region_name = SagemakerLLM()._load_credentials(optional_params)
+
+    assert credentials.access_key == "ASIASMCOMPROLEKEY"
+    assert credentials.token == "assumed-session-token"
+    assert aws_region_name == "us-east-1"
+    assert "aws_external_id" not in optional_params

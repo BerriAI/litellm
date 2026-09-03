@@ -165,6 +165,20 @@ describe("OrganizationsTable", () => {
     expect(screen.getByText("RPM: Unlimited")).toBeInTheDocument();
   });
 
+  it("renders a tpm/rpm limit of 0 as 0, never as Unlimited", () => {
+    render(
+      <OrganizationsTable
+        {...baseProps}
+        organizations={[makeOrganization({ litellm_budget_table: { max_budget: null, tpm_limit: 0, rpm_limit: 0 } })]}
+      />,
+    );
+
+    expect(screen.getByText("TPM: 0")).toBeInTheDocument();
+    expect(screen.getByText("RPM: 0")).toBeInTheDocument();
+    expect(screen.queryByText("TPM: Unlimited")).not.toBeInTheDocument();
+    expect(screen.queryByText("RPM: Unlimited")).not.toBeInTheDocument();
+  });
+
   it("renders loading skeletons instead of rows while loading", () => {
     render(
       <OrganizationsTable

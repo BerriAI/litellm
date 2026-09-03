@@ -6,7 +6,6 @@ Re-exported from ``litellm.proxy._types`` for backwards compatibility.
 """
 
 from datetime import datetime
-from typing import Optional, Union
 
 from pydantic import Json
 
@@ -17,34 +16,36 @@ from litellm.types.llms.base import LiteLLMPydanticObjectBase
 class LiteLLM_SpendLogs(LiteLLMPydanticObjectBase):
     request_id: str
     api_key: str
-    model: Optional[str] = ""
-    api_base: Optional[str] = ""
+    model: str | None = ""
+    api_base: str | None = ""
     call_type: str
-    spend: Optional[float] = 0.0
-    total_tokens: Optional[int] = 0
-    prompt_tokens: Optional[int] = 0
-    completion_tokens: Optional[int] = 0
-    startTime: Union[str, datetime, None]
-    endTime: Union[str, datetime, None]
-    user: Optional[str] = ""
-    metadata: Optional[Json] = {}
-    cache_hit: Optional[str] = "False"
-    cache_key: Optional[str] = None
-    request_tags: Optional[Json] = None
-    requester_ip_address: Optional[str] = None
-    messages: Optional[Union[str, list, dict]]
-    response: Optional[Union[str, list, dict]]
+    spend: float | None = 0.0
+    total_tokens: int | None = 0
+    prompt_tokens: int | None = 0
+    completion_tokens: int | None = 0
+    startTime: str | datetime | None
+    endTime: str | datetime | None
+    user: str | None = ""
+    metadata: Json | None = {}
+    cache_hit: str | None = "False"
+    cache_key: str | None = None
+    request_tags: Json | None = None
+    requester_ip_address: str | None = None
+    messages: str | list | dict | None
+    response: str | list | dict | None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
-    request_id: Optional[str] = str(uuid.uuid4())
-    api_base: Optional[str] = ""
-    model_group: Optional[str] = ""
-    litellm_model_name: Optional[str] = ""
-    model_id: Optional[str] = ""
-    request_kwargs: Optional[dict] = {}
-    exception_type: Optional[str] = ""
-    status_code: Optional[str] = ""
-    exception_string: Optional[str] = ""
-    startTime: Union[str, datetime, None]
-    endTime: Union[str, datetime, None]
+    request_id: str | None = str(uuid.uuid4())
+    api_base: str | None = ""
+    model_group: str | None = ""
+    litellm_model_name: str | None = ""
+    model_id: str | None = ""
+    request_kwargs: dict | None = {}
+    exception_type: str | None = ""
+    status_code: str | None = ""
+    exception_string: str | None = ""
+    startTime: str | datetime | None
+    endTime: str | datetime | None

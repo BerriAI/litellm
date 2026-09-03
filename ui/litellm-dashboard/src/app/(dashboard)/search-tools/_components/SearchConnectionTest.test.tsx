@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SearchConnectionTest from "./SearchConnectionTest";
 import * as networking from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 vi.mock("@/components/networking", () => ({
   testSearchToolConnection: vi.fn(),
@@ -68,7 +68,7 @@ describe("SearchConnectionTest", () => {
     render(<SearchConnectionTest {...defaultProps} onTestComplete={onTestComplete} />);
 
     await waitFor(() => {
-      expect(NotificationsManager.success).toHaveBeenCalledWith("Connection test successful!");
+      expect(toast.success).toHaveBeenCalledWith("Connection test successful!");
     });
     expect(onTestComplete).toHaveBeenCalledTimes(1);
   });
