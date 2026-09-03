@@ -3367,6 +3367,7 @@ async def test_mcp_manager_returns_public_when_permission_lookup_fails():
 @pytest.mark.asyncio
 async def test_mcp_manager_merges_public_and_restricted_servers():
     try:
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPServerAccess
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             MCPServerManager,
         )
@@ -3398,8 +3399,8 @@ async def test_mcp_manager_merges_public_and_restricted_servers():
             return_value=False,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPRequestHandler.get_allowed_mcp_servers",
-            AsyncMock(return_value=["restricted"]),
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPRequestHandler.get_mcp_server_access",
+            AsyncMock(return_value=MCPServerAccess(server_ids=("restricted",), scope="scoped")),
         ),
     ):
         allowed = await manager.get_allowed_mcp_servers(UserAPIKeyAuth())
