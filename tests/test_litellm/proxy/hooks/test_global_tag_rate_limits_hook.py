@@ -812,7 +812,7 @@ async def test_a_rejected_admission_attempts_model_does_not_drive_later_accounti
     # Release the occupier's concurrency slot so the final check below is
     # gated only by chain_spend (dollars), not by conc-a still being full.
     await hook.async_log_success_event(
-        kwargs={"litellm_call_id": "occupier", "metadata": {"tags": ["end_user_id:u1"]}},
+        kwargs={"litellm_call_id": "occupier", "metadata": {"tags": ["end_user_id:u1"]}, "model": "model-a"},
         response_obj=None,
         start_time=0,
         end_time=0,
@@ -1527,6 +1527,77 @@ async def test_comma_separated_model_outside_acompletion_call_type_is_not_a_batc
             data=_data(["end_user_id:u1"], call_id="call-2"),
             call_type="completion",
         )
+
+
+@pytest.mark.asyncio
+async def test_non_racing_batch_width_accounts_for_nested_message_lists(time_controller, monkeypatch):
+    """veria-ai finding: Router.abatch_completion's "N requests to M models"
+    mode (a nested `messages: list[list[...]]`) dispatches one real branch
+    per (message, model) pair, not one per model -- admission must reserve
+    model_count * message_list_count units, not just model_count."""
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "concurrency_limits": {
+                "limits": [{"name": "conc", "tag_id": "end_user_id", "limit": 4, "period_seconds": 60}]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    data = {
+        **_data(["end_user_id:u1"], call_id="call-1"),
+        "model": "model-a,model-b",
+        "messages": [[{"role": "user", "content": "q1"}], [{"role": "user", "content": "q2"}]],
+    }
+    await hook.async_pre_call_hook(user_api_key_dict=_key(), cache=DualCache(), data=data, call_type="acompletion")
+
+    # 2 models x 2 message-lists = 4 real branches, exactly at the cap of 4 --
+    # a fifth unit for anything else must be rejected.
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_key(),
+            cache=DualCache(),
+            data=_data(["end_user_id:u1"], call_id="call-2"),
+            call_type="completion",
+        )
+
+
+@pytest.mark.asyncio
+async def test_terminal_event_releases_every_matching_concurrency_policy(time_controller, monkeypatch):
+    """veria-ai finding: a request matching two distinct concurrency-scoped
+    entries reserves one key per entry, and a single terminal event must
+    release both, not just one -- otherwise the second stays reserved until
+    its safety TTL even after the only real call finishes."""
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "concurrency_limits": {
+                "limits": [
+                    {"name": "policy-a", "tag_id": "end_user_id", "limit": 1, "period_seconds": 60},
+                    {"name": "policy-b", "tag_id": "team_id", "limit": 1, "period_seconds": 60},
+                ]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    data = {**_data(["end_user_id:u1", "team_id:t1"], call_id="call-1"), "model": "gpt-4o"}
+    await hook.async_pre_call_hook(user_api_key_dict=_key(), cache=DualCache(), data=data, call_type="acompletion")
+
+    kwargs = {"litellm_call_id": "call-1", "metadata": {"tags": ["end_user_id:u1", "team_id:t1"]}, "model": "gpt-4o"}
+    await hook.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={**_data(["end_user_id:u1", "team_id:t1"], call_id="call-2"), "model": "gpt-4o"},
+        call_type="acompletion",
+    )
+    assert result is not None
 
 
 # ---------------------------------------------------------------------------

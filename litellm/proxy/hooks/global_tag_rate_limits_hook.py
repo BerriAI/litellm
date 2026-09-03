@@ -43,7 +43,7 @@ whole batch would be released by whichever branch finishes first, letting
 the still-running siblings push real concurrent calls past the configured
 cap, so admission instead reserves one unit per comma-separated model (see
 `_non_racing_batch_width`) and each branch's own event releases just its own
-share (see `_release_one_pending_for_call_id`). The racing
+share (see `_release_own_share`). The racing
 `abatch_completion_fastest_response` variant is excluded from that: it
 cancels every losing branch without ever firing a terminal event for it
 (confirmed live), so reserving more than the single unit it already does
@@ -160,6 +160,30 @@ def _entry_applies_any_candidate_model(
     return any(_entry_applies(entry, tags, key_alias, model) for model in candidate_models)
 
 
+def _own_concurrency_keys(
+    config: TagRateLimits,
+    tags: Sequence[str],
+    key_alias: str | None,
+    key_hash: str | None,
+    candidate_models: frozenset[str],
+) -> frozenset[str]:
+    """The exact `_inflight_key`s this hop's own admission would have
+    reserved, mirroring `_classify`'s own concurrency-unit matching. A
+    request can match more than one concurrency-scoped `TagRateLimitEntry`
+    (e.g. a global cap and a named per-team cap on the same tag), and each
+    match is its own key -- a terminal event must release every one of
+    them, not just one."""
+    group: Final = getattr(config, _UNIT_TO_GROUP_FIELD["concurrency"])
+    if group is None:
+        return frozenset()
+    return frozenset(
+        _inflight_key(entry, "concurrency", tag_value, key_hash=key_hash if entry.scope_by_key_hash else None)
+        for entry in group.limits
+        if (tag_value := _extract_identity(tags, entry.tag_id)) is not None
+        and _entry_applies_any_candidate_model(entry, tags, key_alias, candidate_models)
+    )
+
+
 def _individual_model_names(model: str | None, call_type: str) -> tuple[str, ...]:
     """`route_llm_request.py` splits a comma-separated `model` on this exact
     condition before fanning out through `Router.abatch_completion`/
@@ -193,14 +217,24 @@ def _non_racing_batch_width(data: Mapping[str, object], call_type: str) -> int:
 
     Mirrors the exact condition `route_llm_request.py` uses to route into
     `abatch_completion` in the first place, so this only ever fires for a
-    request that will actually take that path.
+    request that will actually take that path. `abatch_completion` itself
+    also accepts a nested `messages: list[list[...]]` ("N requests to M
+    models") and dispatches one branch per (message, model) pair, not one
+    per model -- veria-ai's finding on this file.
     """
     if call_type != "acompletion" or data.get("fastest_response"):
         return 1
     model_field: Final = data.get("model")
     if not isinstance(model_field, str) or "," not in model_field:
         return 1
-    return len(model_field.split(","))
+    model_count: Final = len(model_field.split(","))
+    messages_field: Final = data.get("messages")
+    message_list_count: Final = (
+        len(messages_field)
+        if isinstance(messages_field, list) and messages_field and all(isinstance(m, list) for m in messages_field)
+        else 1
+    )
+    return model_count * message_list_count
 
 
 def _hash_tag(entry: TagRateLimitEntry, unit: _LimitUnit, tag_value: str, key_hash: str | None) -> str:
@@ -258,9 +292,9 @@ class _GlobalTagRateLimitStash:
     admitted_models: frozenset[str] = field(default_factory=frozenset)
     # One entry per reserved unit, not one entry per distinct key: a
     # non-racing batch dispatch (see _non_racing_batch_width) reserves and
-    # appends `batch_width` entries for the same key, and each branch's own
-    # terminal event pops exactly one of them -- see
-    # _release_one_pending_for_call_id.
+    # appends `batch_width` entries per matching policy, and each branch's
+    # own terminal event pops exactly one entry per its own matching
+    # policies -- see _release_own_share.
     pending_concurrency_keys: list[tuple[str, _PartitionKey]] = field(default_factory=list)  # mutable-ok: queue
     # Keys already charged for this call_id, so a fallback retry (same
     # litellm_call_id, different model) renews instead of double-charging.
@@ -745,16 +779,85 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         self, request_kwargs: Mapping[str, object]
     ) -> tuple[str, _PartitionKey] | None:
         """Releases exactly one reservation, not every reservation currently
-        pending: a non-racing batch dispatch reserves one unit per
-        comma-separated model (see _non_racing_batch_width), and each
-        branch's own terminal event must only release its own share, not a
-        still-running sibling's. Entries under one call_id are otherwise
-        fungible (same key repeated), so which single entry gets popped
-        doesn't matter."""
+        pending. Fallback only, for when this hop's own identity can't be
+        resolved at release time (see _own_concurrency_keys_for_release):
+        entries under one call_id are otherwise fungible (same key
+        repeated), so releasing one arbitrary entry is safe even without
+        knowing which policy it belongs to, but releasing every entry would
+        risk sweeping up a still-running sibling branch's own share."""
         stash: Final = _stash_for_call(_call_id_from_kwargs(request_kwargs))
         if stash is None or not stash.pending_concurrency_keys:
             return None
         return stash.pending_concurrency_keys.pop()  # mutable-ok: see field's own docstring
+
+    async def _pop_matching_keys_for_call_id(
+        self, request_kwargs: Mapping[str, object], only_keys: frozenset[str]
+    ) -> tuple[tuple[str, _PartitionKey], ...]:
+        """Pops at most one reservation per key in only_keys, not every
+        reservation currently pending: a request can match more than one
+        concurrency-scoped entry (see _own_concurrency_keys), and each
+        terminal event must release every one of its own matches, not just
+        one -- while still leaving a still-running sibling branch's own
+        share (a different key, or another fungible entry under a shared
+        key) untouched. An empty only_keys means this hop's own identity
+        resolved to zero matching policies, so it pops nothing."""
+        stash: Final = _stash_for_call(_call_id_from_kwargs(request_kwargs))
+        if stash is None or not stash.pending_concurrency_keys:
+            return ()
+        pending: Final = stash.pending_concurrency_keys
+        matched_indices: Final = tuple(
+            idx
+            for key in only_keys
+            if (idx := next((i for i, entry in enumerate(pending) if entry[0] == key), None)) is not None
+        )
+        released: Final = tuple(pending[idx] for idx in matched_indices)
+        for entry in released:
+            try:
+                pending.remove(entry)  # mutable-ok: see field's own docstring
+            except ValueError:
+                pass
+        return released
+
+    def _own_concurrency_keys_for_release(self, kwargs: Mapping[str, object]) -> frozenset[str] | None:
+        """The keys `_own_concurrency_keys` would compute for this hop, or
+        `None` if identity/config can't be resolved at all -- distinct from
+        resolving to zero matching policies, which is a real, releasable
+        answer of "nothing to release here"."""
+        config: Final = self._refresh_config()
+        if config is None:
+            return None
+        litellm_params_raw: Final = kwargs.get("litellm_params")
+        litellm_params_for_metadata: Final[Mapping[str, object]] = (
+            litellm_params_raw if isinstance(litellm_params_raw, Mapping) else kwargs
+        )
+        metadata_variable_name: Final = _resolve_authoritative_metadata_variable_name(litellm_params_for_metadata)
+        key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
+        key_alias: Final = _extract_key_alias(litellm_params_for_metadata, metadata_variable_name)
+        tags: Final = _order_tags_for_identity_resolution(
+            _get_tags_from_request_kwargs(litellm_params_for_metadata, metadata_variable_name=metadata_variable_name),
+            litellm_params_for_metadata,
+            metadata_variable_name,
+        )
+        if not tags:
+            return None
+        model_raw: Final = kwargs.get("model")
+        standard_logging_object: Final = kwargs.get("standard_logging_object")
+        model: Final = (
+            model_raw
+            if isinstance(model_raw, str)
+            else standard_logging_object.get("model")
+            if isinstance(standard_logging_object, dict)
+            else None
+        )
+        candidate_models: Final = frozenset((model,)) if isinstance(model, str) else frozenset()
+        return _own_concurrency_keys(config, tags, key_alias, key_hash, candidate_models)
+
+    async def _release_own_share(self, kwargs: Mapping[str, object]) -> tuple[tuple[str, _PartitionKey], ...]:
+        own_concurrency_keys: Final = self._own_concurrency_keys_for_release(kwargs)
+        if own_concurrency_keys is not None:
+            return await self._pop_matching_keys_for_call_id(kwargs, own_concurrency_keys)
+        one_entry: Final = await self._release_one_pending_for_call_id(kwargs)
+        return (one_entry,) if one_entry is not None else ()
 
     async def async_release_disconnect_state_hook(self, request_data: Mapping[str, object]) -> None:
         await self._release_pending_for_call_id(request_data)
@@ -792,10 +895,10 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         # error marker) can still land after this hook already reserved its
         # own slot. Only this one branch's own share, not every reservation
         # still pending for a non-racing batch's other, still-running
-        # branches -- see _release_one_pending_for_call_id.
-        released_entry: Final = await self._release_one_pending_for_call_id(kwargs)
-        if released_entry is not None:
-            await self._release_keys((released_entry,))
+        # branches -- see _release_own_share.
+        released_entries: Final = await self._release_own_share(kwargs)
+        if released_entries:
+            await self._release_keys(released_entries)
 
     async def async_log_success_event(
         self,
@@ -804,9 +907,9 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         start_time: datetime | None,
         end_time: datetime | None,
     ) -> None:
-        released_entry: Final = await self._release_one_pending_for_call_id(kwargs)
-        if released_entry is not None:
-            release_task: Final = asyncio.create_task(self._release_keys((released_entry,)))
+        released_entries: Final = await self._release_own_share(kwargs)
+        if released_entries:
+            release_task: Final = asyncio.create_task(self._release_keys(released_entries))
             _BACKGROUND_TASKS.add(release_task)  # mutable-ok: see _BACKGROUND_TASKS's own docstring
             release_task.add_done_callback(_BACKGROUND_TASKS.discard)
 
