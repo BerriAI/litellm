@@ -32,6 +32,7 @@ pub(super) fn truncate_error_body(body: &str) -> String {
     format!("{truncated}... (truncated)")
 }
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) fn ocr_provider_config(
     provider: &str,
     model: &str,
@@ -71,12 +72,6 @@ pub(super) fn string_headers(
                 })
         })
         .collect()
-}
-
-pub(super) fn has_header(headers: &[(String, String)], name: &str) -> bool {
-    headers
-        .iter()
-        .any(|(key, _)| key.eq_ignore_ascii_case(name))
 }
 
 fn document_url_field(document: &Value) -> Result<Option<(&str, &str)>, Error> {
