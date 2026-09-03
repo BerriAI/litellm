@@ -35,6 +35,22 @@ class StreamTransformSink:
     holdback_per_choice: dict[int, int] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class StreamingScanKey:
+    """What a streaming guardrail round would hand to ``apply_guardrail``. Two keys
+    compare equal when the round would scan the same content again; ``stream_ended``
+    stays out of the comparison and only says whether the handler is on its
+    end-of-stream path, where an empty payload is still scanned today."""
+
+    texts: tuple[str, ...]
+    tool_calls: tuple[str, ...] = ()
+    stream_ended: bool = field(default=False, compare=False)
+
+    @property
+    def has_nothing_to_scan(self) -> bool:
+        return not self.stream_ended and not any(self.texts) and not self.tool_calls
+
+
 class BaseTranslation(ABC):
     @staticmethod
     def transform_user_api_key_dict_to_metadata(
@@ -151,12 +167,15 @@ class BaseTranslation(ABC):
         """
         return responses_so_far
 
+    def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        return None
+
     def build_block_sse_chunks(
         self,
         exc: "ModifyResponseException",
         stream_started: bool = False,
-        responses_so_far: list[Any] | None = None,
-    ) -> list[bytes] | None:
+        responses_so_far: Sequence[Any] | None = None,
+    ) -> Sequence[bytes] | None:
         """
         Build the streaming chunks that deliver a guardrail block message and
         cleanly terminate the stream in this provider's wire format.

@@ -9,6 +9,7 @@ import click
 import requests
 
 from .auth import context_secret_vault, get_stored_api_key, login
+from .cmd_quoting import quote_for_cmd
 
 ANTHROPIC_BASE_URL_ENV: Final = "ANTHROPIC_BASE_URL"
 ANTHROPIC_AUTH_TOKEN_ENV: Final = "ANTHROPIC_AUTH_TOKEN"
@@ -151,29 +152,7 @@ def verify_proxy_key(
 
 
 _WINDOWS_SHIM_SUFFIXES: Final[frozenset[str]] = frozenset({".cmd", ".bat"})
-_CMD_PERCENT_GUARD: Final = "%%cd:~,%"
 _CMD_LINE_BREAKS: Final = ("\r", "\n")
-
-
-def _double_trailing_backslashes(segment: str) -> str:
-    bare: Final = segment.rstrip("\\")
-    return bare + "\\" * 2 * (len(segment) - len(bare))
-
-
-def _quote_for_cmd(token: str) -> str:
-    """Quote one token so both parsers that read it see the original text.
-
-    Follows the algorithm the Rust standard library settled on for batch files
-    after CVE-2024-24576. Two parsers see this token: cmd.exe, which ends a
-    quoted string on a lone `"` and so wants an embedded one doubled, and the
-    shim's own interpreter, which re-splits `%*` under C runtime rules where a
-    backslash escapes the quote that follows it, so every backslash run standing
-    before a quote is doubled. Quoting cannot stop cmd expanding `%VAR%`, so each
-    `%` is prefixed with `%%cd:~,`: the zero-length substring of the always
-    defined `cd` expands to nothing and leaves no `%` pair for cmd to match.
-    """
-    escaped: Final = '""'.join(_double_trailing_backslashes(part) for part in token.split('"'))
-    return '"' + escaped.replace("%", _CMD_PERCENT_GUARD) + '"'
 
 
 def _windows_command(path: str, args: Sequence[str]) -> str | tuple[str, ...]:
@@ -202,7 +181,7 @@ def _windows_command(path: str, args: Sequence[str]) -> str | tuple[str, ...]:
             f"Cannot pass an argument containing a line break to `{os.path.basename(path)}` on "
             "Windows: cmd.exe ends the command line there, so the agent would silently lose it."
         )
-    inner: Final = " ".join(_quote_for_cmd(token) for token in (path, *rest))
+    inner: Final = " ".join(quote_for_cmd(token) for token in (path, *rest))
     return f'cmd.exe /d /e:on /v:off /s /c "{inner}"'
 
 

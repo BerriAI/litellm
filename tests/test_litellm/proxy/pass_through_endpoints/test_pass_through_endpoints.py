@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
 from io import BytesIO
 from types import SimpleNamespace
@@ -29,6 +30,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     websocket_passthrough_request,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
@@ -5464,7 +5466,10 @@ def test_the_marker_check_distinguishes_the_two_route_kinds():
     assert request_dispatched_to_pass_through_endpoint(builtin) is False
 
 
-async def _drive_passthrough_request_and_capture_logging(user_api_key_dict: UserAPIKeyAuth) -> tuple[int, object]:
+async def _drive_passthrough_request_and_capture_logging(
+    user_api_key_dict: UserAPIKeyAuth,
+    on_pre_call: Callable[[LiteLLMLoggingObj | None], None] | None = None,
+) -> tuple[int, LiteLLMLoggingObj | None]:
     import litellm
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
     from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -5487,10 +5492,12 @@ async def _drive_passthrough_request_and_capture_logging(user_api_key_dict: User
     mock_request.query_params = QueryParams({})
     mock_request.body = AsyncMock(return_value=b'{"model": "gemini-2.0-flash"}')
 
-    captured_data: dict = {}
+    captured_data: dict = {}  # mutable-ok: the pre-call hook records the request data into it
 
     async def capture_pre_call_hook(user_api_key_dict, data, call_type):
         captured_data.update(data)
+        if on_pre_call is not None:
+            on_pre_call(data.get("litellm_logging_obj"))
         return data
 
     mock_proxy_logging = MagicMock()
@@ -5623,3 +5630,103 @@ async def test_resolve_team_callback_wiring_fails_open_on_operational_error():
     assert wiring.success_callbacks is None
     assert wiring.failure_callbacks is None
     assert wiring.logging_kwargs is None
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_leaves_guardrail_readable_metadata():
+    """A pre-call guardrail reads the request headers off the passthrough logging
+    params without raising."""
+    from litellm.proxy.guardrails.guardrail_hooks.hiddenlayer.hiddenlayer import (
+        _logged_request_headers,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_id="test-team",
+        team_metadata={
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success_and_failure",
+                    "callback_vars": {
+                        "langfuse_public_key": "pk_test",
+                        "langfuse_secret_key": "sk_test",
+                    },
+                }
+            ]
+        },
+    )
+
+    observed: dict[str, dict[str, str] | BaseException] = {}  # mutable-ok: the pre-call hook records into it
+
+    def read_headers_the_way_a_guardrail_does(logging_obj: LiteLLMLoggingObj | None) -> None:
+        assert logging_obj is not None
+        try:
+            observed["headers"] = _logged_request_headers(logging_obj)
+        except Exception as exc:  # noqa: BLE001 - the regression is that this used to raise
+            observed["headers"] = exc
+
+    status_code, logging_obj = await _drive_passthrough_request_and_capture_logging(
+        user_api_key_dict, on_pre_call=read_headers_the_way_a_guardrail_does
+    )
+
+    assert "headers" in observed, "the pre-call hook never ran, so nothing was observed"
+    assert observed["headers"] == {}, f"guardrail header read failed: {observed['headers']!r}"
+    assert status_code == 200
+    assert logging_obj is not None
+    assert logging_obj.dynamic_success_callbacks, "team success callbacks must stay wired"
+    assert logging_obj.standard_callback_dynamic_params.get("langfuse_public_key") == "pk_test"
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_leaves_cost_router_logger_working():
+    """The cost router's logger reads the deployment id off the passthrough logging
+    params without raising. least_busy shares the read but swallows the exception,
+    so this is the strategy where the break is observable."""
+    from litellm._logging import verbose_logger
+    from litellm.caching.caching import DualCache
+    from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
+
+    handler = LowestCostLoggingHandler(router_cache=DualCache())
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_id="test-team",
+        team_metadata={
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success_and_failure",
+                    "callback_vars": {
+                        "langfuse_public_key": "pk_test",
+                        "langfuse_secret_key": "sk_test",
+                    },
+                }
+            ]
+        },
+    )
+
+    status_code, logging_obj = await _drive_passthrough_request_and_capture_logging(user_api_key_dict)
+    assert status_code == 200
+    assert logging_obj is not None
+
+    raised: list[logging.LogRecord] = []  # mutable-ok: logging.Handler records into it
+
+    class _RecordTracebacks(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if record.exc_info is not None:
+                raised.append(record)
+
+    recorder = _RecordTracebacks()
+    verbose_logger.addHandler(recorder)
+    try:
+        await handler.async_log_success_event(
+            kwargs=logging_obj.model_call_details,
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+    finally:
+        verbose_logger.removeHandler(recorder)
+
+    assert not raised, f"cost router logger raised on the passthrough logging params: {raised[0].exc_info}"
