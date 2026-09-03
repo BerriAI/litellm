@@ -544,6 +544,14 @@ def print_verbose(
         pass
 
 
+def _print_verbose_is_active() -> bool:
+    """Whether print_verbose would reach either of its two consumers, so a call site can skip
+    building a payload nothing would read. _is_debugging_on() is not the same predicate: it reads
+    litellm._logging.set_verbose, while print_verbose's print reads litellm.set_verbose, and
+    assigning the documented litellm.set_verbose = True rebinds only the latter."""
+    return litellm.set_verbose is True or verbose_logger.isEnabledFor(logging.DEBUG)
+
+
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
 def custom_llm_setup():
@@ -4705,7 +4713,8 @@ def get_optional_params(
         openai_params=list(DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys()),
         additional_drop_params=additional_drop_params,
     )
-    print_verbose(f"Final returned optional params: {optional_params}")
+    if _print_verbose_is_active():
+        print_verbose(f"Final returned optional params: {redact_credentials_in_payload(optional_params)}")
     optional_params = _apply_openai_param_overrides(
         optional_params=optional_params,
         non_default_params=non_default_params,
