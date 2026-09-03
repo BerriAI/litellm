@@ -40,6 +40,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
+    SESSION_ID_OMITTED_METADATA_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -581,8 +582,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         )
 
         # Set internal keys after merging client-supplied metadata so a request
-        # body that mirrors them cannot clobber the authenticated key or the
-        # real parent span.
+        # body that mirrors them cannot clobber the authenticated key, the real
+        # parent span, or the proxy's own session-id decision.
+        _metadata.pop(SESSION_ID_OMITTED_METADATA_KEY, None)
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
         _metadata["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
@@ -812,6 +814,8 @@ def _resolve_team_callback_wiring(
         else {  # mutable-ok: Logging arg
             **callback_vars,
             TRUSTED_CALLBACK_VARS_FIELD: callback_vars,
+            "metadata": {},  # mutable-ok: Logging arg
+            "model_info": {},  # mutable-ok: Logging arg
         }
     )
     return _TeamCallbackWiring(

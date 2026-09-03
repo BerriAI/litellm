@@ -9,11 +9,19 @@ import { getSubmitBlockedReason } from "./add_auto_router_tab";
 import { buildModelAvailability } from "@/lib/autorouter_presets";
 import { testAutoRouterRouting } from "../networking";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
-import { getAllPresets, getPresetByKey, getRequiredModelsInPreset } from "@/lib/autorouter_presets";
+import { AutoRouterPreset, getRequiredModelsInPreset } from "@/lib/autorouter_presets";
+import { BUNDLED_PRESETS, LOADED_PRESETS_QUERY, useAutoRouterPresets } from "../../../tests/mocks/autoRouterPresets";
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
 );
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useAutoRouterPresets",
+  async () => await import("../../../tests/mocks/autoRouterPresets"),
+);
+
+const getAllPresets = (): AutoRouterPreset[] => BUNDLED_PRESETS;
+const getPresetByKey = (key: string): AutoRouterPreset | undefined => BUNDLED_PRESETS.find((p) => p.key === key);
 
 const ANTHROPIC_PRESET = getPresetByKey("anthropic_family")!;
 const ANTHROPIC_TIERS = ANTHROPIC_PRESET.complexity_router_config.tiers;
@@ -101,18 +109,24 @@ vi.mock("./build_complexity_router_config", async (importOriginal) => {
 });
 
 // A real TeamDropdown fetches teams and renders an antd Select; the wiring under test is
-// whether team_id is registered, validated and forwarded, so a plain control stands in.
+// whether team_id is registered, validated and forwarded, so a plain control stands in. The
+// clear button mirrors the real dropdown's x, which emits null rather than a string.
 vi.mock("../common_components/team_dropdown", () => ({
-  default: ({ value, onChange }: { value?: string; onChange?: (next: string) => void }) => (
-    <select
-      data-testid="team-dropdown"
-      value={value ?? ""}
-      onChange={(event) => onChange?.(event.target.value)}
-      aria-label="Select Team"
-    >
-      <option value="">none</option>
-      <option value="team-1">team-1</option>
-    </select>
+  default: ({ value, onChange }: { value?: string; onChange?: (next: string | null) => void }) => (
+    <>
+      <select
+        data-testid="team-dropdown"
+        value={value ?? ""}
+        onChange={(event) => onChange?.(event.target.value)}
+        aria-label="Select Team"
+      >
+        <option value="">none</option>
+        <option value="team-1">team-1</option>
+      </select>
+      <button type="button" data-testid="team-dropdown-clear" onClick={() => onChange?.(null)}>
+        clear team
+      </button>
+    </>
   ),
 }));
 
@@ -354,6 +368,25 @@ describe("AddAutoRouterTab", () => {
     expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
   });
 
+  // The shared dropdown emits null on clear while this form's schema wants a string, so the
+  // form maps null back to "": the user sees the pick-a-team message, not a zod type error.
+  it("treats a team picked and then cleared like no team at all", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(
+      <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" userRole="Internal User" createScope="team-required" />,
+    );
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "team-scoped-router");
+    await user.selectOptions(screen.getByTestId("team-dropdown"), "team-1");
+    await user.click(screen.getByTestId("team-dropdown-clear"));
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    expect(await screen.findByText("Please select a team to continue")).toBeInTheDocument();
+    expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
+  });
+
   it("defaults a new router to session affinity off, matching the backend field default", async () => {
     const user = userEvent.setup();
     vi.mocked(getMissingTiersError).mockReturnValue(null);
@@ -557,6 +590,44 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
+  it("writes both modality flags as false into the create payload when the panel stays untouched", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "modality-router" } });
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      modality_routing: false,
+      modality_pin_override: false,
+    });
+  });
+
+  it("carries the pin override through to the create payload once image routing unlocks it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "modality-router" } });
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Modality Routing"));
+    await user.click(await screen.findByRole("switch", { name: "Route image requests to vision-capable models" }));
+    await user.click(await screen.findByRole("switch", { name: "Override session pin for image requests" }));
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      modality_routing: true,
+      modality_pin_override: true,
+    });
+  });
+
   // Custom is the escape hatch, not the headline choice, so it's listed after every bundled preset
   // rather than first.
   it("lists Custom Configuration after the bundled presets", () => {
@@ -565,7 +636,14 @@ describe("AddAutoRouterTab", () => {
 
     const labels = visibleOptions().map((option) => option.querySelector(".font-medium")?.textContent);
 
-    expect(labels).toEqual(["Anthropic Family", "Gemini Family", "Lite", "OpenAI Family", "Custom Configuration"]);
+    expect(labels).toEqual([
+      "1M Context",
+      "Anthropic Family",
+      "Gemini Family",
+      "Lite",
+      "OpenAI Family",
+      "Custom Configuration",
+    ]);
   });
 
   describe("routing test", () => {
@@ -989,7 +1067,14 @@ describe("AddAutoRouterTab", () => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
       const labels = visibleOptions().map((option) => option.querySelector(".font-medium")?.textContent);
-      expect(labels).toEqual(["Anthropic Family", "Gemini Family", "Lite", "OpenAI Family", "Custom Configuration"]);
+      expect(labels).toEqual([
+        "Anthropic Family",
+        "1M Context",
+        "Gemini Family",
+        "Lite",
+        "OpenAI Family",
+        "Custom Configuration",
+      ]);
     });
 
     it.each([
@@ -1115,5 +1200,54 @@ describe("getSubmitBlockedReason", () => {
     expect(getSubmitBlockedReason({ tiers, classifier_type: "heuristic" }, rules, referenced, availability)).toContain(
       "no longer has",
     );
+  });
+});
+
+describe("preset catalog fetch states", () => {
+  afterEach(() => vi.mocked(useAutoRouterPresets).mockReturnValue(LOADED_PRESETS_QUERY));
+
+  it("keeps showing cached presets without the error banner when only a refetch fails", () => {
+    vi.mocked(useAutoRouterPresets).mockReturnValue({
+      ...LOADED_PRESETS_QUERY,
+      isError: true,
+    } as never);
+    renderWithProviders(<Harness />);
+
+    expect(screen.queryByText(/Could not load templates/)).not.toBeInTheDocument();
+
+    openTemplateDropdown();
+    expect(screen.queryAllByRole("option").length).toBeGreaterThan(1);
+  });
+
+  it("shows a loading hint while the catalog fetch is pending", () => {
+    vi.mocked(useAutoRouterPresets).mockReturnValue({
+      ...LOADED_PRESETS_QUERY,
+      data: undefined,
+      isPending: true,
+    } as never);
+    renderWithProviders(<Harness />);
+
+    expect(screen.getByText("Loading templates...")).toBeInTheDocument();
+  });
+
+  it("degrades to Custom Configuration with a retry hint that refetches the catalog", async () => {
+    const refetch = vi.fn();
+    vi.mocked(useAutoRouterPresets).mockReturnValue({
+      ...LOADED_PRESETS_QUERY,
+      data: undefined,
+      isError: true,
+      refetch,
+    } as never);
+    renderWithProviders(<Harness />);
+
+    expect(await screen.findByText(/Could not load templates/)).toBeInTheDocument();
+
+    openTemplateDropdown();
+    const options = screen.queryAllByRole("option");
+    expect(options).toHaveLength(1);
+    expect(options[0]).toHaveTextContent("Custom Configuration");
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refetch).toHaveBeenCalled();
   });
 });

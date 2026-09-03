@@ -82,7 +82,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   // Using a unique ID to force the ConnectionErrorDisplay to remount and run a fresh test
   const [connectionTestId, setConnectionTestId] = useState<string>("");
 
-  const { accessToken, userRole, premiumUser, userId } = useAuthorized();
+  const { accessToken, userRole, premiumUser, userId, isViewOnly } = useAuthorized();
   const {
     data: providerMetadata,
     isLoading: isProviderMetadataLoading,
@@ -157,7 +157,10 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   const isTeamAdmin = isUserTeamAdminForAnyTeam(teams, userId);
   // Same owner the Auto-Routers tab uses, so the two creation forms cannot disagree about
   // who has to name a team. This form is only reachable when creation is allowed at all.
-  const createScope = modelCreationScope({ userRole, userID: userId }, { teams, disabledForInternalUsers: false });
+  const createScope = modelCreationScope(
+    { userRole, userID: userId, isViewOnly },
+    { teams, disabledForInternalUsers: false },
+  );
   const requiresTeamScope = createScope === "team-required";
 
   return (

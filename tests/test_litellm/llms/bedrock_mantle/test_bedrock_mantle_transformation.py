@@ -486,6 +486,71 @@ class TestBedrockMantleChatAuth:
         assert "/us-east-2/bedrock/aws4_request" in authorization
         assert requests[0]["url"].startswith("https://bedrock-mantle.us-east-2.api.aws")
 
+    def test_completion_per_request_role_reaches_signer_and_not_the_body(self, monkeypatch):
+        from unittest.mock import MagicMock, Mock
+
+        from botocore.credentials import Credentials
+
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+        from litellm.types.utils import ModelResponse
+
+        for var in ("BEDROCK_MANTLE_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_MANTLE_API_BASE"):
+            monkeypatch.delenv(var, raising=False)
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(
+            return_value=Credentials(
+                access_key="ASIAEXAMPLE",
+                secret_key="YXNzdW1lZC1yb2xlLXNlY3JldC1hc3N1bWVk",
+                token="assumed-session-token",
+            )
+        )
+        url = "https://bedrock-mantle.us-east-1.api.aws/openai/v1/chat/completions"
+        client = HTTPHandler(client=httpx.Client())
+        client.post = Mock(
+            return_value=httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 1733529600,
+                    "model": "google.gemma-4-31b",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+                request=httpx.Request("POST", url),
+            )
+        )
+
+        BaseLLMHTTPHandler().completion(
+            model="google.gemma-4-31b",
+            messages=[{"role": "user", "content": "hello"}],
+            api_base=None,
+            custom_llm_provider="bedrock_mantle",
+            model_response=ModelResponse(),
+            encoding=None,
+            logging_obj=Mock(),
+            optional_params={},
+            timeout=10,
+            litellm_params={
+                "aws_role_name": "arn:aws:iam::000000000000:role/attributed-role",
+                "aws_session_name": "user-123",
+                "aws_region_name": "us-east-1",
+            },
+            acompletion=False,
+            client=client,
+            provider_config=BedrockMantleChatConfig(aws_signer=signer),
+        )
+
+        credential_kwargs = signer.get_credentials.call_args.kwargs
+        assert credential_kwargs["aws_role_name"] == "arn:aws:iam::000000000000:role/attributed-role"
+        assert credential_kwargs["aws_session_name"] == "user-123"
+        sent = client.post.call_args.kwargs
+        assert sent["headers"]["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert not [key for key in json.loads(sent["data"]) if key.startswith("aws_")]
+
 
 class TestBedrockMantleProjectHeader:
     def test_validate_environment_sets_openai_project_header(self):

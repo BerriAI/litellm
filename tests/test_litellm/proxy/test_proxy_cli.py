@@ -95,6 +95,7 @@ class TestProxyInitializationHelpers:
         assert args["app"] == "litellm.proxy.proxy_server:app"
         assert args["host"] == "localhost"
         assert args["port"] == 8000
+        assert args["server_header"] is False
 
         # Test with log_config
         args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
@@ -2452,6 +2453,96 @@ class TestReadReplicaConnectionParams:
         assert "DATABASE_URL_READ_REPLICA" not in captured
 
 
+class TestMaxIdleConnectionLifetimeDefault:
+    """The proxy defaults `max_idle_connection_lifetime` below common infra idle
+    timeouts so stale pooled connections are recycled instead of failing requests."""
+
+    def _config(self, tmp_path, general_settings):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+        return str(config_path)
+
+    def test_default_applied_to_database_and_direct_url(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {}),
+            direct_url="postgresql://t:t@localhost:5432/t",
+        )
+
+        for env_var in ("DATABASE_URL", "DIRECT_URL"):
+            query = urlparse.parse_qs(urlparse.urlparse(captured[env_var]).query)
+            assert query["max_idle_connection_lifetime"] == ["60"], env_var
+
+    def test_url_pinned_value_wins_over_default(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {}),
+            database_url="postgresql://t:t@localhost:5432/t?max_idle_connection_lifetime=300",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert query["max_idle_connection_lifetime"] == ["300"]
+
+    def test_url_pinned_value_wins_over_config_key(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {"database_max_idle_connection_lifetime": 45}),
+            database_url="postgresql://t:t@localhost:5432/t?max_idle_connection_lifetime=300",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert query["max_idle_connection_lifetime"] == ["300"]
+
+    def test_config_key_overrides_default(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {"database_max_idle_connection_lifetime": 45}),
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert query["max_idle_connection_lifetime"] == ["45"]
+
+    def test_extra_connection_params_override_default(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(
+                tmp_path,
+                {"database_extra_connection_params": {"max_idle_connection_lifetime": 120}},
+            ),
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert query["max_idle_connection_lifetime"] == ["120"]
+
+    def test_read_replica_gets_the_default(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {}),
+            read_replica_url="postgresql://t:t@reader:5432/t",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert query["max_idle_connection_lifetime"] == ["60"]
+
+    def test_replica_pinned_value_wins(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {"database_max_idle_connection_lifetime": 45}),
+            read_replica_url="postgresql://t:t@reader:5432/t?max_idle_connection_lifetime=200",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert query["max_idle_connection_lifetime"] == ["200"]
+
+    def test_config_key_reaches_the_read_replica(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {"database_max_idle_connection_lifetime": 45}),
+            read_replica_url="postgresql://t:t@reader:5432/t",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert query["max_idle_connection_lifetime"] == ["45"]
+
+    def test_idle_lifetime_params_prefers_configured_value(self):
+        from litellm.proxy.db.db_url_settings import idle_lifetime_params
+
+        assert dict(idle_lifetime_params(45)) == {"max_idle_connection_lifetime": 45}
+        assert dict(idle_lifetime_params(None)) == {"max_idle_connection_lifetime": 60}
+
+
 class TestTokenAuthCliFlags:
     """`--azure_postgresql_auth` has to reach the URL assembly the same way the env var does."""
 
@@ -2532,3 +2623,49 @@ class TestTokenAuthCliFlags:
         assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
         assert "ENTRA_TOKEN" not in (database_url or "")
         assert toggle is None
+
+
+class TestLibpqSslParamTranslation:
+    """Prisma ignores ``sslrootcert`` and treats ``sslmode=verify-full`` as
+    ``prefer``, so the URL handed to it must carry Prisma's own strict dialect."""
+
+    @staticmethod
+    def _config(tmp_path, general_settings):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+        return str(config_path)
+
+    def test_libpq_url_is_translated_on_every_prisma_url(self, tmp_path):
+        libpq = "?sslmode=verify-full&sslrootcert=/certs/rds-bundle.pem"
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {}),
+            database_url=f"postgresql://t:t@localhost:5432/t{libpq}",
+            direct_url=f"postgresql://t:t@direct:5432/t{libpq}",
+            read_replica_url=f"postgresql://t:t@reader:5432/t{libpq}",
+        )
+
+        for env_var in ("DATABASE_URL", "DIRECT_URL", "DATABASE_URL_READ_REPLICA"):
+            query = urlparse.parse_qs(urlparse.urlparse(captured[env_var]).query)
+            assert "sslrootcert" not in query, env_var
+            assert query["sslmode"] == ["require"], env_var
+            assert query["sslcert"] == ["/certs/rds-bundle.pem"], env_var
+            assert query["sslaccept"] == ["strict"], env_var
+
+    def test_libpq_params_from_extra_connection_params_are_translated(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(
+                tmp_path,
+                {
+                    "database_extra_connection_params": {
+                        "sslmode": "verify-full",
+                        "sslrootcert": "/certs/rds-bundle.pem",
+                    }
+                },
+            ),
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert "sslrootcert" not in query
+        assert query["sslmode"] == ["require"]
+        assert query["sslcert"] == ["/certs/rds-bundle.pem"]
+        assert query["sslaccept"] == ["strict"]

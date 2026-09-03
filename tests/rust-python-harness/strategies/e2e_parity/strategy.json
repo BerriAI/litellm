@@ -1,0 +1,50 @@
+{
+  "order": 10,
+  "id": "e2e_parity",
+  "label": "End-to-end parity",
+  "description": "Compare observable Python and Rust SDK behavior over generated and recorded inputs.",
+  "functions": {
+    "ocr": {
+      "coverage": "partial",
+      "selectors": [
+        "tests/rust-python-harness/strategies/e2e_parity/sdk/ocr/test_sdk_parity.py",
+        "tests/test_litellm/ocr/test_rust_bridge.py"
+      ],
+      "note": "Recorded sync/async SDK parity; invalid-model provider errors differ, and Reducto lacks a Rust contract."
+    },
+    "messages": {
+      "coverage": "partial",
+      "selectors": [
+        "tests/test_litellm/anthropic_interface/test_rust_bridge_messages.py"
+      ],
+      "note": "Bridge coverage exists; frozen-oracle fuzz parity is still being added."
+    },
+    "responses": {
+      "coverage": "partial",
+      "selectors": [
+        "tests/test_litellm/responses/test_rust_bridge_websocket.py"
+      ],
+      "note": "Covers the websocket bridge; full responses parity is still being added."
+    },
+    "count_tokens": {
+      "coverage": "planned",
+      "selectors": [],
+      "note": "No Rust count_tokens parity test is present yet."
+    },
+    "chat_completions": {
+      "coverage": "partial",
+      "selectors": [
+        "tests/test_litellm/rust_bridge/test_chat_completions.py"
+      ],
+      "note": "Bridge coverage exists; frozen-oracle fuzz parity is still being added."
+    },
+    "transcription": {
+      "coverage": "partial",
+      "selectors": [
+        "tests/test_litellm/test_audio_transcription_rust_bridge.py"
+      ],
+      "note": "Bridge coverage exists; frozen-oracle fuzz parity is still being added."
+    }
+  },
+  "gateway": {}
+}
