@@ -40,35 +40,47 @@ class TypingImportViolation:
     name: str
 
 
-def _contains_sys_version_info(node: ast.AST) -> bool:
-    return any(
-        isinstance(child, ast.Attribute)
-        and isinstance(child.value, ast.Name)
-        and child.value.id == "sys"
-        and child.attr == "version_info"
-        for child in ast.walk(node)
+def _walk_with_ancestors(
+    node: ast.AST, ancestors: tuple[tuple[ast.AST, str], ...] = ()
+) -> Iterator[tuple[ast.AST, tuple[tuple[ast.AST, str], ...]]]:
+    yield node, ancestors
+    for field_name, field_value in ast.iter_fields(node):
+        if isinstance(field_value, ast.AST):
+            yield from _walk_with_ancestors(field_value, (*ancestors, (node, field_name)))
+        elif isinstance(field_value, list):
+            for child in field_value:
+                if isinstance(child, ast.AST):
+                    yield from _walk_with_ancestors(child, (*ancestors, (node, field_name)))
+
+
+def _is_sys_version_info(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "sys"
+        and node.attr == "version_info"
     )
 
 
-def _walk_with_ancestors(
-    node: ast.AST, ancestors: tuple[ast.AST, ...] = ()
-) -> Iterator[tuple[ast.AST, tuple[ast.AST, ...]]]:
-    yield node, ancestors
-    next_ancestors: Final[tuple[ast.AST, ...]] = (*ancestors, node)
-    for child in ast.iter_child_nodes(node):
-        yield from _walk_with_ancestors(child, next_ancestors)
-
-
-def _is_version_guarded(ancestors: tuple[ast.AST, ...]) -> bool:
-    enclosing_if: ast.If | None = next(
+def _is_version_guarded(ancestors: tuple[tuple[ast.AST, str], ...]) -> bool:
+    nearest_if: Final[tuple[ast.If, str] | None] = next(
         (
-            ancestor
-            for ancestor in reversed(ancestors)
+            (ancestor, field_name)
+            for ancestor, field_name in reversed(ancestors)
             if isinstance(ancestor, ast.If)
         ),
         None,
     )
-    return enclosing_if is not None and _contains_sys_version_info(enclosing_if.test)
+    if nearest_if is None:
+        return False
+    enclosing_if, branch = nearest_if
+    test: Final[ast.expr] = enclosing_if.test
+    if not isinstance(test, ast.Compare) or len(test.ops) != 1 or not _is_sys_version_info(test.left):
+        return False
+    operator: Final[ast.cmpop] = test.ops[0]
+    return (isinstance(operator, (ast.Gt, ast.GtE)) and branch == "body") or (
+        isinstance(operator, (ast.Lt, ast.LtE)) and branch == "orelse"
+    )
 
 
 def scan_file(file_path: str | os.PathLike[str]) -> tuple[TypingImportViolation, ...]:
@@ -105,7 +117,11 @@ def scan_directory(base_dir: str | os.PathLike[str] = ".") -> tuple[TypingImport
     base_path: Final[Path] = Path(base_dir)
     return tuple(
         violation
-        for directory in (base_path / "litellm", base_path / "enterprise")
+        for directory in (
+            base_path / "litellm",
+            base_path / "enterprise",
+            base_path / "litellm-proxy-extras" / "litellm_proxy_extras",
+        )
         if directory.exists()
         for path in directory.rglob("*.py")
         for violation in scan_file(path)

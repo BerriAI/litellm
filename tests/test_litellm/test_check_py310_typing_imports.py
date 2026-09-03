@@ -38,5 +38,49 @@ def test_version_guarded_typing_import_passes(tmp_path: Path) -> None:
     assert _scan(tmp_path, source) == ()
 
 
+def test_python_310_branch_flags_typing_import(tmp_path: Path) -> None:
+    source = (
+        "import sys\n"
+        "if sys.version_info >= (3, 11):\n"
+        "    from typing_extensions import NotRequired\n"
+        "else:\n"
+        "    from typing import NotRequired\n"
+    )
+    violations = _scan(tmp_path, source)
+    assert tuple(violation.name for violation in violations) == ("NotRequired",)
+
+
+def test_python_310_branch_is_exempt_for_less_than_guard(tmp_path: Path) -> None:
+    source = (
+        "import sys\n"
+        "if sys.version_info < (3, 11):\n"
+        "    from typing_extensions import NotRequired\n"
+        "else:\n"
+        "    from typing import NotRequired\n"
+    )
+    assert _scan(tmp_path, source) == ()
+
+
+def test_nearest_if_controls_version_guard(tmp_path: Path) -> None:
+    source = (
+        "if sys.version_info >= (3, 11):\n"
+        "    from typing import Self\n"
+        "    x = 1\n"
+        "if True:\n"
+        "    from typing import Self\n"
+    )
+    violations = _scan(tmp_path, source)
+    assert tuple((violation.name, violation.line) for violation in violations) == (("Self", 5),)
+
+
+def test_scan_directory_includes_proxy_extras(tmp_path: Path) -> None:
+    file_path = tmp_path / "litellm-proxy-extras" / "litellm_proxy_extras" / "m.py"
+    file_path.parent.mkdir(parents=True)
+    file_path.write_text("from typing import NotRequired\n", encoding="utf-8")
+
+    violations = checker.scan_directory(tmp_path)
+    assert tuple((violation.name, violation.file) for violation in violations) == (("NotRequired", str(file_path)),)
+
+
 def test_python_310_typing_name_passes(tmp_path: Path) -> None:
     assert _scan(tmp_path, "from typing import Optional\n") == ()
