@@ -18,7 +18,6 @@ from litellm_enterprise.types.proxy.audit_logging_endpoints import (
 
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.utils import _hash_token_if_needed
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import AuditLogRepository
 
@@ -50,14 +49,13 @@ def _build_json_field_or_condition(json_key: str, value: str) -> dict[str, objec
 
 
 def _build_search_condition(search: str) -> dict[str, object]:
-    """Match any id column; a raw sk- key is hashed for the two columns that store key hashes."""
-    hashed: Final = _hash_token_if_needed(search)
+    """Match a row whose id, changed_by, object_id, or changed_by_api_key equals the search value."""
     return {
         "OR": (
             {"id": search},
             {"changed_by": search},
-            {"object_id": hashed},
-            {"changed_by_api_key": hashed},
+            {"object_id": search},
+            {"changed_by_api_key": search},
         )
     }
 
@@ -99,10 +97,7 @@ async def get_audit_logs(
     ),
     search: str | None = Query(
         None,
-        description=(
-            "Match a row whose id, object_id, changed_by, or changed_by_api_key equals this value "
-            "(a raw sk- virtual key is hashed first)"
-        ),
+        description="Match a row whose id, object_id, changed_by, or changed_by_api_key equals this value",
     ),
     # Sorting parameters
     sort_by: str | None = Query(
@@ -159,7 +154,7 @@ async def get_audit_logs(
         {sort_by: sort_order} if sort_by and isinstance(sort_by, str) else {"updated_at": sort_order}
     )
 
-    audit_log_table: Final[TableActions["prisma_models.LiteLLM_AuditLog"]] = AuditLogRepository(prisma_client).table
+    audit_log_table: Final[TableActions[prisma_models.LiteLLM_AuditLog]] = AuditLogRepository(prisma_client).table
 
     # Get paginated results
     audit_logs: Final = await audit_log_table.find_many(
@@ -221,7 +216,7 @@ async def get_audit_log_by_id(
             detail={"message": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    audit_log_table: Final[TableActions["prisma_models.LiteLLM_AuditLog"]] = AuditLogRepository(prisma_client).table
+    audit_log_table: Final[TableActions[prisma_models.LiteLLM_AuditLog]] = AuditLogRepository(prisma_client).table
 
     # Get the audit log by ID
     audit_log: Final = await audit_log_table.find_unique(where={"id": id})

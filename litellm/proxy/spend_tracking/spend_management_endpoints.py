@@ -2240,20 +2240,18 @@ def _build_spend_log_search_condition(
     end_date: datetime,
     next_param_index: int,
 ) -> _SpendLogSearchCondition:
-    """request_id (indexed) matches across all time; the unindexed id columns only inside the window (sk- keys hashed)."""
+    """request_id (indexed) matches across all time; the unindexed id columns only inside the window."""
     raw: Final = f"${next_param_index}"
-    hashed: Final = f"${next_param_index + 1}"
-    window_start: Final = f"${next_param_index + 2}"
-    window_end: Final = f"${next_param_index + 3}"
+    window_start: Final = f"${next_param_index + 1}"
+    window_end: Final = f"${next_param_index + 2}"
     sql: Final = (
         f"(request_id = {raw} OR ("
         f"\"startTime\" >= ({window_start}::timestamptz AT TIME ZONE 'UTC') "
         f"AND \"startTime\" <= ({window_end}::timestamptz AT TIME ZONE 'UTC') "
-        f'AND (api_key = {hashed} OR team_id = {raw} OR "user" = {raw} OR end_user = {raw} '
+        f'AND (api_key = {raw} OR team_id = {raw} OR "user" = {raw} OR end_user = {raw} '
         f"OR session_id = {raw} OR model_id = {raw})))"
     )
-    hashed_search: Final = hash_token(token=search) if search.startswith("sk-") else search
-    return _SpendLogSearchCondition(sql=sql, params=(search, hashed_search, start_date, end_date))
+    return _SpendLogSearchCondition(sql=sql, params=(search, start_date, end_date))
 
 
 @router.get(
@@ -2359,7 +2357,7 @@ async def ui_view_spend_logs(
     search: str | None = fastapi.Query(
         default=None,
         description=(
-            "Match a log whose request_id, api_key (a raw sk- key is hashed first), team_id, user, end_user, "
+            "Match a log whose request_id, api_key (hash), team_id, user, end_user, "
             "session_id, or model_id equals this value. request_id matches across all time; the other columns "
             "match inside start_date/end_date, which stay required"
         ),

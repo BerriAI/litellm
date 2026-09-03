@@ -525,14 +525,14 @@ describe("useKeys", () => {
       json: async () => mockKeysResponse,
     });
 
-    const { result } = renderHook(() => useKeys(1, 10, { search: "sk-pasted-key" }), { wrapper });
+    const { result } = renderHook(() => useKeys(1, 10, { search: "pasted-key-id" }), { wrapper });
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
     });
 
     const callUrl = new URL(mockFetch.mock.calls[0][0], "http://localhost");
-    expect(callUrl.searchParams.get("search")).toBe("sk-pasted-key");
+    expect(callUrl.searchParams.get("search")).toBe("pasted-key-id");
     expect(callUrl.searchParams.has("key_alias")).toBe(false);
     expect(callUrl.searchParams.has("key_hash")).toBe(false);
   });
