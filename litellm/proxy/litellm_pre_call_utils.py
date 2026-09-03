@@ -2865,6 +2865,29 @@ def _add_guardrails_from_policies_in_metadata(
     )
 
 
+def add_guardrails_from_auth_metadata(
+    user_api_key_dict: UserAPIKeyAuth,
+    data: dict,
+    metadata_variable_name: str,
+) -> None:
+    """Resolve key, team, and project guardrails (direct and via policies) onto ``data[metadata_variable_name]``."""
+    project_metadata: Final = user_api_key_dict.project_metadata or {}
+    _add_guardrails_from_key_or_team_metadata(
+        key_metadata=user_api_key_dict.metadata,
+        team_metadata=user_api_key_dict.team_metadata,
+        project_metadata=project_metadata,
+        data=data,
+        metadata_variable_name=metadata_variable_name,
+    )
+    _add_guardrails_from_policies_in_metadata(
+        key_metadata=user_api_key_dict.metadata,
+        team_metadata=user_api_key_dict.team_metadata,
+        project_metadata=project_metadata,
+        data=data,
+        metadata_variable_name=metadata_variable_name,
+    )
+
+
 async def move_guardrails_to_metadata(
     data: dict,
     _metadata_variable_name: str,
@@ -2897,22 +2920,8 @@ async def move_guardrails_to_metadata(
             data.pop("policies", None)
             return
 
-    # Check key/team/project-level guardrails
-    _add_guardrails_from_key_or_team_metadata(
-        key_metadata=user_api_key_dict.metadata,
-        team_metadata=user_api_key_dict.team_metadata,
-        project_metadata=project_metadata,
-        data=data,
-        metadata_variable_name=_metadata_variable_name,
-    )
-
-    #########################################################################################
-    # Add guardrails from policies attached to key/team/project metadata
-    #########################################################################################
-    _add_guardrails_from_policies_in_metadata(
-        key_metadata=user_api_key_dict.metadata,
-        team_metadata=user_api_key_dict.team_metadata,
-        project_metadata=project_metadata,
+    add_guardrails_from_auth_metadata(
+        user_api_key_dict=user_api_key_dict,
         data=data,
         metadata_variable_name=_metadata_variable_name,
     )
