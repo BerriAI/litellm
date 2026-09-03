@@ -1,28 +1,24 @@
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use litellm_core::error::Error;
-use litellm_core::providers::reducto::ocr::transformation::{
-    build_upload_request, extract_document_source, extract_upload_file_id,
-};
-use litellm_core::request_context::RequestAttribution;
+use litellm_core::ocr::{PreparedOcrRequest, ProviderOcrRequest, prepare_ocr_provider_call};
 use serde_json::{Map, Value, json};
 use std::future::Future;
 use std::pin::Pin;
 
-use super::common_utils::{convert_document_url_to_data_uri, string_headers, truncate_error_body};
-use super::types::{PreparedOcrRequest, ProviderOcrRequest};
-use crate::client::http_client;
 use crate::integrations::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
 };
 use crate::integrations::custom_logger::{
     CallType, CallbackTiming, CallbackValue, CustomLoggerRunner, LoggingError, ModelCallDetails,
 };
-use crate::integrations::types::{StandardLoggingMetadata, StandardLoggingPayload};
+use crate::integrations::types::{
+    RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload,
+};
 
 pub(crate) struct OcrLifecycleHooks {
     logger_runner: CustomLoggerRunner,
     guardrail_runner: CustomGuardrailRunner,
-    request_metadata: RequestAttribution,
+    request_metadata: RequestMetadata,
 }
 
 type OcrFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
@@ -32,7 +28,7 @@ impl OcrLifecycleHooks {
     pub(crate) fn new(
         logger_runner: CustomLoggerRunner,
         guardrail_runner: CustomGuardrailRunner,
-        request_metadata: RequestAttribution,
+        request_metadata: RequestMetadata,
     ) -> Self {
         Self {
             logger_runner,
@@ -77,83 +73,24 @@ impl OcrLifecycleHooks {
         &self,
         request: PreparedOcrRequest,
     ) -> Result<ProviderOcrRequest, Error> {
-        let config = request.config?;
-        let env_lookup = |key: &str| std::env::var(key).ok();
-        let upstream_headers = config.validate_environment(
-            string_headers(request.extra_headers)?,
-            request.api_key.as_deref(),
-            &env_lookup,
-        )?;
-        let url_params = request
-            .optional_params
-            .clone()
-            .into_iter()
-            .chain(request.vertex.into_map())
-            .collect();
-        let url = config.complete_url(
-            request.api_base.as_deref(),
-            &request.model,
-            &url_params,
-            &env_lookup,
-        )?;
-        let model = request.model.clone();
-        let custom_llm_provider = request.custom_llm_provider.clone();
-        let is_reducto = custom_llm_provider == "reducto";
-        let document = if is_reducto {
-            let guarded_document = self
-                .run_during_call_guardrails(&model, &custom_llm_provider, &url, request.document)
-                .await?;
-            upload_reducto_document(
-                &guarded_document,
-                request.api_base.as_deref(),
-                request.timeout,
-                &upstream_headers,
-            )
-            .await?
-        } else if config.requires_data_uri_document() {
-            convert_document_url_to_data_uri(request.document).await?
-        } else {
-            request.document
-        };
-        let optional_params = request.optional_params;
-        let body = config
-            .transform_ocr_request(&request.model, document, optional_params.clone())?
-            .data;
-        let body = if is_reducto {
-            body
-        } else {
-            self.run_during_call_guardrails(&model, &custom_llm_provider, &url, body)
-                .await?
-        };
-        Ok(ProviderOcrRequest {
-            model,
-            custom_llm_provider,
-            config,
-            url,
-            body,
-            optional_params,
-            upstream_headers,
-            timeout: request.timeout,
-        })
+        let provider_request = prepare_ocr_provider_call(request).await?;
+        self.run_during_call_guardrails(provider_request).await
     }
 
     async fn run_during_call_guardrails(
         &self,
-        model: &str,
-        custom_llm_provider: &str,
-        url: &str,
-        body: Value,
-    ) -> Result<Value, Error> {
+        request: ProviderOcrRequest,
+    ) -> Result<ProviderOcrRequest, Error> {
         if self.guardrail_runner.is_empty() {
-            return Ok(body);
+            return Ok(request);
         }
 
         let context = guardrail_context(&self.request_metadata);
         let guardrail_request = GuardrailRequest::new(json!({
-            "model": model,
-            "custom_llm_provider": custom_llm_provider,
-            "url": url,
-            "body": body,
+            "model": request.model(),
+            "custom_llm_provider": request.custom_llm_provider(),
+            "url": request.url(),
+            "body": request.body(),
         }));
         let (guardrail_request, _) = self
             .guardrail_runner
@@ -161,6 +98,7 @@ impl OcrLifecycleHooks {
             .await
             .map_err(guardrail_error_to_core_error)?;
         parse_ocr_during_call_guardrail_request(guardrail_request)
+            .map(|body| request.with_body(body))
     }
 
     fn standard_logging_payload(
@@ -190,63 +128,6 @@ impl OcrLifecycleHooks {
             messages: None,
         }
     }
-}
-
-async fn upload_reducto_document(
-    document: &Value,
-    api_base: Option<&str>,
-    timeout: Option<std::time::Duration>,
-    upstream_headers: &[(String, String)],
-) -> Result<Value, Error> {
-    let source = extract_document_source(document)?;
-    let Some(authorization) = upstream_headers
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
-        .map(|(_, value)| value.as_str())
-    else {
-        return Err(Error::Auth(
-            "Reducto upload requires an Authorization header".to_string(),
-        ));
-    };
-    let Some(upload) = build_upload_request(source, authorization, api_base) else {
-        return Ok(document.clone());
-    };
-    let part = reqwest::multipart::Part::bytes(upload.bytes)
-        .file_name(upload.file_name)
-        .mime_str(&upload.mime_type)
-        .map_err(|error| Error::InvalidRequest(error.to_string()))?;
-    let form = reqwest::multipart::Form::new().part("file", part);
-    let mut request_builder = http_client().post(upload.url).multipart(form);
-    for (name, value) in upstream_headers {
-        if !name.eq_ignore_ascii_case("content-type")
-            && !name.eq_ignore_ascii_case("content-length")
-        {
-            request_builder = request_builder.header(name, value);
-        }
-    }
-    if let Some(timeout) = timeout {
-        request_builder = request_builder.timeout(timeout);
-    }
-    let response = request_builder
-        .send()
-        .await
-        .map_err(|error| Error::Network(error.to_string()))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| Error::Network(error.to_string()))?;
-    if !status.is_success() {
-        return Err(Error::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&body),
-        });
-    }
-    let response_json: Value = serde_json::from_str(&body).map_err(|error| {
-        Error::InvalidResponse(format!("invalid Reducto upload response JSON: {error}"))
-    })?;
-    let file_id = extract_upload_file_id(&response_json)?;
-    Ok(json!({"type": "document_url", "document_url": file_id}))
 }
 
 impl CallLifecycleHooks<PreparedOcrRequest, PreparedOcrRequest, Value> for OcrLifecycleHooks {
@@ -329,7 +210,7 @@ impl CallLifecycleHooks<PreparedOcrRequest, PreparedOcrRequest, Value> for OcrLi
     }
 }
 
-fn guardrail_context(metadata: &RequestAttribution) -> GuardrailContext {
+fn guardrail_context(metadata: &RequestMetadata) -> GuardrailContext {
     GuardrailContext {
         call_type: CallType::Ocr,
         selected_guardrails: Vec::new(),

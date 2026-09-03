@@ -13,7 +13,6 @@
 //!   binary turns on.
 
 pub mod audio_transcription;
-mod client;
 pub mod io;
 pub mod ocr;
 

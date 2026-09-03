@@ -110,3 +110,73 @@ fn crates_directory_matches_allowlist() {
     let expected: BTreeSet<String> = EXPECTED_CRATE_DIRS.iter().map(|s| s.to_string()).collect();
     assert_eq!(actual, expected, "{MISMATCH}");
 }
+
+/// Parse the dependency names out of a crate manifest's `[dependencies]`
+/// table.
+///
+/// Same hand-rolled approach as [`parse_members`]: take the lines after the
+/// `[dependencies]` header up to the next table header (a line starting with
+/// `[`), then keep the text before ` = ` on each non-comment line, trimmed of
+/// the `.workspace`-style shorthand suffix.
+fn parse_dependencies(manifest: &str) -> BTreeSet<String> {
+    let Some((_, after_table)) = manifest.split_once("[dependencies]") else {
+        return BTreeSet::new();
+    };
+
+    after_table
+        .lines()
+        .map(str::trim)
+        .take_while(|line| !line.starts_with('['))
+        .filter_map(|line| {
+            let (name, _) = line.split_once(" = ")?;
+            let name = name.split('.').next().unwrap_or(name);
+            (!name.is_empty() && !name.starts_with('#')).then(|| name.to_string())
+        })
+        .collect()
+}
+
+fn crate_manifest(root: &Path, crate_dir: &str) -> String {
+    fs::read_to_string(root.join("crates").join(crate_dir).join("Cargo.toml"))
+        .unwrap_or_else(|error| panic!("{crate_dir}/Cargo.toml should be readable: {error}"))
+}
+
+/// The python bridge depends on the domain layers, never on the gateway: the
+/// bridge and the axum server are alternative hosts over `litellm-core`, so a
+/// bridge -> gateway edge would drag the server crate into every cdylib build
+/// and let provider I/O creep back out of core.
+#[test]
+fn python_bridge_dependencies_stay_on_core_and_interop() {
+    let manifest = crate_manifest(&workspace_root(), "python-bridge");
+    let dependencies = parse_dependencies(&manifest);
+
+    assert!(
+        dependencies.contains("litellm-core"),
+        "python-bridge must depend on litellm-core, got {dependencies:?}"
+    );
+    assert!(
+        dependencies.contains("litellm-python-interop"),
+        "python-bridge must depend on litellm-python-interop, got {dependencies:?}"
+    );
+    assert!(
+        !dependencies.contains("litellm-ai-gateway"),
+        "python-bridge must not depend on litellm-ai-gateway (it belongs behind the \
+         gateway's own host surface, not the cdylib), got {dependencies:?}"
+    );
+}
+
+/// `litellm-core` stays a pure Rust SDK: Python bindings (pyo3, pythonize,
+/// pyo3-async-runtimes) live in `litellm-python-interop` /
+/// `litellm-python-bridge`, never in core.
+#[test]
+fn core_dependencies_stay_python_free() {
+    let manifest = crate_manifest(&workspace_root(), "core");
+    let dependencies = parse_dependencies(&manifest);
+
+    for banned in ["pyo3", "pyo3-async-runtimes", "pythonize"] {
+        assert!(
+            !dependencies.contains(banned),
+            "litellm-core must not depend on {banned}; Python binding crates own it, \
+             got {dependencies:?}"
+        );
+    }
+}
