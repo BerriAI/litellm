@@ -80,10 +80,16 @@ jobs:
       - name: Run core tests with Bedrock auth
         run: cargo test -p litellm-core --features bedrock-auth --locked
 
+      - name: Run Clippy with server feature
+        run: cargo clippy -p litellm-ai-gateway --all-targets --features server --locked -- -D warnings
+
+      - name: Run server-feature tests
+        run: cargo test -p litellm-ai-gateway --features server --locked
+
   release-wheel:
     name: release wheel
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     permissions:
       contents: read
     env:
@@ -123,6 +129,74 @@ jobs:
         env:
           RELEASE_WHEEL_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python .github/scripts/verify_linux_native_wheel.py dist/*.whl
+
+      - name: Test native route wheel
+        run: python tests/test_litellm/rust_bridge/native_route_wheel_test.py dist/*.whl
+
+      - name: Test wheel-installed Python wrappers
+        run: |
+          python -m venv .venv-wheel-test
+          .venv-wheel-test/bin/pip install dist/*.whl pytest pytest-asyncio
+          # Run against the wheel-installed litellm, not the repo checkout:
+          # the venv's pytest console script keeps the repo root off
+          # sys.path, and --import-mode=importlib stops pytest from
+          # prepending the repo root when importing the shared conftest.
+          .venv-wheel-test/bin/pytest \
+            tests/test_litellm/rust_bridge/test_bindings.py \
+            tests/test_litellm/rust_bridge/test_runtime.py \
+            tests/test_litellm/rust_bridge/test_chat_completions.py \
+            -q --import-mode=importlib
+
+  debug-wheel:
+    name: debug wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up Rust
+        run: rustup toolchain install
+
+      - name: Cache Cargo registry and target
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            litellm-rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust-toolchain.toml', 'litellm-rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # pyproject [tool.maturin] supplies manifest-path and the configured
+      # features, but --features is passed explicitly (mirroring the
+      # release-wheel panic wheel): smoke_test_native_wheel.py requires the
+      # panic-test-only `_panic_for_test` helper, and extension-module keeps
+      # libpython out of the link. --profile dev overrides the configured
+      # release profile.
+      - name: Build debug wheel
+        run: |
+          python -m pip install maturin==1.15.0
+          maturin build --profile dev --features extension-module,panic-test -o dist
+
+      # verify_linux_native_wheel.py is intentionally not run here: it
+      # asserts release-only properties (e.g. stripped symbols) that a
+      # dev-profile wheel does not satisfy.
+      - name: Smoke-test native panic unwinding
+        run: python .github/scripts/smoke_test_native_wheel.py dist/*.whl
 
       - name: Test native route wheel
         run: python tests/test_litellm/rust_bridge/native_route_wheel_test.py dist/*.whl
