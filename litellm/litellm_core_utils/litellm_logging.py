@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
@@ -576,6 +576,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # enqueue closure here instead of firing it immediately.
         self._defer_async_logging: bool = False
         self._enqueue_deferred_logging: Callable[[], None] | None = None
+        self._on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
 
     def set_response_timing_metrics(self, timing_metrics: Mapping[str, float]) -> None:
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
