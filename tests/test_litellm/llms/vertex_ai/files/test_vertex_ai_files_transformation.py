@@ -177,6 +177,36 @@ class TestBatchObjectNaming:
         object_name = config._get_gcs_object_name_from_batch_jsonl([{"body": {"model": "7768560373388541952"}}])
         assert object_name.startswith("litellm-vertex-files/endpoints/7768560373388541952/")
 
+    def test_deployment_model_overrides_jsonl_body_model(self, config):
+        """The stored path decides which Vertex model the batch later runs against with the
+        deployment's credentials, so a user-crafted JSONL body.model must not be able to redirect
+        an authorized deployment to a different endpoint."""
+        object_name = config._get_gcs_object_name_from_batch_jsonl(
+            [{"body": {"model": "9999999999999999999"}}],
+            deployment_model="vertex_ai/gemini/7768560373388541952",
+        )
+        assert object_name.startswith("litellm-vertex-files/endpoints/7768560373388541952/")
+        assert "9999999999999999999" not in object_name
+
+    def test_url_derives_object_path_from_configured_model(self, config):
+        url = config.get_complete_file_url(
+            api_base=None,
+            api_key=None,
+            model="",
+            optional_params={},
+            litellm_params={
+                "gcs_bucket_name": "my-bucket",
+                "model": "vertex_ai/gemini/7768560373388541952",
+            },
+            data={
+                "file": ("batch.jsonl", b'{"body": {"model": "9999999999999999999"}}', "application/jsonl"),
+                "purpose": "batch",
+            },
+        )
+        object_name = parse_qs(urlparse(url).query)["name"][0]
+        assert object_name.startswith("litellm-vertex-files/endpoints/7768560373388541952/")
+        assert "9999999999999999999" not in object_name
+
 
 class TestCustomEndpointBatchUpload:
     def test_should_reject_batch_upload_for_custom_endpoint_deployment(self, config):

@@ -262,22 +262,24 @@ class VertexAIBatchTransformation:
         """
         Returns the `publishers/<publisher>/models/<model>` or `endpoints/<numeric id>` path from a
         gcs uri, or None if the uri does not contain one.
+
+        A publisher path wins over an `endpoints/` segment, and the last `endpoints/` occurrence is
+        used, so a user-configured bucket prefix that happens to contain `endpoints/<digits>` cannot
+        override the model path LiteLLM appended after it.
         """
         unquoted_uri: Final = unquote(gcs_file_uri)
-        _, endpoint_separator, endpoint_path = unquoted_uri.partition("endpoints/")
+        _, separator, model_path = unquoted_uri.partition("publishers/")
+        if separator:
+            parts: Final = model_path.split("/")
+            if len(parts) >= 3 and parts[1] == "models" and parts[2]:
+                return f"publishers/{'/'.join(parts[:3])}"
+
+        _, endpoint_separator, endpoint_path = unquoted_uri.rpartition("endpoints/")
         endpoint_id: Final = endpoint_path.split("/")[0] if endpoint_separator else ""
         if endpoint_id.isdigit():
             return f"endpoints/{endpoint_id}"
 
-        _, separator, model_path = unquoted_uri.partition("publishers/")
-        if not separator:
-            return None
-
-        parts: Final = model_path.split("/")
-        if len(parts) < 3 or parts[1] != "models" or not parts[2]:
-            return None
-
-        return f"publishers/{'/'.join(parts[:3])}"
+        return None
 
     @classmethod
     def is_unmanaged_gcs_batch_input_file_id(cls, input_file_id: str | None) -> bool:

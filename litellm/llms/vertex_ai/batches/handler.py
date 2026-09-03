@@ -93,13 +93,43 @@ class VertexAIBatchPrediction(VertexLLM):
         vertex_location: str | None,
         timeout: float | httpx.Timeout,
         max_retries: int | None,
+        custom_endpoint: bool | None = None,
     ) -> LiteLLMBatch | Coroutine[object, object, LiteLLMBatch]:
+        if custom_endpoint:
+            raise VertexAIError(
+                status_code=400,
+                message=(
+                    "Vertex AI batch prediction is not supported for `custom_endpoint` deployments. "
+                    "The OpenAI-compatible custom endpoint path has no batch surface in LiteLLM; "
+                    "use a publisher model or fine-tuned Gemini endpoint deployment instead."
+                ),
+            )
         sync_handler: Final = _get_httpx_client()
 
         access_token, project_id = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
             custom_llm_provider="vertex_ai",
+        )
+
+        headers: Final = {
+            "Content-Type": "application/json; charset=utf-8",
+            "Authorization": f"Bearer {access_token}",
+        }
+
+        transformed_batch_request: Final[VertexAIBatchPredictionJob] = (
+            VertexAIBatchTransformation.transform_openai_batch_request_to_vertex_ai_batch_request(
+                request=create_batch_data,
+                vertex_project=vertex_project or project_id,
+                vertex_location=vertex_location or "us-central1",
+            )
+        )
+        vertex_batch_request: Final = self._resolve_fine_tuned_endpoint_model(
+            vertex_batch_request=transformed_batch_request,
+            headers=headers,
+            sync_handler=sync_handler,
+            api_base=api_base,
+            vertex_location=vertex_location or "us-central1",
         )
 
         default_api_base: Final = self.create_vertex_batch_url(
@@ -124,25 +154,6 @@ class VertexAIBatchPrediction(VertexLLM):
             vertex_project=vertex_project or project_id,
             vertex_location=vertex_location or "us-central1",
             vertex_api_version="v1",
-        )
-
-        headers: Final = {
-            "Content-Type": "application/json; charset=utf-8",
-            "Authorization": f"Bearer {access_token}",
-        }
-
-        transformed_batch_request: Final[VertexAIBatchPredictionJob] = (
-            VertexAIBatchTransformation.transform_openai_batch_request_to_vertex_ai_batch_request(
-                request=create_batch_data,
-                vertex_project=vertex_project or project_id,
-                vertex_location=vertex_location or "us-central1",
-            )
-        )
-        vertex_batch_request: Final = self._resolve_fine_tuned_endpoint_model(
-            vertex_batch_request=transformed_batch_request,
-            headers=headers,
-            sync_handler=sync_handler,
-            vertex_location=vertex_location or "us-central1",
         )
 
         if _is_async is True:
@@ -170,6 +181,7 @@ class VertexAIBatchPrediction(VertexLLM):
         vertex_batch_request: VertexAIBatchPredictionJob,
         headers: dict[str, str],
         sync_handler: HTTPHandler,
+        api_base: str | None,
         vertex_location: str,
     ) -> VertexAIBatchPredictionJob:
         """
@@ -181,7 +193,19 @@ class VertexAIBatchPrediction(VertexLLM):
         if "/endpoints/" not in model:
             return vertex_batch_request
 
-        endpoint_url: Final = f"{get_vertex_base_url(vertex_location)}/v1/{model}"
+        default_endpoint_url: Final = f"{get_vertex_base_url(vertex_location)}/v1/{model}"
+        _, endpoint_url = self._check_custom_proxy(
+            api_base=api_base,
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint=(default_endpoint_url.split(":")[-1] if len(default_endpoint_url.split(":")) > 1 else ""),
+            stream=None,
+            auth_header=None,
+            url=default_endpoint_url,
+            model=None,
+            vertex_location=vertex_location,
+            vertex_api_version="v1",
+        )
         response: Final = sync_handler.get(url=endpoint_url, headers=headers)
         if response.status_code != 200:
             raise VertexAIError(

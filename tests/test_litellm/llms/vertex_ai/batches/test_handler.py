@@ -274,6 +274,32 @@ def test_create_batch_sync_endpoint_resolution_error_raises():
     client.post.assert_not_called()
 
 
+def test_create_batch_custom_endpoint_raises_400_without_io():
+    """custom_endpoint deployments have no Vertex batch surface; creating a job would target a
+    nonexistent publisher model, so the handler must 400 before any auth or HTTP work (LIT-6899)."""
+    h = _make_handler()
+    client = MagicMock()
+
+    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+        with pytest.raises(VertexAIError) as exc_info:
+            h.create_batch(
+                _is_async=False,
+                create_batch_data=CREATE_DATA,
+                api_base=None,
+                vertex_credentials=None,
+                vertex_project=PROJECT,
+                vertex_location=LOCATION,
+                timeout=600.0,
+                max_retries=None,
+                custom_endpoint=True,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "custom_endpoint" in str(exc_info.value)
+    h._ensure_access_token.assert_not_called()
+    client.post.assert_not_called()
+
+
 def test_create_batch_sync_endpoint_without_deployed_model_raises_400():
     h = _make_handler()
     client = MagicMock()
