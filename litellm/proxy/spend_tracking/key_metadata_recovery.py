@@ -1,7 +1,8 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from typing import Final, Protocol
+from typing import Final, Protocol, TypeVar
 
+from prisma.errors import PrismaError
 from typing_extensions import TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -12,6 +13,8 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+
+_T = TypeVar("_T")
 
 # Cap reverse-hash scans so a Usage page with orphaned double-hashed api_key
 # values cannot pull an unbounded VerificationToken table into memory.
@@ -56,6 +59,18 @@ class _TokenAliasRecord(Protocol):
     def user_id(self) -> str | None: ...
 
 
+async def _db_or_empty(
+    load: Callable[[], Awaitable[_T]],
+    warning: str,
+    count: int,
+) -> _T | None:
+    try:
+        return await load()
+    except PrismaError as e:
+        verbose_proxy_logger.warning(warning, count, e)
+        return None
+
+
 def _token_digest_metadata(
     records: Sequence[_TokenAliasRecord],
     wanted: AbstractSet[str],
@@ -76,16 +91,12 @@ async def _reverse_hash_active_key_metadata(
     prisma_client: PrismaClient,
     wanted: AbstractSet[str],
 ) -> dict[str, KeyMetadataDict]:
-    try:
-        active_records: Final[Sequence[_TokenAliasRecord]] = await VerificationTokenRepository(
-            prisma_client
-        ).table.find_many(take=_MAX_DOUBLE_HASH_TOKEN_SCAN)
-    except Exception as e:
-        verbose_proxy_logger.warning(
-            "Failed reverse-hash recovery against active keys for %d missing keys: %s",
-            len(wanted),
-            e,
-        )
+    active_records: Final = await _db_or_empty(
+        lambda: VerificationTokenRepository(prisma_client).table.find_many(take=_MAX_DOUBLE_HASH_TOKEN_SCAN),
+        "Failed reverse-hash recovery against active keys for %d missing keys: %s",
+        len(wanted),
+    )
+    if active_records is None:
         return {}
     return _token_digest_metadata(active_records, wanted)
 
@@ -94,19 +105,15 @@ async def _reverse_hash_deleted_key_metadata(
     prisma_client: PrismaClient,
     wanted: AbstractSet[str],
 ) -> dict[str, KeyMetadataDict]:
-    try:
-        deleted_records: Final[Sequence[_TokenAliasRecord]] = await DeletedVerificationTokenRepository(
-            prisma_client
-        ).table.find_many(
+    deleted_records: Final = await _db_or_empty(
+        lambda: DeletedVerificationTokenRepository(prisma_client).table.find_many(
             take=_MAX_DOUBLE_HASH_TOKEN_SCAN,
             order={"deleted_at": "desc"},
-        )
-    except Exception as e:
-        verbose_proxy_logger.warning(
-            "Failed reverse-hash recovery against deleted keys for %d missing keys: %s",
-            len(wanted),
-            e,
-        )
+        ),
+        "Failed reverse-hash recovery against deleted keys for %d missing keys: %s",
+        len(wanted),
+    )
+    if deleted_records is None:
         return {}
     return _token_digest_metadata(deleted_records, wanted)
 
@@ -126,19 +133,14 @@ async def _spend_logs_key_metadata(
     prisma_client: PrismaClient,
     wanted: AbstractSet[str],
 ) -> dict[str, KeyMetadataDict]:
-    try:
-        spend_log_rows: Final = await prisma_client.db.query_raw(
+    spend_log_rows: Final = await _db_or_empty(
+        lambda: prisma_client.db.query_raw(
             _SPEND_LOGS_KEY_METADATA_SQL,
             list(wanted),
-        )
-    except Exception as e:
-        verbose_proxy_logger.warning(
-            "Failed SpendLogs metadata recovery for %d missing keys: %s",
-            len(wanted),
-            e,
-        )
-        return {}
-
+        ),
+        "Failed SpendLogs metadata recovery for %d missing keys: %s",
+        len(wanted),
+    )
     if not isinstance(spend_log_rows, list):
         return {}
 
@@ -160,14 +162,12 @@ async def _emails_for_user_ids(
 ) -> Mapping[str, str]:
     if not user_ids:
         return {}
-    try:
-        users: Final = await UserRepository(prisma_client).table.find_many(where={"user_id": {"in": list(user_ids)}})
-    except Exception as e:
-        verbose_proxy_logger.warning(
-            "Failed user_email recovery for %d user ids: %s",
-            len(user_ids),
-            e,
-        )
+    users: Final = await _db_or_empty(
+        lambda: UserRepository(prisma_client).table.find_many(where={"user_id": {"in": list(user_ids)}}),
+        "Failed user_email recovery for %d user ids: %s",
+        len(user_ids),
+    )
+    if users is None:
         return {}
     return {
         user.user_id: user.user_email
