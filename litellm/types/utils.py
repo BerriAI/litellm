@@ -2879,6 +2879,10 @@ RoutingDecisionCause = Literal[
     # routed model does not accept image input, so the nearest higher capable tier or
     # default_model served instead. The displaced placement rides in signals.
     "modality_escalation",
+    # modality_pin_override replaced a KEPT session-affinity pin for this request only: the turn
+    # carries an image the pinned model cannot accept. The stored pin is untouched, so the next
+    # text turn replays it. Distinct from "modality_escalation", which never displaces a pin.
+    "modality_pin_override",
     "session_affinity_pin",
     "session_affinity_escalation",
     # classification_mode 'user_turn': the request is an agent loop's continuation turn (no new
