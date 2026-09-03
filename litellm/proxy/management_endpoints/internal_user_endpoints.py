@@ -426,6 +426,11 @@ async def add_new_user_to_default_team(
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
+async def _fetch_user_team_ids(user_id: str, prisma_client: "PrismaClient") -> tuple[str, ...]:
+    user_row: Final = await _user_table(prisma_client).find_unique(where={"user_id": user_id})
+    return tuple(user_row.teams) if user_row is not None else ()
+
+
 @router.post(
     "/user/new",
     tags=["Internal User management"],
@@ -580,6 +585,11 @@ async def new_user(
             )
 
         user_id: Final = cast(str | None, response.get("user_id", None))
+        attached_team_ids: Final = (
+            await _fetch_user_team_ids(user_id=user_id, prisma_client=prisma_client)
+            if user_id is not None and (_team_id is not None or teams is not None)
+            else None
+        )
 
         if organization_ids is not None and user_id is not None:
             await _add_user_to_organizations(
@@ -596,6 +606,8 @@ async def new_user(
                 response_dict[key] = value
 
         response_dict["key"] = response.get("token", "")
+        if attached_team_ids is not None:
+            response_dict["teams"] = list(attached_team_ids)
 
         new_user_response: Final = NewUserResponse.model_validate(response_dict)
 
