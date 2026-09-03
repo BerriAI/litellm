@@ -15,6 +15,7 @@ import {
   teamCreateCall,
 } from "./networking";
 import Teams from "./Teams";
+import { chooseSelectOption } from "../../tests/test-utils";
 
 const can = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
@@ -1486,5 +1487,150 @@ describe("Teams - the exact bytes the create call sends", () => {
 
     expect(await screen.findByText("Please input a team name")).toBeInTheDocument();
     expect(teamCreateCall).not.toHaveBeenCalled();
+  });
+});
+
+describe("Teams - the create form keeps the organization and models picks while it is open", () => {
+  const ORGS = [
+    { organization_id: "org-1", organization_alias: "Org 1", models: [], members: [] },
+    { organization_id: "org-2", organization_alias: "Org 2", models: [], members: [] },
+  ];
+
+  const orgField = () => screen.getByRole("combobox", { name: /organization/i });
+  const modelsField = () => screen.getByTestId("create-team-models-select");
+
+  const openCreateModal = async () => {
+    act(() => {
+      fireEvent.click(screen.getAllByRole("button", { name: /create team/i })[0]);
+    });
+    await screen.findByLabelText(/team name/i);
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4", "gpt-3.5-turbo"]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(getDefaultTeamSettings).mockResolvedValue({ values: {} });
+    mockUseOrganizations.mockReturnValue({ data: ORGS });
+  });
+
+  it("keeps both picks when the organizations list comes back changed from a refetch", async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    await openCreateModal();
+
+    await chooseSelectOption(user, orgField(), /Org 1/);
+    fireEvent.change(modelsField(), { target: { value: "gpt-4" } });
+
+    mockUseOrganizations.mockReturnValue({ data: ORGS.map((org) => ({ ...org, spend: 1 })) });
+    fireEvent.click(screen.getByText("Additional Settings"));
+
+    expect(orgField()).toHaveValue("Org 1");
+    expect(modelsField()).toHaveValue("gpt-4");
+  });
+
+  it("keeps models picked before the available models finish loading", async () => {
+    let resolveModels: (models: string[]) => void = () => {};
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockReturnValue(
+      new Promise<string[]>((resolve) => {
+        resolveModels = resolve;
+      }),
+    );
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    await openCreateModal();
+
+    fireEvent.change(modelsField(), { target: { value: "gpt-4" } });
+    await act(async () => {
+      resolveModels(["gpt-4", "gpt-3.5-turbo"]);
+    });
+
+    expect(modelsField()).toHaveValue("gpt-4");
+  });
+
+  it("clears the models pick when the organization is changed, since models are org scoped", async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    await openCreateModal();
+
+    await chooseSelectOption(user, orgField(), /Org 1/);
+    fireEvent.change(modelsField(), { target: { value: "gpt-4" } });
+    await chooseSelectOption(user, orgField(), /Org 2/);
+
+    await waitFor(() => expect(orgField()).toHaveValue("Org 2"));
+    expect(modelsField()).toHaveValue("");
+  });
+
+  it("keeps the models pick when the same organization is chosen again", async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    await openCreateModal();
+
+    await chooseSelectOption(user, orgField(), /Org 1/);
+    fireEvent.change(modelsField(), { target: { value: "gpt-4" } });
+    await chooseSelectOption(user, orgField(), /Org 1/);
+
+    expect(orgField()).toHaveValue("Org 1");
+    expect(modelsField()).toHaveValue("gpt-4");
+  });
+
+  it("still preselects the only organization an org admin can create teams in", async () => {
+    mockUseOrganizations.mockReturnValue({
+      data: [
+        {
+          organization_id: "org-1",
+          organization_alias: "Org 1",
+          models: [],
+          members: [{ user_id: "user-123", user_role: "org_admin" }],
+        },
+      ],
+    });
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Internal User" />);
+    await openCreateModal();
+
+    expect(orgField()).toHaveValue("Org 1");
+    expect(orgField()).toBeDisabled();
+  });
+
+  it("leaves an org admin able to pick when their admin orgs narrow to one while the form is open", async () => {
+    const orgAdminOrgs = [
+      {
+        organization_id: "org-1",
+        organization_alias: "Org 1",
+        models: [],
+        members: [{ user_id: "user-123", user_role: "org_admin" }],
+      },
+      {
+        organization_id: "org-2",
+        organization_alias: "Org 2",
+        models: [],
+        members: [{ user_id: "user-123", user_role: "org_admin" }],
+      },
+    ];
+    mockUseOrganizations.mockReturnValue({ data: orgAdminOrgs });
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Internal User" />);
+    await openCreateModal();
+    expect(orgField()).toHaveValue("");
+
+    mockUseOrganizations.mockReturnValue({ data: [orgAdminOrgs[0]] });
+    fireEvent.click(screen.getByText("Additional Settings"));
+
+    expect(orgField()).toBeEnabled();
+  });
+
+  it("starts the form clean again when the modal is closed and reopened", async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    await openCreateModal();
+
+    await chooseSelectOption(user, orgField(), /Org 1/);
+    fireEvent.change(modelsField(), { target: { value: "gpt-4" } });
+    fireEvent.click(screen.getByRole("button", { name: /^close$/i }));
+    await waitFor(() => expect(screen.queryByLabelText(/team name/i)).not.toBeInTheDocument());
+
+    await openCreateModal();
+    expect(orgField()).toHaveValue("");
+    expect(modelsField()).toHaveValue("");
   });
 });
