@@ -11,6 +11,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use serde_json::Value;
 
+#[cfg(feature = "mimalloc")]
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
