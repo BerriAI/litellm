@@ -57,6 +57,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
 )
+from litellm.proxy.management_endpoints.types import highest_privilege_role
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.user_repository import UserRepository
 
@@ -251,23 +252,21 @@ class JWTHandler:
 
         Note:
             The function handles both single string roles and lists of roles from the JWT.
-            If multiple mappings match the JWT roles, the first matching mapping is returned.
+            If multiple mappings match the JWT roles, the highest privilege internal role wins.
         """
         if self.litellm_jwtauth.role_mappings is None:
             return None
 
-        jwt_role: Final = self.get_jwt_role(token=token, default_value=None)
-        if not jwt_role:
+        jwt_roles: Final = frozenset(self.get_jwt_role(token=token, default_value=None) or ())
+        if not jwt_roles:
             return None
 
-        jwt_role_set: Final = set(jwt_role)
-
-        for role_mapping in self.litellm_jwtauth.role_mappings:
-            # Check if the mapping role matches any of the JWT roles
-            if role_mapping.role in jwt_role_set:
-                return role_mapping.internal_role
-
-        return None
+        return cast(  # cast-ok: every candidate is an RBAC_ROLES member, so the winner is one too
+            RBAC_ROLES | None,
+            highest_privilege_role(
+                mapping.internal_role for mapping in self.litellm_jwtauth.role_mappings if mapping.role in jwt_roles
+            ),
+        )
 
     def get_rbac_role(self, token: dict) -> RBAC_ROLES | None:
         """
@@ -541,7 +540,7 @@ class JWTHandler:
         return user_roles
 
     def map_jwt_role_to_litellm_role(self, token: dict) -> LitellmUserRoles | None:
-        """Map roles from JWT to LiteLLM user roles"""
+        """Map roles from JWT to the highest privilege LiteLLM user role they match"""
         if not self.litellm_jwtauth.jwt_litellm_role_map:
             return None
 
@@ -549,11 +548,11 @@ class JWTHandler:
         if not jwt_roles:
             return None
 
-        for mapping in self.litellm_jwtauth.jwt_litellm_role_map:
-            for role in jwt_roles:
-                if fnmatch.fnmatch(role, mapping.jwt_role):
-                    return mapping.litellm_role
-        return None
+        return highest_privilege_role(
+            mapping.litellm_role
+            for mapping in self.litellm_jwtauth.jwt_litellm_role_map
+            if any(fnmatch.fnmatch(role, mapping.jwt_role) for role in jwt_roles)
+        )
 
     def get_jwt_role(self, token: dict, default_value: list[str] | None) -> list[str] | None:
         """

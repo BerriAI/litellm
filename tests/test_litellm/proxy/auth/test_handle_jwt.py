@@ -20,6 +20,7 @@ from litellm.proxy._types import (
     Member,
     ProxyErrorTypes,
     ProxyException,
+    RoleMapping,
 )
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy.auth.handle_jwt import (
@@ -905,10 +906,10 @@ async def test_map_jwt_role_to_litellm_role():
     result = jwt_handler.map_jwt_role_to_litellm_role(token)
     assert result is None
 
-    # Test multiple roles - should return first mapping match
+    # Test multiple roles - the highest privilege mapping wins
     token = {"roles": ["user_test", "ADMIN"]}
     result = jwt_handler.map_jwt_role_to_litellm_role(token)
-    assert result == LitellmUserRoles.PROXY_ADMIN  # ADMIN matches first mapping
+    assert result == LitellmUserRoles.PROXY_ADMIN
 
     # Test empty roles
     token = {"roles": []}
@@ -953,6 +954,73 @@ async def test_map_jwt_role_to_litellm_role():
     token = {"roles": ["team_"]}  # No character after underscore
     result = jwt_handler.map_jwt_role_to_litellm_role(token)
     assert result is None
+
+
+@pytest.mark.parametrize(
+    "role_mappings",
+    [
+        [
+            RoleMapping(role="viewer", internal_role=LitellmUserRoles.INTERNAL_USER),
+            RoleMapping(role="admin", internal_role=LitellmUserRoles.PROXY_ADMIN),
+        ],
+        [
+            RoleMapping(role="admin", internal_role=LitellmUserRoles.PROXY_ADMIN),
+            RoleMapping(role="viewer", internal_role=LitellmUserRoles.INTERNAL_USER),
+        ],
+    ],
+)
+def test_get_rbac_role_from_role_mappings_picks_highest_privilege_regardless_of_config_order(
+    role_mappings,
+):
+    """A token matching several role_mappings entries must not depend on the order the operator listed them in."""
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(roles_jwt_field="roles", role_mappings=role_mappings)
+
+    assert jwt_handler.get_rbac_role({"roles": ["viewer", "admin"]}) == LitellmUserRoles.PROXY_ADMIN
+
+
+@pytest.mark.parametrize(
+    "jwt_litellm_role_map",
+    [
+        [
+            JWTLiteLLMRoleMap(jwt_role="readonly", litellm_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY),
+            JWTLiteLLMRoleMap(jwt_role="platform-admins", litellm_role=LitellmUserRoles.PROXY_ADMIN),
+        ],
+        [
+            JWTLiteLLMRoleMap(jwt_role="platform-admins", litellm_role=LitellmUserRoles.PROXY_ADMIN),
+            JWTLiteLLMRoleMap(jwt_role="readonly", litellm_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY),
+        ],
+    ],
+)
+def test_map_jwt_role_to_litellm_role_picks_highest_privilege_regardless_of_config_order(
+    jwt_litellm_role_map,
+):
+    """
+    Under sync_user_role_and_teams this result is written to the user's DB row, so a
+    reordered YAML list must not silently demote or promote everyone on their next request.
+    """
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(roles_jwt_field="roles", jwt_litellm_role_map=jwt_litellm_role_map)
+
+    token = {"roles": ["readonly", "platform-admins"]}
+    assert jwt_handler.map_jwt_role_to_litellm_role(token) == LitellmUserRoles.PROXY_ADMIN
+
+
+def test_map_jwt_role_to_litellm_role_broad_glob_does_not_shadow_a_later_admin_mapping():
+    """A catch-all pattern listed first used to swallow every mapping below it."""
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        roles_jwt_field="roles",
+        jwt_litellm_role_map=[
+            JWTLiteLLMRoleMap(jwt_role="*", litellm_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY),
+            JWTLiteLLMRoleMap(jwt_role="platform-admins", litellm_role=LitellmUserRoles.PROXY_ADMIN),
+        ],
+    )
+
+    assert jwt_handler.map_jwt_role_to_litellm_role({"roles": ["platform-admins"]}) == LitellmUserRoles.PROXY_ADMIN
+    assert (
+        jwt_handler.map_jwt_role_to_litellm_role({"roles": ["contractor"]}) == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    )
 
 
 @pytest.mark.asyncio
