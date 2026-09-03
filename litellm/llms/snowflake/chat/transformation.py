@@ -22,20 +22,16 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     create_anthropic_image_param,
     select_anthropic_content_block_type_for_file,
 )
-from litellm.llms.anthropic.common_utils import (
-    AnthropicModelInfo,
-    normalize_cache_control_in_anthropic_payload,
-)
+from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicStreamParser
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk, ChatCompletionToolMessage
 from litellm.types.utils import (
-    ChatCompletionMessageToolCall,
-    ChatCompletionUsageBlock,
     Choices,
-    Function,
     GenericStreamingChunk,
     Message,
     ModelResponse,
-    Usage,
+    ModelResponseStream,
 )
 
 from ...base_llm.base_model_iterator import BaseModelResponseIterator
@@ -177,6 +173,22 @@ def _convert_tool_result_to_anthropic(
     return {**converted, "cache_control": cache_control}  # mutable-ok: JSON wire block
 
 
+def _signed_thinking_blocks(msg: object) -> list[dict[str, object]]:  # mutable-ok: JSON wire blocks
+    """The assistant turn's thinking blocks that can legally be echoed back.
+
+    Only signed blocks round-trip: Cortex rejects a thinking block whose signature is
+    missing, which is what an unsigned block from a non-thinking turn would produce.
+    """
+    blocks: Final = msg.get("thinking_blocks") if isinstance(msg, dict) else getattr(msg, "thinking_blocks", None)
+    if not isinstance(blocks, list):
+        return []  # mutable-ok: JSON wire blocks
+    return [  # mutable-ok: JSON wire blocks
+        dict(block)
+        for block in blocks
+        if isinstance(block, Mapping) and (block.get("signature") or block.get("type") == "redacted_thinking")
+    ]
+
+
 def _clean_input_schema(schema: object) -> object:  # mutable-ok: JSON schema copy
     return (
         {key: value for key, value in schema.items() if key != "$schema"}
@@ -212,7 +224,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             "tools",
             "tool_choice",
         ]
-        if _is_claude_model(model) and AnthropicModelInfo._is_adaptive_thinking_model(model, "snowflake"):
+        if _is_claude_model(model):
             params.append("thinking")
         return params
 
@@ -327,6 +339,9 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
                 if tool_calls:
                     content_blocks: list[dict[str, object]] = []  # mutable-ok: JSON wire blocks
+                    # Anthropic verifies thinking signatures by position, so a signed block
+                    # has to lead the turn it belongs to or Cortex rejects the next request.
+                    content_blocks.extend(_signed_thinking_blocks(msg))
                     if content:
                         content_blocks.append({"type": "text", "text": content})
                     for tc in tool_calls:
@@ -555,23 +570,10 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             additional_args={"complete_input_dict": request_data},
         )
 
-        text_content = ""
-        tool_calls: Final = []
-
-        for block in response_json.get("content", []):
-            if block.get("type") == "text":
-                text_content += block.get("text", "")
-            elif block.get("type") == "tool_use":
-                tool_calls.append(
-                    ChatCompletionMessageToolCall(
-                        id=block.get("id", ""),
-                        type="function",
-                        function=Function(
-                            name=block.get("name", ""),
-                            arguments=json.dumps(block.get("input", {})),
-                        ),
-                    )
-                )
+        anthropic_config: Final = AnthropicConfig()
+        text_content, _, thinking_blocks, reasoning_content, tool_calls, _, _, _ = (
+            anthropic_config.extract_response_content(completion_response=dict(response_json))
+        )
 
         _stop_reason_map: Final = {
             "end_turn": "stop",
@@ -581,9 +583,13 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         }
         finish_reason: Final = _stop_reason_map.get(response_json.get("stop_reason", "end_turn"), "stop")
 
-        message: Final = Message(content=text_content or None, role="assistant")
-        if tool_calls:
-            message.tool_calls = tool_calls
+        message: Final = Message(
+            content=text_content or None,
+            role="assistant",
+            tool_calls=tool_calls or None,
+            thinking_blocks=thinking_blocks,
+            reasoning_content=reasoning_content,
+        )
 
         choice: Final = Choices(
             finish_reason=finish_reason,
@@ -591,11 +597,13 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             message=message,
         )
 
-        usage_data: Final = response_json.get("usage", {})
-        usage: Final = Usage(
-            prompt_tokens=usage_data.get("input_tokens", 0),
-            completion_tokens=usage_data.get("output_tokens", 0),
-            total_tokens=usage_data.get("input_tokens", 0) + usage_data.get("output_tokens", 0),
+        # Cortex reports prompt-cache creation/read counts alongside input_tokens; the
+        # shared calculator folds them into prompt_tokens_details so cached input is
+        # visible and billed at its own rate.
+        usage: Final = anthropic_config.calculate_usage(
+            usage_object=response_json.get("usage", {}),
+            reasoning_content=reasoning_content,
+            completion_response=dict(response_json),
         )
 
         model_response.choices = [choice]
@@ -636,15 +644,19 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
         json_mode: bool | None = False,
     ):
         super().__init__(streaming_response=streaming_response, sync_stream=sync_stream)
-        self._tool_index = 0
-        self._tool_id = ""
-        self._tool_name = ""
-        self._input_tokens = 0
+        # Cortex streams the Anthropic SSE dialect on /messages, so its events are parsed
+        # by Anthropic's own parser: thinking deltas, signatures and prompt-cache usage
+        # all arrive the way they do on every other Anthropic-dialect provider.
+        self._anthropic_parser: Final = AnthropicStreamParser(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
         if "choices" in chunk:
             return self._parse_openai_chunk(chunk)
-        return self._parse_anthropic_chunk(chunk)
+        return self._anthropic_parser.chunk_parser(chunk)
 
     def _parse_openai_chunk(self, chunk: dict) -> GenericStreamingChunk:
         choices: Final = chunk.get("choices", [])
@@ -685,118 +697,4 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
             usage=None,
             index=choice.get("index", 0),
             tool_use=tool_use,
-        )
-
-    def _parse_anthropic_chunk(self, chunk: dict) -> GenericStreamingChunk:
-        event_type: Final = chunk.get("type", "")
-
-        if event_type == "message_start":
-            message: Final = chunk.get("message", {})
-            usage_data = message.get("usage", {})
-            self._input_tokens = usage_data.get("input_tokens", 0)
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
-
-        elif event_type == "content_block_delta":
-            delta = chunk.get("delta", {})
-            delta_type: Final = delta.get("type", "")
-
-            if delta_type == "text_delta":
-                return GenericStreamingChunk(
-                    text=delta.get("text", ""),
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=chunk.get("index", 0),
-                    tool_use=None,
-                )
-            elif delta_type == "input_json_delta":
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=chunk.get("index", 0),
-                    tool_use=ChatCompletionToolCallChunk(
-                        id=None,
-                        type="function",
-                        function={
-                            "name": None,
-                            "arguments": delta.get("partial_json", ""),
-                        },
-                        index=self._tool_index,
-                    ),
-                )
-
-        elif event_type == "content_block_start":
-            content_block: Final = chunk.get("content_block", {})
-            if content_block.get("type") == "tool_use":
-                self._tool_id = content_block.get("id", "")
-                self._tool_name = content_block.get("name", "")
-                self._tool_index = chunk.get("index", 0)
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=chunk.get("index", 0),
-                    tool_use=ChatCompletionToolCallChunk(
-                        id=self._tool_id,
-                        type="function",
-                        function={"name": self._tool_name, "arguments": ""},
-                        index=self._tool_index,
-                    ),
-                )
-
-        elif event_type == "message_delta":
-            delta = chunk.get("delta", {})
-            stop_reason: Final = delta.get("stop_reason", "")
-            usage_data = chunk.get("usage", {})
-            _stop_map: Final = {
-                "end_turn": "stop",
-                "max_tokens": "length",
-                "tool_use": "tool_calls",
-                "stop_sequence": "stop",
-            }
-            usage = None
-            if usage_data or self._input_tokens:
-                output_t: Final = usage_data.get("output_tokens", 0)
-                input_t: Final = self._input_tokens or usage_data.get("input_tokens", 0)
-                usage = ChatCompletionUsageBlock(
-                    prompt_tokens=input_t,
-                    completion_tokens=output_t,
-                    total_tokens=input_t + output_t,
-                )
-            return GenericStreamingChunk(
-                text="",
-                is_finished=True,
-                finish_reason=_stop_map.get(stop_reason, "stop"),
-                usage=usage,
-                index=0,
-                tool_use=None,
-            )
-
-        elif event_type == "message_stop":
-            return GenericStreamingChunk(
-                text="",
-                is_finished=True,
-                finish_reason="stop",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
-
-        return GenericStreamingChunk(
-            text="",
-            is_finished=False,
-            finish_reason="",
-            usage=None,
-            index=0,
-            tool_use=None,
         )

@@ -331,11 +331,17 @@ class TestSnowflakeCortexClaudeFixes:
             headers={},
         )
 
-    def test_supported_thinking_is_catalog_gated(self):
-        assert "thinking" in self.config.get_supported_openai_params("snowflake/claude-sonnet-4-6")
-        assert "thinking" not in self.config.get_supported_openai_params("snowflake/claude-sonnet-4-5")
-        assert "thinking" not in self.config.get_supported_openai_params("snowflake/claude-3-7-sonnet")
-        assert "thinking" not in self.config.get_supported_openai_params("snowflake/claude-4-opus")
+    def test_thinking_is_offered_on_every_claude_model(self):
+        """Cortex documents extended thinking (budget_tokens) for Claude generally, so a
+        4.6-only gate would silently drop it on the models that do support it."""
+        for model in (
+            "snowflake/claude-sonnet-4-6",
+            "snowflake/claude-sonnet-4-5",
+            "snowflake/claude-3-7-sonnet",
+            "snowflake/claude-4-opus",
+        ):
+            assert "thinking" in self.config.get_supported_openai_params(model), model
+        assert "thinking" not in self.config.get_supported_openai_params("snowflake/llama3.1-70b")
 
     def test_system_blocks_preserve_cache_control_and_strip_ttl(self):
         body = self._transform(
@@ -562,14 +568,74 @@ class TestSnowflakeCortexClaudeFixes:
                 "delta": {"type": "input_json_delta", "partial_json": '"/tmp"}'},
             }
         )
-        assert start["tool_use"]["id"] == "tool_1"
-        assert start["tool_use"]["function"]["name"] == "read"
-        assert first_delta["tool_use"]["id"] is None
-        assert first_delta["tool_use"]["function"]["name"] is None
-        assert second_delta["tool_use"]["id"] is None
-        assert second_delta["tool_use"]["function"]["name"] is None
-        assert first_delta["tool_use"]["function"]["arguments"] == '{"path":'
-        assert second_delta["tool_use"]["function"]["arguments"] == '"/tmp"}'
+        def _tool_call(chunk):
+            return chunk.choices[0].delta.tool_calls[0]
+
+        assert _tool_call(start).id == "tool_1"
+        assert _tool_call(start).function.name == "read"
+        assert _tool_call(first_delta).id is None
+        assert _tool_call(first_delta).function.name is None
+        assert _tool_call(second_delta).id is None
+        assert _tool_call(second_delta).function.name is None
+        assert _tool_call(first_delta).function.arguments == '{"path":'
+        assert _tool_call(second_delta).function.arguments == '"/tmp"}'
+
+    def test_signed_thinking_blocks_lead_the_assistant_turn(self):
+        """Multi-turn tool use with thinking only works if the signed block is echoed back first."""
+        body = self._transform(
+            [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "thinking_blocks": [
+                        {"type": "thinking", "thinking": "391", "signature": "Eto"},
+                        {"type": "thinking", "thinking": "unsigned"},
+                    ],
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                    ],
+                },
+            ]
+        )
+        blocks = body["messages"][1]["content"]
+        assert blocks[0] == {"type": "thinking", "thinking": "391", "signature": "Eto"}
+        assert [b["type"] for b in blocks] == ["thinking", "tool_use"]
+
+    def test_streaming_surfaces_thinking_and_prompt_cache_usage(self):
+        """Cortex streams thinking deltas, signatures and cache counts; all must reach the caller."""
+        handler = SnowflakeStreamingHandler(streaming_response=[], sync_stream=True)
+        handler.chunk_parser(
+            {
+                "type": "message_start",
+                "message": {"usage": {"input_tokens": 18, "cache_creation_input_tokens": 1323}},
+            }
+        )
+        thinking = handler.chunk_parser(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": "391"},
+            }
+        )
+        signature = handler.chunk_parser(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "signature_delta", "signature": "Eto"},
+            }
+        )
+        final = handler.chunk_parser(
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 8, "cache_read_input_tokens": 1323},
+            }
+        )
+
+        assert thinking.choices[0].delta.reasoning_content == "391"
+        assert signature.choices[0].delta.thinking_blocks[0]["signature"] == "Eto"
+        assert final.usage.prompt_tokens_details.cached_tokens == 1323
 
 
 class TestSnowFlakeCompletion:
