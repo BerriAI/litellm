@@ -542,6 +542,27 @@ class TestOllamaTextCompletionStreamingToolCalls:
         assert json.loads(tool_calls[0].function.arguments) == {"location": "Paris"}
         assert done.choices[0].finish_reason == "tool_calls"
 
+    def test_leading_whitespace_tokens_do_not_disable_tool_call_reconstruction(self):
+        chunks, done = self._stream(["\n", " ", '{"name": "get_weather",', ' "arguments": {"location": "Paris"}}'])
+
+        for chunk in chunks:
+            assert isinstance(chunk, ModelResponseStream)
+            assert not chunk.choices[0].delta.content
+
+        assert isinstance(done, ModelResponseStream)
+        tool_calls = done.choices[0].delta.tool_calls
+        assert tool_calls is not None and len(tool_calls) == 1
+        assert tool_calls[0].function.name == "get_weather"
+        assert json.loads(tool_calls[0].function.arguments) == {"location": "Paris"}
+        assert done.choices[0].finish_reason == "tool_calls"
+
+    def test_leading_whitespace_before_plain_text_is_flushed_as_content(self):
+        chunks, done = self._stream(["\n", "Hello", " world"])
+
+        streamed = "".join(c.choices[0].delta.content or "" for c in chunks)
+        assert streamed == "\nHello world"
+        assert done["finish_reason"] == "stop"
+
     def test_streamed_regular_json_flushed_as_content_once_not_a_function_call(self):
         chunks, done = self._stream(['{"answer":', ' 42}'])
 

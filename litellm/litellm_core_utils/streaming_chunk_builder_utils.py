@@ -36,6 +36,8 @@ from litellm.types.utils import (
 from litellm.utils import print_verbose, token_counter
 
 if TYPE_CHECKING:
+    from openai.types.completion_usage import CompletionUsage
+
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.litellm_core_utils.streaming_chunk_builder_utils import (
         UsagePerChunk,
@@ -71,6 +73,18 @@ class _ContentChoice(TypedDict, total=False):
 
 class _ContentChunk(TypedDict):
     choices: Sequence[_ContentChoice]
+
+
+class _FunctionCallDelta(TypedDict):
+    function_call: ReadOnly[FunctionCall]
+
+
+class _FunctionCallChoice(TypedDict):
+    delta: ReadOnly[_FunctionCallDelta]
+
+
+class _FunctionCallChunk(TypedDict):
+    choices: ReadOnly[Sequence[_FunctionCallChoice]]
 
 
 class _AudioDelta(TypedDict, total=False):
@@ -588,7 +602,7 @@ class ChunkProcessor:
 
         return tool_calls_list
 
-    def get_combined_function_call_content(self, function_call_chunks: list[dict[str, Any]]) -> FunctionCall:
+    def get_combined_function_call_content(self, function_call_chunks: Sequence["_FunctionCallChunk"]) -> FunctionCall:
         argument_list: Final = []
         delta = function_call_chunks[0]["choices"][0]["delta"]
         function_call = delta.get("function_call", "")
@@ -782,7 +796,7 @@ class ChunkProcessor:
 
     @staticmethod
     def _extract_usage_chunk(chunk: "_UsageBearingChunk | ModelResponse | ModelResponseStream") -> Usage | None:
-        usage_chunk: Usage | None = None
+        usage_chunk: Usage | CompletionUsage | None = None
         if hasattr(chunk, "usage") and chunk.usage is not None:
             usage_chunk = chunk.usage
         elif "usage" in chunk:
@@ -794,7 +808,9 @@ class ChunkProcessor:
 
         if isinstance(usage_chunk, dict):
             return Usage(**usage_chunk)
-        return usage_chunk
+        if usage_chunk is None or isinstance(usage_chunk, Usage):
+            return usage_chunk
+        return Usage(**usage_chunk.model_dump())
 
     def _calculate_usage_per_chunk(
         self,

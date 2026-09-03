@@ -468,10 +468,11 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
 
     def _released_text(self, response_text: str) -> str | None:
         """None while a fragment is held back because it may still complete a prompted function call."""
+        stripped: Final = response_text.strip()
         if self.buffered_json_content is None and not (
             self.function_call_buffering_enabled
             and not self.started_reasoning_content
-            and response_text.lstrip().startswith("{")
+            and (stripped == "" or stripped.startswith("{"))
         ):
             self.function_call_buffering_enabled = False
             return response_text

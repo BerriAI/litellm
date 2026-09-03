@@ -6,6 +6,7 @@ import sys
 from datetime import datetime
 from logging import Formatter
 from typing import Any, Final, TextIO
+from urllib.parse import unquote
 
 import litellm
 from litellm.constants import (
@@ -146,6 +147,72 @@ class SecretRedactionFilter(logging.Filter):
 _secret_filter: Final = SecretRedactionFilter()
 
 
+_MAX_SCRUBBED_ACCESS_ARG: Final = 512
+
+_REDACTION_PLACEHOLDER: Final = "REDACTED"
+
+
+def _hides_a_credential(value: str) -> bool:
+    """Whether *value* only looks clean until it is percent-decoded."""
+    decoded: Final = unquote(value)
+    return _redact_string(decoded) != decoded
+
+
+def _drop_encoded_credential(scrubbed: str) -> str:
+    """Drop the part of a request target that only decoding shows to be a secret.
+
+    The request parser decodes query names and values, so `?k%65y=sk%2D...` is a
+    working credential that the patterns, which match literal text, do not see.
+    The decoded text is never logged back: it can carry a newline, and forging
+    log lines is not a trade worth making for a readable request target.
+    """
+    path, separator, _query = scrubbed.partition("?")
+    if _hides_a_credential(path):
+        return _REDACTION_PLACEHOLDER
+    if separator and _hides_a_credential(scrubbed):
+        return f"{path}?{_REDACTION_PLACEHOLDER}"
+    return scrubbed
+
+
+def _scrub_access_arg(value: str) -> str:
+    """Redact one access-log positional arg, bounding the scanned length.
+
+    The request target is the only input to the secret regex an unauthenticated
+    caller controls end to end, so it is cut back to a whole query parameter
+    before it is scanned; a half-parameter would be too short to match its
+    pattern and would then be logged raw.
+    """
+    if len(value) <= _MAX_SCRUBBED_ACCESS_ARG:
+        return _drop_encoded_credential(_redact_string(value))
+    head: Final = value[:_MAX_SCRUBBED_ACCESS_ARG]
+    kept: Final = head[: max(head.rfind("?"), head.rfind("&"))] if "?" in head else head
+    scrubbed: Final = _drop_encoded_credential(_redact_string(kept))
+    return f"{scrubbed}... ({len(value) - len(kept)} more chars truncated) ..."
+
+
+class AccessLogRedactionFilter(logging.Filter):
+    """Scrubs known secret/credential patterns from HTTP access-log records.
+
+    uvicorn's AccessFormatter unpacks ``record.args`` as a five-element tuple at
+    emit time, so SecretRedactionFilter cannot be reused here: it collapses the
+    record into ``record.msg`` and clears the args, and the formatter then raises.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not _ENABLE_SECRET_REDACTION:
+            return True
+        if isinstance(record.args, tuple) and record.args:
+            record.args = tuple(  # rebind-ok: a Filter scrubs records in place
+                _scrub_access_arg(arg) if isinstance(arg, str) else arg for arg in record.args
+            )
+            return True
+        # No positional args means everything is in msg, where collapsing is correct.
+        return _secret_filter.filter(record)
+
+
+_access_log_filter: Final = AccessLogRedactionFilter()
+
+
 def _get_max_string_length_stdout_log() -> int:
     """Read the limit per record so a value loaded later via proxy config
     environment_variables is honored."""
@@ -264,13 +331,17 @@ def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
 
 
 class LevelRoutingStreamHandler(logging.StreamHandler):
-    """Writes records below WARNING to stdout and WARNING and above to stderr.
+    """Writes records below WARNING and invalid-key warnings to stdout, others to stderr.
 
     Collectors that derive severity from the stream report every stderr line as an error.
+    Invalid-key warnings route to stdout so LITELLM_LOG=ERROR can suppress them.
     """
 
     def emit(self, record: logging.LogRecord) -> None:
-        preferred: Final = sys.stdout if record.levelno < logging.WARNING else sys.stderr
+        is_stdout_record: Final = record.levelno < logging.WARNING or (
+            record.levelno == logging.WARNING and record.name == verbose_proxy_stdout_logger.name
+        )
+        preferred: Final = sys.stdout if is_stdout_record else sys.stderr
         if preferred is None or getattr(preferred, "closed", False):
             self.stream = sys.stderr  # rebind-ok: fall back to the pre-fix stream rather than raising per record
         else:
@@ -508,6 +579,9 @@ else:
     handler.setFormatter(formatter)
 
 verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
+# Malformed virtual key rejections log through this child; LevelRoutingStreamHandler
+# writes its WARNING records to stdout. It has no handler or level of its own.
+verbose_proxy_stdout_logger: Final = verbose_proxy_logger.getChild("stdout")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
 verbose_logger = logging.getLogger("LiteLLM")
 
@@ -520,6 +594,7 @@ verbose_logger.addHandler(handler)
 # handlers (JSON mode, uvicorn log config, a host app's root handler).
 verbose_router_logger.addFilter(_stdout_truncation_filter)
 verbose_proxy_logger.addFilter(_stdout_truncation_filter)
+verbose_proxy_stdout_logger.addFilter(_stdout_truncation_filter)
 verbose_logger.addFilter(_stdout_truncation_filter)
 
 
@@ -545,6 +620,14 @@ _REDACTED_THIRD_PARTY_LOGGERS: Final[tuple[str, ...]] = (
     "uvicorn.error",
 )
 
+# Access loggers, which emit the full request target, so a credential passed as a
+# query parameter (e.g. `/key/info?key=`) lands on stdout verbatim. uvicorn.access
+# covers uvicorn.run, --run_gunicorn (its worker_class is UvicornWorker, so the
+# access line is still uvicorn's) and an embedding host app. --run_hypercorn and
+# --run_granian log through their own loggers in their own record shapes, and
+# both ship with access logging off.
+_REDACTED_ACCESS_LOGGERS: Final[tuple[str, ...]] = ("uvicorn.access",)
+
 
 def _redact_third_party_loggers() -> None:
     """Extend secret redaction to records litellm does not emit directly.
@@ -567,6 +650,8 @@ def _redact_third_party_loggers() -> None:
     """
     for name in _REDACTED_THIRD_PARTY_LOGGERS:
         logging.getLogger(name).addFilter(_secret_filter)
+    for name in _REDACTED_ACCESS_LOGGERS:
+        logging.getLogger(name).addFilter(_access_log_filter)
 
 
 # Call the suppression function
@@ -683,6 +768,7 @@ def _turn_on_json():
     - Adds a JSON formatter to all loggers
     """
     handler: Final = LevelRoutingStreamHandler()
+    handler.setLevel(numeric_level)
     handler.setFormatter(JsonFormatter())
     _initialize_loggers_with_handler(handler)
     # Set up exception handlers
@@ -700,12 +786,14 @@ def _disable_debugging():
     verbose_logger.disabled = True
     verbose_router_logger.disabled = True
     verbose_proxy_logger.disabled = True
+    verbose_proxy_stdout_logger.disabled = True
 
 
 def _enable_debugging():
     verbose_logger.disabled = False
     verbose_router_logger.disabled = False
     verbose_proxy_logger.disabled = False
+    verbose_proxy_stdout_logger.disabled = False
 
 
 def print_verbose(print_statement):

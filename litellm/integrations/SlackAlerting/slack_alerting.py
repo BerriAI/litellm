@@ -68,6 +68,7 @@ from .utils import process_slack_alerting_variables
 
 if TYPE_CHECKING:
     from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+    from litellm.proxy.utils import PrismaClient
     from litellm.router import Router as _Router
 
     Router = _Router
@@ -545,7 +546,6 @@ class SlackAlerting(CustomBatchLogger):
         # Get the appropriate budget alert type handler
         budget_alert_class: Final = get_budget_alert_type(type)
         _id: Final = budget_alert_class.get_id(user_info)
-        user_info_json: Final = user_info.model_dump(exclude_none=True)
         user_info_str: Final = self._get_user_info_str(user_info)
         event_message = budget_alert_class.get_event_message()
 
@@ -575,7 +575,22 @@ class SlackAlerting(CustomBatchLogger):
                 webhook_event = WebhookEvent(
                     event=event,
                     event_message=event_message,
-                    **user_info_json,
+                    spend=user_info.spend,
+                    max_budget=user_info.max_budget,
+                    soft_budget=user_info.soft_budget,
+                    token=user_info.token,
+                    customer_id=user_info.customer_id,
+                    user_id=user_info.user_id,
+                    team_id=user_info.team_id,
+                    team_alias=user_info.team_alias,
+                    organization_id=user_info.organization_id,
+                    user_email=user_info.user_email,
+                    key_alias=user_info.key_alias,
+                    projected_exceeded_date=user_info.projected_exceeded_date,
+                    projected_spend=user_info.projected_spend,
+                    event_group=user_info.event_group,
+                    alert_emails=user_info.alert_emails,
+                    max_budget_alert_emails=user_info.max_budget_alert_emails,
                 )
                 await self.send_alert(
                     message=event_message + "\n\n" + user_info_str,
@@ -657,7 +672,7 @@ class SlackAlerting(CustomBatchLogger):
         """
         Create a standard message for a budget alert
         """
-        _all_fields_as_dict: Final = user_info.model_dump(exclude_none=True)
+        _all_fields_as_dict: Final[dict[str, object]] = user_info.model_dump(exclude_none=True)
         _all_fields_as_dict.pop("token")
         msg = ""
         for k, v in _all_fields_as_dict.items():
@@ -1006,7 +1021,7 @@ class SlackAlerting(CustomBatchLogger):
         except Exception:
             pass
 
-    async def model_added_alert(self, model_name: str, litellm_model_name: str, passed_model_info: Any):
+    async def model_added_alert(self, model_name: str, litellm_model_name: str, passed_model_info: object):
         base_model_from_user: Final = getattr(passed_model_info, "base_model", None)
         model_info = {}
         base_model = ""
@@ -1930,6 +1945,68 @@ Model Info:
         except Exception as e:
             verbose_proxy_logger.exception("Error sending weekly spend report %s", e)
 
+    async def send_user_spend_alerts(self, prisma_client: "PrismaClient | None" = None) -> None:
+        """Check per-user daily/monthly spend thresholds and spend anomalies, alerting once per user per period."""
+        if self.alerting is None or "slack" not in self.alerting:
+            return
+
+        thresholds_enabled: Final = AlertType.user_spend_thresholds in self.alert_types
+        anomalies_enabled: Final = AlertType.user_spend_anomalies in self.alert_types
+        if not thresholds_enabled and not anomalies_enabled:
+            return
+
+        from litellm.proxy.proxy_server import prisma_client as global_prisma_client
+
+        client: Final = prisma_client if prisma_client is not None else global_prisma_client
+        if client is None:
+            return
+
+        from litellm.integrations.SlackAlerting.user_spend_alerts import (
+            evaluate_user_spend,
+            fetch_user_spend_rows,
+        )
+
+        try:
+            today: Final = datetime.datetime.now(datetime.timezone.utc).date()
+            rows: Final = await fetch_user_spend_rows(
+                prisma_client=client,
+                today=today,
+                baseline_days=self.alerting_args.spend_anomaly_baseline_days,
+            )
+            all_events: Final = tuple(
+                event
+                for row in rows
+                for event in evaluate_user_spend(
+                    row=row,
+                    args=self.alerting_args,
+                    today=today,
+                    thresholds_enabled=thresholds_enabled,
+                    anomalies_enabled=anomalies_enabled,
+                )
+            )
+            cached_flags: Final = await asyncio.gather(
+                *(self.internal_usage_cache.async_get_cache(key=event.cache_key) for event in all_events)
+            )
+            new_events: Final = tuple(event for event, cached in zip(all_events, cached_flags) if not cached)
+            for alert_type in (AlertType.user_spend_thresholds, AlertType.user_spend_anomalies):
+                typed_events = tuple(event for event in new_events if event.alert_type == alert_type)
+                if not typed_events:
+                    continue
+                await self.send_alert(
+                    message="\n\n".join(event.message for event in typed_events),
+                    level="High",
+                    alert_type=alert_type,
+                    alerting_metadata={},  # mutable-ok: send_alert takes a dict payload
+                )
+                for event in typed_events:
+                    await self.internal_usage_cache.async_set_cache(
+                        key=event.cache_key,
+                        value="SENT",
+                        ttl=event.cache_ttl,
+                    )
+        except Exception as e:  # noqa: BLE001  # background job must not crash the scheduler
+            verbose_proxy_logger.exception("Error sending user spend alerts: %s", e)
+
     async def send_fallback_stats_from_prometheus(self):
         """
         Helper to send fallback statistics from prometheus server -> to slack
@@ -1973,7 +2050,7 @@ Model Info:
         try:
             message = f"`{event_name}`\n"
 
-            key_event_dict: Final = key_event.model_dump()
+            key_event_dict: Final[dict[str, object]] = key_event.model_dump()
 
             # Add Created by information first
             message += "*Action Done by:*\n"

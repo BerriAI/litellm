@@ -8,9 +8,11 @@ then we poll until the result is ready.
 
 import asyncio
 import time
-from typing import Any, Final
+from collections.abc import Coroutine, Mapping
+from typing import Final, Protocol, TypedDict
 
 import httpx
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger
@@ -33,6 +35,23 @@ from ..common_utils import (
 from .transformation import BlackForestLabsImageGenerationConfig
 
 
+class _BFLTaskPayload(TypedDict, total=False):
+    """The body BFL returns for a submitted or polled generation task."""
+
+    errors: ReadOnly[object]
+    polling_url: ReadOnly[str]
+    status: ReadOnly[str]
+
+
+class _TaskJsonResponse(Protocol):
+    def json(self) -> _BFLTaskPayload: ...
+
+
+def _task_payload(response: _TaskJsonResponse) -> _BFLTaskPayload:
+    """The JSON body of a BFL task submission or poll response."""
+    return response.json()
+
+
 class BlackForestLabsImageGeneration:
     """
     Black Forest Labs Image Generation handler.
@@ -53,10 +72,10 @@ class BlackForestLabsImageGeneration:
         litellm_params: GenericLiteLLMParams | dict,
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout | None,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         aimg_generation: bool = False,
-    ) -> ImageResponse | Any:
+    ) -> ImageResponse | Coroutine[object, object, ImageResponse]:
         """
         Main entry point for image generation requests.
 
@@ -187,7 +206,7 @@ class BlackForestLabsImageGeneration:
         litellm_params: GenericLiteLLMParams | dict,
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout | None,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> ImageResponse:
         """
@@ -305,7 +324,7 @@ class BlackForestLabsImageGeneration:
 
         # Parse initial response to get polling URL
         try:
-            response_data: Final = initial_response.json()
+            response_data: Final = _task_payload(initial_response)
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=initial_response.status_code,
@@ -350,7 +369,7 @@ class BlackForestLabsImageGeneration:
                     message=f"Polling failed: {response.text}",
                 )
 
-            data = response.json()
+            data = _task_payload(response)
             status = data.get("status")
 
             verbose_logger.debug("BFL poll status: %s", status)
@@ -396,7 +415,7 @@ class BlackForestLabsImageGeneration:
 
         # Parse initial response to get polling URL
         try:
-            response_data: Final = initial_response.json()
+            response_data: Final = _task_payload(initial_response)
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=initial_response.status_code,
@@ -441,7 +460,7 @@ class BlackForestLabsImageGeneration:
                     message=f"Polling failed: {response.text}",
                 )
 
-            data = response.json()
+            data = _task_payload(response)
             status = data.get("status")
 
             verbose_logger.debug("BFL poll status: %s", status)

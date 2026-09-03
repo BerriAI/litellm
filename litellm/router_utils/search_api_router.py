@@ -9,6 +9,7 @@ import random
 import traceback
 from collections.abc import Callable
 from functools import partial
+from types import MappingProxyType
 from typing import Any, Final
 
 from litellm._logging import verbose_router_logger
@@ -214,6 +215,15 @@ class SearchAPIRouter:
             api_key, api_base = SearchAPIRouter._resolve_search_provider_credentials(
                 tool_litellm_params=litellm_params,
             )
+            protected_params: Final = frozenset(("search_provider", "api_key", "api_base"))
+            search_params: Final = MappingProxyType(
+                {
+                    key: value
+                    for params in (litellm_params, kwargs)
+                    for key, value in params.items()
+                    if key not in protected_params and value is not None
+                }
+            )
 
             verbose_router_logger.debug("Selected search tool with provider: %s", search_provider)
 
@@ -222,7 +232,7 @@ class SearchAPIRouter:
                 search_provider=search_provider,
                 api_key=api_key,
                 api_base=api_base,
-                **kwargs,
+                **search_params,
             )
 
             return response
