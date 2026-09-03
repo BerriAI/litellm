@@ -58,11 +58,15 @@ class SSOAssertionCache:
             max_size_in_memory=MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE,
             default_ttl=ttl_seconds,
         )
-        self._generations = itertools.count(1)
+        self._generations = InMemoryCache(
+            max_size_in_memory=MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE,
+            default_ttl=ttl_seconds,
+        )
+        self._next_generation = itertools.count(1)
 
     def generation(self, user_id: str) -> int | None:
-        gen: Final = self._entries.get_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
-            f"gen:{user_id}"
+        gen: Final = self._generations.get_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
+            user_id
         )
         return gen if isinstance(gen, int) else None
 
@@ -80,8 +84,8 @@ class SSOAssertionCache:
         )
 
     def invalidate(self, user_id: str) -> None:
-        self._entries.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
-            f"gen:{user_id}", next(self._generations)
+        self._generations.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
+            user_id, next(self._next_generation)
         )
         self._entries.delete_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
             user_id
@@ -89,6 +93,7 @@ class SSOAssertionCache:
 
     def flush(self) -> None:
         self._entries.flush_cache()  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
+        self._generations.flush_cache()  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
 
 
 _ASSERTION_CACHE: Final = SSOAssertionCache()

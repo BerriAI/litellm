@@ -314,6 +314,32 @@ async def test_fetch_racing_a_relogin_does_not_cache_the_previous_assertion():
 
 
 @pytest.mark.asyncio
+async def test_assertion_for_colliding_user_id_does_not_clobber_another_users_generation_guard():
+    stored = {}
+    prisma = _make_prisma(stored)
+    cache = SSOAssertionCache()
+    user_a_token = _make_id_token(exp_offset=100)
+    colliding_user_token = _make_id_token(exp_offset=7200)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):  # test-quality-ok: fake DB seam
+        await persist_sso_identity_assertion("user-a", assertion_from_sso_login(user_a_token, None), cache=cache)
+        user_a_generation = cache.generation("user-a")
+        await fetch_sso_identity_assertion("user-a", cache=cache)
+        await persist_sso_identity_assertion(
+            "gen:user-a",
+            assertion_from_sso_login(colliding_user_token, None),
+            cache=cache,
+        )
+        colliding_user_assertion = await fetch_sso_identity_assertion("gen:user-a", cache=cache)
+        user_a_assertion = await fetch_sso_identity_assertion("user-a", cache=cache)
+    assert isinstance(user_a_generation, int)
+    assert cache.generation("user-a") == user_a_generation
+    assert colliding_user_assertion is not None
+    assert colliding_user_assertion.id_token.get_secret_value() == colliding_user_token
+    assert user_a_assertion is not None
+    assert user_a_assertion.id_token.get_secret_value() == user_a_token
+
+
+@pytest.mark.asyncio
 async def test_fetch_missing_row_returns_none():
     prisma = _make_prisma({})
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
