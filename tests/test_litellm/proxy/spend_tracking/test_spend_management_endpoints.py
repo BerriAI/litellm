@@ -3971,6 +3971,7 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
                 "mcp_tool_call_spend": 10.0,
                 "session_llm_count": 1,
                 "session_agent_count": 0,
+                "session_models": ["claude-haiku-4-5", "gpt-5.4-nano"],
             }
         ]
     )
@@ -3997,6 +3998,7 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
     assert rows[1]["mcp_tool_call_spend"] == 10.0
     assert rows[0]["session_llm_count"] == 1
     assert rows[0]["session_agent_count"] == 0
+    assert rows[0]["session_models"] == ["claude-haiku-4-5", "gpt-5.4-nano"]
 
     # Every row in the session carries the full session spend, not just its own
     assert rows[0]["session_total_spend"] == 15.0
@@ -4004,6 +4006,7 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
 
     # Row without a session_id defaults to 1
     assert rows[2]["session_total_count"] == 1
+    assert "session_models" not in rows[2]
 
     # The count is folded into the single aggregate query; no separate group_by call.
     mock_prisma.db.litellm_spendlogs.group_by.assert_not_called()

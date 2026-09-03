@@ -85,7 +85,7 @@ describe("Type column", () => {
         session_id: "sess-edge",
         session_total_count: 3,
         session_llm_count: 2,
-        session_mcp_count: 1,
+        mcp_tool_call_count: 1,
         session_agent_count: 0,
       }),
     ]);

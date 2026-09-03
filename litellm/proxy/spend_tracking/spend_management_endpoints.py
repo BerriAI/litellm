@@ -158,6 +158,7 @@ class _SessionSpendRow(TypedDict):
     session_cache_hit_count: ReadOnly[int]
     session_llm_count: ReadOnly[int]
     session_agent_count: ReadOnly[int]
+    session_models: ReadOnly[Sequence[str]]
 
 
 class _SpendSumAggregate(TypedDict, total=False):
@@ -4121,7 +4122,7 @@ async def _build_ui_spend_logs_response(
             }
         )
 
-    session_spend_map: dict[tuple[str, str], dict[str, int | float]] = {}
+    session_spend_map: dict[tuple[str, str], dict[str, int | float | list[str]]] = {}
     if enrich_session_counts and session_ids:
         from prisma.errors import PrismaError
 
@@ -4152,7 +4153,12 @@ async def _build_ui_spend_logs_response(
                        COUNT(*) FILTER (
                            WHERE call_type NOT IN {_MCP_CALL_TYPES_SQL} AND call_type != {_AGENT_CALL_TYPE_SQL}
                        )::int AS session_llm_count,
-                       COUNT(*) FILTER (WHERE call_type = {_AGENT_CALL_TYPE_SQL})::int AS session_agent_count
+                       COUNT(*) FILTER (WHERE call_type = {_AGENT_CALL_TYPE_SQL})::int AS session_agent_count,
+                       COALESCE(
+                           ARRAY_AGG(DISTINCT model ORDER BY model)
+                           FILTER (WHERE model IS NOT NULL AND model <> ''),
+                           ARRAY[]::text[]
+                       ) AS session_models
                 FROM "LiteLLM_SpendLogs"
                 WHERE session_id = ANY($1::text[])
                   AND api_key = ANY($2::text[])
@@ -4170,6 +4176,7 @@ async def _build_ui_spend_logs_response(
                     "session_cache_hit_count": int(row.get("session_cache_hit_count") or 0),
                     "session_llm_count": int(row.get("session_llm_count") or 0),
                     "session_agent_count": int(row.get("session_agent_count") or 0),
+                    "session_models": list(row.get("session_models") or []),
                 }
                 for row in rows
                 if row.get("session_id") and row.get("api_key") is not None
@@ -4196,6 +4203,7 @@ async def _build_ui_spend_logs_response(
                 row_dict["session_cache_hit_count"] = session_stats["session_cache_hit_count"]
                 row_dict["session_llm_count"] = session_stats["session_llm_count"]
                 row_dict["session_agent_count"] = session_stats["session_agent_count"]
+                row_dict["session_models"] = session_stats["session_models"]
             enriched.append(row_dict)
         response_data: list = enriched
     else:
