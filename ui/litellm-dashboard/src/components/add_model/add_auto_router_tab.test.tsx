@@ -43,9 +43,15 @@ const ANTHROPIC_ONLY_MODEL = ANTHROPIC_TIERS.COMPLEX[0];
 
 const openTemplateDropdown = (): void => {
   if (!screen.queryByTestId("template-selector")) {
-    fireEvent.click(screen.getByRole("button", { name: /choose a template or set up manually/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
   }
   fireEvent.click(screen.getByTestId("template-selector"));
+};
+
+const openAutoSetup = (): void => {
+  if (!screen.queryByTestId("auto-quality-selector")) {
+    fireEvent.click(screen.getByTestId("configure-automatically-button"));
+  }
 };
 
 // Detailed Configuration is collapsed by default, so any test reaching into it (a tier select, an
@@ -152,8 +158,22 @@ describe("AddAutoRouterTab", () => {
     vi.mocked(useAutoRouterRecommendation).mockReturnValue(EMPTY_RECOMMENDATION_QUERY);
   });
 
-  it("starts with only quality and optimization choices in Auto setup", () => {
+  it("keeps the manual form and adds Configure automatically above it", () => {
     renderWithProviders(<Harness />);
+
+    expect(screen.getByTestId("configure-automatically-button")).toBeInTheDocument();
+    expect(screen.getByTestId("template-selector")).toBeInTheDocument();
+    expect(screen.getByTestId("detailed-configuration-toggle")).toBeInTheDocument();
+    expect(screen.queryByTestId("auto-quality-selector")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
+    expect(useAutoRouterRecommendation).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
+  });
+
+  it("shows the two outcome choices after Configure automatically is selected", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Harness />);
+
+    await user.click(screen.getByTestId("configure-automatically-button"));
 
     expect(screen.getByTestId("auto-quality-selector")).toBeInTheDocument();
     expect(screen.getByTestId("auto-objective-selector")).toBeInTheDocument();
@@ -161,6 +181,18 @@ describe("AddAutoRouterTab", () => {
     expect(useAutoRouterRecommendation).toHaveBeenCalledWith(
       expect.objectContaining({ qualityLevel: "balanced", optimizeFor: "balanced", enabled: true }),
     );
+  });
+
+  it("returns to the original manual form from automatic setup", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Harness />);
+
+    await user.click(screen.getByTestId("configure-automatically-button"));
+    await user.click(screen.getByRole("button", { name: "Back" }));
+
+    expect(screen.getByTestId("template-selector")).toBeInTheDocument();
+    expect(screen.getByTestId("configure-automatically-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("auto-quality-selector")).not.toBeInTheDocument();
   });
 
   it("submits the editable policy generated for the caller's available model groups", async () => {
@@ -221,7 +253,8 @@ describe("AddAutoRouterTab", () => {
     });
 
     renderWithProviders(<Harness />);
-    await screen.findByText(/Ready with 1 available model/);
+    await user.click(screen.getByTestId("configure-automatically-button"));
+    await screen.findByText(/Uses 1 available model/);
     await user.type(screen.getByPlaceholderText(/smart_router/i), "max-speed-router");
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
@@ -231,8 +264,8 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
-  // Detailed Configuration starts collapsed so the modal opens onto just Name + Template; a caller
-  // opts into the full tier/classifier form rather than always seeing it up front.
+  // Detailed Configuration starts collapsed after manual setup is selected; a caller opts into the
+  // full tier/classifier form rather than always seeing it up front.
   it("keeps Detailed Configuration collapsed until a caller opens it", () => {
     renderWithProviders(<Harness />);
 
@@ -243,9 +276,7 @@ describe("AddAutoRouterTab", () => {
     expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
   });
 
-  // Nothing is filled in, so there is nothing to submit. The button reports that itself instead of
-  // accepting a click and answering with a toast.
-  it("offers no submit at all until every tier has a model", async () => {
+  it("offers no submit until every tier has a model", async () => {
     renderWithProviders(<Harness />);
 
     expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
@@ -259,6 +290,7 @@ describe("AddAutoRouterTab", () => {
     });
     const { container } = renderWithProviders(<Harness />);
 
+    openAutoSetup();
     fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "early-router" } });
     fireEvent.submit(container.querySelector("form")!);
 
@@ -465,6 +497,7 @@ describe("AddAutoRouterTab", () => {
       <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" userRole="Internal User" createScope="team-required" />,
     );
 
+    openAutoSetup();
     expect(screen.getByText("Select a team to build its Auto setup")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
     expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
@@ -480,6 +513,7 @@ describe("AddAutoRouterTab", () => {
       <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" userRole="Internal User" createScope="team-required" />,
     );
 
+    openAutoSetup();
     await user.type(screen.getByPlaceholderText(/smart_router/i), "team-scoped-router");
     await user.selectOptions(screen.getByTestId("team-dropdown"), "team-1");
     await user.click(screen.getByTestId("team-dropdown-clear"));

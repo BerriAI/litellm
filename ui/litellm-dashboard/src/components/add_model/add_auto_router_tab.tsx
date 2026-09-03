@@ -186,7 +186,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const watchedName = useWatch({ control: form.control, name: "auto_router_name" });
   const watchedTeamId = useWatch({ control: form.control, name: "team_id" });
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
-  const [setupMode, setSetupMode] = useState<SetupMode>("auto");
+  const [setupMode, setSetupMode] = useState<SetupMode>("manual");
   const [qualityLevel, setQualityLevel] = useState<AutoSetupQualityLevel>("balanced");
   const [optimizeFor, setOptimizeFor] = useState<AutoSetupObjective>("balanced");
   const appliedRecommendationKey = useRef<string | null>(null);
@@ -337,6 +337,20 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     setMatchThreshold(prefill.matchThreshold);
     setEscalationKeywords(prefill.escalationKeywords);
   }, []);
+
+  const chooseAutoSetup = () => {
+    appliedRecommendationKey.current = null;
+    setDetailsExpanded(false);
+    setSetupMode("auto");
+  };
+
+  const returnToManualSetup = () => {
+    appliedRecommendationKey.current = null;
+    setSelectedPreset(undefined);
+    applyPrefill(buildEmptyPrefill());
+    setDetailsExpanded(false);
+    setSetupMode("manual");
+  };
 
   useEffect(() => {
     if (!recommendation || setupMode !== "auto") return;
@@ -596,22 +610,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   hasAutoPolicy={Boolean(complexityRouterConfig.auto_setup)}
                   onRetry={() => void refetchRecommendation()}
                   onRegenerate={regenerateAutoSetup}
-                  onUseManual={() => setSetupMode("manual")}
+                  onBack={returnToManualSetup}
                 />
               ) : (
                 <div>
                   <div className="mb-2 flex items-center justify-between gap-3">
                     <label className="block text-sm font-medium text-foreground">Template</label>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      className="h-auto px-0"
-                      onClick={() => {
-                        appliedRecommendationKey.current = null;
-                        setSetupMode("auto");
-                      }}
-                    >
-                      Use Auto setup
+                    <Button type="button" data-testid="configure-automatically-button" onClick={chooseAutoSetup}>
+                      Configure automatically
                     </Button>
                   </div>
                   <Select
@@ -691,11 +697,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                     ) : (
                       <ChevronRight className="size-3 text-muted-foreground" />
                     )}
-                    Detailed Configuration
+                    {setupMode === "auto" ? "Review and edit configuration" : "Detailed Configuration"}
                   </span>
                   {!detailsExpanded && (
                     <span className="text-xs text-muted-foreground line-clamp-2">
-                      {tierConfigSummary(complexityRouterConfig)}
+                      {setupMode === "auto"
+                        ? "View the generated model tiers and routing rules"
+                        : tierConfigSummary(complexityRouterConfig)}
                     </span>
                   )}
                 </button>
@@ -768,27 +776,31 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   <TooltipContent>Get help on our github</TooltipContent>
                 </Tooltip>
                 <div className="flex gap-2">
-                  <BlockedReasonTooltip reason={submitBlockedReason}>
+                  {setupMode === "manual" && (
+                    <BlockedReasonTooltip reason={submitBlockedReason}>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        data-testid="auto-router-test-routing-btn"
+                        disabled={submitBlockedReason !== null || isSubmitting}
+                        onClick={() => setIsRoutingTestVisible(true)}
+                      >
+                        Test Routing
+                      </Button>
+                    </BlockedReasonTooltip>
+                  )}
+                  {setupMode === "manual" && (
                     <Button
                       type="button"
                       variant="outline"
-                      data-testid="auto-router-test-routing-btn"
-                      disabled={submitBlockedReason !== null || isSubmitting}
-                      onClick={() => setIsRoutingTestVisible(true)}
+                      data-testid="auto-router-test-connect-btn"
+                      onClick={handleTestConnection}
+                      disabled={isTestingConnection}
                     >
-                      Test Routing
+                      {isTestingConnection && <UiLoadingSpinner className="size-4" />}
+                      Test Connection
                     </Button>
-                  </BlockedReasonTooltip>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    data-testid="auto-router-test-connect-btn"
-                    onClick={handleTestConnection}
-                    disabled={isTestingConnection}
-                  >
-                    {isTestingConnection && <UiLoadingSpinner className="size-4" />}
-                    Test Connection
-                  </Button>
+                  )}
                   <BlockedReasonTooltip reason={submitBlockedReason}>
                     <Button
                       type="button"
