@@ -1594,6 +1594,32 @@ async def test_handle_list_tools_converts_permission_httpexception_to_mcp_error(
 
 
 @pytest.mark.asyncio
+async def test_mcp_server_tool_call_renders_denial_message_not_detail_dict():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import mcp_server_tool_call
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    denial_message = "MCP server 'github' is not available to this key: the key is bound to agent 'agent-123'"
+    denial = HTTPException(status_code=403, detail={"error": denial_message})
+
+    with (
+        patch(  # test-quality-ok: the protocol handler reads auth from module context; no injection seam
+            "litellm.proxy._experimental.mcp_server.server.get_or_extract_auth_context",
+            new=AsyncMock(return_value=(None, None, None, None, None, None, None)),
+        ),
+        patch(  # test-quality-ok: the tool-call helper is the handler's only collaborator; the suite's seam
+            "litellm.proxy._experimental.mcp_server.server.call_mcp_tool",
+            new=AsyncMock(side_effect=denial),
+        ),
+    ):
+        result = await mcp_server_tool_call("github-search_issues", {})
+
+    assert result.isError is True
+    assert result.content[0].text == f"Error: {denial_message}"
+
+
+@pytest.mark.asyncio
 async def test_mcp_server_tool_call_body_with_none_arguments():
     """Test that proxy_server_request body handles None arguments correctly"""
     try:
@@ -3740,6 +3766,35 @@ async def test_call_mcp_tool_user_unauthorized_access():
         # Verify the exception details
         assert exc_info.value.status_code == 403
         assert "User not allowed to call this tool" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_scoped_denial_names_the_binding_agent():
+    from litellm.proxy._experimental.mcp_server.server import call_mcp_tool
+
+    agent_bound_key = UserAPIKeyAuth(api_key="test-key", user_id="test-user", agent_id="agent-123")
+
+    with (
+        patch(  # test-quality-ok: the server registry is a module-level singleton; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_allowed_mcp_servers",
+            AsyncMock(return_value=[]),
+        ),
+        patch(  # test-quality-ok: the permission resolver is a module-level function; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            _scope_resolver({"github": "srv-github"}),
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await call_mcp_tool(
+                name="github-search_issues",
+                arguments={},
+                user_api_key_auth=agent_bound_key,
+                mcp_servers=["github"],
+            )
+
+    assert exc_info.value.status_code == 403
+    assert "MCP server 'github'" in exc_info.value.detail["error"]
+    assert "agent 'agent-123'" in exc_info.value.detail["error"]
 
 
 @pytest.mark.asyncio
