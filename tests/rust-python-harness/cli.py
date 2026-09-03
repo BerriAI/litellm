@@ -44,13 +44,19 @@ def _parser() -> argparse.ArgumentParser:
         choices=SDK_FUNCTIONS,
         help="run only this SDK function",
     )
-    parser.add_argument(
+    ledger_mode = parser.add_mutually_exclusive_group()
+    ledger_mode.add_argument(
         "--validate-ledger",
         action="store_true",
         help=(
             "require complete one-to-one Python/Rust test mappings and current "
             "inventory; narrow with --function"
         ),
+    )
+    ledger_mode.add_argument(
+        "--audit-ledger",
+        action="store_true",
+        help="check mapping structure and compiled inventory while allowing unresolved ports; narrow with --function",
     )
     parser.add_argument(
         "--plain",
@@ -140,7 +146,7 @@ def _print_catalog(strategies: Sequence[Strategy]) -> None:
             print(f"  {case.sdk_function:12} {case.coverage.value:14} {selectors}")
 
 
-def _print_function_report(report: FunctionReport) -> None:
+def _print_function_report(report: FunctionReport, *, show_unresolved: bool = True) -> None:
     print(f"\n{report.sdk_function}")
     if report.error is not None:
         print(f"  invalid ledger: {report.error}")
@@ -161,9 +167,9 @@ def _print_function_report(report: FunctionReport) -> None:
     )
     print(f"  {len(ledger.rust_only_tests)} Rust-only tests")
     if audit.is_clean:
-        print("  ledger is in sync with the live test files")
+        print("  ledger is in sync with Python sources and compiled Rust tests")
     for entry in ledger.entries:
-        if entry.status == "unresolved_portable":
+        if show_unresolved and entry.status == "unresolved_portable":
             print(
                 "  unresolved portable contract: "
                 f"{entry.python_file}::{entry.python_test}: {entry.reason}"
@@ -180,12 +186,12 @@ def _print_function_report(report: FunctionReport) -> None:
         print("  one-to-one mapping validation passed")
 
 
-def _validate_ledger(sdk_functions: set[str]) -> int:
+def _validate_ledger(sdk_functions: set[str], *, audit_only: bool = False) -> int:
     functions = sdk_functions or set(SDK_FUNCTIONS)
     reports = tuple(build_function_report(function) for function in sorted(functions))
     for report in reports:
-        _print_function_report(report)
-    return 0 if all(report.passes_validation for report in reports) else 1
+        _print_function_report(report, show_unresolved=not audit_only)
+    return 0 if all(report.passes_audit if audit_only else report.passes_validation for report in reports) else 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -195,8 +201,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--coverage requires the project's pytest-cov dependency; run with "
             "`poetry run python -m tests.rust-python-harness --coverage`"
         )
-    if args.validate_ledger:
-        return _validate_ledger(set(args.sdk_functions))
+    if args.validate_ledger or args.audit_ledger:
+        return _validate_ledger(set(args.sdk_functions), audit_only=args.audit_ledger)
     strategies = load_catalog()
     if args.list:
         _print_catalog(strategies)

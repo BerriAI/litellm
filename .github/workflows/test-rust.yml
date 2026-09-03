@@ -10,6 +10,13 @@ on:
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
       - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
+      - "tests/rust-python-harness/**"
+      - "tests/test_rust_python_harness.py"
+      - "tests/test_litellm/ocr/**"
+      - "tests/test_litellm/llms/**/ocr/**"
+      - "tests/test_litellm/llms/ocr/**"
+      - "tests/test_litellm/llms/azure_ai/*ocr*"
+      - "tests/test_litellm/proxy/ocr_endpoints/**"
       - ".github/workflows/test-rust.yml"
   pull_request:
     branches:
@@ -25,6 +32,13 @@ on:
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
       - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
+      - "tests/rust-python-harness/**"
+      - "tests/test_rust_python_harness.py"
+      - "tests/test_litellm/ocr/**"
+      - "tests/test_litellm/llms/**/ocr/**"
+      - "tests/test_litellm/llms/ocr/**"
+      - "tests/test_litellm/llms/azure_ai/*ocr*"
+      - "tests/test_litellm/proxy/ocr_endpoints/**"
       - ".github/workflows/test-rust.yml"
 
 permissions:
@@ -54,6 +68,11 @@ jobs:
       - name: Set up Rust
         run: rustup toolchain install
 
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
       - name: Cache Cargo registry and target
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -79,6 +98,24 @@ jobs:
 
       - name: Run core tests with Bedrock auth
         run: cargo test -p litellm-core --features bedrock-auth --locked
+
+      - name: Audit Rust and Python parity ledger
+        working-directory: .
+        run: >-
+          uv run --no-project
+          --with pydantic==2.13.4
+          --with pytest==9.0.3
+          python -m tests.rust-python-harness
+          --audit-ledger --function ocr
+
+      - name: Test parity ledger infrastructure
+        working-directory: .
+        run: >-
+          uv run --no-project
+          --with pydantic==2.13.4
+          --with pytest==9.0.3
+          python -m pytest tests/test_rust_python_harness.py
+          --noconftest -q
 
   release-wheel:
     name: release wheel

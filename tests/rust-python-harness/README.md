@@ -95,6 +95,14 @@ mappings, untracked or stale tests, malformed entries, and unresolved portable
 contracts. Python-only and Rust-only tests require a reason and do not reduce the
 portable mapping percentage.
 
+Rust inventory comes from the compiled test targets declared in `rust_scope`. The
+harness asks Cargo for each test executable, then reads its libtest inventory with
+`--list --format terse`. Fully qualified package, target, and test names are the
+mapping keys. Source files remain review locators and do not decide whether a test
+exists. `--audit-ledger` enforces this inventory and the mapping structure while
+allowing declared `unresolved_portable` work; `--validate-ledger` also requires every
+portable contract to be mapped
+
 `validate_sub_methods/` owns the future source-section inventory that maps a stable
 Python qualified symbol to its Rust symbol. That inventory is the denominator for
 per-function rollups; raw coverage for the entire LiteLLM repository would obscure

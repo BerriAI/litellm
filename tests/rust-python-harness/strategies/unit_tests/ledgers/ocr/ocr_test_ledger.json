@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "sdk_function": "ocr",
   "python_scope": [
     "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
@@ -13,12 +13,35 @@
     "tests/test_litellm/proxy/ocr_endpoints/test_endpoints.py"
   ],
   "rust_scope": [
-    "litellm-rust/crates/ai-gateway/src/ocr/common_utils.rs",
-    "litellm-rust/crates/ai-gateway/src/ocr/tests.rs",
-    "litellm-rust/crates/core/src/providers/azure_ai/ocr/transformation.rs",
-    "litellm-rust/crates/core/src/providers/vertex_ai/ocr/transformation.rs",
-    "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-    "litellm-rust/crates/ai-gateway/src/integrations/custom_logger/mod.rs"
+    {
+      "target": {
+        "package": "litellm-core",
+        "name": "litellm_core",
+        "kind": "lib"
+      },
+      "features": [
+        "bedrock-auth"
+      ],
+      "default_features": true,
+      "modules": [
+        "providers::azure_ai::ocr",
+        "providers::mistral::ocr",
+        "providers::vertex_ai::ocr"
+      ]
+    },
+    {
+      "target": {
+        "package": "litellm-ai-gateway",
+        "name": "litellm_ai_gateway",
+        "kind": "lib"
+      },
+      "features": [],
+      "default_features": true,
+      "modules": [
+        "ocr",
+        "integrations::custom_logger"
+      ]
+    }
   ],
   "entries": [
     {
@@ -38,8 +61,15 @@
       "python_test": "test_transform_ocr_response_preserves_azure_native_fields",
       "status": "mapped",
       "rust_file": "litellm-rust/crates/core/src/providers/azure_ai/ocr/transformation.rs",
-      "rust_test": "document_intelligence_response_normalizes_pages",
-      "justification": "both assert page markdown, dimension (inch-to-pixel) normalization, and usage_info.pages_processed from the same Azure succeeded response shape"
+      "justification": "both assert page markdown, dimension (inch-to-pixel) normalization, and usage_info.pages_processed from the same Azure succeeded response shape",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::azure_ai::ocr::transformation::tests::document_intelligence_response_normalizes_pages"
+      }
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
@@ -130,8 +160,15 @@
       "python_test": "test_get_complete_url_combines_pages_and_features",
       "status": "mapped",
       "rust_file": "litellm-rust/crates/core/src/providers/azure_ai/ocr/transformation.rs",
-      "rust_test": "document_intelligence_url_normalizes_zero_based_pages",
-      "justification": "both assert 0-based, duplicate page indices are deduped, sorted, and rewritten 1-based into the request URL"
+      "justification": "both assert 0-based, duplicate page indices are deduped, sorted, and rewritten 1-based into the request URL",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::azure_ai::ocr::transformation::tests::document_intelligence_url_normalizes_zero_based_pages"
+      }
     },
     {
       "python_file": "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",
@@ -624,104 +661,195 @@
       "python_test": "TestGetSupportedOcrParams::test_extract_header_in_supported_params",
       "status": "mapped",
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "extract_header_is_a_supported_ocr_param",
-      "justification": "both assert extract_header appears in the Mistral supported OCR params list"
+      "justification": "both assert extract_header appears in the Mistral supported OCR params list",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::extract_header_is_a_supported_ocr_param"
+      }
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_transformation.py",
       "python_test": "TestGetSupportedOcrParams::test_extract_footer_in_supported_params",
       "status": "mapped",
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "extract_footer_is_a_supported_ocr_param",
-      "justification": "both assert extract_footer appears in the Mistral supported OCR params list"
+      "justification": "both assert extract_footer appears in the Mistral supported OCR params list",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::extract_footer_is_a_supported_ocr_param"
+      }
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_transformation.py",
       "python_test": "TestGetSupportedOcrParams::test_existing_params_still_present",
       "status": "mapped",
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "existing_ocr_params_remain_supported",
-      "justification": "both assert the previously supported params are still present in the supported list"
+      "justification": "both assert the previously supported params are still present in the supported list",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::existing_ocr_params_remain_supported"
+      }
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_transformation.py",
       "python_test": "TestMapOcrParams::test_extract_header_passed_through",
       "status": "mapped",
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "map_ocr_params_forwards_extract_header",
-      "justification": "both assert extract_header alone survives map_ocr_params unchanged"
+      "justification": "both assert extract_header alone survives map_ocr_params unchanged",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::map_ocr_params_forwards_extract_header"
+      }
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_transformation.py",
       "python_test": "TestMapOcrParams::test_extract_footer_passed_through",
       "status": "mapped",
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "map_ocr_params_forwards_extract_footer",
-      "justification": "both assert extract_footer alone survives map_ocr_params unchanged"
+      "justification": "both assert extract_footer alone survives map_ocr_params unchanged",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::map_ocr_params_forwards_extract_footer"
+      }
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_transformation.py",
       "python_test": "TestMapOcrParams::test_extract_header_and_footer_together",
       "status": "mapped",
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "map_ocr_params_forwards_extract_header_and_footer",
-      "justification": "both assert header and footer passed together are both forwarded with their given values"
+      "justification": "both assert header and footer passed together are both forwarded with their given values",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::map_ocr_params_forwards_extract_header_and_footer"
+      }
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_transformation.py",
       "python_test": "TestMapOcrParams::test_unknown_param_is_dropped",
       "status": "mapped",
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "map_ocr_params_drops_unknown_params",
-      "justification": "both assert an unrecognized param key is dropped while a known one is kept"
+      "justification": "both assert an unrecognized param key is dropped while a known one is kept",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::map_ocr_params_drops_unknown_params"
+      }
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_transformation.py",
       "python_test": "TestNewSupportedParams::test_new_param_in_supported_list",
       "status": "mapped",
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "new_ocr_params_are_supported",
-      "justification": "both assert each OCR4 param is in the supported list"
+      "justification": "both assert each OCR4 param is in the supported list",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::new_ocr_params_are_supported"
+      }
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_transformation.py",
       "python_test": "TestNewParamsMapOcr::test_new_param_passed_through",
       "status": "mapped",
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "map_ocr_params_forwards_new_ocr_params",
-      "justification": "both assert each OCR4 param/value pair survives map_ocr_params unchanged"
+      "justification": "both assert each OCR4 param/value pair survives map_ocr_params unchanged",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::map_ocr_params_forwards_new_ocr_params"
+      }
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_transformation.py",
       "python_test": "TestTransformOcrRequest::test_param_included_in_request_body",
       "status": "mapped",
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "transform_ocr_request_includes_each_optional_param",
-      "justification": "both assert each optional param value lands in the built request body alongside model/document with no files"
+      "justification": "both assert each optional param value lands in the built request body alongside model/document with no files",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::transform_ocr_request_includes_each_optional_param"
+      }
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_transformation.py",
       "python_test": "TestTransformOcrRequest::test_multiple_new_params_together",
       "status": "mapped",
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "transform_ocr_request_includes_multiple_new_params",
-      "justification": "both assert multiple OCR4 params passed together all land in the same request body"
+      "justification": "both assert multiple OCR4 params passed together all land in the same request body",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::transform_ocr_request_includes_multiple_new_params"
+      }
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_transformation.py",
       "python_test": "TestTransformOcrResponseOcr4Fields::test_blocks_and_confidence_scores_preserved",
       "status": "mapped",
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "transform_ocr_response_preserves_blocks_and_confidence_scores",
-      "justification": "both assert blocks and confidence_scores survive the OCR response transform on the returned page"
+      "justification": "both assert blocks and confidence_scores survive the OCR response transform on the returned page",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::transform_ocr_response_preserves_blocks_and_confidence_scores"
+      }
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_transformation.py",
       "python_test": "TestTransformOcrResponseOcr4Fields::test_ocr4_fields_survive_model_dump",
       "status": "mapped",
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "transform_ocr_response_preserves_ocr4_page_fields",
-      "justification": "both assert tables, hyperlinks, header and footer survive the OCR response transform on the returned page"
+      "justification": "both assert tables, hyperlinks, header and footer survive the OCR response transform on the returned page",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::transform_ocr_response_preserves_ocr4_page_fields"
+      }
     },
     {
       "python_file": "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_cost.py",
@@ -931,153 +1059,363 @@
   "rust_only_tests": [
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/integrations/custom_logger/mod.rs",
-      "rust_test": "rust_custom_logger_reads_failure_payload_for_non_ocr_call_type",
-      "reason": "exercises the non-OCR (acompletion) call-type branch of the logger; the OCR branch is covered separately by rust_custom_logger_reads_success_payload_for_ocr"
+      "reason": "exercises the non-OCR (acompletion) call-type branch of the logger; the OCR branch is covered separately by rust_custom_logger_reads_success_payload_for_ocr",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "integrations::custom_logger::tests::rust_custom_logger_reads_failure_payload_for_non_ocr_call_type"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/integrations/custom_logger/mod.rs",
-      "rust_test": "no_callback_fast_path_dispatches_nothing",
-      "reason": "Rust-only fast-path optimization test for when zero callbacks are registered; Python has no equivalent no-op dispatch path"
+      "reason": "Rust-only fast-path optimization test for when zero callbacks are registered; Python has no equivalent no-op dispatch path",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "integrations::custom_logger::tests::no_callback_fast_path_dispatches_nothing"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/integrations/custom_logger/mod.rs",
-      "rust_test": "with_standard_logging_payload_keeps_top_level_fields_in_sync",
-      "reason": "Rust-internal builder-method invariant, Python has no equivalent internal builder"
+      "reason": "Rust-internal builder-method invariant, Python has no equivalent internal builder",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "integrations::custom_logger::tests::with_standard_logging_payload_keeps_top_level_fields_in_sync"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/common_utils.rs",
-      "rust_test": "blocks_private_and_metadata_ips",
-      "reason": "SSRF IP-blocking helper has no Python unit test; Python relies on the proxy-layer JSON/form guards instead"
+      "reason": "SSRF IP-blocking helper has no Python unit test; Python relies on the proxy-layer JSON/form guards instead",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "ocr::common_utils::tests::blocks_private_and_metadata_ips"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/common_utils.rs",
-      "rust_test": "convert_document_url_rejects_loopback_fetch",
-      "reason": "URL-fetch SSRF protection is Rust-gateway-only"
+      "reason": "URL-fetch SSRF protection is Rust-gateway-only",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "ocr::common_utils::tests::convert_document_url_rejects_loopback_fetch"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/common_utils.rs",
-      "rust_test": "convert_document_url_leaves_data_uri_untouched",
-      "reason": "URL-fetch SSRF protection is Rust-gateway-only"
+      "reason": "URL-fetch SSRF protection is Rust-gateway-only",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "ocr::common_utils::tests::convert_document_url_leaves_data_uri_untouched"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/tests.rs",
-      "rust_test": "truncate_error_body_passes_short_strings_through",
-      "reason": "Rust-gateway error-body truncation helper has no Python counterpart"
+      "reason": "Rust-gateway error-body truncation helper has no Python counterpart",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "ocr::tests::truncate_error_body_passes_short_strings_through"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/tests.rs",
-      "rust_test": "truncate_error_body_caps_long_payloads",
-      "reason": "Rust-gateway error-body truncation helper has no Python counterpart"
+      "reason": "Rust-gateway error-body truncation helper has no Python counterpart",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "ocr::tests::truncate_error_body_caps_long_payloads"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/tests.rs",
-      "rust_test": "truncate_error_body_does_not_split_multibyte_chars",
-      "reason": "Rust-gateway error-body truncation helper has no Python counterpart"
+      "reason": "Rust-gateway error-body truncation helper has no Python counterpart",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "ocr::tests::truncate_error_body_does_not_split_multibyte_chars"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/tests.rs",
-      "rust_test": "ocr_dispatch_supports_migrated_providers",
-      "reason": "Rust-internal provider-config dispatch table has no equivalent Python unit test"
+      "reason": "Rust-internal provider-config dispatch table has no equivalent Python unit test",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "ocr::tests::ocr_dispatch_supports_migrated_providers"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/tests.rs",
-      "rust_test": "string_headers_accepts_string_values",
-      "reason": "Rust-gateway header-coercion helper has no Python counterpart"
+      "reason": "Rust-gateway header-coercion helper has no Python counterpart",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "ocr::tests::string_headers_accepts_string_values"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/tests.rs",
-      "rust_test": "auth_header_detection_is_case_insensitive",
-      "reason": "Rust-gateway header-detection helper has no Python counterpart"
+      "reason": "Rust-gateway header-detection helper has no Python counterpart",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "ocr::tests::auth_header_detection_is_case_insensitive"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/tests.rs",
-      "rust_test": "ocr_lifecycle_runs_pre_during_and_success_hooks",
-      "reason": "full gateway-level guardrail-hook-plus-HTTP-lifecycle test with no Python equivalent at this integration scope"
+      "reason": "full gateway-level guardrail-hook-plus-HTTP-lifecycle test with no Python equivalent at this integration scope",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "ocr::tests::ocr_lifecycle_runs_pre_during_and_success_hooks"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/tests.rs",
-      "rust_test": "ocr_lifecycle_runs_failure_hook_on_provider_error",
-      "reason": "full gateway-level failure-hook-plus-HTTP-lifecycle test with no Python equivalent at this integration scope"
+      "reason": "full gateway-level failure-hook-plus-HTTP-lifecycle test with no Python equivalent at this integration scope",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "ocr::tests::ocr_lifecycle_runs_failure_hook_on_provider_error"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/tests.rs",
-      "rust_test": "ocr_lifecycle_pre_call_block_skips_provider_socket",
-      "reason": "full gateway-level pre-call-block-plus-socket-skip test with no Python equivalent at this integration scope"
+      "reason": "full gateway-level pre-call-block-plus-socket-skip test with no Python equivalent at this integration scope",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "ocr::tests::ocr_lifecycle_pre_call_block_skips_provider_socket"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/tests.rs",
-      "rust_test": "ocr_does_not_duplicate_authorization_header_when_header_is_supplied",
-      "reason": "outgoing HTTP header dedup at the Rust gateway has no Python counterpart"
+      "reason": "outgoing HTTP header dedup at the Rust gateway has no Python counterpart",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "ocr::tests::ocr_does_not_duplicate_authorization_header_when_header_is_supplied"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/tests.rs",
-      "rust_test": "document_intelligence_poll_uses_resolved_subscription_key",
-      "reason": "full Azure DI poll-loop integration test with no Python equivalent at this scope"
+      "reason": "full Azure DI poll-loop integration test with no Python equivalent at this scope",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "ocr::tests::document_intelligence_poll_uses_resolved_subscription_key"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/ocr/tests.rs",
-      "rust_test": "string_headers_rejects_non_string_values",
-      "reason": "Rust-gateway header-coercion error path has no Python counterpart"
+      "reason": "Rust-gateway header-coercion error path has no Python counterpart",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "ocr::tests::string_headers_rejects_non_string_values"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/core/src/providers/azure_ai/ocr/transformation.rs",
-      "rust_test": "azure_ai_reuses_mistral_body_transform",
-      "reason": "Rust-internal delegation-to-Mistral-transform implementation detail, no Python test asserts this delegation"
+      "reason": "Rust-internal delegation-to-Mistral-transform implementation detail, no Python test asserts this delegation",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::azure_ai::ocr::transformation::tests::azure_ai_reuses_mistral_body_transform"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/core/src/providers/azure_ai/ocr/transformation.rs",
-      "rust_test": "document_intelligence_request_uses_base64_source_for_data_uri",
-      "reason": "no Python test asserts on the base64Source request body shape"
+      "reason": "no Python test asserts on the base64Source request body shape",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::azure_ai::ocr::transformation::tests::document_intelligence_request_uses_base64_source_for_data_uri"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/core/src/providers/vertex_ai/ocr/transformation.rs",
-      "rust_test": "vertex_mistral_url_uses_project_location_and_model",
-      "reason": "vertex OCR support has no Python unit test coverage yet"
+      "reason": "vertex OCR support has no Python unit test coverage yet",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::vertex_ai::ocr::transformation::tests::vertex_mistral_url_uses_project_location_and_model"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/core/src/providers/vertex_ai/ocr/transformation.rs",
-      "rust_test": "vertex_mistral_reuses_mistral_body_transform",
-      "reason": "vertex OCR support has no Python unit test coverage yet"
+      "reason": "vertex OCR support has no Python unit test coverage yet",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::vertex_ai::ocr::transformation::tests::vertex_mistral_reuses_mistral_body_transform"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/core/src/providers/vertex_ai/ocr/transformation.rs",
-      "rust_test": "vertex_deepseek_request_uses_ocr_endpoint_shape",
-      "reason": "vertex OCR support has no Python unit test coverage yet"
+      "reason": "vertex OCR support has no Python unit test coverage yet",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::vertex_ai::ocr::transformation::tests::vertex_deepseek_request_uses_ocr_endpoint_shape"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/core/src/providers/vertex_ai/ocr/transformation.rs",
-      "rust_test": "vertex_deepseek_response_wraps_markdown_content",
-      "reason": "vertex OCR support has no Python unit test coverage yet"
+      "reason": "vertex OCR support has no Python unit test coverage yet",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::vertex_ai::ocr::transformation::tests::vertex_deepseek_response_wraps_markdown_content"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "transform_ocr_request_rejects_non_object_document",
-      "reason": "non-object document rejection has no dedicated Python unit test"
+      "reason": "non-object document rejection has no dedicated Python unit test",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::transform_ocr_request_rejects_non_object_document"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "transform_ocr_response_normalizes_mistral_json",
-      "reason": "Python's response tests target OCR4-specific fields only, none asserts the same base normalization this Rust test checks"
+      "reason": "Python's response tests target OCR4-specific fields only, none asserts the same base normalization this Rust test checks",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::transform_ocr_response_normalizes_mistral_json"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "complete_url_defaults_and_dedupes_v1",
-      "reason": "URL-building/defaulting for Mistral has no Python unit test"
+      "reason": "URL-building/defaulting for Mistral has no Python unit test",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::complete_url_defaults_and_dedupes_v1"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "resolve_api_key_prefers_param_then_env",
-      "reason": "API key resolution precedence at the Rust provider-config layer has no Python unit test"
+      "reason": "API key resolution precedence at the Rust provider-config layer has no Python unit test",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::resolve_api_key_prefers_param_then_env"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
-      "rust_test": "resolve_api_key_errors_when_absent",
-      "reason": "API key resolution error path at the Rust provider-config layer has no Python unit test"
+      "reason": "API key resolution error path at the Rust provider-config layer has no Python unit test",
+      "rust": {
+        "target": {
+          "package": "litellm-core",
+          "name": "litellm_core",
+          "kind": "lib"
+        },
+        "name": "providers::mistral::ocr::transformation::tests::resolve_api_key_errors_when_absent"
+      }
     },
     {
       "rust_file": "litellm-rust/crates/ai-gateway/src/integrations/custom_logger/mod.rs",
-      "rust_test": "rust_custom_logger_reads_success_payload_for_ocr",
-      "reason": "Rust-internal custom-logger dispatch for OCR payloads has no Python unit test at this layer"
+      "reason": "Rust-internal custom-logger dispatch for OCR payloads has no Python unit test at this layer",
+      "rust": {
+        "target": {
+          "package": "litellm-ai-gateway",
+          "name": "litellm_ai_gateway",
+          "kind": "lib"
+        },
+        "name": "integrations::custom_logger::tests::rust_custom_logger_reads_success_payload_for_ocr"
+      }
     }
   ]
 }
