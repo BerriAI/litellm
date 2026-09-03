@@ -2867,7 +2867,7 @@ def _add_guardrails_from_policies_in_metadata(
 
 def add_guardrails_from_auth_metadata(
     user_api_key_dict: UserAPIKeyAuth,
-    data: dict,
+    data: dict,  # mutable-ok: writes guardrails into the live request dict, same contract as the helpers it wraps
     metadata_variable_name: str,
 ) -> None:
     """Resolve key, team, and project guardrails (direct and via policies) onto ``data[metadata_variable_name]``."""
