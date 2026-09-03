@@ -87,6 +87,7 @@ from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
     ProjectQuotaCallback,
+    ResponseIdAuthorizer,
     ResponsesAPIStreamingIterator,
     ResponsesWebSocketStreaming,
     SyncResponsesAPIStreamingIterator,
@@ -304,6 +305,30 @@ def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
         cast(ProjectQuotaCallback, callback)  # cast-ok: required callback method is callable
         for callback in callbacks
         if callable(getattr(callback, "enforce_project_io_token_quota_for_frame", None))
+    )
+
+
+def _collect_ws_response_id_authorizer() -> ResponseIdAuthorizer | None:
+    """Duck-type discover the proxy hook that owns Responses id authorization, so
+    the WebSocket surface refuses a ``previous_response_id`` the connection's key
+    does not own through the very same step the HTTP routes run.
+
+    Uses duck-typing on ``litellm.callbacks`` (rather than importing the proxy
+    hook directly) to avoid a layering violation (SDK importing from the proxy
+    layer). Without the proxy there is no key to authorize and no hook to find.
+    """
+    import litellm as _litellm
+
+    callbacks: Final = cast(  # cast-ok: callback registry is inspected before protocol use
+        Sequence[object], _litellm.callbacks
+    )
+    return next(
+        (
+            cast(ResponseIdAuthorizer, callback)  # cast-ok: required callback method is callable
+            for callback in callbacks
+            if callable(getattr(callback, "response_id_ownership_refusal", None))
+        ),
+        None,
     )
 
 
@@ -6429,6 +6454,7 @@ class BaseLLMHTTPHandler:
         - Forwards events over the websocket connection
         """
         _ws_quota_callbacks: Final = _collect_ws_project_quota_callbacks()
+        _ws_response_id_authorizer: Final = _collect_ws_response_id_authorizer()
 
         if responses_api_provider_config is None or not responses_api_provider_config.supports_native_websocket():
             from litellm.responses.streaming_iterator import (
@@ -6447,6 +6473,7 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 first_message=first_message,
                 quota_callbacks=_ws_quota_callbacks,
+                response_id_authorizer=_ws_response_id_authorizer,
                 **kwargs,
             )
             await handler.run()
@@ -6569,6 +6596,7 @@ class BaseLLMHTTPHandler:
                     output_guardrail_callbacks=_ws_output_guardrail_callbacks,
                     quota_callbacks=_ws_quota_callbacks,
                     authorized_model=model,
+                    response_id_authorizer=_ws_response_id_authorizer,
                 )
                 await streaming.bidirectional_forward()
 

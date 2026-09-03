@@ -99,12 +99,12 @@ class ResponsesIDSecurity(CustomLogger):
         )
         if not isinstance(addressed_id, str) or not addressed_id:
             return data
-        authorized_id: Final = self._authorize_response_id(addressed_id, user_api_key_dict)
+        authorized_id: Final = self.authorize_response_id(addressed_id, user_api_key_dict)
         data[addressed_id_field] = authorized_id
         data[_ADDRESSED_RESPONSE_ID_KEY] = addressed_id
         return data
 
-    def _authorize_response_id(
+    def authorize_response_id(
         self,
         response_id: str,
         user_api_key_dict: "UserAPIKeyAuth",
@@ -118,6 +118,22 @@ class ResponsesIDSecurity(CustomLogger):
             return response_id
 
         raise HTTPException(status_code=403, detail=_UNMANAGED_RESPONSE_ID_DETAIL)
+
+    def response_id_ownership_refusal(
+        self,
+        response_id: str,
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> str | None:
+        """Report the same authorization step the HTTP routes run as a value.
+
+        The WebSocket surface answers a refused frame with an error frame rather
+        than a status code, so it needs the refusal text instead of an exception.
+        """
+        try:
+            self.authorize_response_id(response_id, user_api_key_dict)
+        except HTTPException as exc:
+            return str(exc.detail)
+        return None
 
     def _unmanaged_response_ids_allowed(self, user_api_key_dict: "UserAPIKeyAuth") -> bool:
         general_settings: Final = self._general_settings_reader()
