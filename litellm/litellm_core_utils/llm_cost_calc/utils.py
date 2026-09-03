@@ -417,11 +417,6 @@ def _is_off_peak(off_peak: Mapping[str, object], current_time: datetime | None =
 
 @dataclass(frozen=True, slots=True)
 class TokenRates:
-    """The per-token rates one request bills at. reasoning_rate is None when reasoning bills at
-    output_rate: the model has no dedicated reasoning rate, or the caller resolves reasoning on
-    its own.
-    """
-
     input_rate: float
     output_rate: float
     cache_read_rate: float

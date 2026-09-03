@@ -650,8 +650,6 @@ class TestDashscopeCostCalculator:
         assert math.isclose(completion_cost, 200 * 2.4e-06, rel_tol=1e-10)
 
     def test_dashscope_off_peak_reasoning_rate_replaces_the_dedicated_reasoning_rate(self):
-        """Regression (LIT-6887): a block carrying output_cost_per_reasoning_token bills reasoning
-        tokens at it inside the window, over the model's own reasoning rate, which returns outside."""
         self._register_off_peak_flat_model(
             "dashscope/qwen-reasoning-rate-off-peak-test",
             {
@@ -678,8 +676,6 @@ class TestDashscopeCostCalculator:
         assert math.isclose(peak_completion_cost, (150 * 4.8e-06) + (50 * 9e-06), rel_tol=1e-10)
 
     def test_dashscope_off_peak_cache_creation_rate_replaces_the_standard_rate(self):
-        """Regression (LIT-6887): a block carrying cache_creation_input_token_cost bills cache-creation
-        tokens at it inside the window, while the cache-read rate it leaves unset stays standard."""
         self._register_off_peak_flat_model(
             "dashscope/qwen-cache-creation-off-peak-test",
             {"hours_utc": self.OFF_PEAK_WINDOW, "cache_creation_input_token_cost": 1.5e-06},
@@ -701,7 +697,6 @@ class TestDashscopeCostCalculator:
         assert math.isclose(peak_prompt_cost, (600 * 2.4e-06) + (300 * 2e-07) + (100 * 3e-06), rel_tol=1e-10)
 
     def test_dashscope_off_peak_reasoning_and_cache_creation_rates_override_the_selected_tier(self):
-        """The new keys override the selected tier the way the input and output rates already do."""
         self._register_tiered_model(
             "dashscope/qwen-tiered-reasoning-off-peak-test",
             [
