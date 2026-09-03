@@ -426,6 +426,36 @@ async def test_error_mode_fails_the_request_instead_of_answering_without_the_kno
 
 
 @pytest.mark.asyncio
+async def test_a_misspelled_failure_mode_annotates_instead_of_erroring_the_request(
+    registry_with: RegisterStores,
+    monkeypatch: pytest.MonkeyPatch,
+    warnings: list[logging.LogRecord],
+) -> None:
+    """Regression (LIT-6809): litellm_settings takes any value, so a typo must not become a 500."""
+    registry_with("vs-broken")
+    monkeypatch.setattr(litellm, "vector_store_search_failure_mode", "erorr")
+
+    logging_obj = FakeLoggingObj({})
+    _, messages, _ = await _run_hook(
+        VectorStorePreCallHook(
+            proxy_runtime=FakeProxyRuntime(router=RecordingRouter(failing_vector_store_ids=frozenset({"vs-broken"})))
+        ),
+        ["vs-broken"],
+        logging_obj,
+    )
+
+    assert messages[0]["content"] == "what is litellm?"
+    assert logging_obj.model_call_details["vector_store_search_failures"] == (
+        {
+            "vector_store_id": "vs-broken",
+            "custom_llm_provider": "bedrock",
+            "error": "litellm.BadRequestError: no healthy deployments for vs-broken",
+        },
+    )
+    assert any("erorr" in record.getMessage() for record in warnings)
+
+
+@pytest.mark.asyncio
 async def test_error_mode_leaves_a_fully_healthy_request_alone(
     registry_with: RegisterStores,
     monkeypatch: pytest.MonkeyPatch,
