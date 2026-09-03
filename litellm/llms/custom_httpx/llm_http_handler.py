@@ -184,7 +184,6 @@ if TYPE_CHECKING:
         AnthropicMessagesStreamingResponse,
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
-    from litellm.router import Router
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,
         CancelRunResponse,
@@ -9709,7 +9708,6 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-        router: "Router | None" = None,
     ) -> VectorStoreSearchResponse:
         if isinstance(vector_store_provider_config, BaseDirectVectorStoreConfig):
             self._pre_call_direct_vector_store_search(
@@ -9760,7 +9758,6 @@ class BaseLLMHTTPHandler:
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),
                 extra_body=extra_body,
-                router=router,
                 embedding_executor=embedding_executor,
             )
         else:
@@ -9775,7 +9772,6 @@ class BaseLLMHTTPHandler:
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),
                 extra_body=extra_body,
-                router=router,
             )
         all_optional_params: Final[dict[str, object]] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
@@ -9828,7 +9824,6 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
-        router: "Router | None" = None,
     ) -> VectorStoreSearchResponse | Coroutine[object, object, VectorStoreSearchResponse]:
         if _is_async:
             return self.async_vector_store_search_handler(
@@ -9844,7 +9839,6 @@ class BaseLLMHTTPHandler:
                 extra_body=extra_body,
                 timeout=timeout,
                 client=client,
-                router=router,
             )
 
         if isinstance(vector_store_provider_config, BaseDirectVectorStoreConfig):
@@ -9893,7 +9887,6 @@ class BaseLLMHTTPHandler:
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),
                 extra_body=extra_body,
-                router=router,
                 embedding_executor=embedding_executor,
             )
         else:
@@ -9908,7 +9901,6 @@ class BaseLLMHTTPHandler:
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),
                 extra_body=extra_body,
-                router=router,
             )
 
         all_optional_params: Final[dict[str, object]] = dict(litellm_params)
