@@ -7,7 +7,7 @@ import asyncio
 import contextvars
 from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -21,8 +21,10 @@ from litellm.types.llms.openai_evals import (
     CancelRunResponse,
     CreateEvalRequest,
     CreateRunRequest,
+    DataSourceConfig,
     DeleteEvalResponse,
     Eval,
+    GraderConfig,
     ListEvalsParams,
     ListEvalsResponse,
     ListRunsParams,
@@ -41,13 +43,13 @@ DEFAULT_OPENAI_API_BASE: Final = "https://api.openai.com"
 
 @client
 async def acreate_eval(
-    data_source_config: dict[str, Any],
-    testing_criteria: list[dict[str, Any]],
+    data_source_config: DataSourceConfig,
+    testing_criteria: list[GraderConfig],
     name: str | None = None,
-    metadata: dict[str, Any] | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    metadata: dict[str, object] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -110,17 +112,17 @@ async def acreate_eval(
 
 @client
 def create_eval(
-    data_source_config: dict[str, Any],
-    testing_criteria: list[dict[str, Any]],
+    data_source_config: DataSourceConfig,
+    testing_criteria: list[GraderConfig],
     name: str | None = None,
-    metadata: dict[str, Any] | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    metadata: dict[str, object] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Eval | Coroutine[Any, Any, Eval]:
+) -> Eval | Coroutine[object, object, Eval]:
     """
     Create a new evaluation
 
@@ -231,8 +233,8 @@ async def alist_evals(
     before: str | None = None,
     order: str | None = None,
     order_by: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -300,12 +302,12 @@ def list_evals(
     before: str | None = None,
     order: str | None = None,
     order_by: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> ListEvalsResponse | Coroutine[Any, Any, ListEvalsResponse]:
+) -> ListEvalsResponse | Coroutine[object, object, ListEvalsResponse]:
     """
     List all evaluations
 
@@ -413,8 +415,8 @@ def list_evals(
 @client
 async def aget_eval(
     eval_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -470,12 +472,12 @@ async def aget_eval(
 @client
 def get_eval(
     eval_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Eval | Coroutine[Any, Any, Eval]:
+) -> Eval | Coroutine[object, object, Eval]:
     """
     Get an evaluation by ID
 
@@ -564,10 +566,10 @@ def get_eval(
 async def aupdate_eval(
     eval_id: str,
     name: str | None = None,
-    metadata: dict[str, Any] | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    metadata: dict[str, object] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -630,14 +632,14 @@ async def aupdate_eval(
 def update_eval(
     eval_id: str,
     name: str | None = None,
-    metadata: dict[str, Any] | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    metadata: dict[str, object] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Eval | Coroutine[Any, Any, Eval]:
+) -> Eval | Coroutine[object, object, Eval]:
     """
     Update an evaluation
 
@@ -783,8 +785,8 @@ def update_eval(
 @client
 async def adelete_eval(
     eval_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -840,12 +842,12 @@ async def adelete_eval(
 @client
 def delete_eval(
     eval_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> DeleteEvalResponse | Coroutine[Any, Any, DeleteEvalResponse]:
+) -> DeleteEvalResponse | Coroutine[object, object, DeleteEvalResponse]:
     """
     Delete an evaluation
 
@@ -933,8 +935,8 @@ def delete_eval(
 @client
 async def acancel_eval(
     eval_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -990,12 +992,12 @@ async def acancel_eval(
 @client
 def cancel_eval(
     eval_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> CancelEvalResponse | Coroutine[Any, Any, CancelEvalResponse]:
+) -> CancelEvalResponse | Coroutine[object, object, CancelEvalResponse]:
     """
     Cancel a running evaluation
 
@@ -1092,12 +1094,12 @@ def cancel_eval(
 @client
 async def acreate_run(
     eval_id: str,
-    data_source: dict[str, Any],
+    data_source: dict[str, object],
     name: str | None = None,
-    metadata: dict[str, Any] | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    metadata: dict[str, object] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -1161,16 +1163,16 @@ async def acreate_run(
 @client
 def create_run(
     eval_id: str,
-    data_source: dict[str, Any],
+    data_source: dict[str, object],
     name: str | None = None,
-    metadata: dict[str, Any] | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    metadata: dict[str, object] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Run | Coroutine[Any, Any, Run]:
+) -> Run | Coroutine[object, object, Run]:
     """
     Create a new run for an evaluation
 
@@ -1280,8 +1282,8 @@ async def alist_runs(
     after: str | None = None,
     before: str | None = None,
     order: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -1349,12 +1351,12 @@ def list_runs(
     after: str | None = None,
     before: str | None = None,
     order: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> ListRunsResponse | Coroutine[Any, Any, ListRunsResponse]:
+) -> ListRunsResponse | Coroutine[object, object, ListRunsResponse]:
     """
     List all runs for an evaluation
 
@@ -1462,8 +1464,8 @@ def list_runs(
 async def aget_run(
     eval_id: str,
     run_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -1522,12 +1524,12 @@ async def aget_run(
 def get_run(
     eval_id: str,
     run_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> Run | Coroutine[Any, Any, Run]:
+) -> Run | Coroutine[object, object, Run]:
     """
     Get a specific run
 
@@ -1618,8 +1620,8 @@ def get_run(
 async def acancel_run(
     eval_id: str,
     run_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -1678,12 +1680,12 @@ async def acancel_run(
 def cancel_run(
     eval_id: str,
     run_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> CancelRunResponse | Coroutine[Any, Any, CancelRunResponse]:
+) -> CancelRunResponse | Coroutine[object, object, CancelRunResponse]:
     """
     Cancel a running run
 
@@ -1783,8 +1785,8 @@ def cancel_run(
 async def adelete_run(
     eval_id: str,
     run_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
@@ -1843,12 +1845,12 @@ async def adelete_run(
 def delete_run(
     eval_id: str,
     run_id: str,
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> RunDeleteResponse | Coroutine[Any, Any, RunDeleteResponse]:
+) -> RunDeleteResponse | Coroutine[object, object, RunDeleteResponse]:
     """
     Delete a run
 

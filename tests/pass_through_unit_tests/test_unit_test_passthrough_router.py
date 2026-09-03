@@ -1,13 +1,10 @@
 import json
 import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
 
-sys.path.insert(0, os.path.abspath("../.."))  #
 
 import unittest
-from unittest.mock import patch
 from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
     PassthroughEndpointRouter,
 )
@@ -31,38 +28,60 @@ passthrough_endpoint_router = PassthroughEndpointRouter()
 
 class TestPassthroughEndpointRouter(unittest.TestCase):
     def setUp(self):
-        self.router = PassthroughEndpointRouter()
+        self.router = PassthroughEndpointRouter(llm_router_getter=lambda: None)
 
-    def test_set_and_get_credentials(self):
+    def test_deployment_and_get_credentials(self):
         """
         1. Basic Usage:
-            - Set credentials for OpenAI, AssemblyAI, Anthropic, Cohere
-            - GET credentials from passthrough_endpoint_router (from the memory store when available)
+            - Flag deployments for OpenAI, AssemblyAI, Anthropic, Cohere with use_in_pass_through
+            - GET credentials from passthrough_endpoint_router (resolved live from the llm router)
         """
+        import litellm
 
-        # OpenAI: standard (no region-specific logic)
-        self.router.set_pass_through_credentials("openai", None, "openai_key")
-        self.assertEqual(self.router.get_credentials("openai", None), "openai_key")
-
-        # AssemblyAI: using an API base that contains 'eu' should trigger regional logic.
-        api_base_eu = "https://api.eu.assemblyai.com"
-        self.router.set_pass_through_credentials(
-            "assemblyai", api_base_eu, "assemblyai_key"
+        llm_router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o",
+                        "api_key": "openai_key",
+                        "use_in_pass_through": True,
+                    },
+                },
+                {
+                    "model_name": "best",
+                    "litellm_params": {
+                        "model": "assemblyai/best",
+                        "api_key": "assemblyai_key",
+                        "api_base": "https://api.eu.assemblyai.com",
+                        "use_in_pass_through": True,
+                    },
+                },
+                {
+                    "model_name": "claude-sonnet-4-5",
+                    "litellm_params": {
+                        "model": "anthropic/claude-sonnet-4-5",
+                        "api_key": "anthropic_key",
+                        "use_in_pass_through": True,
+                    },
+                },
+                {
+                    "model_name": "embed-english-v3.0",
+                    "litellm_params": {
+                        "model": "cohere/embed-english-v3.0",
+                        "api_key": "cohere_key",
+                        "use_in_pass_through": True,
+                    },
+                },
+            ]
         )
-        # When calling get_credentials, pass the region "eu" (extracted from the API base)
-        self.assertEqual(
-            self.router.get_credentials("assemblyai", "eu"), "assemblyai_key"
-        )
+        router = PassthroughEndpointRouter(llm_router_getter=lambda: llm_router)
 
-        # Anthropic: no region set
-        self.router.set_pass_through_credentials("anthropic", None, "anthropic_key")
-        self.assertEqual(
-            self.router.get_credentials("anthropic", None), "anthropic_key"
-        )
-
-        # Cohere: no region set
-        self.router.set_pass_through_credentials("cohere", None, "cohere_key")
-        self.assertEqual(self.router.get_credentials("cohere", None), "cohere_key")
+        self.assertEqual(router.get_credentials("openai", None), "openai_key")
+        # AssemblyAI: an API base that contains 'eu' triggers regional matching
+        self.assertEqual(router.get_credentials("assemblyai", "eu"), "assemblyai_key")
+        self.assertEqual(router.get_credentials("anthropic", None), "anthropic_key")
+        self.assertEqual(router.get_credentials("cohere", None), "cohere_key")
 
     def test_get_credentials_from_env(self):
         """

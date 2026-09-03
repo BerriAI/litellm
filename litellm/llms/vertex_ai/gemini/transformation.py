@@ -250,7 +250,7 @@ def _gs_uri_requires_content_type_metadata(url: str) -> bool:
 
 
 def _image_url_payload_may_need_sync_gcs_metadata_fetch(
-    raw_image_url: Any,
+    raw_image_url: object,
 ) -> bool:
     """
     True when this image_url value (content-part image_url or assistant ``images[]``
@@ -326,7 +326,7 @@ def _openai_messages_may_need_sync_gcs_metadata_fetch(
 def _get_gcs_object_content_type(
     image_url: str,
     vertex_project: str | None = None,
-    vertex_credentials: Any | None = None,
+    vertex_credentials: object = None,
 ) -> str | None:
     """
     Resolve content type from GCS object metadata.
@@ -479,7 +479,7 @@ def _process_gemini_media(
     model: str | None = None,
     video_metadata: dict[str, Any] | None = None,
     vertex_project: str | None = None,
-    vertex_credentials: Any | None = None,
+    vertex_credentials: object = None,
 ) -> PartType:
     """
     Given a media URL (image, audio, or video), return the appropriate PartType for Gemini
@@ -645,10 +645,9 @@ def _collect_tool_call_thought_signatures(
     the text part as well would send two copies and double-bill the previous
     turn's reasoning tokens on gemini-3 and newer models.
 
-    Detection deliberately calls _get_thought_signature_from_tool without the
-    model argument: with a gemini-3 model that helper synthesizes a dummy
-    signature for unsigned tool calls, which must not suppress a real
-    text-part signature (e.g. replaying gemini-2.5 history to a newer model).
+    Only real signatures count here; a synthesized placeholder must not
+    suppress a genuine text-part signature (e.g. replaying gemini-2.5 history
+    to a newer model).
     """
     signatures: tuple[str, ...] = ()
 
@@ -1003,7 +1002,7 @@ def _gemini_convert_messages_with_history(
                     if isinstance(_ss_invocations, list):
                         for invocation in _ss_invocations:
                             # Re-inject toolCall part
-                            tc_part: dict[str, Any] = {
+                            tc_part: dict[str, object] = {
                                 "toolCall": {
                                     "toolType": invocation.get("tool_type"),
                                     "id": invocation.get("id"),
@@ -1016,13 +1015,13 @@ def _gemini_convert_messages_with_history(
 
                             # Re-inject toolResponse part if response is present
                             if "response" in invocation:
-                                tr_dict: dict[str, Any] = {
+                                tr_dict: dict[str, object] = {
                                     "id": invocation.get("id"),
                                     "response": invocation.get("response"),
                                 }
                                 if invocation.get("tool_type"):
                                     tr_dict["toolType"] = invocation["tool_type"]
-                                tr_part: dict[str, Any] = {"toolResponse": tr_dict}
+                                tr_part: dict[str, object] = {"toolResponse": tr_dict}
                                 if "response_thought_signature" in invocation:
                                     tr_part["thoughtSignature"] = invocation["response_thought_signature"]
                                 assistant_content.append(tr_part)
@@ -1091,7 +1090,7 @@ def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
                 data_dict[k] = v
 
 
-def _has_google_maps_tool(tools: Any | None) -> bool:
+def _has_google_maps_tool(tools: object) -> bool:
     """Return True if any tool object in the list has a 'googleMaps' key."""
     if not isinstance(tools, list):
         return False
@@ -1128,7 +1127,7 @@ def _rewrite_mime_type_to_response_format(generation_config: GenerationConfig) -
         schema = generation_config.pop("response_schema", None)
     generation_config.pop("response_mime_type", None)
 
-    response_format: Final[dict[str, Any]] = {"text": {"mimeType": "APPLICATION_JSON"}}
+    response_format: Final[dict[str, dict[str, object]]] = {"text": {"mimeType": "APPLICATION_JSON"}}
     if schema is not None:
         response_format["text"]["schema"] = schema
     generation_config["responseFormat"] = response_format
@@ -1317,7 +1316,7 @@ async def async_transform_request_body(
     timeout: float | httpx.Timeout | None,
     extra_headers: dict | None,
     optional_params: dict,
-    logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,
+    logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
     vertex_project: str | None,

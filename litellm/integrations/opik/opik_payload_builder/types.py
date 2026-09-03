@@ -1,7 +1,7 @@
 """Type definitions for Opik payload building."""
 
 from dataclasses import dataclass
-from typing import Any, Final, Literal, Union
+from typing import Any, Final, Literal
 
 
 @dataclass
@@ -42,5 +42,5 @@ class SpanPayload:
     total_cost: float | None = None
 
 
-PayloadItem = Union[TracePayload, SpanPayload]
+PayloadItem = TracePayload | SpanPayload
 TraceSpanPayloadTuple: Final = tuple[TracePayload | None, SpanPayload]

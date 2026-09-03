@@ -1,7 +1,7 @@
 """Provider / exporter factory + the Baggage span processor."""
 
 from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from opentelemetry import _logs, baggage, metrics
 from opentelemetry._events import EventLogger
@@ -135,14 +135,36 @@ def parse_headers(raw: str | None) -> dict[str, str]:
     return dict(parse_env_headers(raw, liberal=True))
 
 
+_IN_MEMORY_KINDS: Final = ("in_memory", "inmemory", "memory")
+_OTLP_HTTP_KINDS: Final = ("otlp_http", "http", "http/protobuf", "http/json")
+_OTLP_GRPC_KINDS: Final = ("otlp_grpc", "grpc")
+
+
+def exporter_transport(kind: str) -> Literal["http", "grpc", "headerless"]:
+    """How an exporter of this ``kind`` carries credentials, per ``_exporter_from_spec``.
+
+    ``http``/``grpc`` exporters (and any registered factory, which builds an
+    OTLP exporter) stamp ``spec.headers``; ``console``, ``in_memory``, and any
+    unrecognized kind (which falls back to a header-ignoring console exporter)
+    are ``headerless``. Routability decisions must read this rather than a
+    denylist, so a typo'd or unavailable kind is not mistaken for OTLP.
+    """
+    resolved: Final = kind.lower()
+    if resolved in _OTLP_HTTP_KINDS or resolved in _EXPORTER_FACTORIES:
+        return "http"
+    if resolved in _OTLP_GRPC_KINDS:
+        return "grpc"
+    return "headerless"
+
+
 def _exporter_from_spec(spec: ExporterSpec) -> SpanExporter:
     kind: Final = (spec.kind or "console").lower()
     factory: Final = _EXPORTER_FACTORIES.get(kind)
     if factory is not None:
         return factory(spec)
-    if kind in ("in_memory", "inmemory", "memory"):
+    if kind in _IN_MEMORY_KINDS:
         return InMemorySpanExporter()
-    if kind in ("otlp_http", "http", "http/protobuf", "http/json"):
+    if kind in _OTLP_HTTP_KINDS:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
             OTLPSpanExporter as HTTPExporter,
         )
@@ -151,7 +173,7 @@ def _exporter_from_spec(spec: ExporterSpec) -> SpanExporter:
             endpoint=_otlp_traces_endpoint(spec.endpoint),
             headers=parse_headers(spec.headers),
         )
-    if kind in ("otlp_grpc", "grpc"):
+    if kind in _OTLP_GRPC_KINDS:
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
             OTLPSpanExporter as GRPCExporter,
         )
@@ -436,6 +458,8 @@ def build_tracer_provider(
     # ``config._normalize`` guarantees at least one spec (it folds the top-level
     # ``exporter``/``endpoint``/``headers`` fields in when ``exporters`` is empty).
     for spec in config.exporters:
+        if spec.requires_headers and not spec.headers:
+            continue
         exp = _exporter_from_spec(spec)
         provider.add_span_processor(
             _processor_for(

@@ -1,12 +1,10 @@
 """Unit tests for MCP OAuth passthrough tool-fetch behavior."""
 
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
-sys.path.insert(0, "../../../../../")
 
 from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (

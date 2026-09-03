@@ -136,6 +136,8 @@ def _split_parallel_tool_calls(messages: list[AllMessageValues]) -> list[AllMess
 
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -328,6 +330,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     ) -> dict:
         is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
         mapped_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        if "claude" in model:
+            AnthropicConfig.translate_legacy_thinking_for_adaptive_model(
+                model=model, optional_params=mapped_params, custom_llm_provider="databricks"
+            )
         if "tools" in mapped_params:
             mapped_params["tools"] = self._map_openai_to_dbrx_tool(model=model, tools=mapped_params["tools"])
         if "max_completion_tokens" in non_default_params and replace_max_completion_tokens_with_max_tokens:
@@ -603,7 +609,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -733,6 +739,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                 created=chunk["created"],
                 model=chunk["model"],
                 choices=translated_choices,
+                usage=chunk.get("usage"),
             )
         except KeyError as e:
             raise DatabricksException(

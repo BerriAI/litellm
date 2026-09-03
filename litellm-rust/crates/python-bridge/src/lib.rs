@@ -1,106 +1,18 @@
-use std::collections::HashMap;
-use std::time::Duration;
+mod constants;
+mod diagnostics;
+mod errors;
+mod execution;
+pub mod function_trace;
+mod marshal;
+mod routes;
 
-use litellm_ai_gateway::io::audio_transcription::{
-    AudioTranscriptionRequest, audio_transcription as run_audio_transcription,
-};
-use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
-use litellm_core::error::CoreError;
-use litellm_core::messages::messages as run_messages;
-use litellm_core::messages::types::{AnthropicMessagesResponse, MessagesRequest};
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict};
-use serde_json::{Map, Value};
+use pyo3::types::PyAny;
+use serde_json::Value;
 
-mod gil;
-
-type MarshaledOcrInputs = (
-    Value,
-    Option<Map<String, Value>>,
-    Map<String, Value>,
-    Option<Duration>,
-);
-
-fn py_to_json(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Value> {
-    let json = py.import("json")?;
-    let encoded: String = json.call_method1("dumps", (value,))?.extract()?;
-    serde_json::from_str(&encoded).map_err(|err| PyValueError::new_err(err.to_string()))
-}
-
-fn json_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
-    let json = py.import("json")?;
-    let encoded =
-        serde_json::to_string(&value).map_err(|err| PyValueError::new_err(err.to_string()))?;
-    Ok(json.call_method1("loads", (encoded,))?.unbind())
-}
-
-fn messages_response_to_py(
-    py: Python<'_>,
-    response: AnthropicMessagesResponse,
-) -> PyResult<Py<PyAny>> {
-    let value =
-        serde_json::to_value(response).map_err(|err| PyValueError::new_err(err.to_string()))?;
-    json_to_py(py, value)
-}
-
-fn core_error_to_pyerr(err: CoreError) -> PyErr {
-    match err {
-        CoreError::Auth(message) => PyValueError::new_err(message),
-        CoreError::InvalidProvider(_)
-        | CoreError::InvalidRequest(_)
-        | CoreError::InvalidType { .. }
-        | CoreError::MissingField(_) => PyValueError::new_err(err.to_string()),
-        other => PyRuntimeError::new_err(other.to_string()),
-    }
-}
-
-fn optional_object_to_map(
-    py: Python<'_>,
-    name: &'static str,
-    value: Option<Py<PyAny>>,
-) -> PyResult<Map<String, Value>> {
-    match value {
-        Some(value) => match py_to_json(py, value.bind(py))? {
-            Value::Object(map) => Ok(map),
-            _ => Err(PyValueError::new_err(format!("{name} must be a dict"))),
-        },
-        None => Ok(Map::new()),
-    }
-}
-
-fn optional_timeout(timeout_seconds: Option<f64>) -> Option<Duration> {
-    timeout_seconds.and_then(|secs| {
-        if secs.is_finite() && secs > 0.0 {
-            Some(Duration::from_secs_f64(secs))
-        } else {
-            None
-        }
-    })
-}
-
-fn marshal_headers(
-    py: Python<'_>,
-    headers: Option<Py<PyAny>>,
-) -> PyResult<HashMap<String, String>> {
-    let value = match headers {
-        Some(headers) => py_to_json(py, headers.bind(py))?,
-        None => Value::Object(Map::new()),
-    };
-    let Value::Object(headers) = value else {
-        return Err(PyValueError::new_err("headers must be a dict"));
-    };
-    headers
-        .into_iter()
-        .map(|(name, value)| {
-            value
-                .as_str()
-                .map(|value| (name, value.to_string()))
-                .ok_or_else(|| PyValueError::new_err("header values must be strings"))
-        })
-        .collect()
-}
+use crate::errors::core_error_to_pyerr;
+use crate::marshal::{marshal_headers, optional_timeout};
 
 #[pyclass]
 struct ResponsesWebSocketConnection {
@@ -115,16 +27,16 @@ impl ResponsesWebSocketConnection {
         _cls: &Bound<'py, pyo3::types::PyType>,
         py: Python<'py>,
         url: String,
-        headers: Option<Py<PyAny>>,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] headers: Option<Value>,
         timeout_seconds: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let headers = marshal_headers(py, headers)?;
+        let headers = marshal_headers(headers)?;
         let timeout = optional_timeout(timeout_seconds);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
                 .await
                 .map_err(core_error_to_pyerr)?;
-            Python::attach(|py| Py::new(py, ResponsesWebSocketConnection { inner }))
+            Ok(ResponsesWebSocketConnection { inner })
         })
     }
 
@@ -150,302 +62,126 @@ impl ResponsesWebSocketConnection {
     }
 }
 
-fn marshal_inputs(
-    py: Python<'_>,
-    document: Py<PyAny>,
-    extra_headers: Option<Py<PyAny>>,
-    optional_params: Option<Py<PyAny>>,
-    timeout_seconds: Option<f64>,
-) -> PyResult<MarshaledOcrInputs> {
-    let document = py_to_json(py, document.bind(py))?;
-    let extra_headers = match extra_headers {
-        Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
-        None => None,
-    };
-    let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
-    let timeout = optional_timeout(timeout_seconds);
+#[pymodule(gil_used = false)]
+mod _native {
+    use pyo3::prelude::*;
 
-    Ok((document, extra_headers, optional_params, timeout))
-}
-
-#[pyfunction]
-#[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
-#[allow(clippy::too_many_arguments)]
-fn ocr(
-    py: Python<'_>,
-    model: String,
-    document: Py<PyAny>,
-    api_key: Option<String>,
-    api_base: Option<String>,
-    custom_llm_provider: Option<String>,
-    extra_headers: Option<Py<PyAny>>,
-    optional_params: Option<Py<PyAny>>,
-    timeout_seconds: Option<f64>,
-) -> PyResult<Py<PyAny>> {
-    let (document, extra_headers, optional_params, timeout) = marshal_inputs(
-        py,
-        document,
-        extra_headers,
-        optional_params,
-        timeout_seconds,
-    )?;
-
-    let result = gil::release_gil(py, || {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(run_ocr(OcrRequest {
-            model: &model,
-            document,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            optional_params,
-            timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
-            litellm_call_id: None,
-        }))
-    });
-
-    match result {
-        Ok(value) => json_to_py(py, value),
-        Err(err) => Err(core_error_to_pyerr(err)),
+    #[pymodule_init]
+    fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        super::errors::register(module)?;
+        super::routes::register(module)?;
+        module.add_class::<super::ResponsesWebSocketConnection>()?;
+        super::diagnostics::register(module)
     }
 }
 
-#[pyfunction]
-#[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
-#[allow(clippy::too_many_arguments)]
-fn aocr(
-    py: Python<'_>,
-    model: String,
-    document: Py<PyAny>,
-    api_key: Option<String>,
-    api_base: Option<String>,
-    custom_llm_provider: Option<String>,
-    extra_headers: Option<Py<PyAny>>,
-    optional_params: Option<Py<PyAny>>,
-    timeout_seconds: Option<f64>,
-) -> PyResult<Bound<'_, PyAny>> {
-    let (document, extra_headers, optional_params, timeout) = marshal_inputs(
-        py,
-        document,
-        extra_headers,
-        optional_params,
-        timeout_seconds,
-    )?;
+#[cfg(test)]
+mod tests {
+    use std::ffi::CString;
+    use std::time::Duration;
 
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let value = run_ocr(OcrRequest {
-            model: &model,
-            document,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            optional_params,
-            timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
-            litellm_call_id: None,
-        })
-        .await
-        .map_err(core_error_to_pyerr)?;
+    use futures_util::{SinkExt, StreamExt};
+    use pyo3::types::PyDict;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::{accept_async, tungstenite::Message};
 
-        Python::attach(|py| json_to_py(py, value))
-    })
-}
+    use super::*;
 
-#[pyfunction]
-#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
-#[allow(clippy::too_many_arguments)]
-fn transcription(
-    py: Python<'_>,
-    model: String,
-    audio: Py<PyAny>,
-    api_key: Option<String>,
-    api_base: Option<String>,
-    custom_llm_provider: Option<String>,
-    extra_headers: Option<Py<PyAny>>,
-    optional_params: Option<Py<PyAny>>,
-    timeout_seconds: Option<f64>,
-) -> PyResult<Py<PyAny>> {
-    let audio = py_to_json(py, audio.bind(py))?;
-    let extra_headers = match extra_headers {
-        Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
-        None => None,
-    };
-    let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
-    let timeout = optional_timeout(timeout_seconds);
-    let result = gil::release_gil(py, || {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(run_audio_transcription(
-            AudioTranscriptionRequest {
-                model: &model,
-                audio,
-                api_key: api_key.as_deref(),
-                api_base: api_base.as_deref(),
-                custom_llm_provider: custom_llm_provider.as_deref(),
-                extra_headers,
-                optional_params,
-                timeout,
-                callbacks: Vec::new(),
-                guardrails: Vec::new(),
-                request_metadata: Default::default(),
-                litellm_call_id: None,
-            },
-        ))
-    });
-    match result {
-        Ok(value) => json_to_py(py, value),
-        Err(err) => Err(core_error_to_pyerr(err)),
+    #[test]
+    fn module_registration_preserves_the_public_surface() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = pyo3::wrap_pymodule!(_native)(py).into_bound(py);
+
+            let expected = [
+                "RustBridgeDeclined",
+                "RustUpstreamError",
+                "ocr",
+                "aocr",
+                "transcription",
+                "atranscription",
+                "messages",
+                "amessages",
+                "chat_completions_decline",
+                "chat_completions",
+                "achat_completions",
+                "ResponsesWebSocketConnection",
+                "gil_stats",
+            ];
+
+            let public_names: Vec<String> = module
+                .dict()
+                .keys()
+                .extract::<Vec<String>>()
+                .expect("module names should be strings")
+                .into_iter()
+                .filter(|name| !name.starts_with("__"))
+                .collect();
+            assert_eq!(public_names, expected);
+        });
     }
-}
 
-#[pyfunction]
-#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
-#[allow(clippy::too_many_arguments)]
-fn atranscription(
-    py: Python<'_>,
-    model: String,
-    audio: Py<PyAny>,
-    api_key: Option<String>,
-    api_base: Option<String>,
-    custom_llm_provider: Option<String>,
-    extra_headers: Option<Py<PyAny>>,
-    optional_params: Option<Py<PyAny>>,
-    timeout_seconds: Option<f64>,
-) -> PyResult<Bound<'_, PyAny>> {
-    let audio = py_to_json(py, audio.bind(py))?;
-    let extra_headers = match extra_headers {
-        Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
-        None => None,
-    };
-    let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
-    let timeout = optional_timeout(timeout_seconds);
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let value = run_audio_transcription(AudioTranscriptionRequest {
-            model: &model,
-            audio,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            optional_params,
-            timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
-            litellm_call_id: None,
-        })
-        .await
-        .map_err(core_error_to_pyerr)?;
-        Python::attach(|py| json_to_py(py, value))
-    })
-}
+    #[test]
+    fn responses_websocket_connection_round_trips_through_python() {
+        Python::initialize();
+        let runtime = pyo3_async_runtimes::tokio::get_runtime();
+        let listener = runtime
+            .block_on(TcpListener::bind("127.0.0.1:0"))
+            .expect("listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("listener should have an address");
+        let server = runtime.spawn(async move {
+            let (stream, _) = listener.accept().await.expect("server should accept");
+            let mut socket = accept_async(stream)
+                .await
+                .expect("handshake should succeed");
 
-type MarshaledMessagesInputs = (Value, Option<Map<String, Value>>, Option<Duration>);
+            let message = socket
+                .next()
+                .await
+                .expect("client should send a frame")
+                .expect("client frame should be valid");
+            assert_eq!(message, Message::Text("from-python".into()));
+            socket
+                .send(Message::Text("from-server".into()))
+                .await
+                .expect("server should reply");
+            assert!(matches!(socket.next().await, Some(Ok(Message::Close(_)))));
+        });
 
-fn marshal_messages_inputs(
-    py: Python<'_>,
-    body: Py<PyAny>,
-    extra_headers: Option<Py<PyAny>>,
-    timeout_seconds: Option<f64>,
-) -> PyResult<MarshaledMessagesInputs> {
-    let body = py_to_json(py, body.bind(py))?;
-    if !body.is_object() {
-        return Err(PyValueError::new_err("body must be a dict"));
+        Python::attach(|py| {
+            let module = pyo3::wrap_pymodule!(_native)(py).into_bound(py);
+            let locals = PyDict::new(py);
+            locals
+                .set_item("native", &module)
+                .expect("module should enter Python locals");
+            locals
+                .set_item("url", format!("ws://{address}"))
+                .expect("URL should enter Python locals");
+            let code = CString::new(
+                r#"
+import asyncio
+
+async def exercise():
+    connection = await native.ResponsesWebSocketConnection.connect(url)
+    assert type(connection) is native.ResponsesWebSocketConnection
+    await connection.send_text("from-python")
+    assert await connection.recv_text() == "from-server"
+    await connection.close()
+    assert await connection.recv_text() is None
+
+asyncio.run(asyncio.wait_for(exercise(), timeout=5))
+"#,
+            )
+            .expect("Python source should not contain null bytes");
+            py.run(&code, Some(&locals), Some(&locals))
+                .expect("Python WebSocket methods should round trip");
+        });
+
+        runtime
+            .block_on(async { tokio::time::timeout(Duration::from_secs(5), server).await })
+            .expect("server should finish")
+            .expect("server task should not panic");
     }
-    let extra_headers = match extra_headers {
-        Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
-        None => None,
-    };
-    Ok((body, extra_headers, optional_timeout(timeout_seconds)))
-}
-
-#[pyfunction]
-#[pyo3(signature = (model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
-#[allow(clippy::too_many_arguments)]
-fn messages(
-    py: Python<'_>,
-    model: String,
-    body: Py<PyAny>,
-    api_key: Option<String>,
-    api_base: Option<String>,
-    custom_llm_provider: Option<String>,
-    extra_headers: Option<Py<PyAny>>,
-    timeout_seconds: Option<f64>,
-) -> PyResult<Py<PyAny>> {
-    let (body, extra_headers, timeout) =
-        marshal_messages_inputs(py, body, extra_headers, timeout_seconds)?;
-
-    let result = gil::release_gil(py, || {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(run_messages(MessagesRequest {
-            model: &model,
-            body,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            timeout,
-        }))
-    });
-
-    match result {
-        Ok(response) => messages_response_to_py(py, response),
-        Err(err) => Err(core_error_to_pyerr(err)),
-    }
-}
-
-#[pyfunction]
-#[pyo3(signature = (model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
-#[allow(clippy::too_many_arguments)]
-fn amessages(
-    py: Python<'_>,
-    model: String,
-    body: Py<PyAny>,
-    api_key: Option<String>,
-    api_base: Option<String>,
-    custom_llm_provider: Option<String>,
-    extra_headers: Option<Py<PyAny>>,
-    timeout_seconds: Option<f64>,
-) -> PyResult<Bound<'_, PyAny>> {
-    let (body, extra_headers, timeout) =
-        marshal_messages_inputs(py, body, extra_headers, timeout_seconds)?;
-
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let response = run_messages(MessagesRequest {
-            model: &model,
-            body,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            timeout,
-        })
-        .await
-        .map_err(core_error_to_pyerr)?;
-
-        Python::attach(|py| messages_response_to_py(py, response))
-    })
-}
-
-#[pyfunction]
-fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
-    let stats = PyDict::new(py);
-    stats.set_item("releases", gil::release_count())?;
-    Ok(stats.into_any().unbind())
-}
-
-#[pymodule]
-fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(ocr, module)?)?;
-    module.add_function(wrap_pyfunction!(aocr, module)?)?;
-    module.add_function(wrap_pyfunction!(transcription, module)?)?;
-    module.add_function(wrap_pyfunction!(atranscription, module)?)?;
-    module.add_function(wrap_pyfunction!(messages, module)?)?;
-    module.add_function(wrap_pyfunction!(amessages, module)?)?;
-    module.add_class::<ResponsesWebSocketConnection>()?;
-    module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
-    Ok(())
 }

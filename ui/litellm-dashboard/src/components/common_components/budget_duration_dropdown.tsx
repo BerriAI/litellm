@@ -1,34 +1,52 @@
 import React from "react";
-import { Select } from "antd";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-const { Option } = Select;
+export const NEVER_RESETS_BUDGET_DURATION = "none";
+
+const DURATION_LABELS: Record<string, string> = {
+  [NEVER_RESETS_BUDGET_DURATION]: "Never resets",
+  "1h": "hourly",
+  "24h": "daily",
+  "7d": "weekly",
+  "30d": "monthly",
+};
 
 interface BudgetDurationDropdownProps {
+  id?: string;
   value?: string | null;
-  onChange?: (value: string) => void;
+  onChange?: (value: string | undefined) => void;
   className?: string;
   style?: React.CSSProperties;
+  placeholder?: string;
+  showNeverResets?: boolean;
 }
 
 const BudgetDurationDropdown: React.FC<BudgetDurationDropdownProps> = ({
+  id,
   value,
   onChange,
   className = "",
   style = {},
+  placeholder = "n/a",
+  showNeverResets = false,
 }) => {
   return (
     <Select
-      style={{ width: "100%", ...style }}
-      value={value || undefined}
-      onChange={onChange}
-      className={className}
-      placeholder="n/a"
-      allowClear
+      items={DURATION_LABELS}
+      value={value || null}
+      onValueChange={(next: string | null) => onChange?.(next ?? undefined)}
     >
-      <Option value="1h">hourly</Option>
-      <Option value="24h">daily</Option>
-      <Option value="7d">weekly</Option>
-      <Option value="30d">monthly</Option>
+      <SelectTrigger id={id} className={`w-full ${className}`} style={style}>
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={null}>{placeholder}</SelectItem>
+        {showNeverResets ? <SelectItem value={NEVER_RESETS_BUDGET_DURATION}>Never resets</SelectItem> : null}
+        <SelectItem value="1h">hourly</SelectItem>
+        <SelectItem value="24h">daily</SelectItem>
+        <SelectItem value="7d">weekly</SelectItem>
+        <SelectItem value="30d">monthly</SelectItem>
+      </SelectContent>
     </Select>
   );
 };

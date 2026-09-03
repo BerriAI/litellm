@@ -5,12 +5,10 @@ This module tests that tool metadata is preserved when creating prefixed tools,
 which is critical for ChatGPT UI widget rendering.
 """
 
-import sys
 
 import pytest
 
 # Add the parent directory to the path so we can import litellm
-sys.path.insert(0, "../../../../../")
 
 from mcp.types import Tool as MCPTool
 

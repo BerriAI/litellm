@@ -20,7 +20,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
+from collections.abc import Awaitable, Callable
 from typing import List, Optional, Union
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -31,6 +33,7 @@ from typing_extensions import TypedDict
 
 import litellm.proxy.proxy_server as ps
 from litellm.proxy.proxy_server import (
+    ProxyStartupEvent,
     _initialize_shared_aiohttp_session,
     _resolve_pydantic_type,
     _resolve_typed_dict_type,
@@ -124,6 +127,66 @@ async def test_proxy_shutdown_event_disconnects_prisma_and_resets(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monkeypatch):
+    """
+    The gateway request fold lives in memory, so shutdown drains it to the database.
+
+    That drain has to happen while prisma is still connected: a write attempted
+    after ``disconnect()`` raises ClientNotConnectedError, the flush swallows it
+    and merges the counts back onto an accumulator the process is about to
+    discard, and the final interval is lost silently on every restart. Ordering is
+    the whole behavior here, so assert the order rather than that both ran.
+    """
+    calls: list = []  # mutable-ok: records call order, which is the assertion
+
+    fake_prisma = MagicMock()
+    fake_prisma.disconnect = AsyncMock(side_effect=lambda: calls.append("disconnect"))
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+
+    async def _record_flush(client, accumulator):
+        calls.append("flush")
+        assert client is fake_prisma
+
+    monkeypatch.setattr(ps, "flush_gateway_requests", _record_flush, raising=False)
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    await proxy_shutdown_event()
+
+    assert calls == ["flush", "disconnect"]
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_skips_gateway_flush_without_a_database(monkeypatch):
+    """No prisma client means nothing to drain to, and no attempt is made."""
+    flush = AsyncMock()
+    monkeypatch.setattr(ps, "flush_gateway_requests", flush, raising=False)
+    monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    await proxy_shutdown_event()
+
+    assert flush.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_proxy_shutdown_event_prisma_disconnect_raises_error(monkeypatch):
     fake_prisma = MagicMock()
     fake_prisma.disconnect = AsyncMock(side_effect=RuntimeError("db gone"))
@@ -140,6 +203,50 @@ async def test_proxy_shutdown_event_prisma_disconnect_raises_error(monkeypatch):
 
     with pytest.raises(RuntimeError, match="db gone"):
         await proxy_shutdown_event()
+
+
+# ---------------------------------------------------------------------------
+# _flush_spend_logs_queue_on_shutdown
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_flush_spend_logs_queue_on_shutdown_drains_before_disconnect(monkeypatch):
+    fake_prisma = MagicMock()
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    drain = AsyncMock()
+    import litellm.proxy.utils as utils_mod
+
+    monkeypatch.setattr(utils_mod, "drain_spend_logs_queue", drain)
+
+    await ps._flush_spend_logs_queue_on_shutdown()
+
+    observed = {
+        "drain_calls": drain.await_count,
+        "drain_prisma": drain.await_args.kwargs["prisma_client"] is fake_prisma,
+    }
+    assert observed == {
+        "drain_calls": 1,
+        "drain_prisma": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_flush_spend_logs_queue_on_shutdown_swallows_drain_errors(monkeypatch):
+    monkeypatch.setattr(ps, "prisma_client", MagicMock(), raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm.proxy.utils as utils_mod
+
+    monkeypatch.setattr(
+        utils_mod,
+        "drain_spend_logs_queue",
+        AsyncMock(side_effect=RuntimeError("db gone")),
+    )
+
+    await ps._flush_spend_logs_queue_on_shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -335,9 +442,7 @@ def test__redact_worker_config_for_logging_masks_nested_secret_fields():
                 "database_url": nested_db_url,
                 "database_extra_connection_params": {"password": nested_extra_pw},
                 "alert_to_webhook_url": {"budget_alerts": nested_webhook},
-                "pass_through_endpoints": [
-                    {"path": "/up", "headers": {"Authorization": nested_bearer}}
-                ],
+                "pass_through_endpoints": [{"path": "/up", "headers": {"Authorization": nested_bearer}}],
             }
         }
     }
@@ -389,16 +494,13 @@ def test_load_from_azure_key_vault_disabled_no_side_effect(monkeypatch):
     import litellm
 
     sentinel_secret_mgr = object()
-    monkeypatch.setattr(
-        litellm, "secret_manager_client", sentinel_secret_mgr, raising=False
-    )
+    monkeypatch.setattr(litellm, "secret_manager_client", sentinel_secret_mgr, raising=False)
 
     result = load_from_azure_key_vault(use_azure_key_vault=False)
 
     observed = {
         "return_value": result,
-        "secret_manager_unchanged": litellm.secret_manager_client
-        is sentinel_secret_mgr,
+        "secret_manager_unchanged": litellm.secret_manager_client is sentinel_secret_mgr,
         "called_with": False,
     }
     assert normalize(observed) == {
@@ -422,8 +524,9 @@ def test_load_from_azure_key_vault_missing_uri_failure_is_swallowed(monkeypatch)
 # ---------------------------------------------------------------------------
 
 
-def test_cost_tracking_adds_two_callbacks_when_prisma_set(monkeypatch):
+def test_cost_tracking_adds_db_and_shadow_eval_callbacks_when_prisma_set(monkeypatch):
     import litellm
+    from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
     fake_prisma = MagicMock()
     monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
@@ -434,15 +537,18 @@ def test_cost_tracking_adds_two_callbacks_when_prisma_set(monkeypatch):
     before_async = len(litellm._async_success_callback)
 
     cost_tracking()
+    cost_tracking()
 
     observed = {
         "added_to_callbacks": len(litellm.callbacks) - before_callbacks,
         "added_to_async_success": len(litellm._async_success_callback) - before_async,
+        "shadow_eval_loggers": sum(isinstance(cb, ShadowEvalLogger) for cb in litellm.callbacks),
         "prisma_was_set": True,
     }
     assert normalize(observed) == {
-        "added_to_callbacks": 1,
+        "added_to_callbacks": 2,
         "added_to_async_success": 1,
+        "shadow_eval_loggers": 1,
         "prisma_was_set": True,
     }
 
@@ -552,9 +658,7 @@ def test_get_litellm_model_info_uses_base_model_for_lookup(monkeypatch):
 
     observed = {
         "called_arg": (
-            fake_get.call_args.args[0]
-            if fake_get.call_args.args
-            else fake_get.call_args.kwargs.get("model")
+            fake_get.call_args.args[0] if fake_get.call_args.args else fake_get.call_args.kwargs.get("model")
         ),
         "returned_max_tokens": result.get("max_tokens"),
         "returned_cost": result.get("input_cost_per_token"),
@@ -601,9 +705,7 @@ def test_run_ollama_serve_invokes_subprocess_popen(monkeypatch):
 
 def test_run_ollama_serve_popen_failure_is_swallowed(monkeypatch):
     """Popen raising OSError must NOT propagate — function logs and returns."""
-    monkeypatch.setattr(
-        ps.subprocess, "Popen", MagicMock(side_effect=OSError("no ollama binary"))
-    )
+    monkeypatch.setattr(ps.subprocess, "Popen", MagicMock(side_effect=OSError("no ollama binary")))
 
     result = run_ollama_serve()
     assert result is None
@@ -623,8 +725,7 @@ async def test_proxy_startup_event_is_async_context_manager_with_expected_signat
     observed = {
         "param_count": len(sig.parameters),
         "has_app_param": "app" in sig.parameters,
-        "wrapped_is_async": inspect.iscoroutinefunction(wrapped)
-        or inspect.isasyncgenfunction(wrapped),
+        "wrapped_is_async": inspect.iscoroutinefunction(wrapped) or inspect.isasyncgenfunction(wrapped),
         "has_asynccontextmanager_wrapper": wrapped is not None,
     }
     assert normalize(observed) == {
@@ -668,3 +769,211 @@ def test_otel_global_provider_published_after_callback_init():
         "preset logger will not exist yet and a second generic logger will own "
         "the global provider, orphaning gen-ai spans"
     )
+
+
+def test_startup_warns_for_global_budget_without_database(caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_budget_without_db(max_budget=100.0, prisma_client=None)
+
+    assert "litellm.max_budget=100.0" in caplog.text
+    assert "will NOT be enforced" in caplog.text
+    assert "requests will never be blocked" in caplog.text
+
+
+def test_startup_does_not_warn_for_global_budget_with_database(caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_budget_without_db(max_budget=100.0, prisma_client=MagicMock())
+
+    assert "litellm.max_budget" not in caplog.text
+
+
+@pytest.mark.parametrize("max_budget", [0, None])
+def test_startup_does_not_warn_without_global_budget(caplog, max_budget):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_budget_without_db(max_budget=max_budget, prisma_client=None)
+
+    assert "litellm.max_budget" not in caplog.text
+
+
+def test_proxy_startup_event_warns_for_global_budget_without_database():
+    """Pin the lifespan call that prevents silent DB-less budgets.
+
+    The call must follow Prisma setup so DB-backed deployments do not false-positive.
+    Direct ``_warn_budget_without_db`` tests cover the warning behavior itself.
+    """
+    wrapped = getattr(proxy_startup_event, "__wrapped__", proxy_startup_event)
+    source = inspect.getsource(wrapped)
+    budget_check_pos = source.find("if prisma_client is not None and litellm.max_budget > 0:")
+    warn_pos = source.find("_warn_budget_without_db(")
+    next_startup_section_pos = source.find(
+        "await ProxyStartupEvent.initialize_scheduled_background_jobs(",
+        budget_check_pos,
+    )
+
+    assert budget_check_pos != -1, "global budget startup block not found"
+    assert warn_pos != -1, "DB-less budget warning call not found"
+    assert next_startup_section_pos != -1, "startup section after budget block not found"
+    assert budget_check_pos < warn_pos < next_startup_section_pos, (
+        "DB-less budget warning must run after Prisma setup and the DB-backed budget block"
+    )
+
+
+# ---------------------------------------------------------------------------
+# _initialize_slack_alerting_jobs — spend-report pod locking (issue #14809)
+# ---------------------------------------------------------------------------
+
+SlackAlertingJobs = dict[str, Callable[[], Awaitable[None]]]
+
+
+def _make_slack_alerting_proxy_logging(acquire_lock_result: bool | None) -> MagicMock:
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.slack_alerting_instance.alerting = ["slack"]
+    proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report = AsyncMock()
+    proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report = AsyncMock()
+    proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus = AsyncMock()
+    pod_lock_manager = proxy_logging_obj.db_spend_update_writer.pod_lock_manager
+    pod_lock_manager.acquire_lock = AsyncMock(return_value=acquire_lock_result)
+    pod_lock_manager.release_lock = AsyncMock()
+    return proxy_logging_obj
+
+
+async def _init_slack_alerting_jobs(
+    acquire_lock_result: bool | None,
+    spend_report_frequency: str = "7d",
+) -> tuple[SlackAlertingJobs, MagicMock]:
+    scheduler = MagicMock()
+    proxy_logging_obj = _make_slack_alerting_proxy_logging(acquire_lock_result)
+
+    await ProxyStartupEvent._initialize_slack_alerting_jobs(
+        scheduler=scheduler,
+        general_settings={"spend_report_frequency": spend_report_frequency},
+        proxy_logging_obj=proxy_logging_obj,
+        prisma_client=MagicMock(),
+    )
+
+    jobs = {call.kwargs["id"]: call.args[0] for call in scheduler.add_job.call_args_list}
+    return jobs, proxy_logging_obj
+
+
+@pytest.mark.parametrize("spend_report_frequency", ["0d", "-1d", "7h"])
+@pytest.mark.asyncio
+async def test_initialize_slack_alerting_jobs_invalid_frequency_raises(spend_report_frequency: str):
+    """A non-positive window used to become an every-second APScheduler interval, and now also
+    computes a negative lock TTL that expires instantly and suppresses the report for good.
+    match= is load-bearing: drop the guard and "-1d" still raises, but from duration_in_seconds."""
+    with pytest.raises(ValueError, match="positive number of days"):
+        await _init_slack_alerting_jobs(
+            acquire_lock_result=True,
+            spend_report_frequency=spend_report_frequency,
+        )
+
+
+@pytest.mark.asyncio
+async def test_weekly_spend_report_skipped_when_another_pod_holds_the_lock():
+    """regression: issue #14809 - every pod ran its own weekly spend report job."""
+    jobs, proxy_logging_obj = await _init_slack_alerting_jobs(acquire_lock_result=False)
+
+    await jobs["weekly_spend_report_job"]()
+
+    proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report.assert_not_awaited()
+    proxy_logging_obj.db_spend_update_writer.pod_lock_manager.acquire_lock.assert_awaited_once_with(
+        cronjob_id="weekly_spend_report_job",
+        ttl=7 * 86400 - 3600,
+        allow_reentrant=False,
+    )
+
+
+@pytest.mark.parametrize("acquire_lock_result", [True, None])
+@pytest.mark.asyncio
+async def test_weekly_spend_report_sent_when_the_lock_is_free_or_absent(acquire_lock_result):
+    """None means redis isn't configured; a single-pod deploy must still report."""
+    jobs, proxy_logging_obj = await _init_slack_alerting_jobs(acquire_lock_result=acquire_lock_result)
+
+    await jobs["weekly_spend_report_job"]()
+
+    proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report.assert_awaited_once_with("7d")
+
+
+@pytest.mark.asyncio
+async def test_weekly_spend_report_lock_ttl_tracks_the_configured_window():
+    """TTL is the window less an hour: long enough that no second pod re-sends inside the
+    window, short enough that the lock is gone before the next one opens. A fixed TTL would
+    break one end or the other as soon as spend_report_frequency changes."""
+    jobs, proxy_logging_obj = await _init_slack_alerting_jobs(acquire_lock_result=True, spend_report_frequency="1d")
+
+    await jobs["weekly_spend_report_job"]()
+
+    proxy_logging_obj.db_spend_update_writer.pod_lock_manager.acquire_lock.assert_awaited_once_with(
+        cronjob_id="weekly_spend_report_job",
+        ttl=86400 - 3600,
+        allow_reentrant=False,
+    )
+    proxy_logging_obj.slack_alerting_instance.send_weekly_spend_report.assert_awaited_once_with("1d")
+
+
+@pytest.mark.asyncio
+async def test_monthly_spend_report_skipped_when_another_pod_holds_the_lock():
+    jobs, proxy_logging_obj = await _init_slack_alerting_jobs(acquire_lock_result=False)
+
+    await jobs["monthly_spend_report_job"]()
+
+    proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report.assert_not_awaited()
+    proxy_logging_obj.db_spend_update_writer.pod_lock_manager.acquire_lock.assert_awaited_once_with(
+        cronjob_id="monthly_spend_report_job",
+        ttl=3600,
+        allow_reentrant=False,
+    )
+
+
+@pytest.mark.parametrize("acquire_lock_result", [True, None])
+@pytest.mark.asyncio
+async def test_monthly_spend_report_sent_when_the_lock_is_free_or_absent(acquire_lock_result):
+    jobs, proxy_logging_obj = await _init_slack_alerting_jobs(acquire_lock_result=acquire_lock_result)
+
+    await jobs["monthly_spend_report_job"]()
+
+    proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_spend_report_locks_are_never_released():
+    """The lock is a per-window marker, not a mutex: releasing it lets the next pod re-send."""
+    jobs, proxy_logging_obj = await _init_slack_alerting_jobs(acquire_lock_result=True)
+
+    await jobs["weekly_spend_report_job"]()
+    await jobs["monthly_spend_report_job"]()
+
+    proxy_logging_obj.db_spend_update_writer.pod_lock_manager.release_lock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_prometheus_fallback_stats_job_skipped_when_another_pod_holds_the_lock(monkeypatch):
+    """The boot-time send goes through the same gate, so a losing pod sends nothing at all:
+    startup and the scheduled job both stay at zero."""
+    monkeypatch.setenv("PROMETHEUS_URL", "http://prometheus.invalid")
+    jobs, proxy_logging_obj = await _init_slack_alerting_jobs(acquire_lock_result=False)
+    send_fallback_stats = proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus
+    assert send_fallback_stats.await_count == 0
+
+    await jobs["prometheus_fallback_stats_job"]()
+
+    assert send_fallback_stats.await_count == 0
+    proxy_logging_obj.db_spend_update_writer.pod_lock_manager.acquire_lock.assert_awaited_with(
+        cronjob_id="prometheus_fallback_stats_job",
+        ttl=3600,
+        allow_reentrant=False,
+    )
+    assert proxy_logging_obj.db_spend_update_writer.pod_lock_manager.acquire_lock.await_count == 2
+
+
+@pytest.mark.parametrize("acquire_lock_result", [True, None])
+@pytest.mark.asyncio
+async def test_prometheus_fallback_stats_job_runs_when_the_lock_is_free_or_absent(monkeypatch, acquire_lock_result):
+    monkeypatch.setenv("PROMETHEUS_URL", "http://prometheus.invalid")
+    jobs, proxy_logging_obj = await _init_slack_alerting_jobs(acquire_lock_result=acquire_lock_result)
+    send_fallback_stats = proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus
+    assert send_fallback_stats.await_count == 1
+
+    await jobs["prometheus_fallback_stats_job"]()
+
+    assert send_fallback_stats.await_count == 2

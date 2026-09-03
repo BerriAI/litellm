@@ -10,7 +10,7 @@ from litellm.types.guardrails import *
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 
-def can_modify_guardrails(team_obj: Optional[LiteLLM_TeamTable]) -> bool:
+def can_modify_guardrails(team_obj: LiteLLM_TeamTable | None) -> bool:
     if team_obj is None:
         return True
 

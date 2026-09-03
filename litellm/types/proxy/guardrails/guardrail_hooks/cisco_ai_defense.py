@@ -2,7 +2,7 @@
 Cisco AI Defense Guardrail Config Model
 """
 
-from typing import Final, List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -36,7 +36,7 @@ class CiscoAIDefenseRule(BaseModel):
     rule_name: CISCO_AI_DEFENSE_RULE_NAMES = Field(
         description="The canonical Cisco AI Defense rule name to evaluate.",
     )
-    entity_types: Optional[List[str]] = Field(
+    entity_types: list[str] | None = Field(
         default=None,
         description=(
             "Optional list of entity types for the rule (e.g. 'Email Address', "
@@ -60,7 +60,7 @@ class CiscoAIDefenseGuardrailConfigModelOptionalParams(BaseModel):
             "two guardrails to scan both chat and MCP traffic."
         ),
     )
-    inspect_path: Optional[str] = Field(
+    inspect_path: str | None = Field(
         default=None,
         description=(
             "Override for the inspection endpoint path. Defaults to "
@@ -68,7 +68,7 @@ class CiscoAIDefenseGuardrailConfigModelOptionalParams(BaseModel):
             "/api/v1/inspect/mcp when inspection_type='mcp'."
         ),
     )
-    enabled_rules: Optional[List[CiscoAIDefenseRule]] = Field(
+    enabled_rules: list[CiscoAIDefenseRule] | None = Field(
         default=None,
         description=(
             "Explicit list of Cisco AI Defense rules to evaluate. If omitted, "
@@ -76,23 +76,23 @@ class CiscoAIDefenseGuardrailConfigModelOptionalParams(BaseModel):
             "UI are used."
         ),
     )
-    integration_profile_id: Optional[str] = Field(
+    integration_profile_id: str | None = Field(
         default=None,
         description="Integration profile id to apply (advanced).",
     )
-    integration_profile_version: Optional[str] = Field(
+    integration_profile_version: str | None = Field(
         default=None,
         description="Integration profile version to apply (advanced).",
     )
-    integration_tenant_id: Optional[str] = Field(
+    integration_tenant_id: str | None = Field(
         default=None,
         description="Integration tenant id to apply (advanced).",
     )
-    integration_type: Optional[str] = Field(
+    integration_type: str | None = Field(
         default=None,
         description="Integration type to apply (advanced).",
     )
-    on_flagged_action: Optional[str] = Field(
+    on_flagged_action: str | None = Field(
         default="block",
         description=(
             "Action to take when Cisco AI Defense flags content. 'block' raises "
@@ -100,7 +100,7 @@ class CiscoAIDefenseGuardrailConfigModelOptionalParams(BaseModel):
             "request continue."
         ),
     )
-    fallback_on_error: Optional[Literal["allow", "block"]] = Field(
+    fallback_on_error: Literal["allow", "block"] | None = Field(
         default="block",
         description=(
             "Behaviour when the Cisco AI Defense API is unavailable: 'allow' "
@@ -108,7 +108,7 @@ class CiscoAIDefenseGuardrailConfigModelOptionalParams(BaseModel):
             "the request (maximum security)."
         ),
     )
-    timeout: Optional[float] = Field(
+    timeout: float | None = Field(
         default=10.0,
         ge=1.0,
         le=60.0,
@@ -119,7 +119,7 @@ class CiscoAIDefenseGuardrailConfigModelOptionalParams(BaseModel):
 class CiscoAIDefenseGuardrailConfigModel(GuardrailConfigModel[CiscoAIDefenseGuardrailConfigModelOptionalParams]):
     """Configuration parameters for the Cisco AI Defense guardrail."""
 
-    api_key: Optional[str] = Field(
+    api_key: str | None = Field(
         default=None,
         description=(
             "API key for the Cisco AI Defense inspection endpoint. If "
@@ -128,7 +128,7 @@ class CiscoAIDefenseGuardrailConfigModel(GuardrailConfigModel[CiscoAIDefenseGuar
             "Both the chat and MCP endpoints use this key."
         ),
     )
-    api_base: Optional[str] = Field(
+    api_base: str | None = Field(
         default=None,
         description=(
             "Regional base URL for the Cisco AI Defense Inspection API. "

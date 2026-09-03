@@ -32,7 +32,7 @@ describe("GuardrailsMonitorView", () => {
 
     render(<GuardrailsMonitorView accessToken="test-token" />, { wrapper });
 
-    expect(await screen.findByRole("heading", { name: /Guardrails Monitor/i })).toBeDefined();
+    expect(await screen.findByRole("heading", { name: /Guardrails Monitor/i })).toBeInTheDocument();
     await waitFor(() => {
       expect(mockGetGuardrailsUsageOverview).toHaveBeenCalled();
     });
@@ -40,6 +40,6 @@ describe("GuardrailsMonitorView", () => {
 
   it("should render without crashing when accessToken is null", async () => {
     render(<GuardrailsMonitorView accessToken={null} />, { wrapper });
-    expect(await screen.findByRole("heading", { name: /Guardrails Monitor/i })).toBeDefined();
+    expect(await screen.findByRole("heading", { name: /Guardrails Monitor/i })).toBeInTheDocument();
   });
 });

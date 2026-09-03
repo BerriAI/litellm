@@ -1,13 +1,10 @@
 import asyncio
-import os
-import sys
 import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.proxy.health_endpoints._health_endpoints import (
     _aggregate_health_check_results,
@@ -624,6 +621,54 @@ async def test_perform_health_check_and_save_forwards_skip_disabled_background_f
 
     call_kwargs = mock_perform.call_args[1]
     assert call_kwargs["health_check_skip_disabled_background_models"] is True
+
+
+def test_parse_background_health_check_model_groups_unset_returns_none():
+    from litellm.proxy.health_check import parse_background_health_check_model_groups
+
+    assert parse_background_health_check_model_groups(None) is None
+    assert parse_background_health_check_model_groups({}) is None
+    assert (
+        parse_background_health_check_model_groups(
+            {"background_health_check_model_groups": None}
+        )
+        is None
+    )
+
+
+def test_parse_background_health_check_model_groups_list_returns_frozenset():
+    from litellm.proxy.health_check import parse_background_health_check_model_groups
+
+    parsed = parse_background_health_check_model_groups(
+        {"background_health_check_model_groups": ["prod-openai", "prod-claude"]}
+    )
+    assert parsed == frozenset({"prod-openai", "prod-claude"})
+
+
+@pytest.mark.parametrize("bad_value", ["prod-openai", 42, {"a": 1}, [1, 2], [None]])
+def test_parse_background_health_check_model_groups_malformed_raises(bad_value):
+    from litellm.proxy.health_check import parse_background_health_check_model_groups
+
+    with pytest.raises(ValueError, match="must be a list of model group names"):
+        parse_background_health_check_model_groups(
+            {"background_health_check_model_groups": bad_value}
+        )
+
+
+def test_filter_deployments_to_model_groups():
+    from litellm.proxy.health_check import filter_deployments_to_model_groups
+
+    model_list = [
+        {"model_name": "prod-openai", "model_info": {"id": "a"}},
+        {"model_name": "internal-claude", "model_info": {"id": "b"}},
+        {"model_name": "prod-openai", "model_info": {"id": "c"}},
+    ]
+
+    assert filter_deployments_to_model_groups(model_list, None) == tuple(model_list)
+    assert filter_deployments_to_model_groups(
+        model_list, frozenset({"prod-openai"})
+    ) == (model_list[0], model_list[2])
+    assert filter_deployments_to_model_groups(model_list, frozenset()) == ()
 
 
 if __name__ == "__main__":

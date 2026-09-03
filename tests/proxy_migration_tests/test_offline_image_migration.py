@@ -131,6 +131,48 @@ def test_migration_offline_as_non_root_uid(offline_postgres):
     )
 
 
+QUERY_ENGINE_PROBE = """
+from pathlib import Path
+from prisma.client import BINARY_PATHS
+
+for path in BINARY_PATHS.query_engine.values():
+    print(path, Path(path).exists())
+"""
+
+
+def test_baked_query_engine_paths_resolve_for_any_uid():
+    """The generated client's query engine paths survive resolution as an arbitrary uid.
+
+    prisma-python resolves the baked BINARY_PATHS eagerly, before it reads the
+    PRISMA_QUERY_ENGINE_BINARY override, and its existence check propagates
+    EACCES instead of skipping the candidate. A path baked under a build-time
+    HOME is unreadable to a different runtime uid, so client startup dies with a
+    PermissionError that no env override can rescue. Baking under the fixed,
+    world-readable /opt/prisma is what keeps that scan from raising.
+    """
+    assert IMAGE is not None
+    probe = _docker(
+        "run", "--rm", "--user", NON_ROOT_UID, "--entrypoint", "python",
+        IMAGE, "-c", QUERY_ENGINE_PROBE,
+        check=False,
+    )
+
+    assert probe.returncode == 0, (
+        f"resolving the baked query engine paths failed as uid {NON_ROOT_UID}\n"
+        f"stdout:\n{probe.stdout}\nstderr:\n{probe.stderr}"
+    )
+
+    paths = [line.split()[0] for line in probe.stdout.splitlines() if line.startswith("/")]
+    assert paths, f"the generated client baked no query engine paths\nstdout:\n{probe.stdout}"
+
+    outside = [path for path in paths if not path.startswith("/opt/prisma/")]
+    assert not outside, (
+        f"query engine paths baked outside the fixed /opt/prisma location: {outside}. "
+        "Whatever uid can read them at build time is the only uid that can start the "
+        "client, and the PRISMA_QUERY_ENGINE_BINARY override cannot recover from it."
+    )
+
+
 def test_runtime_cache_env_not_read_only():
     """No runtime cache env var may point at the world-read-only /opt/prisma bake.
 

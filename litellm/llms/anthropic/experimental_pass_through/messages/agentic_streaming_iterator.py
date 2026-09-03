@@ -6,13 +6,44 @@ yields every chunk to the caller (preserving real streaming), collects
 all bytes, and on stream exhaustion rebuilds the full Anthropic response
 to run through agentic completion hooks. If an agentic hook fires, the
 follow-up response is chained as Phase 2 of the same iterator.
+
+In hold-back mode (``hold_back=True``) chunks are buffered instead of yielded
+live, keepalive pings run whenever no other byte is ready, and then either the
+follow-up replaces the message or the buffer replays, except that a tool_use for
+a server-fulfilled tool fails the turn rather than reaching a client that cannot
+execute it.
 """
 
+import asyncio
+import contextlib
 import json
 from collections.abc import AsyncIterator
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_logger
+from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+HOLD_BACK_PING_INTERVAL_SECONDS: Final = 15.0
+SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES: Final = (
+    b"event: error\n"
+    b'data: {"type": "error", "error": {"type": "api_error", "message": '
+    b'"Server-side tool retrieval failed, so this turn could not be completed. Please retry."}}\n\n'
+)
+
+
+def is_server_fulfilled_tool_leak_error(chunk: object) -> bool:
+    return chunk == SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES
+
+
+async def _anext_or_none(iterator: AsyncIterator) -> bytes | None:
+    try:
+        return await iterator.__anext__()
+    except StopAsyncIteration:
+        return None
+
 
 # ---------------------------------------------------------------------------
 # SSE parsing helpers (module-level to keep the class lean)
@@ -153,9 +184,12 @@ class AgenticAnthropicStreamingIterator:
         messages: list[dict],
         anthropic_messages_provider_config: Any,
         anthropic_messages_optional_request_params: dict,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str,
         kwargs: dict,
+        hold_back: bool = False,
+        server_fulfilled_tool_names: frozenset[str] = frozenset(),
+        ping_interval_seconds: float = HOLD_BACK_PING_INTERVAL_SECONDS,
     ):
         self._inner = completion_stream.__aiter__()
         self._http_handler = http_handler
@@ -166,16 +200,32 @@ class AgenticAnthropicStreamingIterator:
         self._logging_obj = logging_obj
         self._custom_llm_provider = custom_llm_provider
         self._kwargs = kwargs
+        self._hold_back = hold_back
+        self._server_fulfilled_tool_names = server_fulfilled_tool_names
+        self._ping_interval_seconds = ping_interval_seconds
 
         self._collected_bytes: list[bytes] = []
         self._stream_exhausted = False
         self._hook_processing_done = False
         self._follow_up_iterator: AsyncIterator | None = None
+        self._drain_task: asyncio.Task | None = None
+        self._hook_task: asyncio.Task | None = None
+        self._follow_up_chunk_task: asyncio.Task | None = None
+        self._replay_index = 0
+        self._error_emitted = False
+
+    @property
+    def has_buffered_provider_output(self) -> bool:
+        """Whether provider output was received but withheld from the client behind keepalive pings."""
+        return self._hold_back and bool(self._collected_bytes)
 
     def __aiter__(self):
         return self
 
     async def __anext__(self) -> bytes:
+        if self._hold_back:
+            return await self._anext_held_back()
+
         # Phase 1: yield from upstream, collect bytes
         if not self._stream_exhausted:
             try:
@@ -194,11 +244,102 @@ class AgenticAnthropicStreamingIterator:
 
         raise StopAsyncIteration
 
+    async def _drain_upstream(self) -> None:
+        try:
+            while True:
+                self._collected_bytes.append(await self._inner.__anext__())
+        except StopAsyncIteration:
+            return
+
+    async def _completed_within_ping_interval(self, task: asyncio.Task) -> bool:
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=self._ping_interval_seconds)
+        except asyncio.TimeoutError:
+            return False
+        return True
+
+    async def _anext_held_back(self) -> bytes:
+        if self._drain_task is None:
+            self._drain_task = asyncio.create_task(self._drain_upstream())
+            return STREAM_SSE_KEEPALIVE_PING_BYTES
+
+        if not self._stream_exhausted:
+            if not await self._completed_within_ping_interval(self._drain_task):
+                return STREAM_SSE_KEEPALIVE_PING_BYTES
+            self._stream_exhausted = True
+
+        if self._hook_task is None:
+            self._hook_task = asyncio.create_task(self._process_agentic_hooks())
+        if not await self._completed_within_ping_interval(self._hook_task):
+            return STREAM_SSE_KEEPALIVE_PING_BYTES
+
+        if self._follow_up_iterator is not None:
+            return await self._next_follow_up_chunk(self._follow_up_iterator)
+
+        if self._buffer_holds_server_fulfilled_tool_use():
+            if self._error_emitted:
+                raise StopAsyncIteration
+            self._error_emitted = True
+            verbose_logger.error(
+                "AgenticStreamingIterator: hooks did not replace a message containing a server-fulfilled "
+                "tool_use [model=%s]; emitting an SSE error instead of leaking the tool call to the client",
+                self._model,
+            )
+            return SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES
+
+        if self._replay_index < len(self._collected_bytes):
+            chunk: Final = self._collected_bytes[self._replay_index]
+            self._replay_index += 1
+            return chunk
+
+        raise StopAsyncIteration
+
+    async def _next_follow_up_chunk(self, follow_up_iterator: AsyncIterator) -> bytes:
+        if self._follow_up_chunk_task is None:
+            self._follow_up_chunk_task = asyncio.create_task(_anext_or_none(follow_up_iterator))
+        if not await self._completed_within_ping_interval(self._follow_up_chunk_task):
+            return STREAM_SSE_KEEPALIVE_PING_BYTES
+        chunk: Final = self._follow_up_chunk_task.result()
+        self._follow_up_chunk_task = None
+        if chunk is None:
+            raise StopAsyncIteration
+        return chunk
+
+    def _buffer_holds_server_fulfilled_tool_use(self) -> bool:
+        if not self._server_fulfilled_tool_names:
+            return False
+        started_blocks: Final = (
+            data.get("content_block")
+            for event_type, data in _parse_sse_events(b"".join(self._collected_bytes))
+            if event_type == "content_block_start"
+        )
+        return any(
+            isinstance(block, dict)
+            and block.get("type") == "tool_use"
+            and block.get("name") in self._server_fulfilled_tool_names
+            for block in started_blocks
+        )
+
+    @staticmethod
+    async def _settle_task(task: asyncio.Task | None) -> None:
+        if task is None:
+            return
+        if task.done():
+            if not task.cancelled():
+                task.exception()
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
     async def aclose(self) -> None:
         from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
             aclose_if_supported,
         )
 
+        await self._settle_task(self._drain_task)
+        await self._settle_task(self._hook_task)
+        await self._settle_task(self._follow_up_chunk_task)
         await aclose_if_supported(self._inner)
         await aclose_if_supported(self._follow_up_iterator)
 
@@ -216,11 +357,6 @@ class AgenticAnthropicStreamingIterator:
             if rebuilt is None:
                 verbose_logger.debug("AgenticStreamingIterator: Could not rebuild response from SSE bytes")
                 return
-
-            [
-                (f"{b.get('type')}({b.get('name', '')})" if b.get("type") == "tool_use" else b.get("type"))
-                for b in rebuilt.get("content", [])
-            ]
 
             result: Final = await self._http_handler._call_agentic_completion_hooks(
                 response=rebuilt,

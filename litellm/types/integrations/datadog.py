@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Final, Optional
+from typing import Final
 
 from typing_extensions import NotRequired, TypedDict
 
@@ -40,12 +40,10 @@ class DatadogInitParams(StandardCustomLoggerInitParams):
     Params for initializing a DataDog logger on litellm
     """
 
-    pass
-
 
 class DatadogProxyFailureHookJsonMessage(TypedDict, total=False):
     exception: str
     error_class: str
-    status_code: Optional[int]
+    status_code: int | None
     traceback: str
     user_api_key_dict: dict
