@@ -2237,3 +2237,55 @@ class TestStreamingScanDedup:
 
         assert out == chunks
         assert [scan["texts"] for scan in guardrail.scans] == [["abc"]]
+
+
+class TestTranslationMappingsAreReadLive:
+    """The hooks must read the handler map on every call, never memoize it on the module.
+
+    A second module-level cache is what let one test's handler map outlive its own
+    teardown and decide how unrelated files translated their streams (LIT-6834).
+    """
+
+    @staticmethod
+    def _ocr_request(guardrail):
+        return {
+            "guardrail_to_apply": guardrail,
+            "model": "mistral/mistral-ocr-latest",
+            "document": {
+                "type": "document_url",
+                "document_url": "https://arxiv.org/pdf/2201.04234",
+            },
+        }
+
+    async def _run_pre_call(self, guardrail):
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            cache=DualCache(),
+            data=self._ocr_request(guardrail),
+            call_type=CallTypes.aocr.value,
+        )
+
+    @pytest.mark.asyncio
+    async def test_remapping_between_calls_changes_which_handler_runs(self, monkeypatch):
+        _patch_translation_mappings(monkeypatch, {CallTypes.completion: _NoopTranslation})
+        unmapped = RecordingGuardrail()
+        await self._run_pre_call(unmapped)
+        assert unmapped.apply_calls == []
+
+        _patch_translation_mappings(monkeypatch, {CallTypes.aocr: OCRHandler})
+        mapped = RecordingGuardrail()
+        await self._run_pre_call(mapped)
+        assert [call["input_type"] for call in mapped.apply_calls] == ["request"]
+
+    @pytest.mark.asyncio
+    async def test_module_exposes_no_second_assignable_handler_map(self, monkeypatch):
+        _patch_translation_mappings(monkeypatch, {CallTypes.aocr: OCRHandler})
+        guardrail = RecordingGuardrail()
+        await self._run_pre_call(guardrail)
+
+        assert len(guardrail.apply_calls) == 1
+        assert not [
+            name
+            for name, value in vars(unified_module).items()
+            if isinstance(value, dict) and CallTypes.aocr in value
+        ]
