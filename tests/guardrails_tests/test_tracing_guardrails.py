@@ -865,6 +865,15 @@ def test_guardrail_status_fields_computation():
             "guardrail_intervened",
             id="unknown_status_does_not_mask_blocker",
         ),
+        pytest.param(
+            "failure",
+            [
+                {"guardrail_status": {"unhashable": True}},
+                {"guardrail_status": "guardrail_intervened"},
+            ],
+            "guardrail_intervened",
+            id="unhashable_status_is_skipped",
+        ),
     ],
 )
 def test_guardrail_status_fields_severity_across_entries(

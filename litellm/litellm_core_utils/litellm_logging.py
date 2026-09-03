@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
@@ -5866,12 +5866,13 @@ def _get_status_fields(
         "guardrail_intervened",
     )
     entries: Final[Sequence[object]] = guardrail_information if isinstance(guardrail_information, list) else ()
+    raw_statuses: Final[Iterator[object]] = (
+        entry.get("guardrail_status", "not_run") for entry in entries if isinstance(entry, dict)
+    )
+    # A guardrail is free to write any value here, and an unhashable one would
+    # raise TypeError on the mapping lookup and drop the whole payload.
     guardrail_status: Final[GuardrailStatus] = max(
-        (
-            GUARDRAIL_STATUS_MAP.get(entry.get("guardrail_status", "not_run"), "not_run")
-            for entry in entries
-            if isinstance(entry, dict)
-        ),
+        (GUARDRAIL_STATUS_MAP.get(raw_status, "not_run") for raw_status in raw_statuses if isinstance(raw_status, str)),
         key=GUARDRAIL_STATUS_SEVERITY.index,
         default="not_run",
     )
