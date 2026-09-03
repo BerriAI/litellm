@@ -914,6 +914,7 @@ async def test_mcp_get_prompt_success():
     )
     mock_manager.get_prompt_from_server.assert_awaited_once_with(
         server=server,
+        user_api_key_auth=user_api_key_auth,
         prompt_name="hello",
         arguments={"foo": "bar"},
         mcp_auth_header={"Authorization": "token"},
@@ -976,6 +977,7 @@ async def test_mcp_read_resource_success():
     )
     mock_manager.read_resource_from_server.assert_awaited_once_with(
         server=server,
+        user_api_key_auth=user_api_key_auth,
         url="https://example.com/resource",
         mcp_auth_header={"Authorization": "token"},
         extra_headers={"X-Test": "1"},
@@ -8268,7 +8270,9 @@ class TestOboPreflightScopedToAllowedServers:
 
         _, preflight = await self._run(requested, allowed=[requested], user_api_key_auth=key)
 
-        preflight.assert_awaited_once_with(server=requested, oauth2_headers=self.SUBJECT_HEADERS, user_api_key_auth=key)
+        preflight.assert_awaited_once_with(
+            server=requested, oauth2_headers=self.SUBJECT_HEADERS, user_api_key_auth=key, raw_headers=None
+        )
 
 
 @pytest.mark.asyncio
