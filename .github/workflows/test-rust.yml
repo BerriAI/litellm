@@ -10,6 +10,10 @@ on:
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
       - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
+      - "tests/test_litellm/rust_bridge/sdk_callback_wheel_test.py"
+      - "tests/test_litellm/ocr/**"
+      - "litellm/ocr/**"
+      - "litellm/rust_bridge/**"
       - ".github/workflows/test-rust.yml"
   pull_request:
     branches:
@@ -25,6 +29,10 @@ on:
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
       - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
+      - "tests/test_litellm/rust_bridge/sdk_callback_wheel_test.py"
+      - "tests/test_litellm/ocr/**"
+      - "litellm/ocr/**"
+      - "litellm/rust_bridge/**"
       - ".github/workflows/test-rust.yml"
 
 permissions:
@@ -126,3 +134,9 @@ jobs:
 
       - name: Test native route wheel
         run: python tests/test_litellm/rust_bridge/native_route_wheel_test.py dist/*.whl
+
+      - name: Test installed SDK callback parity and fallback
+        run: |
+          uv venv /tmp/ocr-callback-sdk --python python
+          uv pip install --python /tmp/ocr-callback-sdk/bin/python dist/*.whl
+          /tmp/ocr-callback-sdk/bin/python tests/test_litellm/rust_bridge/sdk_callback_wheel_test.py

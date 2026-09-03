@@ -209,11 +209,22 @@ def assert_rate_limit(native: object, route: str, error: BaseException) -> None:
         raise AssertionError(f"{route} returned the wrong 429 error: {error!r}")
 
 
+def positional_ocr_arguments(api_base: str) -> tuple[object, ...]:
+    kwargs: Final = route_kwargs("ocr", api_base, "success")
+    names: Final = (
+        "model", "document", "api_key", "api_base", "custom_llm_provider",
+        "extra_headers", "optional_params", "timeout_seconds",
+    )
+    return tuple(kwargs.get(name) for name in names)
+
+
 def exercise_sync(native: object, api_base: str) -> None:
     for route in ("ocr", "transcription", "messages", "chat_completions"):
         function: Final = getattr(native, route)
         assert_success(route, function(**route_kwargs(route, api_base, "success")))
         assert_traced_success(route, function(**route_kwargs(route, api_base, "success"), trace=True))
+        if route == "ocr":
+            assert_traced_success(route, function(*positional_ocr_arguments(api_base), True))
         try:
             function(**route_kwargs(route, api_base, "429"))
         except (RuntimeError, native.RustUpstreamError) as error:
@@ -227,6 +238,8 @@ async def exercise_async(native: object, api_base: str) -> None:
         function: Final = getattr(native, f"a{route}")
         assert_success(route, await function(**route_kwargs(route, api_base, "success")))
         assert_traced_success(route, await function(**route_kwargs(route, api_base, "success"), trace=True))
+        if route == "ocr":
+            assert_traced_success(route, await function(*positional_ocr_arguments(api_base), True))
         try:
             await function(**route_kwargs(route, api_base, "429"))
         except (RuntimeError, native.RustUpstreamError) as error:

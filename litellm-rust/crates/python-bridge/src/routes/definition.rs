@@ -9,29 +9,34 @@ macro_rules! bridge_route {
         inputs = $inputs:ident,
         required = { $($(#[$required_attr:meta])* $required_name:ident: $required_type:ty),+ $(,)? },
         optional = { $($(#[$optional_attr:meta])* $optional_name:ident: $optional_type:ty),* $(,)? },
+        $(keyword_only = { $($keyword_name:ident: $keyword_type:ty),+ $(,)? },)?
         prepare = $prepare:path,
         errors = $map_error:path
+        $(, context = $context:ident)?
         $(, extra = [$($extra:ident),* $(,)?])?
         $(,)?
     ) => {
         struct $inputs {
             $($required_name: $required_type,)*
-            $($optional_name: $optional_type),*
+            $($optional_name: $optional_type,)*
+            $($($keyword_name: $keyword_type,)*)?
         }
 
         #[pyfunction]
-        #[pyo3(signature = ($($required_name),*, $($optional_name=None,)* trace=false))]
+        #[pyo3(signature = ($($required_name),*, $($optional_name=None,)* trace=false $(, *, $($keyword_name=None),*)?))]
         #[allow(clippy::too_many_arguments)]
         fn $sync_name(
             py: pyo3::Python<'_>,
             $($(#[$required_attr])* $required_name: $required_type,)*
             $($(#[$optional_attr])* $optional_name: $optional_type,)*
             trace: bool,
+            $($($keyword_name: $keyword_type,)*)?
         ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
             let future = $prepare($inputs {
                 $($required_name,)*
-                $($optional_name),*
-            })?;
+                $($optional_name,)*
+                $($($keyword_name,)*)?
+            }, $($context { py, asynchronous: false },)?)?;
             $crate::execution::run_sync(
                 py,
                 $crate::function_trace::trace_call(future, trace),
@@ -40,18 +45,20 @@ macro_rules! bridge_route {
         }
 
         #[pyfunction]
-        #[pyo3(signature = ($($required_name),*, $($optional_name=None,)* trace=false))]
+        #[pyo3(signature = ($($required_name),*, $($optional_name=None,)* trace=false $(, *, $($keyword_name=None),*)?))]
         #[allow(clippy::too_many_arguments)]
         fn $async_name(
             py: pyo3::Python<'_>,
             $($(#[$required_attr])* $required_name: $required_type,)*
             $($(#[$optional_attr])* $optional_name: $optional_type,)*
             trace: bool,
+            $($($keyword_name: $keyword_type,)*)?
         ) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
             let future = $prepare($inputs {
                 $($required_name,)*
-                $($optional_name),*
-            })?;
+                $($optional_name,)*
+                $($($keyword_name,)*)?
+            }, $($context { py, asynchronous: true },)?)?;
             $crate::execution::run_async(
                 py,
                 $crate::function_trace::trace_call(future, trace),
@@ -164,7 +171,7 @@ mod tests {
                 (
                     "ocr",
                     "aocr",
-                    "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None, trace=False)",
+                    "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None, trace=False, *, callback_adapter=None)",
                 ),
                 (
                     "transcription",

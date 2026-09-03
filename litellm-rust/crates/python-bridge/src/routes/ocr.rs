@@ -1,15 +1,18 @@
 use litellm_core::Error;
 use std::future::Future;
 
-use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
+use litellm_ai_gateway::io::ocr::{OcrRequest, ocr_with_observer};
 use pyo3::prelude::*;
 use serde_json::Value;
 
-use crate::errors::core_error_to_pyerr;
+use crate::errors::ocr_error_to_pyerr;
+use crate::execution::PythonCallContext;
 use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
+use crate::ocr_callbacks::PythonOcrObserver;
 
 fn prepare_ocr(
     inputs: OcrInputs,
+    context: PythonCallContext<'_>,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
     let document = inputs.document;
     let options = RouteOptions::from_python(RouteOptionsInputs {
@@ -21,6 +24,7 @@ fn prepare_ocr(
         timeout_seconds: inputs.timeout_seconds,
     })?;
     let optional_params = object_or_empty("optional_params", inputs.optional_params)?;
+    let mut observer = PythonOcrObserver::new(inputs.callback_adapter, context)?;
 
     Ok(async move {
         let RouteOptions {
@@ -31,20 +35,23 @@ fn prepare_ocr(
             extra_headers,
             timeout,
         } = options;
-        run_ocr(OcrRequest {
-            model: &model,
-            document,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            optional_params,
-            timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
-            litellm_call_id: None,
-        })
+        ocr_with_observer(
+            OcrRequest {
+                model: &model,
+                document,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                optional_params,
+                timeout,
+                callbacks: Vec::new(),
+                guardrails: Vec::new(),
+                request_metadata: Default::default(),
+                litellm_call_id: None,
+            },
+            &mut observer,
+        )
         .await
     })
 }
@@ -68,6 +75,8 @@ bridge_route! {
         optional_params: Option<Value>,
         timeout_seconds: Option<f64>,
     },
+    keyword_only = { callback_adapter: Option<Py<PyAny>> },
     prepare = prepare_ocr,
-    errors = core_error_to_pyerr,
+    errors = ocr_error_to_pyerr,
+    context = PythonCallContext,
 }

@@ -8,6 +8,7 @@ from typing import Final, Protocol, cast  # noqa: TID251  # native extension exp
 import httpx
 
 from litellm.rust_bridge import configuration as _configuration
+from litellm.rust_bridge.ocr_callbacks import OcrLoggingAdapter
 from litellm.rust_bridge.timeouts import timeout_to_seconds as _timeout_to_seconds
 
 rust_ocr_enabled = _configuration.rust_ocr_enabled
@@ -25,6 +26,7 @@ class RustOcr(Protocol):
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
+        callback_adapter: OcrLoggingAdapter | None = None,
     ) -> dict[str, object]:
         raise NotImplementedError
 
@@ -40,6 +42,7 @@ class RustAocr(Protocol):
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
+        callback_adapter: OcrLoggingAdapter | None = None,
     ) -> Awaitable[dict[str, object]]:
         raise NotImplementedError
 
@@ -89,6 +92,15 @@ def load_rust_aocr() -> RustAocr | None:
     return cast(RustAocr, getattr(native_bridge, "aocr", None))
 
 
+def supports_callback_adapter(*, asynchronous: bool = False) -> bool:
+    if (_rust_aocr_impl if asynchronous else _rust_ocr_impl) is not None:
+        return False
+    from litellm.rust_bridge import get_native_bridge
+
+    native: Final = get_native_bridge()
+    return native is not None and hasattr(native, "__ocr_callback_runtime__")
+
+
 def ocr(
     *,
     model: str,
@@ -99,6 +111,7 @@ def ocr(
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
+    callback_adapter: OcrLoggingAdapter | None = None,
 ) -> dict[str, object] | None:
     rust_ocr: Final = load_rust_ocr()
     if rust_ocr is None:
@@ -112,6 +125,7 @@ def ocr(
         extra_headers=extra_headers,
         optional_params=optional_params,
         timeout_seconds=_timeout_to_seconds(timeout),
+        **({"callback_adapter": callback_adapter} if callback_adapter is not None else {}),
     )
 
 
@@ -125,6 +139,7 @@ async def aocr(
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
+    callback_adapter: OcrLoggingAdapter | None = None,
 ) -> dict[str, object] | None:
     rust_aocr: Final = load_rust_aocr()
     if rust_aocr is None:
@@ -138,4 +153,5 @@ async def aocr(
         extra_headers=extra_headers,
         optional_params=optional_params,
         timeout_seconds=_timeout_to_seconds(timeout),
+        **({"callback_adapter": callback_adapter} if callback_adapter is not None else {}),
     )

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use litellm_core::error::Error;
 use litellm_core::http_utils::has_header;
+use litellm_core::ocr::observers::{OcrObserver, OcrPostCall, OcrPreCall};
 use litellm_core::ocr::transformation::OcrResponseHandling;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -18,6 +19,141 @@ use crate::integrations::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, LogFuture, ModelCallDetails,
 };
 use crate::integrations::types::RequestMetadata;
+
+struct ProviderObserver {
+    events: Arc<Mutex<Vec<&'static str>>>,
+    raw_response: Option<String>,
+    reject: bool,
+}
+
+impl OcrObserver for ProviderObserver {
+    type Error = &'static str;
+
+    async fn pre_call(&mut self, input: &OcrPreCall) -> Result<(), Self::Error> {
+        assert_eq!(input.model, "mistral-ocr-4-1");
+        assert_eq!(
+            input.request.data["document"]["document_url"],
+            "https://example.com/document.pdf"
+        );
+        assert!(input.api_base.ends_with("/v1/ocr"));
+        assert!(
+            input
+                .headers
+                .values()
+                .any(|value| value == "Bearer test-key")
+        );
+        self.events.lock().unwrap().push("pre");
+        if self.reject {
+            Err("observer failure")
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn post_call(&mut self, input: &OcrPostCall) -> Result<(), Self::Error> {
+        self.events.lock().unwrap().push("post");
+        self.raw_response = Some(input.original_response.clone());
+        if self.reject {
+            Err("observer failure")
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn observer_request(api_base: &str) -> OcrRequest<'_> {
+    OcrRequest {
+        model: "mistral/mistral-ocr-4-1",
+        document: json!({"type":"document_url","document_url":"https://example.com/document.pdf"}),
+        api_key: Some("test-key"),
+        api_base: Some(api_base),
+        custom_llm_provider: Some("mistral"),
+        extra_headers: None,
+        optional_params: Map::new(),
+        timeout: Some(Duration::from_secs(2)),
+        callbacks: Vec::new(),
+        guardrails: Vec::new(),
+        request_metadata: RequestMetadata::default(),
+        litellm_call_id: Some("observer-test"),
+    }
+}
+
+async fn observer_case(status: u16, body: &'static str, reject: bool) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let provider_events = Arc::clone(&events);
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut socket).await;
+        assert!(request.starts_with("POST /v1/ocr "));
+        provider_events.lock().unwrap().push("http");
+        let response = format!(
+            "HTTP/1.1 {status} Test\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+    });
+    let mut observer = ProviderObserver {
+        events: Arc::clone(&events),
+        raw_response: None,
+        reject,
+    };
+    let result = super::ocr_with_observer(observer_request(&url), &mut observer).await;
+    tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .unwrap()
+        .unwrap();
+    if status != 200 {
+        assert!(matches!(result, Err(Error::Http { status: actual, .. }) if actual == status));
+        assert_eq!(*events.lock().unwrap(), ["pre", "http"]);
+        assert_eq!(observer.raw_response, None);
+    } else {
+        assert_eq!(*events.lock().unwrap(), ["pre", "http", "post"]);
+        assert_eq!(observer.raw_response.as_deref(), Some(body));
+        if body == "invalid-json" {
+            assert!(matches!(result, Err(Error::InvalidResponse(_))));
+        } else {
+            assert_eq!(result.unwrap()["pages"][0]["markdown"], "ok");
+        }
+    }
+}
+
+#[tokio::test]
+async fn provider_observers_surround_http_and_cannot_replace_its_outcome() {
+    for reject in [false, true] {
+        observer_case(200, r#"{"pages":[{"index":0,"markdown":"ok"}]}"#, reject).await;
+        observer_case(200, "invalid-json", reject).await;
+        observer_case(401, r#"{"error":"rejected"}"#, reject).await;
+    }
+}
+
+#[tokio::test]
+async fn invalid_ocr_preparation_does_not_call_observers_or_provider() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut observer = ProviderObserver {
+        events: Arc::clone(&events),
+        raw_response: None,
+        reject: false,
+    };
+    let request = OcrRequest {
+        document: json!(42),
+        ..observer_request(&url)
+    };
+    assert!(
+        super::ocr_with_observer(request, &mut observer)
+            .await
+            .is_err()
+    );
+    assert!(events.lock().unwrap().is_empty());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
+    );
+}
 
 async fn read_http_headers(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();

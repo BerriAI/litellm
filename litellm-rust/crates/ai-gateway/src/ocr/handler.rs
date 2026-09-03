@@ -1,9 +1,11 @@
 use litellm_core::error::Error;
-use litellm_core::http_utils::http_request;
+use litellm_core::ocr::handler::send_ocr_request;
+use litellm_core::ocr::observers::{OcrObserver, OcrPreCall};
 use litellm_core::ocr::transformation::OcrResponseHandling;
+use litellm_core::ocr::types::OcrRequestData;
 use serde_json::Value;
 
-use super::common_utils::{poll_document_intelligence, truncate_error_body};
+use super::common_utils::poll_document_intelligence;
 use super::hooks::OcrLifecycleHooks;
 use super::types::PreparedOcrRequest;
 use crate::client::http_client;
@@ -12,6 +14,7 @@ use crate::client::http_client;
 pub(crate) async fn execute_ocr_provider_call(
     request: PreparedOcrRequest,
     hooks: &OcrLifecycleHooks,
+    observer: &mut impl OcrObserver,
 ) -> Result<Value, Error> {
     let request = hooks.prepare_provider_request(request).await?;
     let mut request_builder = http_client().post(&request.url).json(&request.body);
@@ -22,16 +25,23 @@ pub(crate) async fn execute_ocr_provider_call(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = http_request(request_builder)
-        .await
-        .map_err(|err| Error::Network(err.to_string()))?;
+    let event = OcrPreCall {
+        model: request.model.clone(),
+        request: OcrRequestData {
+            data: request.body,
+            files: None,
+        },
+        api_base: request.url.clone(),
+        headers: request.upstream_headers.iter().cloned().collect(),
+    };
+    let response = send_ocr_request(request_builder, &event, observer).await?;
 
-    let status = response.status();
+    let status = response.status;
     if request.config.response_handling() == OcrResponseHandling::AzureDocumentIntelligencePoll
         && status.as_u16() == 202
     {
         let operation_url = response
-            .headers()
+            .headers
             .get("operation-location")
             .and_then(|value| value.to_str().ok())
             .map(str::to_string)
@@ -54,19 +64,7 @@ pub(crate) async fn execute_ocr_provider_call(
             .into_json());
     }
 
-    let text = response
-        .text()
-        .await
-        .map_err(|err| Error::Network(err.to_string()))?;
-
-    if !status.is_success() {
-        return Err(Error::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
-        });
-    }
-
-    let response_json: Value = serde_json::from_str(&text)
+    let response_json: Value = serde_json::from_str(&response.body)
         .map_err(|err| Error::InvalidResponse(format!("invalid OCR response JSON: {err}")))?;
 
     Ok(request

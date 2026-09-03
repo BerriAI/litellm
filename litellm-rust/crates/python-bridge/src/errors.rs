@@ -27,6 +27,24 @@ pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
     }
 }
 
+pub(crate) fn ocr_error_to_pyerr(err: Error) -> PyErr {
+    let status = match &err {
+        Error::Http { status, .. } => Some(*status),
+        _ => None,
+    };
+    let exception = core_error_to_pyerr(err);
+    if let Some(status) = status {
+        Python::attach(|py| {
+            if let Err(error) = exception.value(py).setattr("status_code", status) {
+                return error;
+            }
+            exception
+        })
+    } else {
+        exception
+    }
+}
+
 /// Map a core error for a route whose host keeps a Python implementation.
 ///
 /// The distinction the host needs is whether the provider was already called.
