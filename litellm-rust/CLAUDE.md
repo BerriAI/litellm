@@ -178,6 +178,8 @@ cargo fmt --check
 cargo clippy -p litellm-ai-gateway --all-targets --features server -- -D warnings
 cargo clippy -p litellm-core -p litellm-python-interop -p litellm-python-bridge --all-targets -- -D warnings
 cargo test --workspace
+# the `auth`, `routes`, `state` and `realtime` tests only exist under `server`
+cargo test -p litellm-ai-gateway --features server
 ```
 
 When a Rust path is exposed through Python, add Python parity tests that compare
