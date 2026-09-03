@@ -241,6 +241,7 @@ class Litellm_EntityType(enum.Enum):
     PROJECT = "project"
     TAG = "tag"
     AGENT = "agent"
+    MODEL_ACCESS_GROUP = "model_access_group"
 
     # global proxy level entity
     PROXY = "proxy"
@@ -421,6 +422,9 @@ class LiteLLMRoutes(enum.Enum):
         "/responses/{response_id}/cancel",
         "/v1/responses/{response_id}/cancel",
         "/openai/v1/responses/{response_id}/cancel",
+        "/responses/input_tokens",
+        "/v1/responses/input_tokens",
+        "/openai/v1/responses/input_tokens",
         # vector stores
         "/vector_stores",
         "/v1/vector_stores",
@@ -470,6 +474,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vllm",
         "/mistral",
         "/milvus",
+        "/gigachat",
         "/watsonx",
     ]
 
@@ -1211,6 +1216,13 @@ class GenerateKeyRequest(KeyRequestBase):
     organization_id: str | None = None
     project_id: str | None = None
 
+    @field_validator("team_id", mode="before")
+    @classmethod
+    def treat_cleared_team_id_as_unset(cls, v: object) -> object:
+        if v == "":
+            return None
+        return v
+
 
 class GenerateKeyResponse(KeyRequestBase):
     key: str
@@ -1405,15 +1417,15 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: str | None = Field(
-        None,
+        default=None,
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
     submitted_by: str | None = Field(
-        None,
+        default=None,
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
     submitted_at: datetime | None = Field(
-        None,
+        default=None,
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
 
@@ -2431,9 +2443,22 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     database_socket_timeout: float | None = Field(
         None,
         description=(
-            "Prisma `socket_timeout` URL param (seconds). When set, an idle/slow "
-            "connection that has not produced data within this window is closed. "
-            "This is the main knob for capping idle DB connections from LiteLLM."
+            "Prisma `socket_timeout` URL param (seconds). When set, an in-flight "
+            "operation that has not produced data within this window is aborted. "
+            "For capping how long idle pooled connections are kept, see "
+            "`database_max_idle_connection_lifetime`."
+        ),
+    )
+    database_max_idle_connection_lifetime: float | None = Field(
+        60,
+        description=(
+            "Prisma `max_idle_connection_lifetime` URL param (seconds). A pooled "
+            "connection idle longer than this is closed and replaced instead of "
+            "being handed to the next request. Defaults to 60 so connections are "
+            "recycled before common infra idle timeouts (AWS NLB / RDS Proxy "
+            "~350s, many LBs 60-350s) silently drop them and requests fail with "
+            "`Error { kind: Closed }`. A value pinned on the DATABASE_URL or set "
+            "via `database_extra_connection_params` takes precedence."
         ),
     )
     database_extra_connection_params: dict[str, Any] | None = Field(
@@ -2482,6 +2507,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     max_batch_file_size_mb: int | None = Field(
         None,
         description="max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider",
+    )
+    max_file_size_mb: int | None = Field(
+        None,
+        description="max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider",
+    )
+    blocked_file_extensions: tuple[str, ...] | None = Field(
+        None,
+        description="file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename",
     )
     max_response_size_mb: int | None = Field(
         None,
@@ -2540,7 +2573,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     alerting: list | None = Field(
         None,
-        description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",
+        description="List of alerting integrations - e.g. `alerting: ['slack', 'webhook', 'email']`. 'slack' posts Slack-format messages to any Slack-compatible webhook (Slack, Rocket.Chat, Mattermost); 'webhook' posts structured JSON budget alerts to WEBHOOK_URL",
     )
     alert_types: list[AlertType] | None = Field(
         None,
@@ -2560,6 +2593,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     reject_clientside_metadata_tags: bool | None = Field(
         None,
         description="When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.",
+    )
+    missing_session_id: Literal["generate", "reject"] | None = Field(
+        None,
+        description="What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.",
     )
     enable_public_model_hub: bool = Field(
         default=False,
@@ -2670,6 +2707,40 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     mcp_required_fields: list[str] | None = Field(
         None,
         description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",
+    )
+    password_policy_min_length: int | None = Field(
+        None,
+        description=(
+            "Minimum length required for a locally-managed user's password. Default is 12; "
+            "a value below 8 is floored to 8 rather than weakening the requirement further."
+        ),
+    )
+    password_policy_require_uppercase: bool | None = Field(
+        None,
+        description="If True (default), a locally-managed user's password must contain an uppercase letter.",
+    )
+    password_policy_require_lowercase: bool | None = Field(
+        None,
+        description="If True (default), a locally-managed user's password must contain a lowercase letter.",
+    )
+    password_policy_require_numbers: bool | None = Field(
+        None,
+        description="If True (default), a locally-managed user's password must contain a number.",
+    )
+    password_policy_require_special_characters: bool | None = Field(
+        None,
+        description="If True (default), a locally-managed user's password must contain a special (non-alphanumeric) character.",
+    )
+    disable_password_login_when_sso_enabled: bool | None = Field(
+        None,
+        description=(
+            "If True and SSO is configured (MICROSOFT_CLIENT_ID, GOOGLE_CLIENT_ID, "
+            "GENERIC_CLIENT_ID, or SAML_IDP_METADATA_URL/XML), disables username/password "
+            "login on /login, /v2/login, and /v3/login so SSO is the only way to reach the "
+            "Admin UI. An admin locked out of the UI can still administer the proxy over the "
+            "API with the master key; unset this setting and restart the proxy to restore "
+            "UI username/password login. Default is False."
+        ),
     )
     disable_budget_reservation: bool | None = Field(
         None,
@@ -2887,6 +2958,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         ),
     )
     budget_reservation: dict[str, Any] | None = Field(default=None, exclude=True)
+    matched_model_access_groups: list[str] | None = Field(default=None, exclude=True)
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
     user: Any | None = None  # Expanded user object when expand=user is used
     created_by_user: Any | None = None  # Expanded created_by user when expand=user is used
@@ -3547,6 +3619,19 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
     )
 
 
+class SpendLogsRouterMetadata(TypedDict):
+    """
+    Router provenance stamped on spend logs for deployments flagged with
+    model_info.internal_router_model, correlating the requested model group
+    with the provider deployment that served the call
+    """
+
+    requested_model: ReadOnly[str | None]
+    selected_model: ReadOnly[str | None]
+    selected_provider: ReadOnly[str | None]
+    router_correlation_id: ReadOnly[str | None]
+
+
 class SpendLogsMetadata(TypedDict):
     """
     Specific metadata k,v pairs logged to spendlogs for easier cost tracking
@@ -3574,6 +3659,8 @@ class SpendLogsMetadata(TypedDict):
     status: StandardLoggingPayloadStatus
     proxy_server_request: str | None
     batch_models: list[str] | None
+    batch_successful_requests: int | None  # writable-ok: built by assignment like every sibling key in this TypedDict
+    batch_failed_requests: int | None  # writable-ok: built by assignment like every sibling key in this TypedDict
     error_information: StandardLoggingPayloadErrorInformation | None
     usage_object: dict | None
     model_map_information: StandardLoggingModelInformation | None
@@ -3587,6 +3674,7 @@ class SpendLogsMetadata(TypedDict):
     compression_savings: CompressionSavingsMetadata | None
     autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed
     litellm_gateway_injected_cache: ReadOnly[str | None]
+    router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
 
 
 class SpendLogsPayload(TypedDict):
@@ -4919,6 +5007,7 @@ class DBSpendUpdateTransactions(TypedDict):
     org_list_transactions: dict[str, float] | None
     tag_list_transactions: dict[str, float] | None
     agent_list_transactions: dict[str, float] | None
+    model_access_group_list_transactions: ReadOnly[dict[str, float] | None]
 
 
 class SpendUpdateQueueItem(TypedDict, total=False):

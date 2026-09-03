@@ -1,9 +1,9 @@
 {
   "reportAny": {
-    "limit": 17270
+    "limit": 14074
   },
   "reportArgumentType": {
-    "limit": 2539
+    "limit": 2215
   },
   "reportAssignmentType": {
     "limit": 319
@@ -18,13 +18,13 @@
     "limit": 40
   },
   "reportDeprecated": {
-    "limit": 212
+    "limit": 211
   },
   "reportDuplicateImport": {
     "limit": 19
   },
   "reportExplicitAny": {
-    "limit": 5485
+    "limit": 4124
   },
   "reportFunctionMemberAccess": {
     "limit": 7
@@ -42,7 +42,7 @@
     "limit": 12
   },
   "reportIndexIssue": {
-    "limit": 35
+    "limit": 25
   },
   "reportInvalidTypeForm": {
     "limit": 34
@@ -54,10 +54,10 @@
     "limit": 0
   },
   "reportMissingParameterType": {
-    "limit": 5658
+    "limit": 5601
   },
   "reportMissingTypeArgument": {
-    "limit": 15425
+    "limit": 15290
   },
   "reportMissingTypeStubs": {
     "limit": 40
@@ -72,7 +72,7 @@
     "limit": 0
   },
   "reportOptionalMemberAccess": {
-    "limit": 1055
+    "limit": 0
   },
   "reportOptionalOperand": {
     "limit": 0
@@ -90,40 +90,40 @@
     "limit": 8
   },
   "reportReturnType": {
-    "limit": 213
+    "limit": 181
   },
   "reportTypedDictNotRequiredAccess": {
-    "limit": 25
+    "limit": 24
   },
   "reportUndefinedVariable": {
     "limit": 0
   },
   "reportUnknownArgumentType": {
-    "limit": 44526
+    "limit": 44362
   },
   "reportUnknownLambdaType": {
     "limit": 109
   },
   "reportUnknownMemberType": {
-    "limit": 38721
+    "limit": 38332
   },
   "reportUnknownParameterType": {
-    "limit": 19778
+    "limit": 19625
   },
   "reportUnknownVariableType": {
-    "limit": 30290
+    "limit": 29861
   },
   "reportUnnecessaryCast": {
-    "limit": 117
+    "limit": 111
   },
   "reportUnnecessaryComparison": {
-    "limit": 697
+    "limit": 687
   },
   "reportUnnecessaryContains": {
-    "limit": 5
+    "limit": 4
   },
   "reportUnnecessaryIsInstance": {
-    "limit": 829
+    "limit": 823
   },
   "reportUntypedBaseClass": {
     "limit": 0
@@ -138,9 +138,9 @@
     "limit": 138
   },
   "reportUnusedImport": {
-    "limit": 543
+    "limit": 542
   },
   "reportUnusedVariable": {
-    "limit": 139
+    "limit": 137
   }
 }

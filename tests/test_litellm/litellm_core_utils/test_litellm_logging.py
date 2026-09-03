@@ -580,9 +580,17 @@ class TestRetrieveBatchCostPassesModelIdentity:
 
         captured: dict[str, object] = {}
 
-        async def fake_handle_completed_batch(**kwargs: object) -> tuple[float, Usage, list[str]]:
+        from litellm.batches.batch_utils import BatchCostUsageResult
+
+        async def fake_handle_completed_batch(**kwargs: object) -> BatchCostUsageResult:
             captured.update(kwargs)
-            return 1.25, Usage(prompt_tokens=1800, completion_tokens=1000, total_tokens=2800), ["m"]
+            return BatchCostUsageResult(
+                cost=1.25,
+                usage=Usage(prompt_tokens=1800, completion_tokens=1000, total_tokens=2800),
+                models=["m"],
+                successful_requests=1,
+                failed_requests=0,
+            )
 
         monkeypatch.setattr(logging_module, "_handle_completed_batch", fake_handle_completed_batch)
 
@@ -3727,6 +3735,60 @@ def test_get_standard_logging_object_payload_includes_litellm_call_id(logging_ob
     assert payload["litellm_call_id"] == call_id
 
 
+def test_get_standard_logging_object_payload_carries_matched_access_groups(logging_obj):
+    """Access groups stamped at auth time reach the logging payload, so integrations see what a request billed."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    now = datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "model": "gpt-4o",
+            "messages": [],
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_matched_model_access_groups": ["premium-pool", "shared-pool"]
+                },
+                "proxy_server_request": {"body": {}},
+            },
+        },
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["request_model_access_groups"] == ("premium-pool", "shared-pool")
+
+
+def test_get_standard_logging_object_payload_has_no_access_groups_when_unstamped(
+    logging_obj,
+):
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    now = datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={"model": "gpt-4o", "messages": []},
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["request_model_access_groups"] == ()
+
+
 def test_get_standard_logging_object_payload_preserves_absent_end_user_as_none(logging_obj):
     from datetime import datetime
     from typing import Final
@@ -5417,6 +5479,97 @@ def test_pre_call_redacts_and_masks_raw_request(logging_obj):
     assert "key=*****" in raw_api_base
 
 
+def _streaming_logging_obj_with_callbacks(callbacks: list[CustomLogger]):
+    import datetime
+
+    obj = LitellmLogging(
+        model="anthropic/claude-opus-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="slot-leak-test",
+        function_id="slot-leak-test",
+    )
+    obj.model_call_details["litellm_params"] = {"metadata": {}}
+    return patch.object(obj, "get_combined_callback_list", return_value=callbacks), obj
+
+
+def _assembled_stream_result():
+    response = ModelResponse()
+    response.choices[0].message.content = "hello"
+    return response
+
+
+@pytest.mark.asyncio
+async def test_streaming_success_callbacks_survive_logging_hook_failure():
+    """Regression for leaked max_parallel_requests slots: a raising
+    async_logging_hook must not abort the success-callback loop that
+    releases the rate-limiter slot."""
+    broken = CustomLogger()
+    broken.async_logging_hook = AsyncMock(side_effect=RuntimeError("broken stream payload"))
+    releasing = CustomLogger()
+    releasing.async_log_success_event = AsyncMock()
+
+    patcher, logging_obj = _streaming_logging_obj_with_callbacks([broken, releasing])
+    with patcher:
+        await logging_obj.async_success_handler(result=_assembled_stream_result())
+
+    releasing.async_log_success_event.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_streaming_success_callbacks_survive_cost_calculation_failure():
+    releasing = CustomLogger()
+    releasing.async_log_success_event = AsyncMock()
+
+    patcher, logging_obj = _streaming_logging_obj_with_callbacks([releasing])
+    with patcher, patch.object(
+        logging_obj, "_response_cost_calculator", side_effect=ValueError("bad usage block")
+    ):
+        await logging_obj.async_success_handler(result=_assembled_stream_result())
+
+    assert logging_obj.model_call_details["response_cost"] is None
+    releasing.async_log_success_event.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_streaming_success_callbacks_survive_standard_logging_payload_failure():
+    releasing = CustomLogger()
+    releasing.async_log_success_event = AsyncMock()
+
+    patcher, logging_obj = _streaming_logging_obj_with_callbacks([releasing])
+    with patcher, patch.object(
+        logging_obj, "_build_standard_logging_payload", side_effect=ValueError("incomplete stream")
+    ):
+        await logging_obj.async_success_handler(result=_assembled_stream_result())
+
+    assert logging_obj.model_call_details.get("standard_logging_object") is None
+    releasing.async_log_success_event.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_streaming_success_callbacks_survive_guardrail_logging_hook_failure():
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    skipping = CustomGuardrail(guardrail_name="skipping-guardrail")
+    skipping.should_run_guardrail = MagicMock(return_value=False)
+    skipping.async_logging_hook = AsyncMock()
+    raising = CustomGuardrail(guardrail_name="raising-guardrail")
+    raising.should_run_guardrail = MagicMock(return_value=True)
+    raising.async_logging_hook = AsyncMock(side_effect=RuntimeError("guardrail hook failed"))
+    releasing = CustomLogger()
+    releasing.async_log_success_event = AsyncMock()
+
+    patcher, logging_obj = _streaming_logging_obj_with_callbacks([skipping, raising, releasing])
+    with patcher:
+        await logging_obj.async_success_handler(result=_assembled_stream_result())
+
+    skipping.async_logging_hook.assert_not_awaited()
+    raising.async_logging_hook.assert_awaited_once()
+    releasing.async_log_success_event.assert_awaited_once()
+
+
 def _resolve(custom_llm_provider, litellm_params, optional_params, model):
     from litellm.litellm_core_utils.litellm_logging import (
         _resolve_vertex_location_for_cost,
@@ -5849,7 +6002,9 @@ async def test_prompt_hook_injection_marker_recorded_for_every_surface(logging_o
     """The savings gate reads litellm_gateway_injected_cache from the request's
     metadata bucket. Recording lives in the shared prompt-hook wrappers, so chat,
     /v1/responses, router prompt deployments, and proxy prompt templates all mark
-    injected requests the same way; a hook that injects nothing leaves no marker."""
+    injected requests the same way; a hook that injects nothing leaves no marker.
+    A pass that runs before deployment choice declares it and gets the every-deployment
+    sentinel, which a later per-deployment pass never narrows."""
     from litellm.integrations.custom_prompt_management import CustomPromptManagement
 
     class _InjectingHook(CustomPromptManagement):
@@ -5932,3 +6087,193 @@ async def test_prompt_hook_injection_marker_recorded_for_every_surface(logging_o
         request_kwargs=untouched,
     )
     assert "litellm_gateway_injected_cache" not in untouched["metadata"]
+
+    pre_choice = {"metadata": {}, "model_info": {"id": "dep-of-this-attempt"}}
+    logging_obj.get_chat_completion_prompt(
+        model="claude-sonnet-5",
+        messages=[{"role": "user", "content": "hi"}],
+        non_default_params={},
+        prompt_variables=None,
+        prompt_management_logger=_InjectingHook(),
+        request_kwargs=pre_choice,
+        injected_for_every_deployment=True,
+    )
+    assert pre_choice["metadata"]["litellm_gateway_injected_cache"] == ""
+
+    await logging_obj.async_get_chat_completion_prompt(
+        model="claude-sonnet-5",
+        messages=[{"role": "user", "content": "a fresh turn"}],
+        non_default_params={},
+        prompt_variables=None,
+        prompt_management_logger=_InjectingHook(),
+        request_kwargs=pre_choice,
+    )
+    assert pre_choice["metadata"]["litellm_gateway_injected_cache"] == ""
+
+
+def test_get_standard_logging_object_payload_reads_overhead_from_logging_obj_for_dict_results(logging_obj):
+    """LIT-5466: /v1/messages returns a plain dict with no _hidden_params, so the overhead
+    recorded on the logging object must reach hidden_params.litellm_overhead_time_ms (SpendLogs)."""
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj.set_response_timing_metrics({"_response_ms": 1000.0, "litellm_overhead_time_ms": 100.0})
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "call-1", "model": "gpt-4o", "messages": []},
+        init_response_obj={"id": "msg_1", "type": "message", "role": "assistant", "content": []},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["hidden_params"]["litellm_overhead_time_ms"] == 100.0
+
+
+def test_get_standard_logging_object_payload_survives_logging_obj_without_timing_metrics(logging_obj):
+    """The payload is built inside a blanket except that returns None, so a logging object without
+    the timing carrier (custom subclasses, older pickles) must not silently drop every spend log."""
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    del logging_obj.response_timing_metrics
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "call-1", "model": "gpt-4o", "messages": []},
+        init_response_obj={"id": "msg_1", "type": "message", "role": "assistant", "content": []},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["hidden_params"]["litellm_overhead_time_ms"] is None
+
+
+def test_get_standard_logging_object_payload_failure_status_keeps_overhead_none(logging_obj):
+    """A post_call guardrail can fail the request after the upstream call succeeded; the failure
+    payload keeps litellm_overhead_time_ms None, matching responses that carry their own _hidden_params."""
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj.set_response_timing_metrics({"_response_ms": 1000.0, "litellm_overhead_time_ms": 100.0})
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "call-1", "model": "gpt-4o", "messages": []},
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="failure",
+    )
+
+    assert payload is not None
+    assert payload["hidden_params"]["litellm_overhead_time_ms"] is None
+
+
+def test_get_standard_logging_object_payload_prefers_response_hidden_params_overhead(logging_obj):
+    """A response that carries its own litellm_overhead_time_ms (chat completions) wins over the logging object."""
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj.set_response_timing_metrics({"_response_ms": 1000.0, "litellm_overhead_time_ms": 100.0})
+    response = ModelResponse()
+    response._hidden_params = {"litellm_overhead_time_ms": 5.0}
+    now = datetime.datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "call-1", "model": "gpt-4o", "messages": []},
+        init_response_obj=response,
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["hidden_params"]["litellm_overhead_time_ms"] == 5.0
+
+
+def test_response_timing_metrics_survive_deepcopy(logging_obj):
+    """Proxy pre-call hooks deep-copy the logging object; the timing carrier must stay copyable."""
+    import copy
+
+    assert logging_obj.response_timing_metrics == {}
+    logging_obj.set_response_timing_metrics({"_response_ms": 12.5})
+
+    assert copy.deepcopy(logging_obj).response_timing_metrics == {"_response_ms": 12.5}
+
+
+def test_passthrough_embeddings_result_swapped_for_callbacks():
+    """
+    Regression: for gigachat passthrough /embeddings, normalize_logging_result
+    produces an EmbeddingResponse, but the result swap only accepted
+    ModelResponse, so callbacks kept receiving the raw httpx.Response (which
+    crashes attribute readers like OTEL). The swap must cover
+    EmbeddingResponse too.
+    """
+    import datetime as dt
+
+    from litellm.types.utils import EmbeddingResponse
+
+    logging_obj = LitellmLogging(
+        model="EmbeddingsGigaR",
+        messages=[],
+        stream=False,
+        call_type="allm_passthrough_route",
+        start_time=time.time(),
+        litellm_call_id="passthrough-embed-call-id",
+        function_id="passthrough-embed-fn-id",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={},
+        optional_params={},
+        model="EmbeddingsGigaR",
+        custom_llm_provider="gigachat",
+        endpoint="/embeddings",
+        request_data={"model": "EmbeddingsGigaR", "input": ["hello"]},
+        input=["hello"],
+    )
+
+    httpx_response = httpx.Response(
+        200,
+        json={
+            "object": "list",
+            "data": [
+                {
+                    "object": "embedding",
+                    "embedding": [0.1, 0.2, 0.3],
+                    "index": 0,
+                    "usage": {"prompt_tokens": 5},
+                }
+            ],
+            "model": "EmbeddingsGigaR",
+        },
+        request=httpx.Request(
+            "POST", "https://gigachat.devices.sberbank.ru/api/v1/embeddings"
+        ),
+    )
+
+    _, _, swapped_result = logging_obj._success_handler_helper_fn(
+        result=httpx_response,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+        cache_hit=False,
+    )
+
+    assert isinstance(swapped_result, EmbeddingResponse)
+    assert swapped_result.data[0]["embedding"] == [0.1, 0.2, 0.3]

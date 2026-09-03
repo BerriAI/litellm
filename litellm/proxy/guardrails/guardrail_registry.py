@@ -3,10 +3,10 @@
 import asyncio
 import importlib
 import os
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import chain, count
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, cast
 
 from pydantic import ValidationError
 
@@ -89,6 +89,8 @@ guardrail_initializer_registry: Final = {
 }
 
 CONFIG_GUARDRAIL_ID_NAMESPACE: Final = uuid.UUID("625f63f4-935a-50e5-98b5-fbe77babc74a")
+
+GuardrailCallbacks: TypeAlias = tuple[CustomGuardrail, ...]
 
 guardrail_class_registry: Final[dict[str, type[CustomGuardrail]]] = {
     SupportedGuardrailIntegrations.BEDROCK.value: BedrockGuardrail,
@@ -424,6 +426,41 @@ def _apply_configured_bool_overrides(instance: CustomGuardrail, litellm_params: 
         instance.scan_raw_request = bool(litellm_params.scan_raw_request)
 
 
+def _as_callback_tuple(
+    initialized: CustomGuardrail | Sequence[CustomGuardrail] | None,
+) -> GuardrailCallbacks:
+    if initialized is None:
+        return ()
+    if isinstance(initialized, (list, tuple)):
+        return tuple(initialized)
+    return (initialized,)
+
+
+def _configure_callback_scoping(
+    custom_guardrail_callback: CustomGuardrail, guardrail_name: str, litellm_params: LitellmParams
+) -> None:
+    for scoping_param in (
+        "skip_system_message_in_guardrail",
+        "skip_tool_message_in_guardrail",
+        "scan_only_tool_results",
+    ):
+        setattr(custom_guardrail_callback, scoping_param, getattr(litellm_params, scoping_param, None))
+    scan_only_tool_results_enabled: Final = effective_scan_only_tool_results_for_guardrail(custom_guardrail_callback)
+    if scan_only_tool_results_enabled and not custom_guardrail_callback.supports_scan_only_tool_results():
+        raise ValueError(
+            f"Guardrail {guardrail_name}: scan_only_tool_results is enabled, but this "
+            "guardrail's role filtering never scans tool results, so no request content would ever "
+            "be scanned. Remove scan_only_tool_results or the guardrail's role-filtering option."
+        )
+    if scan_only_tool_results_enabled and effective_skip_tool_message_for_guardrail(custom_guardrail_callback):
+        raise ValueError(
+            f"Guardrail {guardrail_name}: scan_only_tool_results and "
+            "skip_tool_message_in_guardrail are enabled together, which excludes every message from "
+            "scanning, so no request content would ever be scanned. Remove one of the two."
+        )
+    _apply_configured_bool_overrides(custom_guardrail_callback, litellm_params)
+
+
 class InMemoryGuardrailHandler:
     """
     Class that handles initializing guardrails and adding them to the CallbackManager
@@ -439,6 +476,8 @@ class InMemoryGuardrailHandler:
         """
         Guardrail id to CustomGuardrail object mapping
         """
+
+        self.guardrail_id_to_sibling_callbacks: dict[str, GuardrailCallbacks] = {}  # mutable-ok: per-id registry
 
         self._sources: dict[str, Literal["db", "config"]] = {}
         """
@@ -474,7 +513,6 @@ class InMemoryGuardrailHandler:
             self._sources[guardrail_id] = source
             return self.IN_MEMORY_GUARDRAILS[guardrail_id]
 
-        custom_guardrail_callback: CustomGuardrail | None = None
         litellm_params_data: Final = guardrail["litellm_params"]
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
@@ -498,54 +536,15 @@ class InMemoryGuardrailHandler:
         if guardrail_type is None:
             raise ValueError("guardrail_type is required")
 
-        initializer: Final = guardrail_initializer_registry.get(guardrail_type)
-
-        if initializer:
-            # Try to call with llm_router first, fall back to without if it fails
-            import inspect
-
-            sig: Final = inspect.signature(initializer)
-            if "llm_router" in sig.parameters:
-                custom_guardrail_callback = initializer(
-                    litellm_params,
-                    guardrail,
-                    llm_router,
-                )
-            else:
-                custom_guardrail_callback = initializer(litellm_params, guardrail)
-        elif isinstance(guardrail_type, str) and "." in guardrail_type:
-            custom_guardrail_callback = self.initialize_custom_guardrail(
-                guardrail=guardrail,
-                guardrail_type=guardrail_type,
-                litellm_params=litellm_params,
-                config_file_path=config_file_path,
-            )
-        else:
-            raise ValueError(f"Unsupported guardrail: {guardrail_type}")
-
-        if custom_guardrail_callback is not None:
-            for scoping_param in (
-                "skip_system_message_in_guardrail",
-                "skip_tool_message_in_guardrail",
-                "scan_only_tool_results",
-            ):
-                setattr(custom_guardrail_callback, scoping_param, getattr(litellm_params, scoping_param, None))
-            scan_only_tool_results_enabled: Final = effective_scan_only_tool_results_for_guardrail(
-                custom_guardrail_callback
-            )
-            if scan_only_tool_results_enabled and not custom_guardrail_callback.supports_scan_only_tool_results():
-                raise ValueError(
-                    f"Guardrail {guardrail['guardrail_name']}: scan_only_tool_results is enabled, but this "
-                    "guardrail's role filtering never scans tool results, so no request content would ever "
-                    "be scanned. Remove scan_only_tool_results or the guardrail's role-filtering option."
-                )
-            if scan_only_tool_results_enabled and effective_skip_tool_message_for_guardrail(custom_guardrail_callback):
-                raise ValueError(
-                    f"Guardrail {guardrail['guardrail_name']}: scan_only_tool_results and "
-                    "skip_tool_message_in_guardrail are enabled together, which excludes every message from "
-                    "scanning, so no request content would ever be scanned. Remove one of the two."
-                )
-            _apply_configured_bool_overrides(custom_guardrail_callback, litellm_params)
+        created_callbacks: Final = self._create_callbacks(
+            guardrail=guardrail,
+            guardrail_type=guardrail_type,
+            litellm_params=litellm_params,
+            config_file_path=config_file_path,
+            llm_router=llm_router,
+        )
+        for custom_guardrail_callback in created_callbacks:
+            _configure_callback_scoping(custom_guardrail_callback, guardrail["guardrail_name"], litellm_params)
 
         parsed_guardrail: Final = Guardrail(
             guardrail_id=guardrail.get("guardrail_id"),
@@ -556,10 +555,43 @@ class InMemoryGuardrailHandler:
 
         # store references to the guardrail in memory
         self.IN_MEMORY_GUARDRAILS[guardrail_id] = parsed_guardrail
-        self.guardrail_id_to_custom_guardrail[guardrail_id] = custom_guardrail_callback
+        self.guardrail_id_to_custom_guardrail[guardrail_id] = created_callbacks[0] if created_callbacks else None
+        self.guardrail_id_to_sibling_callbacks[guardrail_id] = created_callbacks[1:]
         self._sources[guardrail_id] = source
 
         return parsed_guardrail
+
+    def _create_callbacks(
+        self,
+        guardrail: Guardrail,
+        guardrail_type: str,
+        litellm_params: LitellmParams,
+        config_file_path: str | None,
+        llm_router: Optional["Router"],
+    ) -> GuardrailCallbacks:
+        initializer: Final = guardrail_initializer_registry.get(guardrail_type)
+        if initializer:
+            import inspect
+
+            sig: Final = inspect.signature(initializer)
+            if "llm_router" in sig.parameters:
+                return _as_callback_tuple(initializer(litellm_params, guardrail, llm_router))
+            return _as_callback_tuple(initializer(litellm_params, guardrail))
+        if isinstance(guardrail_type, str) and "." in guardrail_type:
+            return _as_callback_tuple(
+                self.initialize_custom_guardrail(
+                    guardrail=guardrail,
+                    guardrail_type=guardrail_type,
+                    litellm_params=litellm_params,
+                    config_file_path=config_file_path,
+                )
+            )
+        raise ValueError(f"Unsupported guardrail: {guardrail_type}")
+
+    def _tracked_callbacks(self, guardrail_id: str) -> GuardrailCallbacks:
+        primary: Final = self.guardrail_id_to_custom_guardrail.get(guardrail_id)
+        siblings: Final = self.guardrail_id_to_sibling_callbacks.get(guardrail_id, ())
+        return (() if primary is None else (primary,)) + siblings
 
     def initialize_custom_guardrail(
         self,
@@ -630,10 +662,15 @@ class InMemoryGuardrailHandler:
         self.IN_MEMORY_GUARDRAILS[guardrail_id] = guardrail
         self._sources[guardrail_id] = source
 
-        custom_guardrail_callback: Final = self.guardrail_id_to_custom_guardrail.get(guardrail_id)
-        if custom_guardrail_callback:
-            updated_litellm_params: Final = cast(LitellmParams, guardrail.get("litellm_params", {}))
-            custom_guardrail_callback.update_in_memory_litellm_params(litellm_params=updated_litellm_params)
+        tracked_callbacks: Final = self._tracked_callbacks(guardrail_id)
+        if not tracked_callbacks:
+            return
+        updated_litellm_params: Final = cast(LitellmParams, guardrail.get("litellm_params", {}))
+        tracked_callbacks[0].update_in_memory_litellm_params(litellm_params=updated_litellm_params)
+        for sibling_callback in tracked_callbacks[1:]:
+            sibling_stage = sibling_callback.event_hook
+            sibling_callback.update_in_memory_litellm_params(litellm_params=updated_litellm_params)
+            sibling_callback.event_hook = sibling_stage
 
     def delete_in_memory_guardrail(self, guardrail_id: str) -> None:
         """
@@ -648,11 +685,11 @@ class InMemoryGuardrailHandler:
         self.IN_MEMORY_GUARDRAILS.pop(guardrail_id, None)
         self._sources.pop(guardrail_id, None)
 
-        custom_guardrail_callback: Final = self.guardrail_id_to_custom_guardrail.pop(guardrail_id, None)
-        if custom_guardrail_callback is None:
-            return
-
-        litellm.logging_callback_manager.remove_callback_from_all_lists(custom_guardrail_callback)
+        tracked_callbacks: Final = self._tracked_callbacks(guardrail_id)
+        self.guardrail_id_to_custom_guardrail.pop(guardrail_id, None)
+        self.guardrail_id_to_sibling_callbacks.pop(guardrail_id, None)
+        for custom_guardrail_callback in tracked_callbacks:
+            litellm.logging_callback_manager.remove_callback_from_all_lists(custom_guardrail_callback)
 
     def list_in_memory_guardrails(self) -> list[Guardrail]:
         """
@@ -789,11 +826,12 @@ class InMemoryGuardrailHandler:
         Removes old callback from litellm.callbacks and creates fresh instance.
 
         If the new config fails to initialize (e.g. an invalid on_flagged
-        combination), the previous instance is restored rather than left
-        deleted: initialize_guardrail's own ValueError/TypeError propagate
-        uncaught, so a caller reaching this point after already deleting the
-        old instance would otherwise leave the guardrail providing no
-        protection at all, not merely "still enforcing the old config."
+        combination or an invalid regex), the previous instance is restored
+        rather than left deleted, and the failure is re-raised as ValueError so
+        every init failure reaches callers as one exception type: a caller
+        reaching this point after already deleting the old instance would
+        otherwise leave the guardrail providing no protection at all, not
+        merely "still enforcing the old config."
         """
         guardrail_id: Final = guardrail.get("guardrail_id")
         if not guardrail_id:
@@ -812,7 +850,7 @@ class InMemoryGuardrailHandler:
         # that was enforcing must never fail open because an update was bad.
         try:
             return self.initialize_guardrail(guardrail=guardrail, config_file_path=config_file_path, source=source)
-        except Exception:
+        except Exception as init_error:
             if previous_guardrail is not None:
                 verbose_proxy_logger.exception(
                     "Reinitializing guardrail %s with updated params failed; restoring the previous configuration",
@@ -824,7 +862,7 @@ class InMemoryGuardrailHandler:
                     )
                 except Exception:  # noqa: BLE001  # the original failure must propagate even if the restore breaks
                     verbose_proxy_logger.exception("Restoring previous guardrail %s also failed", guardrail_id)
-            raise
+            raise ValueError(f"Guardrail initialization failed: {init_error}") from init_error
 
     def sync_guardrail_from_db(self, guardrail: Guardrail, config_file_path: str | None = None) -> Guardrail | None:
         """

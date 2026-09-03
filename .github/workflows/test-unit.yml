@@ -96,6 +96,7 @@ jobs:
           - shard: misc
             artifact-name: misc
             test-path: >-
+              tests/sdk_function_trace
               tests/test_litellm/batches
               tests/test_litellm/secret_managers
               tests/test_litellm/a2a_protocol
@@ -103,6 +104,7 @@ jobs:
               tests/test_litellm/completion_extras
               tests/test_litellm/compression
               tests/test_litellm/containers
+              tests/test_litellm/endpoints
               tests/test_litellm/experimental_mcp_client
               tests/test_litellm/models
               tests/test_litellm/repositories

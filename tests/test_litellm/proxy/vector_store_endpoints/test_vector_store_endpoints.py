@@ -2,14 +2,15 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import Request
-
-
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 import litellm
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
+)
+from litellm.llms.base_llm.vector_store.transformation import (
+    LiteLLMVectorStoreEmbeddingExecutor,
+    RouterVectorStoreEmbeddingExecutor,
 )
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.vector_store_endpoints.endpoints import (
@@ -17,14 +18,8 @@ from litellm.proxy.vector_store_endpoints.endpoints import (
     index_create,
     index_list,
 )
-from litellm.proxy.vector_store_files_endpoints.endpoints import (
-    _update_request_data_with_model_routing_hint,
-)
 from litellm.proxy.vector_store_endpoints.management_endpoints import (
     _check_vector_store_access,
-    _resolve_embedding_config,
-    _resolve_embedding_config_from_db,
-    _resolve_embedding_config_from_router,
     create_vector_store_in_db,
     new_vector_store,
 )
@@ -33,8 +28,12 @@ from litellm.proxy.vector_store_endpoints.utils import (
     is_allowed_to_call_vector_store_endpoint,
     is_allowed_to_call_vector_store_files_endpoint,
 )
+from litellm.proxy.vector_store_files_endpoints.endpoints import (
+    _update_request_data_with_model_routing_hint,
+)
+from litellm.types.utils import EmbeddingResponse, LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
-from litellm.types.utils import LlmProviders
+from litellm.vector_stores.main import _direct_vector_store_embedding_executor
 
 
 def _serialize_litellm_params(litellm_params):
@@ -51,17 +50,113 @@ def _serialize_litellm_params(litellm_params):
     return json.dumps(litellm_params or {})
 
 
-@pytest.fixture(autouse=True)
-def _reset_embedding_config_cache():
-    """The use-time embedding-config resolver caches results in process
-    memory across calls. Reset it before every test so the resolver
-    actually exercises the router/DB path under test instead of returning
-    a value cached by an earlier test."""
-    from litellm.proxy.vector_store_endpoints import management_endpoints
+def test_direct_vector_store_embedding_executor_rejects_invalid_value():
+    with pytest.raises(TypeError, match="Invalid direct vector store embedding executor"):
+        _direct_vector_store_embedding_executor(object(), None, {})
 
-    management_endpoints._embedding_config_cache = None
-    yield
-    management_endpoints._embedding_config_cache = None
+
+def test_router_vector_store_search_injects_executor_and_request_metadata():
+    router = litellm.Router(model_list=[])
+    original = MagicMock(return_value="searched")
+    wrapped = router.factory_function(original, call_type="vector_store_search")
+
+    assert (
+        wrapped(
+            vector_store_id="store",
+            query="query",
+            custom_llm_provider="valkey",
+            litellm_metadata={"user_api_key_team_id": "team-a"},
+        )
+        == "searched"
+    )
+
+    call_kwargs = original.call_args.kwargs
+    assert call_kwargs["custom_llm_provider"] == "valkey"
+    executor = call_kwargs["_direct_vector_store_embedding_executor"]
+    assert isinstance(executor, RouterVectorStoreEmbeddingExecutor)
+    assert executor.metadata == {"user_api_key_team_id": "team-a"}
+    assert litellm.Router._vector_store_request_metadata({"metadata": {"user_api_key_team_id": "team-b"}}) == {
+        "user_api_key_team_id": "team-b"
+    }
+    assert litellm.Router._vector_store_request_metadata({}) == {}
+
+    with patch.object(  # test-quality-ok: fallback dispatch is the boundary this wrapper delegates to
+        router, "_generic_api_call_with_fallbacks", return_value="routed"
+    ) as fallback:
+        assert wrapped(model="vector-alias", vector_store_id="store", query="query") == "routed"
+    assert fallback.call_args.kwargs["model"] == "vector-alias"
+    assert fallback.call_args.kwargs["original_function"] is original
+
+    create_original = MagicMock(return_value="created")
+    wrapped_create = router.factory_function(create_original, call_type="vector_store_create")
+    assert wrapped_create(name="store") == "created"
+    create_original.assert_called_once_with(name="store")
+    with patch.object(  # test-quality-ok: fallback dispatch is the boundary this wrapper delegates to
+        router, "_generic_api_call_with_fallbacks", return_value="created-through-router"
+    ) as fallback:
+        assert wrapped_create(model="vector-alias", name="store") == "created-through-router"
+    fallback.assert_called_once_with(original_function=create_original, model="vector-alias", name="store")
+
+
+@pytest.mark.asyncio
+async def test_vector_store_embedding_executors_preserve_explicit_configuration():
+    response = EmbeddingResponse(data=[{"embedding": [0.1], "index": 0, "object": "embedding"}])
+    sdk_executor = LiteLLMVectorStoreEmbeddingExecutor()
+
+    with (
+        patch(  # test-quality-ok: isolates SDK dispatch from external embedding providers
+            "litellm.embedding", return_value=response
+        ) as embedding,
+        patch(  # test-quality-ok: isolates async SDK dispatch from external embedding providers
+            "litellm.aembedding", new=AsyncMock(return_value=response)
+        ) as aembedding,
+    ):
+        assert sdk_executor.embed("openai/model", "sync", {"api_key": "explicit"}) is response
+        assert await sdk_executor.aembed("openai/model", "async", {"api_key": "explicit"}) is response
+
+    embedding.assert_called_once_with(model="openai/model", input=["sync"], api_key="explicit")
+    aembedding.assert_awaited_once_with(model="openai/model", input=["async"], api_key="explicit")
+
+    mock_router = MagicMock()
+    mock_router.embedding.return_value = response
+    mock_router.aembedding = AsyncMock(return_value=response)
+    router_executor = RouterVectorStoreEmbeddingExecutor(
+        router=mock_router,
+        metadata={"user_api_key_team_id": "team-a"},
+    )
+
+    assert router_executor.embed("team-alias", "query", {}) is response
+    mock_router.embedding.assert_called_once_with(
+        model="team-alias",
+        input=["query"],
+        metadata={"user_api_key_team_id": "team-a"},
+    )
+
+    with (
+        patch(  # test-quality-ok: verifies explicit store configuration at the SDK boundary
+            "litellm.embedding", return_value=response
+        ) as explicit_embedding,
+        patch(  # test-quality-ok: verifies async explicit store configuration at the SDK boundary
+            "litellm.aembedding", new=AsyncMock(return_value=response)
+        ) as explicit_aembedding,
+    ):
+        assert router_executor.embed("openai/model", "query", {"api_key": "store-key"}) is response
+        assert await router_executor.aembed("openai/model", "query", {"api_key": "store-key"}) is response
+
+    explicit_embedding.assert_not_called()
+    explicit_aembedding.assert_not_awaited()
+    assert mock_router.embedding.call_args.kwargs == {
+        "model": "openai/model",
+        "input": ["query"],
+        "api_key": "store-key",
+        "metadata": {"user_api_key_team_id": "team-a"},
+    }
+    mock_router.aembedding.assert_awaited_once_with(
+        model="openai/model",
+        input=["query"],
+        api_key="store-key",
+        metadata={"user_api_key_team_id": "team-a"},
+    )
 
 
 @pytest.mark.asyncio
@@ -82,10 +177,11 @@ async def test_router_avector_store_search_passes_correct_args():
         }
 
         # Call router's avector_store_search
-        result = await router.avector_store_search(
+        await router.avector_store_search(
             vector_store_id="test_store_id",
             query="test query",
             custom_llm_provider="bedrock",
+            metadata={"user_api_key_team_id": "team-a"},
         )
 
         # Verify the internal method was called with correct args
@@ -96,6 +192,38 @@ async def test_router_avector_store_search_passes_correct_args():
         assert call_args[1]["vector_store_id"] == "test_store_id"
         assert call_args[1]["query"] == "test query"
         assert call_args[1]["custom_llm_provider"] == "bedrock"
+        executor = call_args[1]["_direct_vector_store_embedding_executor"]
+        assert isinstance(executor, RouterVectorStoreEmbeddingExecutor)
+        assert executor.metadata["user_api_key_team_id"] == "team-a"
+
+
+@pytest.mark.asyncio
+async def test_vector_store_embedding_executor_uses_team_scoped_router_deployment():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "shared-embedding",
+                "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "team-a-key"},
+                "model_info": {"team_id": "team-a", "team_public_model_name": "shared-embedding"},
+            },
+            {
+                "model_name": "shared-embedding",
+                "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "team-b-key"},
+                "model_info": {"team_id": "team-b", "team_public_model_name": "shared-embedding"},
+            },
+        ]
+    )
+    executor = RouterVectorStoreEmbeddingExecutor(
+        router=router,
+        metadata={"user_api_key_team_id": "team-b"},
+    )
+    response = EmbeddingResponse(data=[{"embedding": [0.1], "index": 0, "object": "embedding"}])
+
+    with patch("litellm.aembedding", new=AsyncMock(return_value=response)) as mock_aembedding:
+        result = await executor.aembed("shared-embedding", "query", {})
+
+    assert result is response
+    assert mock_aembedding.await_args.kwargs["api_key"] == "team-b-key"
 
 
 @pytest.mark.asyncio
@@ -502,90 +630,29 @@ async def test_update_request_data_with_litellm_managed_vector_store_registry():
 
 
 @pytest.mark.asyncio
-async def test_update_request_data_resolves_embedding_config_at_use_time():
-    """When the persisted vector store row carries only a
-    ``litellm_embedding_model`` reference (the new behaviour after
-    moving the auto-resolve out of write time), the request-handling
-    layer must resolve the embedding config so the downstream embed
-    call still has ``api_key`` / ``api_base`` / ``api_version``. The
-    resolved config lives in this per-request data dict only — never
-    persisted."""
-    mock_vector_store: LiteLLM_ManagedVectorStore = {
+async def test_managed_vector_store_keeps_embedding_reference_and_explicit_config():
+    explicit_config = {"api_key": "store-specific-key", "api_base": "https://embedding.example"}
+    managed_vector_store: LiteLLM_ManagedVectorStore = {
         "vector_store_id": "test_store",
-        "custom_llm_provider": "azure_ai",
+        "custom_llm_provider": "valkey",
         "litellm_params": {
-            "litellm_embedding_model": "azure/text-embedding-3-large",
-            # Note: no litellm_embedding_config persisted
+            "litellm_embedding_model": "team-embedding-alias",
+            "litellm_embedding_config": explicit_config,
         },
     }
-
     mock_registry = MagicMock()
-    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = (
-        mock_vector_store
-    )
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = managed_vector_store
 
-    resolved = {
-        "api_key": "use-time-resolved-key",
-        "api_base": "https://my-azure.example",
-        "api_version": "2024-09-01",
-    }
-
-    with (
-        patch.object(litellm, "vector_store_registry", mock_registry),
-        patch(
-            "litellm.proxy.vector_store_endpoints.endpoints._resolve_embedding_config",
-            new=AsyncMock(return_value=resolved),
-        ),
-    ):
+    with patch.object(litellm, "vector_store_registry", mock_registry):
         result = await _update_request_data_with_litellm_managed_vector_store_registry(
-            data={}, vector_store_id="test_store"
+            data={},
+            vector_store_id="test_store",
         )
 
-    assert result["litellm_embedding_model"] == "azure/text-embedding-3-large"
-    assert result["litellm_embedding_config"] == resolved
+    assert result["litellm_embedding_model"] == "team-embedding-alias"
+    assert result["litellm_embedding_config"] == explicit_config
+    assert managed_vector_store["litellm_params"]["litellm_embedding_config"] == explicit_config
 
-
-@pytest.mark.asyncio
-async def test_update_request_data_passes_through_legacy_embedding_config():
-    """A vector store row created by an older proxy version may already
-    carry a fully-resolved ``litellm_embedding_config`` in its persisted
-    ``litellm_params`` (the very leak this PR closes). Those legacy rows
-    must still work — the use-time resolver skips re-resolution when
-    the config is already present so the embed call keeps succeeding."""
-    legacy_config = {
-        "api_key": "legacy-cleartext-key",
-        "api_base": "https://legacy-azure.example",
-        "api_version": "2024-01-01",
-    }
-    mock_vector_store: LiteLLM_ManagedVectorStore = {
-        "vector_store_id": "legacy_store",
-        "custom_llm_provider": "azure_ai",
-        "litellm_params": {
-            "litellm_embedding_model": "azure/text-embedding-3-large",
-            "litellm_embedding_config": legacy_config,
-        },
-    }
-
-    mock_registry = MagicMock()
-    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = (
-        mock_vector_store
-    )
-
-    resolve_mock = AsyncMock()
-
-    with (
-        patch.object(litellm, "vector_store_registry", mock_registry),
-        patch(
-            "litellm.proxy.vector_store_endpoints.endpoints._resolve_embedding_config",
-            new=resolve_mock,
-        ),
-    ):
-        result = await _update_request_data_with_litellm_managed_vector_store_registry(
-            data={}, vector_store_id="legacy_store"
-        )
-
-    assert result["litellm_embedding_config"] == legacy_config
-    resolve_mock.assert_not_awaited()
 
 
 class TestCheckVectorStorePermission:
@@ -2003,57 +2070,7 @@ async def test_vector_store_update_and_list_synchronization():
 
 
 @pytest.mark.asyncio
-async def test_resolve_embedding_config_from_db():
-    """Test that _resolve_embedding_config_from_db correctly resolves embedding config from database."""
-    mock_prisma_client = MagicMock()
-
-    # Mock database model with litellm_params
-    mock_db_model = MagicMock()
-    mock_db_model.litellm_params = {
-        "api_key": "test-api-key",
-        "api_base": "https://api.openai.com",
-        "api_version": "2024-01-01",
-    }
-
-    mock_prisma_client.db.litellm_proxymodeltable.find_first = AsyncMock(
-        return_value=mock_db_model
-    )
-
-    with patch(
-        "litellm.proxy.vector_store_endpoints.management_endpoints.decrypt_value_helper",
-        side_effect=lambda value, key, return_original_value: value,
-    ):
-        result = await _resolve_embedding_config_from_db(
-            embedding_model="text-embedding-ada-002", prisma_client=mock_prisma_client
-        )
-
-    assert result is not None
-    assert result["api_key"] == "test-api-key"
-    assert result["api_base"] == "https://api.openai.com"
-    assert result["api_version"] == "2024-01-01"
-    mock_prisma_client.db.litellm_proxymodeltable.find_first.assert_called_once_with(
-        where={"model_name": "text-embedding-ada-002"}
-    )
-
-    # Test with empty embedding_model
-    result_empty = await _resolve_embedding_config_from_db(
-        embedding_model="", prisma_client=mock_prisma_client
-    )
-    assert result_empty is None
-
-    # Test with model not found
-    mock_prisma_client.db.litellm_proxymodeltable.find_first = AsyncMock(
-        return_value=None
-    )
-    result_not_found = await _resolve_embedding_config_from_db(
-        embedding_model="non-existent-model", prisma_client=mock_prisma_client
-    )
-    assert result_not_found is None
-
-
-@pytest.mark.asyncio
-async def test_new_vector_store_auto_resolves_embedding_config():
-    """Test that new_vector_store auto-resolves embedding config when embedding_model is provided but config is not."""
+async def test_new_vector_store_persists_embedding_reference_without_credentials():
     import json
 
     from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
@@ -2070,14 +2087,6 @@ async def test_new_vector_store_auto_resolves_embedding_config():
         },
     }
 
-    # Mock database model lookup for embedding config resolution
-    mock_db_model = MagicMock()
-    mock_db_model.litellm_params = {
-        "api_key": "resolved-api-key",
-        "api_base": "https://api.openai.com",
-        "api_version": "2024-01-01",
-    }
-
     # Mock user API key
     mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
     mock_user_api_key.user_role = None
@@ -2088,10 +2097,6 @@ async def test_new_vector_store_auto_resolves_embedding_config():
     mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
         return_value=None  # Vector store doesn't exist yet
     )
-    mock_prisma_client.db.litellm_proxymodeltable.find_first = AsyncMock(
-        return_value=mock_db_model
-    )
-
     # Track what was passed to create
     captured_create_data = {}
 
@@ -2112,261 +2117,21 @@ async def test_new_vector_store_auto_resolves_embedding_config():
     mock_registry = MagicMock()
     mock_registry.add_vector_store_to_registry = MagicMock()
 
-    # Mock router to return None (so it falls back to DB resolution)
-    mock_router = MagicMock()
-    mock_router.get_deployment_by_model_group_name.return_value = None
-
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
-        patch("litellm.proxy.proxy_server.llm_router", mock_router),
-        patch(
-            "litellm.proxy.vector_store_endpoints.management_endpoints.decrypt_value_helper",
-            side_effect=lambda value, key, return_original_value: value,
-        ),
         patch.object(litellm, "vector_store_registry", mock_registry),
     ):
-        result = await new_vector_store(
-            vector_store=vector_store_data, user_api_key_dict=mock_user_api_key
-        )
+        result = await new_vector_store(vector_store=vector_store_data, user_api_key_dict=mock_user_api_key)
 
     assert result["status"] == "success"
-    # Auto-resolve no longer happens at create time — the persisted row
-    # carries only the model reference, never the resolved cleartext
-    # credential. Resolution now happens at request-handling time inside
-    # ``_update_request_data_with_litellm_managed_vector_store_registry``,
-    # where the resolved config lives in per-request memory and is never
-    # written to the database.
     litellm_params_json = captured_create_data.get("litellm_params")
     assert litellm_params_json is not None
     litellm_params_dict = json.loads(litellm_params_json)
     assert "litellm_embedding_config" not in litellm_params_dict
     assert litellm_params_dict["litellm_embedding_model"] == "text-embedding-ada-002"
 
-    # The response must also not echo a cleartext credential — even on
-    # the create response, where redaction guards against caller-supplied
-    # cleartext or pre-existing rows that were created by an earlier
-    # proxy version.
     response_vs = result["vector_store"]
-    assert "resolved-api-key" not in _serialize_litellm_params(
-        response_vs.get("litellm_params")
-    )
-
-
-def test_resolve_embedding_config_from_router():
-    """Test that _resolve_embedding_config_from_router correctly extracts credentials from config-defined models."""
-    from litellm.types.router import Deployment, LiteLLM_Params
-
-    # Create a mock router with a model
-    mock_router = MagicMock()
-
-    # Create a mock deployment with litellm_params
-    mock_litellm_params = MagicMock(spec=LiteLLM_Params)
-    mock_litellm_params.api_key = "config-api-key"
-    mock_litellm_params.api_base = "https://config-api-base.com"
-    mock_litellm_params.api_version = "2024-02-01"
-
-    mock_deployment = MagicMock(spec=Deployment)
-    mock_deployment.litellm_params = mock_litellm_params
-
-    mock_router.get_deployment_by_model_group_name.return_value = mock_deployment
-
-    # Test resolution
-    result = _resolve_embedding_config_from_router(
-        embedding_model="text-embedding-ada-002", llm_router=mock_router
-    )
-
-    assert result is not None
-    assert result["api_key"] == "config-api-key"
-    assert result["api_base"] == "https://config-api-base.com"
-    assert result["api_version"] == "2024-02-01"
-
-    mock_router.get_deployment_by_model_group_name.assert_called_once_with(
-        model_group_name="text-embedding-ada-002"
-    )
-
-
-def test_resolve_embedding_config_from_router_with_provider_prefix():
-    """Test that _resolve_embedding_config_from_router handles provider prefixes like 'azure/model-name'."""
-    from litellm.types.router import Deployment, LiteLLM_Params
-
-    # Create a mock router
-    mock_router = MagicMock()
-
-    # Create a mock deployment
-    mock_litellm_params = MagicMock(spec=LiteLLM_Params)
-    mock_litellm_params.api_key = "azure-api-key"
-    mock_litellm_params.api_base = "https://azure-endpoint.openai.azure.com"
-    mock_litellm_params.api_version = "2024-02-15"
-
-    mock_deployment = MagicMock(spec=Deployment)
-    mock_deployment.litellm_params = mock_litellm_params
-
-    # First call with full name returns None, second call with stripped name returns deployment
-    mock_router.get_deployment_by_model_group_name.side_effect = [None, mock_deployment]
-
-    result = _resolve_embedding_config_from_router(
-        embedding_model="azure/text-embedding-3-large", llm_router=mock_router
-    )
-
-    assert result is not None
-    assert result["api_key"] == "azure-api-key"
-    assert result["api_base"] == "https://azure-endpoint.openai.azure.com"
-    assert result["api_version"] == "2024-02-15"
-
-    # Should have tried both the full name and stripped name
-    assert mock_router.get_deployment_by_model_group_name.call_count == 2
-
-
-def test_resolve_embedding_config_from_router_returns_none_when_not_found():
-    """Test that _resolve_embedding_config_from_router returns None when model is not in router."""
-    mock_router = MagicMock()
-    mock_router.get_deployment_by_model_group_name.return_value = None
-
-    result = _resolve_embedding_config_from_router(
-        embedding_model="nonexistent-model", llm_router=mock_router
-    )
-
-    assert result is None
-
-
-def test_resolve_embedding_config_from_router_handles_os_environ():
-    """Test that _resolve_embedding_config_from_router handles os.environ/ prefixed values."""
-    from litellm.types.router import Deployment, LiteLLM_Params
-
-    mock_router = MagicMock()
-
-    mock_litellm_params = MagicMock(spec=LiteLLM_Params)
-    mock_litellm_params.api_key = "os.environ/OPENAI_API_KEY"
-    mock_litellm_params.api_base = "https://direct-url.com"
-    mock_litellm_params.api_version = None
-
-    mock_deployment = MagicMock(spec=Deployment)
-    mock_deployment.litellm_params = mock_litellm_params
-
-    mock_router.get_deployment_by_model_group_name.return_value = mock_deployment
-
-    with patch(
-        "litellm.proxy.vector_store_endpoints.management_endpoints.get_secret",
-        return_value="resolved-from-env",
-    ) as mock_get_secret:
-        result = _resolve_embedding_config_from_router(
-            embedding_model="text-embedding-ada-002", llm_router=mock_router
-        )
-
-    assert result is not None
-    assert result["api_key"] == "resolved-from-env"
-    assert result["api_base"] == "https://direct-url.com"
-    assert "api_version" not in result
-
-    mock_get_secret.assert_called_once_with("os.environ/OPENAI_API_KEY")
-
-
-@pytest.mark.asyncio
-async def test_resolve_embedding_config_tries_router_then_db():
-    """Test that _resolve_embedding_config tries router first, then falls back to DB."""
-    from litellm.types.router import Deployment, LiteLLM_Params
-
-    mock_prisma_client = MagicMock()
-    mock_router = MagicMock()
-
-    # Router has the model
-    mock_litellm_params = MagicMock(spec=LiteLLM_Params)
-    mock_litellm_params.api_key = "router-api-key"
-    mock_litellm_params.api_base = "https://router-api-base.com"
-    mock_litellm_params.api_version = None
-
-    mock_deployment = MagicMock(spec=Deployment)
-    mock_deployment.litellm_params = mock_litellm_params
-
-    mock_router.get_deployment_by_model_group_name.return_value = mock_deployment
-
-    # DB should NOT be called since router has the model
-    mock_prisma_client.db.litellm_proxymodeltable.find_first = AsyncMock()
-
-    result = await _resolve_embedding_config(
-        embedding_model="text-embedding-ada-002",
-        prisma_client=mock_prisma_client,
-        llm_router=mock_router,
-    )
-
-    assert result is not None
-    assert result["api_key"] == "router-api-key"
-
-    # DB should NOT have been called since router found the model
-    mock_prisma_client.db.litellm_proxymodeltable.find_first.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_resolve_embedding_config_caches_result():
-    """The first lookup should hit the router/DB; subsequent lookups for
-    the same model name should return the cached value without touching
-    the router or the database."""
-    from litellm.types.router import Deployment, LiteLLM_Params
-
-    mock_prisma_client = MagicMock()
-    mock_router = MagicMock()
-
-    mock_litellm_params = MagicMock(spec=LiteLLM_Params)
-    mock_litellm_params.api_key = "router-api-key"
-    mock_litellm_params.api_base = "https://router-api-base.com"
-    mock_litellm_params.api_version = None
-
-    mock_deployment = MagicMock(spec=Deployment)
-    mock_deployment.litellm_params = mock_litellm_params
-    mock_router.get_deployment_by_model_group_name.return_value = mock_deployment
-
-    first = await _resolve_embedding_config(
-        embedding_model="cached-model",
-        prisma_client=mock_prisma_client,
-        llm_router=mock_router,
-    )
-    assert first is not None
-    assert mock_router.get_deployment_by_model_group_name.call_count == 1
-
-    second = await _resolve_embedding_config(
-        embedding_model="cached-model",
-        prisma_client=mock_prisma_client,
-        llm_router=mock_router,
-    )
-    assert second == first
-    # Router (and by extension the DB) was not consulted again.
-    assert mock_router.get_deployment_by_model_group_name.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_resolve_embedding_config_falls_back_to_db():
-    """Test that _resolve_embedding_config falls back to DB when router doesn't have the model."""
-    mock_prisma_client = MagicMock()
-    mock_router = MagicMock()
-
-    # Router doesn't have the model
-    mock_router.get_deployment_by_model_group_name.return_value = None
-
-    # DB has the model
-    mock_db_model = MagicMock()
-    mock_db_model.litellm_params = {
-        "api_key": "db-api-key",
-        "api_base": "https://db-api-base.com",
-    }
-    mock_prisma_client.db.litellm_proxymodeltable.find_first = AsyncMock(
-        return_value=mock_db_model
-    )
-
-    with patch(
-        "litellm.proxy.vector_store_endpoints.management_endpoints.decrypt_value_helper",
-        side_effect=lambda value, key, return_original_value: value,
-    ):
-        result = await _resolve_embedding_config(
-            embedding_model="text-embedding-ada-002",
-            prisma_client=mock_prisma_client,
-            llm_router=mock_router,
-        )
-
-    assert result is not None
-    assert result["api_key"] == "db-api-key"
-
-    # DB should have been called since router didn't find the model
-    mock_prisma_client.db.litellm_proxymodeltable.find_first.assert_called()
+    assert "api_key" not in _serialize_litellm_params(response_vs.get("litellm_params"))
 
 
 @pytest.mark.asyncio
@@ -2425,9 +2190,7 @@ async def test_new_vector_store_auto_resolves_from_router():
         }
         return mock_created_vector_store
 
-    mock_prisma_client.db.litellm_managedvectorstorestable.create = AsyncMock(
-        side_effect=mock_create
-    )
+    mock_prisma_client.db.litellm_managedvectorstorestable.create = AsyncMock(side_effect=mock_create)
 
     mock_registry = MagicMock()
     mock_registry.add_vector_store_to_registry = MagicMock()
@@ -3158,3 +2921,35 @@ class TestAzureAIAnalyzeNamedIndexClassification:
             user_api_key_dict=self._team_member("analyze", ["read"]),
         )
         assert result is True
+
+
+@pytest.mark.parametrize(
+    "blocked_key",
+    ["embedding_model", "litellm_embedding_model", "litellm_embedding_config", "litellm_credential_name"],
+)
+def test_vector_store_search_rejects_caller_embedding_selection_params(blocked_key):
+    """
+    Regression: the search request body must not pick the embedding model or
+    credential used to embed the query. Those resolve through the Router with
+    the proxy's credentials, bypassing the key's model permissions, so they may
+    only come from the managed store's server-side registration.
+    """
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+
+    mock_auth = UserAPIKeyAuth(user_id="test_internal_user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/v1/vector_stores/s3-store/search",
+            json={"query": "hello", blocked_key: "attacker-choice"},
+        )
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 400, response.json()
+    assert blocked_key in str(response.json())

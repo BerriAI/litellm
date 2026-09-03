@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -757,6 +758,45 @@ def test_public_agent_hub_returns_empty_when_no_public_groups():
 
 
 # ---------------------------------------------------------------------------
+# /public/agents/fields
+# ---------------------------------------------------------------------------
+
+
+def test_bedrock_agentcore_runtime_arn_validation_pattern_accepts_full_resource_path():
+    """Regression for LIT-6737: the AgentCore agent_runtime_arn field's
+    validation_pattern must accept a complete runtime ARN whose resource part
+    is itself multi-segment (``runtime/<runtime-id>``), and reject the exact
+    truncated shape a naive split("/")-by-position parse used to produce (the
+    ARN cut off right after the ``runtime`` resource type).
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/agents/fields")
+    assert response.status_code == 200
+    agents = response.json()
+
+    bedrock_agentcore = next((a for a in agents if a["agent_type"] == "bedrock_agentcore"), None)
+    assert bedrock_agentcore is not None, "bedrock_agentcore agent type not found"
+    assert bedrock_agentcore["model_template"] == "bedrock/agentcore/{agent_runtime_arn}"
+
+    fields_by_key = {f["key"]: f for f in bedrock_agentcore["credential_fields"]}
+    arn_field = fields_by_key["agent_runtime_arn"]
+    assert arn_field["required"] is True
+    assert arn_field["include_in_litellm_params"] is False
+
+    pattern = arn_field.get("validation_pattern")
+    assert pattern, "agent_runtime_arn must ship a validation_pattern so the UI can reject a truncated ARN"
+
+    full_arn = "arn:aws:bedrock-agentcore:eu-central-1:123456789012:runtime/hosted_agent_4vm3i-BaTdfOELAs"
+    truncated_arn = "arn:aws:bedrock-agentcore:eu-central-1:123456789012:runtime"
+
+    assert re.match(pattern, full_arn), "the validator must accept a complete runtime ARN"
+    assert not re.match(pattern, truncated_arn), "the validator must reject the truncated ARN"
+
+
+# ---------------------------------------------------------------------------
 # /public/endpoints
 # ---------------------------------------------------------------------------
 
@@ -1037,3 +1077,243 @@ def test_public_mcp_hub_does_not_expose_upstream_url():
     assert all("url" not in item for item in data)
     assert secret_url not in response.text
     app.dependency_overrides.clear()
+
+
+
+@pytest.fixture
+def reset_autorouter_presets_cache():
+    from litellm.proxy.public_endpoints.public_endpoints import _AutoRouterPresetsCache
+
+    _AutoRouterPresetsCache.presets = None
+    _AutoRouterPresetsCache.lock = None
+    yield
+    _AutoRouterPresetsCache.presets = None
+    _AutoRouterPresetsCache.lock = None
+
+
+def test_get_autorouter_presets_local_mode_serves_bundled_catalog(
+    monkeypatch, reset_autorouter_presets_cache
+):
+    monkeypatch.setenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", "True")
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    response = client.get("/public/autorouter_presets")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "anthropic_family" in payload
+    for preset in payload.values():
+        assert isinstance(preset["label"], str)
+        assert isinstance(preset["description"], str)
+        assert "tiers" in preset["complexity_router_config"]
+
+
+@pytest.mark.asyncio
+async def test_get_autorouter_presets_fetches_once_per_process(
+    monkeypatch, reset_autorouter_presets_cache
+):
+    from litellm.proxy.public_endpoints.public_endpoints import (
+        _AUTOROUTER_PRESETS_ADAPTER,
+        get_autorouter_presets,
+    )
+
+    monkeypatch.delenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", raising=False)
+    remote = _AUTOROUTER_PRESETS_ADAPTER.validate_python(
+        {
+            "remote_only": {
+                "label": "Remote Only",
+                "description": "from the remote catalog",
+                "complexity_router_config": {"tiers": {"SIMPLE": ["m1"], "MEDIUM": ["m2"], "COMPLEX": ["m3"], "REASONING": ["m4"]}},
+            }
+        }
+    )
+    calls = []
+
+    async def fake_fetch(url):
+        calls.append(url)
+        return remote
+
+    first = await get_autorouter_presets(url="https://example.test/presets.json", fetch=fake_fetch)
+    second = await get_autorouter_presets(url="https://example.test/presets.json", fetch=fake_fetch)
+
+    assert first == remote
+    assert second == remote
+    assert calls == ["https://example.test/presets.json"]
+
+
+@pytest.mark.asyncio
+async def test_get_autorouter_presets_single_flight_on_concurrent_cold_start(
+    monkeypatch, reset_autorouter_presets_cache
+):
+    import asyncio
+
+    from litellm.proxy.public_endpoints.public_endpoints import (
+        _AUTOROUTER_PRESETS_ADAPTER,
+        get_autorouter_presets,
+    )
+
+    monkeypatch.delenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", raising=False)
+    remote = _AUTOROUTER_PRESETS_ADAPTER.validate_python(
+        {
+            "remote_only": {
+                "label": "Remote Only",
+                "description": "from the remote catalog",
+                "complexity_router_config": {"tiers": {"SIMPLE": ["m1"], "MEDIUM": ["m2"], "COMPLEX": ["m3"], "REASONING": ["m4"]}},
+            }
+        }
+    )
+    calls = []
+
+    async def slow_fetch(url):
+        calls.append(url)
+        await asyncio.sleep(0.05)
+        return remote
+
+    results = await asyncio.gather(
+        get_autorouter_presets(url="https://example.test/presets.json", fetch=slow_fetch),
+        get_autorouter_presets(url="https://example.test/presets.json", fetch=slow_fetch),
+        get_autorouter_presets(url="https://example.test/presets.json", fetch=slow_fetch),
+    )
+
+    assert all(result == remote for result in results)
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_autorouter_presets_caches_bundled_fallback_on_remote_failure(
+    monkeypatch, reset_autorouter_presets_cache
+):
+    from litellm.proxy.public_endpoints.public_endpoints import get_autorouter_presets
+
+    monkeypatch.delenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", raising=False)
+    calls = []
+
+    async def broken_fetch(url):
+        calls.append(url)
+        raise ValueError("remote catalog unavailable")
+
+    first = await get_autorouter_presets(url="https://example.test/presets.json", fetch=broken_fetch)
+    second = await get_autorouter_presets(url="https://example.test/presets.json", fetch=broken_fetch)
+
+    assert "anthropic_family" in first
+    assert second == first
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_autorouter_presets_adapter_rejects_wrong_shapes():
+    from pydantic import ValidationError
+
+    from litellm.proxy.public_endpoints.public_endpoints import _AUTOROUTER_PRESETS_ADAPTER
+
+    with pytest.raises(ValidationError):
+        _AUTOROUTER_PRESETS_ADAPTER.validate_python({"bad": {"label": "no description or config"}})
+    with pytest.raises(ValidationError):
+        _AUTOROUTER_PRESETS_ADAPTER.validate_python(["not", "a", "mapping"])
+    with pytest.raises(ValidationError):
+        _AUTOROUTER_PRESETS_ADAPTER.validate_python(
+            {"no_tiers": {"label": "L", "description": "D", "complexity_router_config": {}}}
+        )
+    with pytest.raises(ValidationError):
+        _AUTOROUTER_PRESETS_ADAPTER.validate_python(
+            {
+                "missing_builtin_tier": {
+                    "label": "L",
+                    "description": "D",
+                    "complexity_router_config": {"tiers": {"SIMPLE": ["m1"], "MEDIUM": ["m2"], "COMPLEX": ["m3"]}},
+                }
+            }
+        )
+    with pytest.raises(ValidationError):
+        _AUTOROUTER_PRESETS_ADAPTER.validate_python(
+            {
+                "unknown_tier_name": {
+                    "label": "L",
+                    "description": "D",
+                    "complexity_router_config": {
+                        "tiers": {
+                            "SIMPLE": ["m1"],
+                            "MEDIUM": ["m2"],
+                            "COMPLEX": ["m3"],
+                            "REASONING": ["m4"],
+                            "ULTRA": ["m5"],
+                        }
+                    },
+                }
+            }
+        )
+    with pytest.raises(ValidationError):
+        _AUTOROUTER_PRESETS_ADAPTER.validate_python(
+            {
+                "bad_tiers": {
+                    "label": "L",
+                    "description": "D",
+                    "complexity_router_config": {"tiers": "not-a-mapping"},
+                }
+            }
+        )
+
+
+def test_get_autorouter_presets_passes_unknown_catalog_fields_through(
+    monkeypatch, reset_autorouter_presets_cache
+):
+    from litellm.proxy.public_endpoints.public_endpoints import (
+        _AUTOROUTER_PRESETS_ADAPTER,
+        _AutoRouterPresetsCache,
+    )
+
+    monkeypatch.delenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", raising=False)
+    _AutoRouterPresetsCache.presets = _AUTOROUTER_PRESETS_ADAPTER.validate_python(
+        {
+            "future_preset": {
+                "label": "Future",
+                "description": "carries fields this proxy version does not know",
+                "complexity_router_config": {
+                    "tiers": {"SIMPLE": ["m1"], "MEDIUM": ["m2"], "COMPLEX": ["m3"], "REASONING": ["m4"]},
+                    "future_config_knob": 3,
+                },
+                "icon": "sparkles",
+            }
+        }
+    )
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    response = client.get("/public/autorouter_presets")
+
+    assert response.status_code == 200
+    served = response.json()["future_preset"]
+    assert served["icon"] == "sparkles"
+    assert served["complexity_router_config"]["future_config_knob"] == 3
+    assert served["complexity_router_config"]["tiers"]["SIMPLE"] == ["m1"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_remote_autorouter_presets_parses_and_rejects_empty(monkeypatch):
+    import litellm.llms.custom_httpx.http_handler as http_handler_module
+    from litellm.proxy.public_endpoints.public_endpoints import _fetch_remote_autorouter_presets
+
+    catalog = {
+        "remote_only": {
+            "label": "Remote Only",
+            "description": "from the remote catalog",
+            "complexity_router_config": {"tiers": {"SIMPLE": ["m1"], "MEDIUM": ["m2"], "COMPLEX": ["m3"], "REASONING": ["m4"]}},
+        }
+    }
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json = MagicMock(return_value=catalog)
+    client = MagicMock()
+    client.get = AsyncMock(return_value=response)
+    monkeypatch.setattr(http_handler_module, "get_async_httpx_client", lambda llm_provider: client)
+
+    presets = await _fetch_remote_autorouter_presets("https://example.test/presets.json")
+    assert presets["remote_only"].label == "Remote Only"
+    response.raise_for_status.assert_called_once()
+
+    response.json = MagicMock(return_value={})
+    with pytest.raises(ValueError, match="empty"):
+        await _fetch_remote_autorouter_presets("https://example.test/presets.json")

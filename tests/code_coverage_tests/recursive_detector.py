@@ -57,11 +57,15 @@ IGNORE_FUNCTIONS = [
     "_filter_argument_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by blocking the tool call at the cap.
     "_redact_scanned_content",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by returning "[REDACTED]" at the cap.
     "_iter_fallback_targets",  # max depth set (2 * ROUTER_MAX_FALLBACKS); fails closed by raising ValueError at the cap.
+    "_mergeable_branch",  # max depth set (_MAX_SCHEMA_FLATTEN_DEPTH=32) plus a seen_refs cycle guard; passes the schema through untouched at the cap.
     "json_string_leaves",  # max depth set (MAX_STRUCTURED_CONTENT_SCAN_DEPTH); fails closed by raising at the cap so nothing goes unscanned.
     "with_json_string_leaves",  # transitively bounded: only runs on a tree json_string_leaves already walked under the cap.
     "json_unrewritable_labels",  # max depth set (MAX_STRUCTURED_CONTENT_SCAN_DEPTH); returns the None sentinel at the cap so the caller blocks.
     "_flatten_form_field",  # bounded by the nesting depth of the already-parsed request body (a finite JSON tree, no cycles possible).
     "_flatten_form_data_field",  # bounded by the nesting depth of the already-parsed request body (a finite JSON tree, no cycles possible).
+    "_json_safe",  # max depth set (_MAX_DEPTH) plus a seen-ids cycle guard for self-referential input.
+    "_redact_agent_params_tree",  # max depth set (default 10), same shape as _redact_sensitive_litellm_params.
+    "_restore_redacted_nested_value",  # max depth set (default 10), mirrors _redact_agent_params_tree on the write side.
 ]
 
 

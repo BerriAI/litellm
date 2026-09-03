@@ -1,13 +1,16 @@
 import asyncio
 import importlib
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
+import anyio
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from litellm._logging import verbose_logger
+from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT
 from litellm.exceptions import (
     BlockedPiiEntityError,
     GuardrailRaisedException,
@@ -18,8 +21,11 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPUpstreamAuthError,
 )
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+    ServerListOk,
+    ServerOutcome,
     classify_list_exception,
     list_fault_http_status,
+    outcome_wire_value,
 )
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     acting_user_auth,
@@ -68,7 +74,13 @@ _MCP_GUARDRAIL_REJECTIONS: Final = (
 )
 
 
-def _connection_error_message(exc: BaseException) -> str:
+def _connection_error_message(exc: BaseException, url: str | None, timeout_seconds: float) -> str:
+    if isinstance(exc, TimeoutError):
+        return (
+            f"Failed to connect to MCP server: no response from {url or 'the server'} "
+            f"within {timeout_seconds:.0f}s. Check that the LiteLLM proxy can reach this URL "
+            "from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
+        )
     if isinstance(exc, httpx.LocalProtocolError):
         return (
             "Failed to connect to MCP server: a request header is malformed. "
@@ -88,6 +100,7 @@ def _connection_error_message(exc: BaseException) -> str:
 if MCP_AVAILABLE:
     from mcp.types import Tool as MCPTool
 
+    from litellm.experimental_mcp_client.client import MCPClient
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
         global_mcp_server_manager,
@@ -99,6 +112,7 @@ if MCP_AVAILABLE:
         ListMCPToolsRestAPIResponseObject,
         MCPInfo,
         MCPServer,
+        _aggregate_server_key,  # pyright: ignore[reportPrivateUsage]  # same per-server key as the tools/list _meta outcomes
         _apply_toolset_scope,
         _fire_mcp_tool_call_logging,
         execute_mcp_tool,
@@ -803,9 +817,6 @@ if MCP_AVAILABLE:
                 list(allowed_server_ids_set), _rest_client_ip
             )
 
-            list_tools_result: Final = []
-            error_message = None
-
             # If server_id is specified, only query that specific server
             if server_id:
                 return await _list_tools_for_single_server(
@@ -849,22 +860,19 @@ if MCP_AVAILABLE:
                     else {}
                 )
 
-                # Query all servers the user has access to
-                errors: Final = []
-                for allowed_server_id in allowed_server_ids:
-                    server = global_mcp_server_manager.get_mcp_server_by_id(allowed_server_id)
-                    if server is None:
-                        continue
-
-                    server_auth_header = _get_server_auth_header(server, mcp_server_auth_headers, mcp_auth_header)
-                    user_oauth_extra_headers = await _get_user_oauth_extra_headers(
+                async def list_server(
+                    server: MCPServer,
+                ) -> tuple[Sequence[ListMCPToolsRestAPIResponseObject], ServerOutcome]:
+                    server_auth_header: Final = _get_server_auth_header(
+                        server, mcp_server_auth_headers, mcp_auth_header
+                    )
+                    user_oauth_extra_headers: Final = await _get_user_oauth_extra_headers(
                         server,
                         user_api_key_dict,
                         prefetched_creds=prefetched_oauth_creds,
                     )
-
                     try:
-                        tools_result = await _get_tools_for_single_server(
+                        tools_result: Final = await _get_tools_for_single_server(
                             server,
                             server_auth_header,
                             raw_headers_from_request,
@@ -872,24 +880,35 @@ if MCP_AVAILABLE:
                             extra_headers=user_oauth_extra_headers,
                             apply_tool_filters=apply_tool_filters,
                         )
-                        list_tools_result.extend(tools_result)
                     except Exception as e:
                         verbose_logger.exception("Error getting tools from %s: %s", server.name, e)
-                        errors.append(
-                            f"{get_server_prefix(server)}: {classify_list_exception(e).tag}"
-                            if isinstance(e, (MCPServerListError, MCPUpstreamAuthError))
-                            else f"{get_server_prefix(server)}: {e}"
-                        )
-                        continue
+                        return (), classify_list_exception(e)
+                    return tools_result, ServerListOk(tool_count=len(tools_result))
 
-                if errors and not list_tools_result:
-                    error_message = "Failed to get tools from servers: " + "; ".join(errors)
-
-            return {
-                "tools": list_tools_result,
-                "error": "partial_failure" if error_message else None,
-                "message": (error_message if error_message else "Successfully retrieved tools"),
-            }
+                queried_servers: Final = tuple(
+                    server
+                    for server in map(global_mcp_server_manager.get_mcp_server_by_id, allowed_server_ids)
+                    if server is not None
+                )
+                listings: Final = tuple([await list_server(server) for server in queried_servers])
+                list_tools_result: Final = [tool for tools, _ in listings for tool in tools]
+                server_outcomes: Final = MappingProxyType(
+                    {_aggregate_server_key(server): outcome for server, (_, outcome) in zip(queried_servers, listings)}
+                )
+                errors: Final = tuple(
+                    f"{key}: {outcome.tag}" for key, outcome in server_outcomes.items() if outcome.tag != "ok"
+                )
+                error_message: Final = (
+                    "Failed to get tools from servers: " + "; ".join(errors)
+                    if errors and not list_tools_result
+                    else None
+                )
+                return {
+                    "tools": list_tools_result,
+                    "error": "partial_failure" if error_message else None,
+                    "message": (error_message if error_message else "Successfully retrieved tools"),
+                    "server_outcomes": {key: outcome_wire_value(outcome) for key, outcome in server_outcomes.items()},
+                }
 
         except MCPUpstreamAuthError as e:
             # Surface upstream pass-through 401/403 challenges to the client so
@@ -1130,12 +1149,18 @@ if MCP_AVAILABLE:
         scopes: Final[list[str] | None] = scopes_raw if isinstance(scopes_raw, list) else None
         return client_id, client_secret, scopes
 
+    async def _list_tools_within(client: MCPClient, deadline: float) -> list[MCPTool] | None:
+        with anyio.move_on_after(deadline):
+            return await client.list_tools(raise_on_error=True)
+        return None
+
     async def _execute_with_mcp_client(
         request: NewMCPServerRequest,
         operation: Callable[..., Awaitable[Mapping[str, object]]],
         mcp_auth_header: str | dict[str, str] | None = None,
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
+        timeout_seconds: float = MCP_TOOL_LISTING_TIMEOUT,
     ) -> Mapping[str, object]:
         """
         Create a temporary MCP client from *request*, run *operation*, and return the result.
@@ -1151,6 +1176,10 @@ if MCP_AVAILABLE:
             oauth2_headers: Headers extracted from the incoming request (may contain the
                 litellm API key — must NOT be forwarded for M2M servers).
             raw_headers: Raw request headers forwarded for stdio env construction.
+            timeout_seconds: Cap on OAuth discovery, connect, handshake, and *operation*
+                combined. Defaults to ``MCP_TOOL_LISTING_TIMEOUT`` (30s, below common LB
+                timeouts) so an unreachable upstream yields this endpoint's JSON error
+                instead of an opaque load-balancer 504 with an empty body.
 
         Returns:
             The dict returned by *operation*, or an error dict on failure.
@@ -1173,6 +1202,7 @@ if MCP_AVAILABLE:
                 transport=request.transport,
                 auth_type=request.auth_type,
                 mcp_info=request.mcp_info,
+                timeout=request.timeout,
                 command=request.command,
                 args=request.args,
                 env=request.env,
@@ -1240,15 +1270,16 @@ if MCP_AVAILABLE:
                 static_headers=request.static_headers,
             )
 
-            client: Final = await global_mcp_server_manager._create_mcp_client(
-                server=server_model,
-                mcp_auth_header=mcp_auth_header,
-                extra_headers=merged_headers,
-                stdio_env=stdio_env,
-                cred_provider=preview_cred_provider,
-            )
+            with anyio.fail_after(timeout_seconds):
+                client: Final = await global_mcp_server_manager._create_mcp_client(
+                    server=server_model,
+                    mcp_auth_header=mcp_auth_header,
+                    extra_headers=merged_headers,
+                    stdio_env=stdio_env,
+                    cred_provider=preview_cred_provider,
+                )
 
-            return await operation(client)
+                return await operation(client)
 
         except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
             raise
@@ -1257,7 +1288,7 @@ if MCP_AVAILABLE:
             return {
                 "status": "error",
                 "error": True,
-                "message": _connection_error_message(e),
+                "message": _connection_error_message(e, request.url, timeout_seconds),
             }
 
     async def _preview_openapi_tools(spec_path: str) -> dict:
@@ -1402,11 +1433,26 @@ if MCP_AVAILABLE:
             oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers)
 
         async def _list_tools_operation(client):
-            async def _list_tools_session_operation(session):
-                return await session.list_tools()
-
-            list_tools_response: Final = await client.run_with_session(_list_tools_session_operation)
-            list_tools_result: Final[list[MCPTool]] = list_tools_response.tools
+            # Bound the whole pagination walk: without this the preview is limited only by the
+            # per-request timeout times the page cap. max() keeps the pre-pagination guarantee
+            # that a single slow page within the client timeout still succeeds, and a
+            # per-server timeout above the global default extends the deadline with it.
+            listing_deadline: Final = max(
+                getattr(client, "timeout", MCP_CLIENT_TIMEOUT) or MCP_CLIENT_TIMEOUT,
+                MCP_TOOL_LISTING_TIMEOUT,
+            )
+            list_tools_result: Final = await _list_tools_within(client, listing_deadline)
+            if list_tools_result is None:
+                verbose_logger.warning(
+                    "MCP tools/list preview timed out after %s seconds while paginating upstream tools",
+                    listing_deadline,
+                )
+                return {  # mutable-ok: error response payload
+                    "status": "error",
+                    "error": True,
+                    "message": f"Timed out listing tools after {listing_deadline} seconds. "
+                    "The MCP server may be responding slowly or paginating excessively.",
+                }
             model_dumped_tools: Final[list[dict]] = [tool.model_dump() for tool in list_tools_result]
             return {
                 "tools": model_dumped_tools,

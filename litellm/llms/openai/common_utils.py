@@ -268,6 +268,7 @@ class BaseOpenAILLM:
             "max_retries",
             "organization",
             "api_base",
+            "workload_identity_config",
         )
         openai_client_fields: Final = (
             BaseOpenAILLM.get_openai_client_initialization_param_fields(client_type=client_type)
@@ -304,14 +305,16 @@ class BaseOpenAILLM:
 
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration()
+        transport: Final = AsyncHTTPHandler._create_async_transport(
+            ssl_context=(ssl_config if isinstance(ssl_config, ssl.SSLContext) else None),
+            ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
+            shared_session=shared_session,
+        )
 
         return httpx.AsyncClient(
             verify=ssl_config,
-            transport=AsyncHTTPHandler._create_async_transport(
-                ssl_context=(ssl_config if isinstance(ssl_config, ssl.SSLContext) else None),
-                ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
-                shared_session=shared_session,
-            ),
+            transport=transport,
+            mounts=AsyncHTTPHandler._create_httpx_proxy_mounts(transport, verify=ssl_config, cert=None),
             follow_redirects=True,
         )
 

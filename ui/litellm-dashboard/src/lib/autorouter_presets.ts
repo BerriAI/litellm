@@ -6,6 +6,7 @@ import {
   ComplexityRouterConfigValue,
   ClassifierType,
   ClassifierLLMConfig,
+  DEFAULT_CLASSIFICATION_MODE,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
   usesLlmClassifier,
@@ -19,7 +20,6 @@ import {
 } from "@/components/add_model/complexity_router_tiers";
 import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "@/components/add_model/SemanticKeywordMatching";
-import presetsRaw from "@/autorouter_presets.json";
 
 // `key` is the stable JSON object key (e.g. "anthropic_family"); `label` is display text and
 // never an identity.
@@ -30,16 +30,10 @@ export interface AutoRouterPreset {
   complexity_router_config: ComplexityRouterConfigPayload;
 }
 
-// The bundled JSON is a developer-authored, build-time asset, so it is trusted at the import
-// boundary rather than re-validated at runtime (resolveJsonModule widens its string literals,
-// hence this one cast). autorouter_presets.test.ts pins the parsed shape, so a JSON typo fails CI.
-const RAW = presetsRaw as Record<string, Omit<AutoRouterPreset, "key">>;
+export type AutoRouterPresetsResponse = Record<string, Omit<AutoRouterPreset, "key">>;
 
-const PRESETS: AutoRouterPreset[] = Object.entries(RAW).map(([key, preset]) => ({ key, ...preset }));
-
-export const getAllPresets = (): AutoRouterPreset[] => PRESETS;
-
-export const getPresetByKey = (key: string): AutoRouterPreset | undefined => PRESETS.find((p) => p.key === key);
+export const hydratePresets = (raw: AutoRouterPresetsResponse): AutoRouterPreset[] =>
+  Object.entries(raw).map(([key, preset]) => ({ key, ...preset }));
 
 // Generalized over ComplexityRouterConfigPayload so the same accessors check either a preset's own
 // bundled config or a caller's actually-built config - the two need to agree, since a preset only
@@ -288,13 +282,17 @@ export const buildPresetPrefill = (
       classifier_context_budget_chars: config.classifier_context_budget_chars,
       classifier_context_per_turn_chars: config.classifier_context_per_turn_chars,
       classifier_context_include_assistant_turns: config.classifier_context_include_assistant_turns,
+      classification_mode: config.classification_mode ?? DEFAULT_CLASSIFICATION_MODE,
       session_affinity: config.session_affinity ?? DEFAULT_SESSION_AFFINITY,
       deployment_affinity: config.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
+      modality_routing: config.modality_routing ?? false,
       adaptive: config.adaptive,
       adaptive_weights: config.adaptive_weights,
       tier_distance_penalty: config.tier_distance_penalty,
       adaptive_eligible: config.adaptive_eligible,
       return_raw_model_name: config.return_raw_model_name,
+      enable_context_window_escalation: config.enable_context_window_escalation,
+      context_window_escalation_buffer: config.context_window_escalation_buffer,
     },
     customTechnicalKeywords: config.custom_technical_keywords ?? [],
     keywordTierRules: hydrateKeywordTierRules(config.keyword_tier_rules ?? []),

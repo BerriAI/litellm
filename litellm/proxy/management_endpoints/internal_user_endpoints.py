@@ -17,7 +17,7 @@ import json
 import traceback
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal, Protocol, cast, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -27,6 +27,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
+from litellm.proxy.auth.password_policy import validate_password_policy
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import (
     object_permission_cache_key,
@@ -154,9 +155,10 @@ def _team_membership_table(
     return team_membership_table
 
 
-def _hash_password_in_dict(data: dict) -> None:
-    """Hash password field in-place if present."""
+def _hash_password_in_dict(data: dict, general_settings: Mapping[str, object]) -> None:
+    """Validate and hash password field in-place if present."""
     if "password" in data and data["password"] is not None:
+        validate_password_policy(data["password"], general_settings)
         data["password"] = hash_password(data["password"])
 
 
@@ -500,7 +502,7 @@ async def new_user(
     ```
     """
     try:
-        from litellm.proxy.proxy_server import _license_check, prisma_client
+        from litellm.proxy.proxy_server import _license_check, general_settings, prisma_client
 
         if prisma_client is None:
             raise HTTPException(status_code=400, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -548,7 +550,7 @@ async def new_user(
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
         # the caller sent would be dropped on the floor.
         data_json = await _set_object_permission(data_json=data_json, prisma_client=prisma_client)
-        _hash_password_in_dict(data_json)
+        _hash_password_in_dict(data_json, general_settings)
         teams = data.teams
         if teams is None:
             teams = check_if_default_team_set()
@@ -735,10 +737,44 @@ def _enforce_user_info_access(user_id: str | None, user_api_key_dict: UserAPIKey
     )
 
 
-async def _get_user_info_teams(
-    prisma_client: Any,
+class _UserInfoDataClient(Protocol):
+    @overload
+    async def get_data(self, *, user_id: str) -> "prisma_models.LiteLLM_UserTable | None": ...
+
+    @overload
+    async def get_data(
+        self,
+        *,
+        user_id: str | None,
+        table_name: Literal["key"],
+        query_type: Literal["find_all"],
+    ) -> "Sequence[LiteLLM_VerificationToken] | None": ...
+
+    @overload
+    async def get_data(
+        self,
+        *,
+        team_id_list: list[str],
+        table_name: Literal["team"],
+        query_type: Literal["find_all"],
+    ) -> "Sequence[TeamListResponseObject] | None": ...
+
+
+async def _get_user_info_keys(
+    prisma_client: "_UserInfoDataClient",
     user_id: str | None,
-    user_info: Any | None,
+) -> "Sequence[LiteLLM_VerificationToken] | None":
+    return await prisma_client.get_data(
+        user_id=user_id,
+        table_name="key",
+        query_type="find_all",
+    )
+
+
+async def _get_user_info_teams(
+    prisma_client: "_UserInfoDataClient",
+    user_id: str | None,
+    user_info: "prisma_models.LiteLLM_UserTable",
     user_api_key_dict: UserAPIKeyAuth,
 ) -> tuple[list[TeamListResponseObject], list[TeamListResponseObject] | None]:
     """Fetch and merge teams from membership + user.teams field."""
@@ -759,7 +795,7 @@ async def _get_user_info_teams(
         team_list = teams_1
         team_id_list = [team.team_id for team in teams_1]
 
-    teams_2: list[TeamListResponseObject] | None = None
+    teams_2: Sequence[TeamListResponseObject] | None = None
     target_team_ids: Final = getattr(user_info, "teams", None)
 
     if target_team_ids and isinstance(target_team_ids, list):
@@ -769,8 +805,8 @@ async def _get_user_info_teams(
             query_type="find_all",
         )
     elif user_api_key_dict.user_id is not None and user_id is None:
-        caller_user_info: Final[object] = await prisma_client.get_data(user_id=user_api_key_dict.user_id)
-        caller_team_ids: Final = getattr(caller_user_info, "teams", None)
+        caller_user_info: Final = await prisma_client.get_data(user_id=user_api_key_dict.user_id)
+        caller_team_ids: Final = caller_user_info.teams if caller_user_info is not None else None
         if caller_team_ids:
             teams_2 = await prisma_client.get_data(
                 team_id_list=caller_team_ids,
@@ -807,7 +843,7 @@ def _redact_scim_enterprise_metadata(
 def _build_user_info_response(
     user_id: str | None,
     user_info: Any | None,
-    keys: list[LiteLLM_VerificationToken] | None,
+    keys: Sequence[LiteLLM_VerificationToken] | None,
     team_list: list[TeamListResponseObject],
     teams_1: list[TeamListResponseObject] | None,
     model_max_budget_usage: dict[str, dict[str, object]] | None = None,
@@ -894,11 +930,7 @@ async def user_info(
         )
 
         ## GET ALL KEYS ##
-        keys: Final = await prisma_client.get_data(
-            user_id=user_id,
-            table_name="key",
-            query_type="find_all",
-        )
+        keys: Final = await _get_user_info_keys(prisma_client, user_id)
 
         response_data: Final = _build_user_info_response(
             user_id=user_id,
@@ -997,6 +1029,14 @@ async def user_info_v2(
     This is the v2 replacement for /user/info, designed to avoid the "god endpoint" problem
     where the old endpoint loaded all keys and teams into memory.
 
+    Note on `spend`: this is the user's running budget counter, which the budget reset job
+    resets whenever `budget_reset_at` elapses (see `budget_duration`): to zero by default,
+    or to the overage above `max_budget` when `budget_rollover` is enabled. It is NOT
+    lifetime or per-period historical spend. For historical spend over a date range, use
+    `/user/daily/activity` or `/user/daily/activity/aggregated`, which read daily spend
+    records that only ever accumulate and are never reset. The two values are expected to
+    diverge once a budget reset has occurred within the queried period.
+
     Access control:
     - Proxy admins can query any user
     - Team admins can query users within their teams
@@ -1077,6 +1117,12 @@ async def user_info_v2(
         raise handle_exception_on_proxy(e)
 
 
+async def _fetch_admin_teams_and_keys_rows(
+    prisma_client: "PrismaClient", sql_query: str
+) -> Sequence[Mapping[str, Sequence[Mapping[str, object]] | None]]:
+    return await prisma_client.db.query_raw(sql_query)
+
+
 async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
     """
     Admin UI Endpoint - Returns All Teams and Keys when Proxy Admin is querying
@@ -1100,22 +1146,25 @@ async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
             "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
         )
 
-    results: Final = await prisma_client.db.query_raw(sql_query)
+    results: Final = await _fetch_admin_teams_and_keys_rows(prisma_client, sql_query)
 
     verbose_proxy_logger.debug("results_keys: %s", results)
 
-    _keys_in_db: Final[Sequence[dict[str, object]]] = results[0]["keys"] or []
+    _keys_in_db: Final[Sequence[Mapping[str, object]]] = results[0]["keys"] or []
     # cast all keys to LiteLLM_VerificationToken
     keys_in_db: Final = []
     for key in _keys_in_db:
-        if key.get("models") is None:
-            key["models"] = []
-        keys_in_db.append(LiteLLM_VerificationToken.model_validate(key))
+        key_payload = dict[str, object](key)
+        if key_payload.get("models") is None:
+            key_payload["models"] = []
+        keys_in_db.append(LiteLLM_VerificationToken.model_validate(key_payload))
 
     # cast all teams to LiteLLM_TeamTable
-    _teams_in_db: list[LiteLLM_TeamTable] = results[0]["teams"] or []
-    _teams_in_db = [LiteLLM_TeamTable.model_validate(team) for team in _teams_in_db]
-    _teams_in_db.sort(key=lambda x: getattr(x, "team_alias", "") or "")
+    _teams_rows: Final[Sequence[Mapping[str, object]]] = results[0]["teams"] or []
+    _teams_in_db: Final = sorted(
+        (LiteLLM_TeamTable.model_validate(team) for team in _teams_rows),
+        key=lambda x: getattr(x, "team_alias", "") or "",
+    )
     returned_keys: Final = _process_keys_for_user_info(keys=keys_in_db, all_teams=_teams_in_db)
 
     # Get admin's own user_id and user_info
@@ -1140,7 +1189,7 @@ async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
 
 
 def _process_keys_for_user_info(
-    keys: list[LiteLLM_VerificationToken] | None,
+    keys: Sequence[LiteLLM_VerificationToken] | None,
     all_teams: list[LiteLLM_TeamTable] | list[TeamListResponseObject] | None,
 ):
     from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
@@ -1231,7 +1280,7 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
 
 
 async def _schedule_user_update_audit_log(
-    response: dict[str, Any],
+    response: Mapping[str, object],
     existing_user_row: BaseModel | None,
     litellm_changed_by: str | None,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1358,7 +1407,7 @@ async def _update_single_user_helper(
 
     Returns the updated user data or raises an exception on failure.
     """
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+    from litellm.proxy.proxy_server import general_settings, litellm_proxy_admin_name, prisma_client
 
     if prisma_client is None:
         raise Exception("Not connected to DB!")
@@ -1373,7 +1422,7 @@ async def _update_single_user_helper(
 
     data_json: Final[dict] = user_request.model_dump(exclude_unset=True)
     non_default_values = _update_internal_user_params(data_json=data_json, data=user_request)
-    _hash_password_in_dict(non_default_values)
+    _hash_password_in_dict(non_default_values, general_settings)
 
     existing_user_row: BaseModel | None = None
     if user_request.user_id:
@@ -2687,6 +2736,11 @@ async def get_user_daily_activity(
 
     Meant to optimize querying spend data for analytics for a user.
 
+    Reads daily spend records that only ever accumulate and are never affected by budget
+    resets. Their total can legitimately exceed the `spend` field returned by
+    `/v2/user/info`, which is a running budget counter that every budget reset sets back
+    to zero (or to the overage above `max_budget` when `budget_rollover` is enabled).
+
     Returns:
     (by date)
     - spend
@@ -2800,6 +2854,11 @@ async def get_user_daily_activity_aggregated(
     """
     Aggregated analytics for a user's daily activity without pagination.
     Returns the same response shape as the paginated endpoint with page metadata set to single-page.
+
+    Reads daily spend records that only ever accumulate and are never affected by budget
+    resets. Their total can legitimately exceed the `spend` field returned by
+    `/v2/user/info`, which is a running budget counter that every budget reset sets back
+    to zero (or to the overage above `max_budget` when `budget_rollover` is enabled).
     """
     from litellm.proxy.proxy_server import prisma_client
 
