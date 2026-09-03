@@ -524,11 +524,22 @@ describe("parseSkillSource — security boundary", () => {
     }
   });
 
-  it("rejects URLs with embedded credentials", () => {
-    expect(parseSkillSource("https://user:token@gitlab.com/org/repo")).toBeNull();
-    expect(parseSkillSource("https://user@gitlab.com/org/repo")).toBeNull();
-    // userinfo confusion: the real host is evil.com, not github.com
-    expect(parseSkillSource("https://github.com@evil.com/org/repo")).toBeNull();
+  it("accepts URLs with credentials and strips them", () => {
+    // Credentials are stripped; the repo URL parses normally afterward
+    expect(parseSkillSource("https://user:token@gitlab.com/org/repo")?.parsed).toEqual({
+      source: "url",
+      url: "https://gitlab.com/org/repo",
+    });
+    expect(parseSkillSource("https://user@gitlab.com/org/repo")?.parsed).toEqual({
+      source: "url",
+      url: "https://gitlab.com/org/repo",
+    });
+    // userinfo confusion: the real host is evil.com — stripping credentials
+    // correctly identifies evil.com as the host, NOT github.com
+    expect(parseSkillSource("https://github.com@evil.com/org/repo")?.parsed).toEqual({
+      source: "url",
+      url: "https://evil.com/org/repo",
+    });
   });
 
   it("rejects IP-literal hosts (loopback, private, metadata, obfuscated, IPv6)", () => {
@@ -541,6 +552,18 @@ describe("parseSkillSource — security boundary", () => {
     ]) {
       expect(parseSkillSource(url)).toBeNull();
     }
+  });
+
+  it("preserves validated host when stripping credentials from //path URLs", () => {
+    // A path starting with // is a new authority if re-parsed after stripping.
+    // In-place credential clearing prevents the host from changing.
+    // The validated host (safe.com) stays as-is — not bypassed to 127.0.0.1.
+    const result = parseSkillSource("https://user@safe.com//127.0.0.1/repo");
+    expect(result).not.toBeNull();
+    expect(result?.parsed).toEqual({
+      source: "url",
+      url: "https://safe.com//127.0.0.1/repo",
+    });
   });
 
   it("does not grant GitHub shorthand to a look-alike host", () => {
