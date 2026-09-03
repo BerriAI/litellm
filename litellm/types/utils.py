@@ -2839,6 +2839,7 @@ class StandardLoggingRoutingDecisionTierBoundaries(TypedDict):
 
 RoutingDecisionCause = Literal[
     "heuristic_scorer",
+    "heuristic_v2",
     # The scorer found 2+ reasoning markers and forced REASONING regardless of score.
     # A distinct cause rather than a marker inside `signals`, because it is the fact
     # that tells a reader the score did NOT choose the tier; encoding it as free text
@@ -2851,6 +2852,7 @@ RoutingDecisionCause = Literal[
     # scorer, and from "classifier_fallback", which is the scorer running because a call failed:
     # only this cause means an LLM classifier was configured, reachable, and deliberately skipped.
     "heuristic_first_short_circuit",
+    "hybrid_short_circuit",
     # The operator's classifier plugin (classifier_type 'custom') decided the tier.
     "classifier_plugin",
     # The LLM classifier or classifier plugin failed on a router with an operator-defined
