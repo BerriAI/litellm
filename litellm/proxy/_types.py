@@ -2504,6 +2504,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="max request size in MB, if a request is larger than this size it will be rejected",
     )
+    enforce_session_id: bool | None = Field(
+        None,
+        description="reject inference requests that arrive without a session id (a session header or metadata.session_id) with a 400",
+    )
     max_batch_file_size_mb: int | None = Field(
         None,
         description="max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider",

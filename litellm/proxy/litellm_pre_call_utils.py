@@ -73,6 +73,7 @@ _EXPLICIT_SESSION_HEADERS: Final = frozenset({"x-litellm-trace-id", "x-litellm-s
 # ``session-id``/``thread-id``; builds before the codex-api split sent
 # ``session_id``/``conversation_id``. Ordered session before thread.
 _CODEX_SESSION_ID_HEADERS: Final = ("session-id", "session_id", "thread-id", "conversation_id")
+
 # Matches every first-party Codex originator: codex-tui, codex_cli_rs, codex_exec,
 # codex_vscode, "Codex ...". A separator is required so an unrelated "codexfoo" client
 # does not read as Codex.
@@ -1342,6 +1343,24 @@ class LiteLLMProxyRequestSetup:
         return data
 
     @staticmethod
+    def resolve_session_id(caller_session_id: object, enforce_session_id: bool) -> str:
+        from litellm._uuid import uuid
+
+        if caller_session_id:
+            return str(caller_session_id)
+        if enforce_session_id:
+            raise ProxyException(
+                message=(
+                    "No session id provided. Pass a session header (e.g. 'x-litellm-session-id') "
+                    "or 'metadata.session_id'. 'enforce_session_id'=True"
+                ),
+                type=ProxyErrorTypes.bad_request_error,
+                param="session_id",
+                code=400,
+            )
+        return str(uuid.uuid4())
+
+    @staticmethod
     def get_sanitized_user_information_from_key(
         user_api_key_dict: UserAPIKeyAuth,
     ) -> StandardLoggingUserAPIKeyMetadata:
@@ -1818,6 +1837,15 @@ async def add_litellm_data_to_request(
         data=data,
         _metadata_variable_name=_metadata_variable_name,
     )
+
+    metadata_for_session: Final = data.get(_metadata_variable_name)
+    if isinstance(metadata_for_session, dict):
+        resolved_session_id: Final = LiteLLMProxyRequestSetup.resolve_session_id(
+            caller_session_id=metadata_for_session.get("session_id") or data.get("litellm_session_id"),
+            enforce_session_id=general_settings is not None and bool(general_settings.get("enforce_session_id")),
+        )
+        data["litellm_session_id"] = resolved_session_id  # rebind-ok: data is an out-param
+        metadata_for_session["session_id"] = resolved_session_id
 
     # Expose request headers under the metadata field for guardrails (fixes #17477)
     if _metadata_variable_name in data and isinstance(data[_metadata_variable_name], dict):

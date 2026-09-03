@@ -25530,6 +25530,11 @@ export interface components {
              */
             enforce_fallback_model_access?: boolean | null;
             /**
+             * Enforce Session Id
+             * @description reject inference requests that arrive without a session id (a session header or metadata.session_id) with a 400
+             */
+            enforce_session_id?: boolean | null;
+            /**
              * Forward Client Headers To Llm Api
              * @description If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.
              */

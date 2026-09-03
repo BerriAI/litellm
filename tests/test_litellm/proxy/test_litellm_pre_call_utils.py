@@ -3287,6 +3287,144 @@ def test_add_litellm_metadata_from_anthropic_user_id_dict_ignores_invalid_sessio
     assert data == {"metadata": {"user_id": user_id}}
 
 
+def _session_request(session_id: str | None) -> MagicMock:
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = (
+        {"Content-Type": "application/json", "x-litellm-session-id": session_id}
+        if session_id is not None
+        else {"Content-Type": "application/json"}
+    )
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    return request_mock
+
+
+def _session_user_api_key_dict() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_gives_spend_log_and_callbacks_one_session_id_without_a_header():
+    """No session header: the fabricated id lands in both authoritative fields, so the two systems agree."""
+    import uuid as _uuid
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-5.4-mini", "metadata": {}},
+        request=_session_request(session_id=None),
+        user_api_key_dict=_session_user_api_key_dict(),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    session_id = updated["metadata"]["session_id"]
+    _uuid.UUID(session_id)
+    assert updated["litellm_session_id"] == session_id
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_promotes_body_session_id_onto_litellm_session_id():
+    """A body metadata.session_id with no header is promoted onto litellm_session_id.
+
+    litellm_session_id is the top spend-log trace_id candidate, so promoting it keeps the spend
+    log from falling back to the router's per-call litellm_trace_id and diverging from callbacks.
+    """
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-5.4-mini", "metadata": {"session_id": "body-session"}},
+        request=_session_request(session_id=None),
+        user_api_key_dict=_session_user_api_key_dict(),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    assert updated["litellm_session_id"] == "body-session"
+    assert updated["metadata"]["session_id"] == "body-session"
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_enforce_session_id_rejects_request_without_one():
+    """enforce_session_id on with no session id anywhere is a 400, not a fabricated id."""
+    with pytest.raises(ProxyException) as exc_info:
+        await add_litellm_data_to_request(
+            data={"model": "gpt-5.4-mini", "metadata": {}},
+            request=_session_request(session_id=None),
+            user_api_key_dict=_session_user_api_key_dict(),
+            proxy_config=MagicMock(),
+            general_settings={"enforce_session_id": True},
+            version="test-version",
+        )
+    assert exc_info.value.code in (400, "400")
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_enforce_session_id_keeps_header_session_id_in_both_fields():
+    """enforce_session_id on with a session header passes, and the header id is what both fields carry."""
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-5.4-mini", "metadata": {}},
+        request=_session_request(session_id="header-session"),
+        user_api_key_dict=_session_user_api_key_dict(),
+        proxy_config=MagicMock(),
+        general_settings={"enforce_session_id": True},
+        version="test-version",
+    )
+    assert updated["litellm_session_id"] == "header-session"
+    assert updated["metadata"]["session_id"] == "header-session"
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_fabricated_session_id_is_what_the_spend_log_records():
+    """The fabricated id is what the spend log computes, so a lookup across systems agrees.
+
+    Spend tracking derives the spend log session_id from the standard logging payload trace_id,
+    whose top default candidate is litellm_session_id. Pre-call sets that field, so the spend
+    log ignores the router's unrelated per-call litellm_trace_id and matches the callbacks.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_session_id_for_spend_log
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-5.4-mini", "metadata": {}},
+        request=_session_request(session_id=None),
+        user_api_key_dict=_session_user_api_key_dict(),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    fabricated = updated["metadata"]["session_id"]
+
+    class _StubLogging:
+        litellm_trace_id = "unrelated-per-call-trace"
+        litellm_session_id = ""
+
+    litellm_params = {
+        "litellm_session_id": updated["litellm_session_id"],
+        "litellm_trace_id": "router-per-call-trace-id",
+        "metadata": {"session_id": fabricated},
+    }
+    resolved_trace_id = StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
+        logging_obj=_StubLogging(), litellm_params=litellm_params
+    )
+    assert resolved_trace_id == fabricated
+
+    spend_log_session_id = _get_session_id_for_spend_log(
+        kwargs={}, standard_logging_payload={"trace_id": resolved_trace_id}
+    )
+    assert spend_log_session_id == fabricated
+
+
 def test_add_litellm_metadata_from_request_headers_explicit_header_beats_generic():
     """Explicit x-litellm-trace-id wins over a generic x-*-session-id header."""
     headers = {
