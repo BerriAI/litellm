@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
@@ -44,6 +45,38 @@ def _get_prisma_env() -> dict:
 _MIGRATION_TS_RE = re.compile(r"^(\d{14})_")
 
 _MIGRATION_DEADLOCK_MARKER = "deadlock detected"
+
+MAX_MIGRATE_DEPLOY_ATTEMPTS = 4
+
+
+@dataclass(frozen=True)
+class _MigrateAttemptBudget:
+    """Retries left, and the recoveries already run.
+
+    A recovery that lands something new costs nothing, so a database full of
+    objects `prisma db push` created works through them one per pass. Anything
+    that made no progress spends an attempt, so a stuck run still gives up.
+    """
+
+    attempts_left: int
+    recoveries: frozenset[str] = frozenset()
+
+    @property
+    def exhausted(self) -> bool:
+        return self.attempts_left <= 0
+
+    @property
+    def attempt_number(self) -> int:
+        return MAX_MIGRATE_DEPLOY_ATTEMPTS - self.attempts_left + 1
+
+    def spend(self) -> "_MigrateAttemptBudget":
+        return replace(self, attempts_left=self.attempts_left - 1)
+
+    def after_recovery(self, recovery: str) -> "_MigrateAttemptBudget":
+        if recovery in self.recoveries:
+            return self.spend()
+        return replace(self, recoveries=self.recoveries | {recovery})
+
 
 _SPEND_LOGS_ALTER_RE = re.compile(r'^ALTER\s+TABLE\s+"LiteLLM_SpendLogs"\s', re.IGNORECASE)
 _SPEND_LOGS_ARTIFACT_DROP_RE = re.compile(
@@ -716,6 +749,9 @@ class ProxyExtrasDBManager:
         Ahead-of-HEAD state (DB has migrations newer than this build ships)
         is logged as a warning, not a fatal error — users whose DBs got into
         weird shapes from the old thrashing should still be able to start.
+
+        The retry budget only counts attempts that made no progress: see
+        _MigrateAttemptBudget.
         """
         schema_path = ProxyExtrasDBManager._get_prisma_dir() + "/schema.prisma"
         migrations_dir = ProxyExtrasDBManager._get_prisma_dir()
@@ -749,8 +785,9 @@ class ProxyExtrasDBManager:
         original_dir = os.getcwd()
         os.chdir(migrations_dir)
         deploy_timeout = prisma_migrate_deploy_timeout()
+        budget = _MigrateAttemptBudget(attempts_left=MAX_MIGRATE_DEPLOY_ATTEMPTS)
         try:
-            for attempt in range(4):
+            while not budget.exhausted:
                 try:
                     result = subprocess.run(
                         [_get_prisma_command(), "migrate", "deploy"],
@@ -767,10 +804,11 @@ class ProxyExtrasDBManager:
                     logger.warning(
                         "prisma migrate deploy attempt %s timed out after %ss, retrying. "
                         "Raise %s if this database needs longer to apply its pending migrations.",
-                        attempt + 1,
+                        budget.attempt_number,
                         deploy_timeout,
                         PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR,
                     )
+                    budget = budget.spend()
                     time.sleep(random.randrange(5, 15))
                     continue
 
@@ -781,7 +819,14 @@ class ProxyExtrasDBManager:
                         logger.info(
                             "Schema exists but no migrations ledger — creating baseline"
                         )
-                        ProxyExtrasDBManager._create_baseline_migration(schema_path)
+                        baselined = ProxyExtrasDBManager._create_baseline_migration(
+                            schema_path
+                        )
+                        budget = (
+                            budget.after_recovery("baseline")
+                            if baselined
+                            else budget.spend()
+                        )
                         continue
 
                     if "P3009" in stderr:
@@ -818,6 +863,7 @@ class ProxyExtrasDBManager:
                                     f"intervention may be required.\n\n"
                                     f"Detail: {resolve_err}"
                                 ) from resolve_err
+                            budget = budget.after_recovery(f"resolved:{name}")
                             continue
                         if migration_match:
                             migration_name = migration_match.group(1)
@@ -831,6 +877,7 @@ class ProxyExtrasDBManager:
                                     migration_name,
                                 )
                                 ProxyExtrasDBManager._roll_back_migration_best_effort(migration_name)
+                                budget = budget.spend()
                                 time.sleep(random.randrange(5, 15))
                                 continue
                         raise RuntimeError(
@@ -876,6 +923,7 @@ class ProxyExtrasDBManager:
                                     f"intervention may be required.\n\n"
                                     f"Detail: {resolve_err}"
                                 ) from resolve_err
+                            budget = budget.after_recovery(f"resolved:{name}")
                             continue
 
                         if migration_match and _MIGRATION_DEADLOCK_MARKER in stderr:
@@ -888,6 +936,7 @@ class ProxyExtrasDBManager:
                             ProxyExtrasDBManager._roll_back_migration_best_effort(
                                 migration_match.group(1)
                             )
+                            budget = budget.spend()
                             time.sleep(random.randrange(5, 15))
                             continue
 
@@ -900,8 +949,9 @@ class ProxyExtrasDBManager:
                         logger.info(
                             "prisma migrate deploy attempt %s deadlocked against "
                             "a concurrent migrate deploy, retrying",
-                            attempt + 1,
+                            budget.attempt_number,
                         )
+                        budget = budget.spend()
                         time.sleep(random.randrange(5, 15))
                         continue
 
@@ -909,8 +959,9 @@ class ProxyExtrasDBManager:
                         logger.info(
                             "prisma migrate deploy attempt %s timed out waiting for "
                             "the advisory lock a concurrent migrate deploy holds, retrying",
-                            attempt + 1,
+                            budget.attempt_number,
                         )
+                        budget = budget.spend()
                         time.sleep(random.randrange(5, 15))
                         continue
 
@@ -920,9 +971,9 @@ class ProxyExtrasDBManager:
                     ) from e
 
             raise RuntimeError(
-                "Database migration failed after 4 attempts (retry loop "
-                "exhausted by timeouts, deadlock retries, or repeated "
-                "idempotent-recovery continues). Check database connectivity, "
+                f"Database migration failed after {MAX_MIGRATE_DEPLOY_ATTEMPTS} "
+                "attempts that made no progress (timeouts, deadlock retries, or a "
+                "recovery that had already run once). Check database connectivity, "
                 "load, and _prisma_migrations ledger state, and raise "
                 f"{PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR} if the attempts timed out."
             )
