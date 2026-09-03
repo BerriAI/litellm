@@ -11,7 +11,10 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
-from litellm.integrations.otel.presets.utils import ensure_mappers
+from litellm.integrations.otel.presets.utils import (
+    credential_gated_exporters,
+    ensure_mappers,
+)
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
@@ -26,10 +29,22 @@ class _ArizeSettings(BaseSettings):
 def arize_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
-    arize_cfg: Final = _V1ArizeLogger.get_arize_config()
-    headers: Final = _arize_headers(arize_cfg)
     base: Final = config_overrides or OpenTelemetryV2Config()
+    mappers: Final = ensure_mappers(base.mapper_names, "openinference")
+    try:
+        arize_cfg: Final = _V1ArizeLogger.get_arize_config()
+    except Exception:
+        if not allow_missing_credentials:
+            raise
+        return base.model_copy(
+            update={  # mutable-ok: pydantic model_copy takes a plain update mapping
+                "exporters": credential_gated_exporters(base.exporters, ExporterOwner.ARIZE_AX),
+                "mapper_names": mappers,
+            }
+        )
+    headers: Final = _arize_headers(arize_cfg)
     return base.model_copy(
         update={
             "exporters": [
@@ -41,7 +56,7 @@ def arize_preset(
                     owner=ExporterOwner.ARIZE_AX,
                 ),
             ],
-            "mapper_names": ensure_mappers(base.mapper_names, "openinference"),
+            "mapper_names": mappers,
             "resource_attributes": {
                 **base.resource_attributes,
                 **({"model_id": arize_cfg.project_name} if arize_cfg.project_name else {}),

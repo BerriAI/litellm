@@ -2845,6 +2845,28 @@ async def _authorize_authenticated_request(
 
 
 @tracer.wrap()
+def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth) -> None:
+    """Anchor the OTLP destinations this key or team overrides its traces to.
+
+    Called inside the ``auth`` phase span so that span reaches the tenant's account
+    as well, and on the request task so the ``ContextVar`` is inherited by the logging
+    tasks that close the LLM span. Best-effort: trace routing must never fail auth.
+
+    The two ``postgres`` spans under ``auth`` close before this runs, because they are
+    the reads that resolve the identity being read here, so they keep going to the
+    operator's backend alone.
+    """
+    try:
+        from litellm.integrations.otel.plumbing.context import set_request_destinations
+        from litellm.proxy.litellm_pre_call_utils import (
+            resolve_tenant_otel_destinations,
+        )
+
+        set_request_destinations(resolve_tenant_otel_destinations(user_api_key_dict))
+    except Exception as exc:  # noqa: BLE001  # telemetry routing is best-effort and must never break authentication
+        verbose_proxy_logger.debug("OTel V2: tenant destination resolution failed: %s", exc)
+
+
 async def user_api_key_auth(
     request: Request,
     api_key: str = fastapi.Security(api_key_header),
@@ -2891,6 +2913,7 @@ async def user_api_key_auth(
                 raise body_parse_exception
             raise
         user_api_key_auth_obj.budget_reservation = None
+        _seed_request_destinations(user_api_key_auth_obj)
 
         # A body that never parsed is authenticated (so the trace carries identity
         # and this ``auth`` span) but not authorized: there is no model to check it

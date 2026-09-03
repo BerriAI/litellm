@@ -18,6 +18,18 @@ class Preset(Protocol):
 
     ``config_overrides`` lets one preset layer onto another's config (or onto
     test-supplied defaults); the factory calls presets with no arguments.
+
+    ``allow_missing_credentials`` lets a credential-mandatory backend (langfuse /
+    arize / weave) degrade to an exporter-less, mapper-only config instead of
+    raising when the operator set no env credentials of their own. That is a real
+    deployment: every team brings its own account and the operator keeps none, and
+    without it the whole V2 path silently falls back to the legacy integration, so
+    no team destination is ever reached. Credential-optional backends ignore it.
     """
 
-    def __call__(self, *, config_overrides: OpenTelemetryV2Config | None = None) -> OpenTelemetryV2Config: ...
+    def __call__(
+        self,
+        *,
+        config_overrides: OpenTelemetryV2Config | None = None,
+        allow_missing_credentials: bool = False,
+    ) -> OpenTelemetryV2Config: ...

@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from fastapi import HTTPException, Request
+from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
@@ -157,6 +158,7 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     LlmProviders,
     ProviderSpecificHeader,
+    StandardCallbackDynamicParams,
     StandardLoggingUserAPIKeyMetadata,
     SupportedCacheControls,
 )
@@ -170,6 +172,7 @@ _ENABLE_TEAM_STALE_ALIAS_BYPASS: bool | None = None
 
 
 if TYPE_CHECKING:
+    from litellm.integrations.otel.model.destination import OtelDestination
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
     from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext
 
@@ -972,6 +975,51 @@ def _get_dynamic_logging_metadata(
             team_id=user_api_key_dict.team_id, proxy_config=proxy_config
         )
     return callback_settings_obj
+
+
+_TENANT_OTEL_PARAMS: Final = TypeAdapter(StandardCallbackDynamicParams)
+
+
+def _tenant_otel_params(callback_vars: Mapping[str, str]) -> StandardCallbackDynamicParams:
+    try:
+        return _TENANT_OTEL_PARAMS.validate_python(callback_vars)
+    except PydanticValidationError:
+        return StandardCallbackDynamicParams()
+
+
+def resolve_tenant_otel_destinations(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> "tuple[OtelDestination, ...]":
+    """The OTLP destinations this request's key or team config overrides its traces to.
+
+    Key settings win over team settings outright, the same precedence
+    ``_get_dynamic_logging_metadata`` applies, so one caller never exports the same
+    backend to two accounts. Returns empty when OTEL V2 is off, when neither level
+    named a destination-capable backend, or when the config is incomplete, and the
+    request then keeps the operator's own exporters.
+    """
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.integrations.otel.presets.destinations import destination_for
+
+    if not is_otel_v2_enabled():
+        return ()
+    entries: Final = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(
+        user_api_key_dict
+    ) or KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    if not entries:
+        return ()
+    resolved: Final = tuple(
+        destination
+        for item in entries
+        if (callback := _get_validated_callback_metadata(item=item, source="otel-destination")) is not None
+        if (destination := destination_for(callback.callback_name, _tenant_otel_params(callback.callback_vars)))
+        is not None
+    )
+    return tuple(
+        destination
+        for index, destination in enumerate(resolved)
+        if destination.callback_name not in tuple(earlier.callback_name for earlier in resolved[:index])
+    )
 
 
 def clean_headers(
