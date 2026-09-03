@@ -843,7 +843,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
 
             blocked: Final = self._should_block_content(armor_response, allow_sanitization=self.mask_response_content)
-            # Overwrite rather than append: the pre_call scan already recorded its own entry.
             _, metadata = get_or_create_metadata_bucket(data)
             metadata["_model_armor_response"] = self._build_logging_response(armor_response)
             metadata["_model_armor_status"] = "blocked" if blocked else "success"
