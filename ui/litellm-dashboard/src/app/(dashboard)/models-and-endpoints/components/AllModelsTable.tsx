@@ -199,7 +199,7 @@ export function AllModelsTable({
             table={table}
             searchValue={searchValue}
             onSearchChange={onSearchChange}
-            searchPlaceholder="Search model names…"
+            searchPlaceholder="Search model names or IDs…"
             onOpenFilters={() => setFiltersOpen(true)}
             onRefresh={onRefresh}
             isRefreshing={isRefreshing}

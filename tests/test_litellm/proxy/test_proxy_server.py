@@ -2239,51 +2239,185 @@ async def test_apply_search_filter_bounds_db_fetch_by_page_and_cap():
     assert take < 10_000, "sorted search must cap below the full match set"
 
 
+def _db_model_row(model_id: str, model_name: str) -> MagicMock:
+    row = MagicMock()
+    row.model_id = model_id
+    row.model_name = model_name
+    row.model_info = {"id": model_id, "db_model": True}
+    return row
+
+
+def _prisma_client_with_model_rows(rows: list[MagicMock]) -> MagicMock:
+    """
+    Fake `LiteLLM_ProxyModelTable` that evaluates the Prisma `where` the
+    search sends: top-level fields AND together, `OR` takes any clause,
+    `contains` is a case-insensitive substring and `not.in` excludes ids.
+    """
+
+    def _column_matches(row: MagicMock, column: str, predicate: object) -> bool:
+        value = getattr(row, column)
+        if isinstance(predicate, str):
+            return value == predicate
+        assert isinstance(predicate, dict)
+        if "contains" in predicate:
+            return predicate["contains"].lower() in value.lower()
+        return value not in predicate["not"]["in"]
+
+    def _row_matches(row: MagicMock, where: dict) -> bool:
+        columns_match = all(
+            _column_matches(row, column, predicate) for column, predicate in where.items() if column != "OR"
+        )
+        any_clause_matches = any(
+            all(_column_matches(row, column, predicate) for column, predicate in clause.items())
+            for clause in where.get("OR", ())
+        )
+        return columns_match and ("OR" not in where or any_clause_matches)
+
+    async def _count(where: dict) -> int:
+        return sum(_row_matches(row, where) for row in rows)
+
+    async def _find_many(where: dict, take: int) -> list[MagicMock]:
+        return [row for row in rows if _row_matches(row, where)][:take]
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.count = AsyncMock(side_effect=_count)
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(side_effect=_find_many)
+    return prisma_client
+
+
+def _proxy_config_decrypting_rows() -> MagicMock:
+    proxy_config = MagicMock()
+    proxy_config.decrypt_model_list_from_db = lambda rows: [
+        {"model_name": r.model_name, "model_info": r.model_info, "litellm_params": {"model": r.model_name}}
+        for r in rows
+    ]
+    return proxy_config
+
+
 @pytest.mark.asyncio
 async def test_apply_search_filter_honours_exact_model_name_in_db_query():
     """
     `/v2/model/info?model=<group>&search=<term>`: the router list is already
     narrowed to the exact group, so the DB count and fetch must be too, or
-    other groups' rows leak into the page and inflate total_count.
+    other groups' rows leak into the page and inflate total_count. Within
+    the group the term still matches either the name or the deployment id.
     """
     from litellm.proxy.proxy_server import _apply_search_filter_to_models
 
-    prisma_client = MagicMock()
-    prisma_client.db.litellm_proxymodeltable.count = AsyncMock(return_value=0)
-    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
-    proxy_config = MagicMock()
-    proxy_config.decrypt_model_list_from_db = lambda rows: []
+    prisma_client = _prisma_client_with_model_rows(
+        [
+            _db_model_row("aaa-in-sonnet-group", "anthropic-sonnet-5"),
+            _db_model_row("bbb-sonnet-in-id-only", "anthropic-opus-5"),
+            _db_model_row("ccc-opus-in-id-only", "anthropic-sonnet-5"),
+        ]
+    )
+    proxy_config = _proxy_config_decrypting_rows()
 
-    await _apply_search_filter_to_models(
+    sonnet_group, sonnet_group_count = await _apply_search_filter_to_models(
         all_models=[],
         search="sonnet",
         prisma_client=prisma_client,
         proxy_config=proxy_config,
         model_name="anthropic-sonnet-5",
     )
-    where = prisma_client.db.litellm_proxymodeltable.count.call_args.kwargs["where"]
-    assert where["model_name"] == "anthropic-sonnet-5"
-    assert prisma_client.db.litellm_proxymodeltable.find_many.call_args.kwargs["where"] == where
+    assert [m["model_info"]["id"] for m in sonnet_group] == ["aaa-in-sonnet-group", "ccc-opus-in-id-only"]
+    assert sonnet_group_count == 2
 
-    prisma_client.db.litellm_proxymodeltable.count.reset_mock()
-    _, total_count = await _apply_search_filter_to_models(
+    opus_id_in_sonnet_group, opus_id_in_sonnet_group_count = await _apply_search_filter_to_models(
         all_models=[],
         search="opus",
         prisma_client=prisma_client,
         proxy_config=proxy_config,
         model_name="anthropic-sonnet-5",
     )
-    prisma_client.db.litellm_proxymodeltable.count.assert_not_called()
-    assert total_count == 0
+    assert [m["model_info"]["id"] for m in opus_id_in_sonnet_group] == ["ccc-opus-in-id-only"]
+    assert opus_id_in_sonnet_group_count == 1
 
-    await _apply_search_filter_to_models(
+    every_sonnet, every_sonnet_count = await _apply_search_filter_to_models(
         all_models=[],
         search="sonnet",
         prisma_client=prisma_client,
         proxy_config=proxy_config,
     )
-    where = prisma_client.db.litellm_proxymodeltable.count.call_args.kwargs["where"]
-    assert where["model_name"] == {"contains": "sonnet", "mode": "insensitive"}
+    assert len(every_sonnet) == 3
+    assert every_sonnet_count == 3
+
+
+@pytest.mark.asyncio
+async def test_apply_search_filter_matches_deployment_id():
+    """
+    LIT-4738: pasting a deployment id (`model_info.id`) into the models page
+    search must find that row, whether it is a config model that only lives
+    in the router or a DB model that is not loaded on this page, and
+    total_count must count it exactly once.
+    """
+    from litellm.proxy.proxy_server import _apply_search_filter_to_models
+
+    config_model_id = "39a9705e6b3a94a207bfbd3200b39a8ed886d2c6daa0deab123d15b721c8c898"
+    config_model = {
+        "model_name": "gpt-4.1",
+        "litellm_params": {"model": "openai/gpt-4.1"},
+        "model_info": {"id": config_model_id, "db_model": False},
+    }
+    sibling_config_model = {
+        "model_name": "gpt-4.1",
+        "litellm_params": {"model": "azure/gpt-4.1"},
+        "model_info": {"id": "0f0f0f0f-sibling", "db_model": False},
+    }
+    router_db_row = _db_model_row("db-row-loaded-in-router", "claude-sonnet-4-5")
+    unloaded_db_row = _db_model_row("lit4738-db-row-not-in-router", "gemini-2.5-pro")
+    router_db_model = {
+        "model_name": router_db_row.model_name,
+        "litellm_params": {"model": "anthropic/claude-sonnet-4-5"},
+        "model_info": router_db_row.model_info,
+    }
+    all_models = [config_model, sibling_config_model, router_db_model]
+    prisma_client = _prisma_client_with_model_rows([router_db_row, unloaded_db_row])
+    proxy_config = _proxy_config_decrypting_rows()
+
+    by_config_id, by_config_id_count = await _apply_search_filter_to_models(
+        all_models=all_models,
+        search=config_model_id,
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+    )
+    assert by_config_id == [config_model]
+    assert by_config_id_count == 1
+
+    by_unloaded_db_id, by_unloaded_db_id_count = await _apply_search_filter_to_models(
+        all_models=all_models,
+        search=unloaded_db_row.model_id,
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+    )
+    assert [m["model_info"]["id"] for m in by_unloaded_db_id] == [unloaded_db_row.model_id]
+    assert by_unloaded_db_id_count == 1
+
+    by_router_db_id, by_router_db_id_count = await _apply_search_filter_to_models(
+        all_models=all_models,
+        search=router_db_row.model_id,
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+    )
+    assert by_router_db_id == [router_db_model], "a DB row already in the router must not be returned twice"
+    assert by_router_db_id_count == 1
+
+    by_id_prefix_upper, _ = await _apply_search_filter_to_models(
+        all_models=all_models,
+        search=config_model_id[:12].upper(),
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+    )
+    assert by_id_prefix_upper == [config_model]
+
+    by_name, by_name_count = await _apply_search_filter_to_models(
+        all_models=all_models,
+        search="gpt-4",
+        prisma_client=prisma_client,
+        proxy_config=proxy_config,
+    )
+    assert by_name == [config_model, sibling_config_model]
+    assert by_name_count == 2
 
 
 @pytest.mark.asyncio
