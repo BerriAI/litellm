@@ -262,6 +262,61 @@ describe("LoginPage", () => {
     expect(screen.getByRole("button", { name: "Login with SSO" })).toBeInTheDocument();
   });
 
+  it("should show the SSO enabled notice when sso_configured is true and hide_sso_login_notice is not set", async () => {
+    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        auto_redirect_to_sso: false,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: true,
+      },
+      isLoading: false,
+    });
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LoginPage />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Login" })).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/Single Sign-On \(SSO\) is enabled\./)).toBeInTheDocument();
+  });
+
+  it("should hide the SSO enabled notice when hide_sso_login_notice is true", async () => {
+    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        auto_redirect_to_sso: false,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: true,
+        hide_sso_login_notice: true,
+      },
+      isLoading: false,
+    });
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LoginPage />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Login" })).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/Single Sign-On \(SSO\) is enabled\./)).not.toBeInTheDocument();
+  });
+
   it("should show disabled Login with SSO button with popover when sso_configured is false", async () => {
     (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {

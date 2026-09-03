@@ -349,7 +349,7 @@ function LoginPageContent() {
                 </FieldGroup>
               </form>
             </div>
-            {uiConfig?.sso_configured && <SsoEnabledNotice />}
+            {uiConfig?.sso_configured && !uiConfig?.hide_sso_login_notice && <SsoEnabledNotice />}
           </TooltipProvider>
         </CardContent>
       </Card>

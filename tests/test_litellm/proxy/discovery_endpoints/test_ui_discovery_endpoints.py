@@ -400,6 +400,76 @@ def test_ui_discovery_endpoints_hide_default_credentials_hint_via_general_settin
         assert data["hide_default_credentials_hint"] is True
 
 
+def test_ui_discovery_endpoints_hide_sso_login_notice_default_false():
+    """SSO login notice is shown by default (flag false)."""
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    with patch.dict(
+        os.environ,
+        {"DISABLE_ADMIN_UI": "false", "GOOGLE_CLIENT_ID": "test-client-id"},
+        clear=False,
+    ):
+        os.environ.pop("LITELLM_HIDE_SSO_LOGIN_NOTICE", None)
+
+        response = client.get("/.well-known/litellm-ui-config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["sso_configured"] is True
+        assert data["hide_sso_login_notice"] is False
+
+
+def test_ui_discovery_endpoints_hide_sso_login_notice_via_env_var():
+    """LITELLM_HIDE_SSO_LOGIN_NOTICE=true hides the login-page SSO notice."""
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    with patch.dict(
+        os.environ,
+        {
+            "LITELLM_HIDE_SSO_LOGIN_NOTICE": "true",
+            "DISABLE_ADMIN_UI": "false",
+            "GOOGLE_CLIENT_ID": "test-client-id",
+        },
+        clear=False,
+    ):
+
+        response = client.get("/.well-known/litellm-ui-config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["hide_sso_login_notice"] is True
+
+
+def test_ui_discovery_endpoints_hide_sso_login_notice_via_general_settings():
+    """general_settings.hide_sso_login_notice=true also hides the SSO notice."""
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    with (
+        patch(  # test-quality-ok: general_settings is a plain module dict with no injection seam, same precedent as the hide_default_credentials_hint test above
+            "litellm.proxy.proxy_server.general_settings",
+            {"hide_sso_login_notice": True},
+        ),
+        patch.dict(
+            os.environ,
+            {"DISABLE_ADMIN_UI": "false", "GOOGLE_CLIENT_ID": "test-client-id"},
+            clear=False,
+        ),
+    ):
+        os.environ.pop("LITELLM_HIDE_SSO_LOGIN_NOTICE", None)
+
+        response = client.get("/.well-known/litellm-ui-config")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["hide_sso_login_notice"] is True
+
+
 def test_ui_discovery_endpoints_is_control_plane_false_when_no_workers():
     app = FastAPI()
     app.include_router(router)
