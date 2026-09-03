@@ -533,9 +533,9 @@ class DeploymentAffinityCheck(CustomLogger):
             return typed_healthy_deployments
 
         verbose_router_logger.debug(
-            "DeploymentAffinityCheck: api-key affinity hit -> deployment=%s user_key=%s",
+            "DeploymentAffinityCheck: caller affinity hit -> deployment=%s user_key=%s",
             model_id,
-            self._shorten_for_logs(user_key),
+            self._shorten_for_logs(self._hash_user_key(user_key)),
         )
         return [deployment]
 
@@ -626,7 +626,7 @@ class DeploymentAffinityCheck(CustomLogger):
                         deployment_model_name,
                         model_id,
                         self.ttl_seconds,
-                        self._shorten_for_logs(user_key),
+                        self._shorten_for_logs(self._hash_user_key(user_key)),
                     )
                 else:
                     verbose_router_logger.debug(
