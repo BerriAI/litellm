@@ -26,7 +26,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
         (503, "internal_server_error"),
     ],
 )
-def test_status_code_decides_the_type_when_the_exception_carries_none(status_code, expected_type):
+def test_status_code_decides_the_type_when_the_exception_carries_none(status_code: int, expected_type: str):
     """A route that raises a bare HTTPException carries no error type, so the status it
     answered with is the only thing left to name the OpenAI type from."""
     assert openai_error_type(HTTPException(status_code=status_code, detail="boom"), status_code) == expected_type
@@ -46,7 +46,7 @@ def test_a_carried_type_wins_over_the_one_the_status_would_imply():
 
 
 @pytest.mark.parametrize("carried_type", [None, 400, {"type": "invalid_request_error"}, ["invalid_request_error"]])
-def test_a_non_string_carried_type_falls_back_to_the_status(carried_type):
+def test_a_non_string_carried_type_falls_back_to_the_status(carried_type: object):
     """OpenAI types error.type as a string, so anything else on the exception is not one and
     must not reach the wire the way the literal "None" used to."""
 
@@ -78,7 +78,7 @@ def test_a_carried_param_names_the_offending_field():
 
 
 @pytest.mark.parametrize("exc", [HTTPException(status_code=400, detail="boom"), ValueError("boom"), None])
-def test_param_is_json_null_when_the_exception_names_no_field(exc):
+def test_param_is_json_null_when_the_exception_names_no_field(exc: Exception | None):
     assert openai_error_param(exc) is None
 
 
@@ -94,12 +94,12 @@ def test_a_carried_status_code_wins_over_the_default():
 
 
 @pytest.mark.parametrize("default", [400, 500])
-def test_the_default_status_stands_when_the_exception_carries_none(default):
+def test_the_default_status_stands_when_the_exception_carries_none(default: int):
     assert error_status_code(ValueError("boom"), default) == default
 
 
 @pytest.mark.parametrize("carried_status", [True, False, "429", None, 429.0])
-def test_a_non_int_carried_status_falls_back_to_the_default(carried_status):
+def test_a_non_int_carried_status_falls_back_to_the_default(carried_status: object):
     """True is an int in Python but not an HTTP status, and a stringified one would break
     every caller that compares the code numerically."""
 
