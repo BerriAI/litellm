@@ -22,6 +22,7 @@ from litellm.llms.perplexity.cost_calculator import (
 )
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
+    OffPeakPricing,
     Usage,
     PromptTokensDetailsWrapper,
 )
@@ -530,7 +531,7 @@ class TestPerplexityCostCalculator:
     INSIDE_WINDOW = datetime(2026, 9, 3, 17, 25, tzinfo=timezone.utc)
     OUTSIDE_WINDOW = datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc)
 
-    def _register_off_peak_model(self, off_peak_pricing: dict) -> None:
+    def _register_off_peak_model(self, off_peak_pricing: OffPeakPricing) -> None:
         litellm.model_cost[f"perplexity/{self.OFF_PEAK_MODEL}"] = {
             "litellm_provider": "perplexity",
             "mode": "chat",

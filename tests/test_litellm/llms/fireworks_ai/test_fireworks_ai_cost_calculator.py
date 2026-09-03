@@ -7,7 +7,7 @@ import pytest
 
 import litellm
 from litellm.llms.fireworks_ai.cost_calculator import cost_per_token
-from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import OffPeakPricing, PromptTokensDetailsWrapper, Usage
 
 MODEL = "accounts/fireworks/models/glm-5p2"
 INPUT_COST = 1.4e-06
@@ -78,7 +78,7 @@ STANDARD_OUTPUT_COST = 6e-07
 STANDARD_CACHE_READ_COST = 1.5e-08
 
 
-def _register_off_peak_model(off_peak_pricing: dict, cache_read_cost: float | None = STANDARD_CACHE_READ_COST) -> None:
+def _register_off_peak_model(off_peak_pricing: OffPeakPricing, cache_read_cost: float | None = STANDARD_CACHE_READ_COST) -> None:
     litellm.model_cost[f"fireworks_ai/{OFF_PEAK_MODEL}"] = {
         "litellm_provider": "fireworks_ai",
         "mode": "chat",
