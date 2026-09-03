@@ -43,6 +43,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "azure_scope",
             "timeout",
             "gcs_bucket_name",
+            "s3_bucket_name",
             "bucket_name",
             "vertex_credentials",
             "vertex_project",
