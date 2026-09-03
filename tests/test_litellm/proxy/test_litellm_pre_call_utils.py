@@ -7737,13 +7737,13 @@ def _request_for(path: str) -> MagicMock:
     return request
 
 
-def _spend_log_session_id(data: dict[str, object]) -> str | None:
+def _spend_log_session_id(data: dict[str, object], metadata_key: str = "metadata") -> str | None:
     """Resolve session_id the way LiteLLM_SpendLogs does, reading the omit decision stamped on the request."""
     from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_session_id_for_spend_log
 
-    metadata = data["metadata"]
+    metadata = data[metadata_key]
     assert isinstance(metadata, dict)
     litellm_params = get_litellm_params(
         litellm_session_id=str(data["litellm_session_id"]) if "litellm_session_id" in data else None,
@@ -7938,3 +7938,29 @@ async def test_missing_session_id_unknown_value_is_ignored():
     )
 
     assert "session_id" not in updated["metadata"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path, metadata_key, general_settings",
+    [
+        ("/v1/chat/completions", "metadata", {}),
+        ("/v1/messages", "litellm_metadata", {}),
+        ("/mcp/tools", "metadata", {"missing_session_id": "omit"}),
+    ],
+)
+async def test_client_supplied_omit_marker_never_reaches_the_spend_log(
+    path: str, metadata_key: str, general_settings: dict[str, str]
+):
+    """The omit marker is proxy-owned: only the pre-call policy may set it. A caller that sends it in its
+    own metadata must not be able to null out SpendLogs.session_id on a request the proxy did not omit."""
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "messages": [], metadata_key: {SESSION_ID_OMITTED_METADATA_KEY: True}},
+        request=_request_for(path),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings=general_settings,
+    )
+
+    assert SESSION_ID_OMITTED_METADATA_KEY not in updated[metadata_key]
+    assert _spend_log_session_id(updated, metadata_key) == "per-call-random-trace-id"
