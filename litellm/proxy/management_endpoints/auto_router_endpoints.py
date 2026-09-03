@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby
 from operator import attrgetter
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
@@ -336,6 +336,9 @@ async def validate_complexity_router_config(
     return ComplexityRouterConfigValidationResponse(valid=error is None, error=error)
 
 
+_MODEL_REFERENCE_MAPPING: Final = TypeAdapter(dict[str, object])
+
+
 def _available_model_refs(
     llm_router: "Router", model_names: Sequence[str], team_id: str | None
 ) -> Mapping[str, tuple[str, ...]]:
@@ -344,20 +347,15 @@ def _available_model_refs(
         deployments = llm_router.get_model_list(model_name=model_name, team_id=team_id) or ()
         resolved: list[str] = [model_name]
         for raw_deployment in deployments:
-            deployment = cast(Mapping[str, object], raw_deployment)
-            litellm_params = deployment.get("litellm_params")
-            model_info = deployment.get("model_info")
-            if isinstance(litellm_params, Mapping):
-                typed_params = cast(Mapping[str, object], litellm_params)
-                resolved.extend(
-                    value
-                    for key in ("model", "base_model")
-                    if isinstance(value := typed_params.get(key), str) and value
-                )
-            if isinstance(model_info, Mapping):
-                base_model = cast(Mapping[str, object], model_info).get("base_model")
-                if isinstance(base_model, str) and base_model:
-                    resolved.append(base_model)
+            deployment = _MODEL_REFERENCE_MAPPING.validate_python(raw_deployment)
+            litellm_params = _MODEL_REFERENCE_MAPPING.validate_python(deployment.get("litellm_params", {}))
+            model_info = _MODEL_REFERENCE_MAPPING.validate_python(deployment.get("model_info", {}))
+            resolved.extend(
+                value for key in ("model", "base_model") if isinstance(value := litellm_params.get(key), str) and value
+            )
+            base_model = model_info.get("base_model")
+            if isinstance(base_model, str) and base_model:
+                resolved.append(base_model)
         refs[model_name] = tuple(dict.fromkeys(resolved))
     return MappingProxyType(refs)
 

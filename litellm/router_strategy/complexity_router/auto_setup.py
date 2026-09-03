@@ -8,9 +8,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib.resources import files
-from typing import Final, Literal, cast
+from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from .config import (
     AutoSetupCandidate,
@@ -32,6 +32,7 @@ _TIER_COMPLEXITIES: Final[Mapping[str, SnapshotComplexity]] = {
 }
 _EASY_COMPLEXITIES: Final = frozenset(("trivial", "simple"))
 _VERSION_SEPARATOR: Final = re.compile(r"(?<=\d)\.(?=\d)")
+_SNAPSHOT_PAYLOAD_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 class SnapshotQualityTier(BaseModel):
@@ -136,23 +137,14 @@ def _canonical_json(value: object) -> str:
 
 @lru_cache(maxsize=1)
 def load_auto_router_snapshot() -> AutoRouterSnapshot:
-    parsed = cast(
-        object,
-        json.loads(
-            files("litellm.router_strategy.complexity_router")
-            .joinpath("artifacts", _SNAPSHOT_FILENAME)
-            .read_text(encoding="utf-8")
-        ),
+    raw: Final = _SNAPSHOT_PAYLOAD_ADAPTER.validate_json(
+        files("litellm.router_strategy.complexity_router")
+        .joinpath("artifacts", _SNAPSHOT_FILENAME)
+        .read_text(encoding="utf-8")
     )
-    if not isinstance(parsed, dict):
-        raise ValueError("Auto Router snapshot must be a JSON object")
-    untyped = cast(dict[object, object], parsed)
-    if not all(isinstance(key, str) for key in untyped):
-        raise ValueError("Auto Router snapshot keys must be strings")
-    raw = cast(dict[str, object], untyped)
     expected = raw.get("artifact_sha256")
     if not isinstance(expected, str):
-        raise ValueError("Auto Router snapshot must carry an artifact_sha256")
+        raise TypeError("Auto Router snapshot must carry an artifact_sha256")
     unsigned: Final = {key: value for key, value in raw.items() if key != "artifact_sha256"}
     actual: Final = hashlib.sha256(_canonical_json(unsigned).encode("utf-8")).hexdigest()
     if expected != actual:
@@ -271,19 +263,24 @@ def _hard_task_rank(
                 ),
             )
         ), "cohort_scoped"
-    balanced_comparable = tuple(item for item in comparable if item[1].cost_per_completed_task_usd is not None)
+    balanced_comparable: list[tuple[_AvailableProfile, float, float]] = []
+    for profile, speed in comparable:
+        cost = speed.cost_per_completed_task_usd
+        completion_ms = speed.retry_adjusted_completion_ms
+        if cost is not None and completion_ms is not None:
+            balanced_comparable.append((profile, cost, completion_ms))
     if not balanced_comparable:
         return cost_ranked, "fallback_no_comparable_cost_evidence"
-    costs: Final = tuple(cast(float, speed.cost_per_completed_task_usd) for _, speed in balanced_comparable)
-    times: Final = tuple(cast(float, speed.retry_adjusted_completion_ms) for _, speed in balanced_comparable)
+    costs: Final = tuple(cost for _, cost, _ in balanced_comparable)
+    times: Final = tuple(completion_ms for _, _, completion_ms in balanced_comparable)
     return tuple(
         profile
-        for profile, _ in sorted(
+        for profile, _, _ in sorted(
             balanced_comparable,
             key=lambda item: (
                 math.hypot(
-                    _normalize_log(cast(float, item[1].cost_per_completed_task_usd), costs),
-                    _normalize_log(cast(float, item[1].retry_adjusted_completion_ms), times),
+                    _normalize_log(item[1], costs),
+                    _normalize_log(item[2], times),
                 ),
                 -item[0].quality.quality_lower_bound,
                 item[0].model_name,

@@ -5,9 +5,9 @@ import math
 import statistics
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import Final, Protocol, cast
+from typing import Final, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_router_logger
 
@@ -18,6 +18,8 @@ _CACHE_TTL_SECONDS: Final = 7 * 24 * 60 * 60
 _MAX_SAMPLES_PER_MODEL: Final = 20
 _MAX_EXPECTED_OUTPUT_SAMPLES: Final = 100
 _MIN_SAMPLES_PER_MODEL: Final = 2
+_OBJECT_ADAPTER: Final = TypeAdapter(object)
+_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 class ResponseLatencyCache(Protocol):
@@ -165,9 +167,12 @@ def _seconds(value: object) -> float | None:
 
 def _field(value: object, key: str) -> object | None:
     if isinstance(value, Mapping):
-        return cast(Mapping[object, object], value).get(key)
+        try:
+            return _OBJECT_MAPPING_ADAPTER.validate_python(value).get(key)
+        except ValidationError:
+            return None
     try:
-        return cast(object, object.__getattribute__(value, key))
+        return _OBJECT_ADAPTER.validate_python(object.__getattribute__(value, key))
     except AttributeError:
         return None
 
