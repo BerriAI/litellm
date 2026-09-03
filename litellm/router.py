@@ -2542,6 +2542,10 @@ class Router:
                         model=model,
                         llm_provider="",
                     )
+                await self._authorize_fusion_dependencies(
+                    fusion_router=fusion_router,
+                    request_kwargs=kwargs,
+                )
                 response = (  # rebind-ok: one mutually exclusive dispatch branch assigns it
                     await fusion_router.acompletion(
                         messages=messages,
@@ -9462,6 +9466,59 @@ class Router:
             completion=self.acompletion,
             search=self._fusion_asearch,
         )
+
+    async def _authorize_fusion_dependencies(
+        self,
+        fusion_router: FusionRouter,
+        request_kwargs: Mapping[str, object],
+    ) -> None:
+        """Apply the originating proxy caller's model access to every hidden call."""
+        metadata_values: Final = tuple(request_kwargs.get(key) for key in ("litellm_metadata", "metadata"))
+        raw_user_api_key_auth: Final = next(
+            (
+                metadata.get("user_api_key_auth")
+                for metadata in metadata_values
+                if isinstance(metadata, Mapping) and metadata.get("user_api_key_auth") is not None
+            ),
+            None,
+        )
+        proxy_auth_required: Final = isinstance(request_kwargs.get("proxy_server_request"), Mapping)
+        if raw_user_api_key_auth is None and not proxy_auth_required:
+            return
+
+        from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+        from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+        try:
+            user_api_key_auth: Final = (
+                raw_user_api_key_auth
+                if isinstance(raw_user_api_key_auth, UserAPIKeyAuth)
+                else UserAPIKeyAuth.model_validate(raw_user_api_key_auth)
+            )
+        except ValidationError as exc:
+            raise ProxyException(
+                message="Fusion model authorization context is missing or invalid",
+                type=ProxyErrorTypes.auth_error,
+                param="model",
+                code=403,
+            ) from exc
+
+        dependency_models: Final = tuple(
+            dict.fromkeys(
+                (
+                    fusion_router.config.outer_model,
+                    *fusion_router.config.panel_models,
+                    fusion_router.config.resolved_analyst_model,
+                )
+            )
+        )
+        for dependency_model in dependency_models:
+            await can_key_call_resolved_model(
+                model=dependency_model,
+                llm_model_list=self.model_list,
+                valid_token=user_api_key_auth,
+                llm_router=self,
+            )
 
     async def _fusion_asearch(  # kwargs-ok: bridge preserves the Router.asearch keyword surface
         self,

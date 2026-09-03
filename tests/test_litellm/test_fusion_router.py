@@ -669,6 +669,76 @@ async def test_router_registers_and_executes_fusion_deployment() -> None:
 
 
 @pytest.mark.asyncio
+async def test_proxy_fusion_authorizes_every_hidden_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth import auth_checks
+
+    model_list = _router_model_list()
+    model_list.insert(
+        -1,
+        {
+            "model_name": "analyst",
+            "litellm_params": {"model": "openai/test", "api_key": "fake", "mock_response": "Analysis"},
+        },
+    )
+    model_list[-1]["litellm_params"]["fusion_router_config"]["analyst_model"] = "analyst"
+    router = Router(model_list=model_list)
+    authorize = AsyncMock(return_value=None)
+    monkeypatch.setattr(auth_checks, "can_key_call_resolved_model", authorize)
+
+    response = await router.acompletion(
+        model="fusion/test",
+        messages=[{"role": "user", "content": "Answer"}],
+        metadata={"user_api_key_auth": UserAPIKeyAuth(models=["*"])},
+        proxy_server_request={"body": {"model": "fusion/test"}},
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert [call.kwargs["model"] for call in authorize.await_args_list] == ["outer", "panel-a", "analyst"]
+
+
+@pytest.mark.asyncio
+async def test_proxy_fusion_denies_hidden_model_before_any_provider_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+    from litellm.proxy.auth import auth_checks
+
+    router = Router(model_list=_router_model_list())
+    denial = ProxyException(
+        message="key not allowed to access model",
+        type=ProxyErrorTypes.key_model_access_denied,
+        param="model",
+        code=403,
+    )
+    monkeypatch.setattr(auth_checks, "can_key_call_resolved_model", AsyncMock(side_effect=denial))
+    fusion_completion = AsyncMock()
+    monkeypatch.setattr(router.fusion_routers["fusion/test"], "acompletion", fusion_completion)
+
+    with pytest.raises(ProxyException, match="key not allowed"):
+        await router.acompletion(
+            model="fusion/test",
+            messages=[{"role": "user", "content": "Answer"}],
+            metadata={"user_api_key_auth": UserAPIKeyAuth(models=["fusion/test"])},
+            proxy_server_request={"body": {"model": "fusion/test"}},
+        )
+
+    fusion_completion.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_proxy_fusion_fails_closed_without_authorization_context() -> None:
+    from litellm.proxy._types import ProxyException
+
+    router = Router(model_list=_router_model_list())
+
+    with pytest.raises(ProxyException, match="authorization context is missing or invalid"):
+        await router.acompletion(
+            model="fusion/test",
+            messages=[{"role": "user", "content": "Answer"}],
+            proxy_server_request={"body": {"model": "fusion/test"}},
+        )
+
+
+@pytest.mark.asyncio
 async def test_router_replays_direct_outer_response_as_an_async_stream() -> None:
     router = Router(model_list=_router_model_list())
     response = await router.acompletion(
