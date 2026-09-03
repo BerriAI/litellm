@@ -4773,12 +4773,12 @@ async def debug_sso_callback(request: Request):
     safe_access_token_claims = {k: v for k, v in (access_token_payload or {}).items() if k not in _OAUTH_TOKEN_FIELDS}
 
     gap: Final = await id_jag_capture_gap_to_surface()
-    id_jag_section: Final = {"id_jag_assertion_capture": gap} if gap is not None else {}  # mutable-ok: optional JSON member
+    id_jag: Final = {"id_jag_assertion_capture": gap} if gap is not None else {}  # mutable-ok: optional JSON member
     sso_payload: Final = {
         "parsed_by_proxy": filtered_result,
         "raw_claims": safe_raw_claims,
         "access_token_claims": safe_access_token_claims,
-        **id_jag_section,
+        **id_jag,
     }
 
     # Replace the placeholder in the template with the actual data
