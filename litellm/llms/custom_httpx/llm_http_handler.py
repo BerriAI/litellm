@@ -7344,6 +7344,8 @@ class BaseLLMHTTPHandler:
                     params=data,
                 )
 
+            response.raise_for_status()
+
             # Transform the response using the provider config
             return video_content_provider_config.transform_video_content_response(
                 raw_response=response,
@@ -7421,6 +7423,8 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     params=data,
                 )
+
+            response.raise_for_status()
 
             # Transform the response using the provider config
             return await video_content_provider_config.async_transform_video_content_response(
