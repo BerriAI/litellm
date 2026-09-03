@@ -1284,16 +1284,18 @@ async def async_post_call_success_deployment_hook(
     except ValueError:
         typed_call_type = None  # unknown call type
 
+    modified_response = response
+
     CustomLogger: Final = _get_cached_custom_logger()
     for callback in litellm.callbacks:
         if isinstance(callback, CustomLogger):
             result = await callback.async_post_call_success_deployment_hook(
-                request_data, cast(LLMResponseTypes, response), typed_call_type
+                request_data, cast(LLMResponseTypes, modified_response), typed_call_type
             )
             if result is not None:
-                return result
+                modified_response = result
 
-    return response
+    return modified_response
 
 
 async def async_post_call_failure_deployment_hook(
