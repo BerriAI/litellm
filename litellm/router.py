@@ -30,7 +30,7 @@ import anyio
 import httpx
 import openai
 from openai import AsyncOpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import overload
 
 import litellm
@@ -381,6 +381,28 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
         ):
             return True
     return False
+
+
+_NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
+_SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _with_router_resolved_session_model(session: object, model_name: str) -> Mapping[str, Mapping[str, object]]:
+    """
+    Realtime client-secret requests carry the model inside ``session`` as well, and the caller's copy of it still
+    holds the pre-routing model group name, so it has to follow the deployment the router just picked.
+
+    Returns kwargs to merge into the downstream call, empty when there is no session model to resolve.
+    """
+    try:
+        typed_session: Final = _SESSION_ADAPTER.validate_python(session)
+    except ValidationError:
+        return _NO_SESSION_KWARGS
+    if "model" not in typed_session:
+        return _NO_SESSION_KWARGS
+    return MappingProxyType(
+        {"session": {**typed_session, "model": model_name}}  # mutable-ok: callees deepcopy and JSON-dump session
+    )
 
 
 # Router._aanthropic_messages_streaming_iterator buffers lifecycle chunks
@@ -4043,6 +4065,7 @@ class Router:
             prompt_variables=prompt_variables,
             prompt_label=prompt_label,
             request_kwargs=kwargs,
+            injected_for_every_deployment=True,
         )
 
         # Filter out prompt management specific parameters from data before merging
@@ -4930,6 +4953,7 @@ class Router:
                 "caching": self.cache_responses,
                 **kwargs,
                 "model": model_name,
+                **_with_router_resolved_session_model(kwargs.get("session"), model_name),
             }
             # Only set custom_llm_provider if it's not None
             if custom_llm_provider is not None:
@@ -6714,7 +6738,10 @@ class Router:
         metadata. When present, decode the ID, replace ``container_id`` with the
         upstream value, and route through ``_ageneric_api_call_with_fallbacks`` so
         deployment credentials (e.g. regional ``api_base`` for Azure) match
-        :meth:`_init_responses_api_endpoints`. Otherwise call the handler directly.
+        :meth:`_init_responses_api_endpoints`. Create/list calls carry no container ID, so
+        they route through the deployment named by ``model`` when the caller passes one,
+        falling back to the direct call when no deployment matches. Otherwise call the
+        handler directly with global provider credentials.
         """
         if custom_llm_provider and "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = custom_llm_provider
@@ -6745,6 +6772,14 @@ class Router:
                     original_function=original_function,
                     **kwargs,
                 )
+
+        requested_model: Final = kwargs.get("model")
+        if isinstance(requested_model, str) and requested_model.strip():
+            return await self._ageneric_api_call_with_fallbacks(
+                original_function=original_function,
+                passthrough_on_no_deployment=True,
+                **kwargs,
+            )
 
         return await original_function(**kwargs)
 

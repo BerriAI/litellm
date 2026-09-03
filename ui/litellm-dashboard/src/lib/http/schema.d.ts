@@ -5110,6 +5110,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get/mcp_tool_search_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Mcp Tool Search Settings
+         * @description Get the `litellm_settings.mcp_tool_search` configuration used by the native `mcp_tool_search` virtual tool.
+         */
+        get: operations["get_mcp_tool_search_settings_get_mcp_tool_search_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get/sso_settings": {
         parameters: {
             query?: never;
@@ -7692,8 +7712,9 @@ export interface paths {
          * @description Retrieve information about a key.
          *
          *     Parameters:
-         *     - key: str | None (query parameter) - The key to look up. Accepts the plaintext key or its hash.
-         *       Defaults to the key in the Authorization header.
+         *     - key: str | None (query parameter) - The key to look up. Accepts the plaintext key or its hash;
+         *       prefer the hash, since a query parameter is recorded verbatim by any HTTP access log in front
+         *       of the proxy. Defaults to the key in the Authorization header.
          *
          *     Returns:
          *     - key: str - The key that was looked up, echoed back as it was passed in
@@ -7725,7 +7746,7 @@ export interface paths {
          *
          *     Example Curl:
          *     ```
-         *     curl -X GET "http://0.0.0.0:4000/key/info?key=sk-test-example-key-123" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:4000/key/info?key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" -H "Authorization: Bearer sk-1234"
          *     ```
          *
          *     Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
@@ -14021,7 +14042,7 @@ export interface paths {
          *
          *     Example Request for specific api_key
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-test-example-key-123" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" -H "Authorization: Bearer sk-1234"
          *     ```
          *
          *     Example Request for specific user_id
@@ -16124,6 +16145,27 @@ export interface paths {
          *     Settings will be picked up by all pods within approximately 10 seconds via background polling.
          */
         patch: operations["update_mcp_semantic_filter_settings_update_mcp_semantic_filter_settings_patch"];
+        trace?: never;
+    };
+    "/update/mcp_tool_search_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Mcp Tool Search Settings
+         * @description Update `litellm_settings.mcp_tool_search` in the database.
+         *     Settings will be picked up by all pods within approximately 10 seconds via background polling.
+         */
+        patch: operations["update_mcp_tool_search_settings_update_mcp_tool_search_settings_patch"];
         trace?: never;
     };
     "/update/sso_settings": {
@@ -22868,6 +22910,10 @@ export interface components {
             required: boolean;
             /** Tooltip */
             tooltip?: string | null;
+            /** Validation Message */
+            validation_message?: string | null;
+            /** Validation Pattern */
+            validation_pattern?: string | null;
         };
         /**
          * AgentExtension
@@ -25435,6 +25481,11 @@ export interface components {
              */
             background_health_checks?: boolean | null;
             /**
+             * Blocked File Extensions
+             * @description file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename
+             */
+            blocked_file_extensions?: string[] | null;
+            /**
              * Cancel On Disconnect
              * @description cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure
              */
@@ -25519,6 +25570,11 @@ export interface components {
              */
             disable_budget_reservation?: boolean | null;
             /**
+             * Disable Password Login When Sso Enabled
+             * @description If True and SSO is configured (MICROSOFT_CLIENT_ID, GOOGLE_CLIENT_ID, GENERIC_CLIENT_ID, or SAML_IDP_METADATA_URL/XML), disables username/password login on /login, /v2/login, and /v3/login so SSO is the only way to reach the Admin UI. An admin locked out of the UI can still administer the proxy over the API with the master key; unset this setting and restart the proxy to restore UI username/password login. Default is False.
+             */
+            disable_password_login_when_sso_enabled?: boolean | null;
+            /**
              * Enable Public Model Hub
              * @description Public model hub for users to see what models they have access to, supported openai params, etc.
              * @default false
@@ -25573,6 +25629,11 @@ export interface components {
              * @description max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider
              */
             max_batch_file_size_mb?: number | null;
+            /**
+             * Max File Size Mb
+             * @description max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider
+             */
+            max_file_size_mb?: number | null;
             /**
              * Max Parallel Requests
              * @description maximum parallel requests for each api key
@@ -25663,6 +25724,31 @@ export interface components {
              * @description Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.
              */
             pass_through_request_timeout?: number | null;
+            /**
+             * Password Policy Min Length
+             * @description Minimum length required for a locally-managed user's password. Default is 12; a value below 8 is floored to 8 rather than weakening the requirement further.
+             */
+            password_policy_min_length?: number | null;
+            /**
+             * Password Policy Require Lowercase
+             * @description If True (default), a locally-managed user's password must contain a lowercase letter.
+             */
+            password_policy_require_lowercase?: boolean | null;
+            /**
+             * Password Policy Require Numbers
+             * @description If True (default), a locally-managed user's password must contain a number.
+             */
+            password_policy_require_numbers?: boolean | null;
+            /**
+             * Password Policy Require Special Characters
+             * @description If True (default), a locally-managed user's password must contain a special (non-alphanumeric) character.
+             */
+            password_policy_require_special_characters?: boolean | null;
+            /**
+             * Password Policy Require Uppercase
+             * @description If True (default), a locally-managed user's password must contain an uppercase letter.
+             */
+            password_policy_require_uppercase?: boolean | null;
             /**
              * Plugins
              * @description external services registered as embeddable UI plugins
@@ -29236,6 +29322,8 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
+            /** Rust */
+            rust?: boolean | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
@@ -31068,6 +31156,49 @@ export interface components {
             rejected: number;
             /** Total */
             total: number;
+        };
+        /**
+         * MCPToolSearchSettings
+         * @description `litellm_settings.mcp_tool_search`: how the native `mcp_tool_search` virtual tool ranks the caller's tools.
+         */
+        MCPToolSearchSettings: {
+            /**
+             * Core Tools
+             * @description Tool names always returned first when the caller can access them, e.g. `my_server-get_rates`.
+             * @default []
+             */
+            core_tools: string[];
+            /**
+             * Embedding Model
+             * @description Embedding model from model_list used to rank tools by meaning. Unset keeps keyword matching.
+             */
+            embedding_model?: string | null;
+            /**
+             * Similarity Threshold
+             * @description Lowest cosine similarity a tool needs to appear in semantic results (0.0 = no cutoff).
+             * @default 0
+             */
+            similarity_threshold: number;
+            /**
+             * Top K
+             * @description Most ranked tools a search returns. A smaller top_k in the tool call wins. Core tools do not count.
+             * @default 5
+             */
+            top_k: number;
+        };
+        /**
+         * MCPToolSearchSettingsResponse
+         * @description Response model for native MCP tool search settings
+         */
+        MCPToolSearchSettingsResponse: {
+            /** Field Schema */
+            field_schema: {
+                [key: string]: unknown;
+            };
+            /** Values */
+            values: {
+                [key: string]: unknown;
+            };
         };
         /** MCPToolsetTool */
         MCPToolsetTool: {
@@ -34444,11 +34575,11 @@ export interface components {
             classifier_plugin_timeout_ms: number;
             /**
              * Classifier Type
-             * @description Classification strategy: local regex/keyword scoring, an LLM call, a custom classifier plugin, or 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier
+             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM call, a custom classifier plugin, or 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier
              * @default heuristic
              * @enum {string}
              */
-            classifier_type: "heuristic" | "llm" | "custom" | "heuristic_first";
+            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "custom" | "heuristic_first";
             /**
              * Code Keywords
              * @description Keywords indicating code-related content
@@ -34509,6 +34640,12 @@ export interface components {
              * @description The highest tier the local scorer may decide on its own; required when classifier_type is 'heuristic_first' and rejected otherwise. A request whose heuristic tier is at or below this one skips the LLM classifier and routes straight to that heuristic tier, so the classifier call is only paid for on traffic the scorer could not place cheaply. The scorer must also have produced at least one signal: a prompt where no dimension fired scores 0.0 and would otherwise land SIMPLE by default rather than by evidence, which is how a chained router would silently send unclassified traffic to the cheapest model. Names a built-in tier, and may not name the highest one, since that would make the LLM classifier unreachable.
              */
             heuristic_first_max_tier?: string | null;
+            /**
+             * Heuristic V2 Artifact
+             * @description Success-probability artifact used by classifier_type 'heuristic_v2'. The bundled UltraFeedback artifact is selected by default; an inline trained artifact may replace it
+             * @default ultrafeedback
+             */
+            heuristic_v2_artifact: components["schemas"]["TrainedTierArtifact"] | "ultrafeedback";
             /**
              * Housekeeping Patterns
              * @description Additional case-sensitive literal sentinels that mark a request as client housekeeping, on top of the built-in conversation-title ones. For clients whose wording the built-ins don't cover, or after a client release changes its strings.
@@ -34647,6 +34784,12 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * RequestType
+         * @description Fixed v0 taxonomy. User-extensible types come in v1.
+         * @enum {string}
+         */
+        RequestType: "code_generation" | "code_understanding" | "technical_design" | "analytical_reasoning" | "writing" | "factual_lookup" | "general";
         /** ResetSpendRequest */
         ResetSpendRequest: {
             /** Reset To */
@@ -35724,7 +35867,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -36607,6 +36750,33 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** TierCohortStatistic */
+        TierCohortStatistic: {
+            /** Cohort */
+            cohort: string;
+            /** Observations */
+            observations: number;
+            /** Successes */
+            successes: number;
+            /** Tier */
+            tier: number;
+        };
+        /** TierDataset */
+        TierDataset: {
+            /** License */
+            license: string;
+            /** Name */
+            name: string;
+            /** Rows */
+            rows: number;
+            /**
+             * Success Definition
+             * @default quality score meets the dataset success threshold
+             */
+            success_definition: string;
+            /** Url */
+            url: string;
+        };
         /**
          * TierDefinition
          * @description An operator-defined tier: the name the LLM classifier must return and its rubric description.
@@ -36622,6 +36792,25 @@ export interface components {
              * @description Tier name; becomes a value the LLM classifier can return and a key of `tiers`
              */
             name: string;
+        };
+        /** TierDomainStatistic */
+        TierDomainStatistic: {
+            /** Observations */
+            observations: number;
+            request_type: components["schemas"]["RequestType"];
+            /** Successes */
+            successes: number;
+            /** Tier */
+            tier: number;
+        };
+        /** TierGlobalStatistic */
+        TierGlobalStatistic: {
+            /** Observations */
+            observations: number;
+            /** Successes */
+            successes: number;
+            /** Tier */
+            tier: number;
         };
         /**
          * TokenCountDetailsResponse
@@ -36891,6 +37080,57 @@ export interface components {
             token: string;
         } & {
             [key: string]: unknown;
+        };
+        /** TrainedTierArtifact */
+        TrainedTierArtifact: {
+            /**
+             * Cohort Prior Mass
+             * @default 20
+             */
+            cohort_prior_mass: number;
+            /**
+             * Cohort Statistics
+             * @default []
+             */
+            cohort_statistics: components["schemas"]["TierCohortStatistic"][];
+            /**
+             * Datasets
+             * @default []
+             */
+            datasets: components["schemas"]["TierDataset"][];
+            /**
+             * Domain Prior Mass
+             * @default 200
+             */
+            domain_prior_mass: number;
+            /**
+             * Domain Statistics
+             * @default []
+             */
+            domain_statistics: components["schemas"]["TierDomainStatistic"][];
+            /** Global Statistics */
+            global_statistics: components["schemas"]["TierGlobalStatistic"][];
+            /**
+             * Routing Threshold
+             * @default 0.75
+             */
+            routing_threshold: number;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: 1;
+            /**
+             * Split Method
+             * @default sha256(prompt): 70% train, 15% validation, 15% test
+             */
+            split_method: string;
+            /**
+             * Success Definition
+             * @default quality score meets the dataset success threshold
+             */
+            success_definition: string;
         };
         /** TransformRequestBody */
         TransformRequestBody: {
@@ -39067,6 +39307,8 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
+            /** Rust */
+            rust?: boolean | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
@@ -46601,6 +46843,26 @@ export interface operations {
             };
         };
     };
+    get_mcp_tool_search_settings_get_mcp_tool_search_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPToolSearchSettingsResponse"];
+                };
+            };
+        };
+    };
     get_sso_settings_get_sso_settings_get: {
         parameters: {
             query?: never;
@@ -47337,7 +47599,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Group spend by internal team or customer or api_key */
                 group_by?: ("team" | "customer" | "api_key") | null;
-                /** @description View spend for a specific api_key. Example api_key='sk-1234 */
+                /** @description View spend for a specific api_key. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. Example api_key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa' */
                 api_key?: string | null;
                 /** @description View spend for a specific internal_user_id. Example internal_user_id='1234 */
                 internal_user_id?: string | null;
@@ -49210,7 +49472,7 @@ export interface operations {
     info_key_fn_key_info_get: {
         parameters: {
             query?: {
-                /** @description Key in the request parameters */
+                /** @description Key to look up. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. Example key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa' */
                 key?: string | null;
             };
             header?: never;
@@ -49388,7 +49650,7 @@ export interface operations {
                 start_date?: string | null;
                 /** @description Time till which to view spend (YYYY-MM-DD) */
                 end_date?: string | null;
-                /** @description View spend for a specific api_key. Proxy admin only; other callers are scoped to their own key. */
+                /** @description View spend for a specific api_key. Proxy admin only; other callers are scoped to their own key. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. Example api_key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa' */
                 api_key?: string | null;
             };
             header?: never;
@@ -58919,6 +59181,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_mcp_tool_search_settings_update_mcp_tool_search_settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MCPToolSearchSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
