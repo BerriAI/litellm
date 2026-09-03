@@ -24,7 +24,6 @@ from litellm.types.vector_stores import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
-    from litellm.router import Router
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -121,11 +120,10 @@ class AzureAIVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAzureLLM
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
         extra_body: Mapping[str, object] | None = None,
-        router: Router | None = None,
         embedding_executor: VectorStoreEmbeddingExecutor | None = None,
     ) -> tuple[str, dict[str, object]]:
         query_text: Final = self.query_text(query)
-        query_vector: Final = self.embed_query(query_text, litellm_params, embedding_executor, router)
+        query_vector: Final = self.embed_query(query_text, litellm_params, embedding_executor)
         return self._search_request(
             vector_store_id,
             query_text,
@@ -145,11 +143,10 @@ class AzureAIVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAzureLLM
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
         extra_body: Mapping[str, object] | None = None,
-        router: Router | None = None,
         embedding_executor: VectorStoreEmbeddingExecutor | None = None,
     ) -> tuple[str, dict[str, object]]:
         query_text: Final = self.query_text(query)
-        query_vector: Final = await self.aembed_query(query_text, litellm_params, embedding_executor, router)
+        query_vector: Final = await self.aembed_query(query_text, litellm_params, embedding_executor)
         return self._search_request(
             vector_store_id,
             query_text,

@@ -187,7 +187,7 @@ class TestRouterEmbeddingIntegration:
         assert _sent(store_route, 1) == ("Bearer store-key", "text-embedding-3-large", ["async query"])
 
     @pytest.mark.asyncio
-    async def test_router_executor_rejects_unserved_models_without_explicit_config(
+    async def test_router_executor_embeds_unserved_models_through_the_sdk(
         self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
     ):
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -198,12 +198,13 @@ class TestRouterEmbeddingIntegration:
             metadata={"user_api_key_team_id": "team-a"},
         )
 
-        with pytest.raises(litellm.BadRequestError):
-            executor.embed("openai/text-embedding-3-large", "sync query", {})
-        with pytest.raises(litellm.BadRequestError):
-            await executor.aembed("openai/text-embedding-3-large", "async query", {})
+        sync_response = executor.embed("text-embedding-3-large", "sync query", {})
+        async_response = await executor.aembed("text-embedding-3-large", "async query", {})
 
-        assert openai_route.call_count == 0
+        assert sync_response.data[0]["embedding"] == QUERY_VECTOR
+        assert async_response.data[0]["embedding"] == QUERY_VECTOR
+        assert _sent(openai_route, 0) == ("Bearer env-key", "text-embedding-3-large", ["sync query"])
+        assert _sent(openai_route, 1) == ("Bearer env-key", "text-embedding-3-large", ["async query"])
 
     def test_router_executor_routes_deployment_model_names_through_the_router(
         self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
