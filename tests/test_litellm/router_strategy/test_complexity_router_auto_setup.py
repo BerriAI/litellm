@@ -217,7 +217,7 @@ async def test_snapshot_policy_is_deterministic_but_manual_pool_keeps_random_sel
         )
         == "gpt-5.6-sol"
     )
-    with patch(
+    with patch(  # test-quality-ok: pinning random choice is required to prove manual routers retain their existing selection path
         "litellm.router_strategy.complexity_router.complexity_router.random.choice", return_value="second"
     ) as pick:
         assert await manual._pick_model_for_tier(ComplexityTier.SIMPLE, None, None, {}) == "second"
@@ -225,7 +225,7 @@ async def test_snapshot_policy_is_deterministic_but_manual_pool_keeps_random_sel
 
 
 @pytest.mark.asyncio
-async def test_live_latency_telemetry_is_recorded_only_for_an_auto_runtime_policy() -> None:
+async def test_live_latency_telemetry_is_recorded_only_for_an_auto_runtime_policy() -> None:  # test-quality-ok: this callback's observable contract is whether telemetry is emitted
     generated = build_auto_setup_config(
         snapshot=load_auto_router_snapshot(),
         available_model_refs=_available_refs("gpt-5.6-sol", "gpt-5.4-nano"),
@@ -255,7 +255,7 @@ async def test_live_latency_telemetry_is_recorded_only_for_an_auto_runtime_polic
         }
     }
 
-    with patch(
+    with patch(  # test-quality-ok: patching the telemetry boundary avoids mutating the shared runtime latency cache
         "litellm.router_strategy.complexity_router.response_latency.record_runtime_response_latency",
         new_callable=AsyncMock,
     ) as recorder:
