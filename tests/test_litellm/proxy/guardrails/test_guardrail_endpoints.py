@@ -104,7 +104,7 @@ def mock_in_memory_handler(mocker):
     mock_handler.get_guardrail_by_id.return_value = MOCK_CONFIG_GUARDRAIL
     mock_handler.get_source.return_value = "config"
     mock_handler.initialize_guardrail = mocker.Mock()
-    mock_handler.update_in_memory_guardrail = mocker.Mock()
+    mock_handler.sync_guardrail_from_db = mocker.Mock()
     mock_handler.delete_in_memory_guardrail = mocker.Mock()
     mock_handler.reconcile_db_guardrails = mocker.Mock(return_value=[])
     return mock_handler
@@ -1047,13 +1047,15 @@ async def test_create_guardrail_endpoint(
     "scenario,expected_result,expected_exception",
     [
         ("success_with_sync", "test-db-guardrail", None),
-        ("success_sync_fails", "test-db-guardrail", None),
+        ("success_sync_fails_unexpected_error", "test-db-guardrail", None),
+        ("sync_fails_invalid_config", None, HTTPException),
         ("database_failure", None, HTTPException),
         ("no_prisma_client", None, HTTPException),
     ],
     ids=[
         "success_with_immediate_sync",
-        "success_but_sync_fails",
+        "success_but_sync_fails_with_unexpected_error",
+        "sync_rejects_invalid_config",
         "database_error",
         "missing_prisma_client",
     ],
@@ -1073,6 +1075,7 @@ async def test_update_guardrail_endpoint(
     mock_logger = None
     if scenario == "success_with_sync":
         mock_prisma_client = mocker.Mock()
+        mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock()
         mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
         mocker.patch(
             "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY",
@@ -1083,10 +1086,13 @@ async def test_update_guardrail_endpoint(
             mock_in_memory_handler,
         )
 
-    elif scenario == "success_sync_fails":
+    elif scenario == "success_sync_fails_unexpected_error":
+        # A non-ValueError/TypeError failure is not a config-rejection signal,
+        # so it keeps the pre-existing swallow-and-warn behavior rather than
+        # rolling back the DB write.
         mock_prisma_client = mocker.Mock()
-        mock_in_memory_handler.update_in_memory_guardrail.side_effect = Exception(
-            "Sync failed"
+        mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock(
+            side_effect=Exception("Sync failed")
         )
         mock_logger = mocker.patch(
             "litellm.proxy.guardrails.guardrail_endpoints.verbose_proxy_logger"
@@ -1098,6 +1104,25 @@ async def test_update_guardrail_endpoint(
             mock_guardrail_registry,
         )
         mocker.patch(
+            "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+            mock_in_memory_handler,
+        )
+
+    elif scenario == "sync_fails_invalid_config":
+        # Regression for the PUT half of the fix: a TypeError from the sync (the
+        # in-place update_in_memory_guardrail raised exactly this on every PUT)
+        # must roll back the DB write and surface a 422, not persist the
+        # rejected config with a 200.
+        mock_prisma_client = mocker.Mock()
+        mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock(
+            side_effect=TypeError("vars() argument must have __dict__ attribute")
+        )
+        mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)  # test-quality-ok: reused pattern
+        mocker.patch(  # test-quality-ok: reused pattern
+            "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY",
+            mock_guardrail_registry,
+        )
+        mocker.patch(  # test-quality-ok: reused pattern
             "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
             mock_in_memory_handler,
         )
@@ -1130,6 +1155,16 @@ async def test_update_guardrail_endpoint(
             assert "Database error" in str(exc_info.value.detail)
         elif scenario == "no_prisma_client":
             assert "Prisma client not initialized" in str(exc_info.value.detail)
+        elif scenario == "sync_fails_invalid_config":
+            assert exc_info.value.status_code == 422
+            assert "update rejected" in str(exc_info.value.detail)
+            # Rolled back: update_guardrail_in_db is called once for the
+            # rejected write and once more to restore the previous config.
+            assert mock_guardrail_registry.update_guardrail_in_db.call_count == 2
+            assert (
+                mock_guardrail_registry.update_guardrail_in_db.call_args.kwargs["guardrail"]
+                == MOCK_DB_GUARDRAIL
+            )
 
     else:
         result = await update_guardrail(
@@ -1145,11 +1180,11 @@ async def test_update_guardrail_endpoint(
             prisma_client=mocker.ANY,
         )
 
-        mock_in_memory_handler.update_in_memory_guardrail.assert_called_once_with(
-            guardrail_id="test-guardrail-id", guardrail=mocker.ANY
+        mock_in_memory_handler.sync_guardrail_from_db.assert_called_once_with(
+            guardrail=mocker.ANY
         )
 
-        if scenario == "success_sync_fails":
+        if scenario == "success_sync_fails_unexpected_error":
             assert mock_logger is not None
             mock_logger.warning.assert_called_once()
             assert "Failed to update" in str(mock_logger.warning.call_args)
