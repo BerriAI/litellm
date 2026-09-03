@@ -588,7 +588,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   };
 
   const changeOrganization = (write: FieldWrite) => (orgId: string) => {
-    write(orgId);
+    write(orgId || undefined);
     setSelectedOrganizationId(orgId || null);
     // Clear team and project when org changes
     setSelectedCreateKeyTeam(null);
