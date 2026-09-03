@@ -90,6 +90,7 @@ import type {
 } from "@/app/(dashboard)/caching/_components/coordination_redis_settings/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity_router_config";
+import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
 import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
 import {
@@ -310,6 +311,8 @@ export interface AgentCredentialFieldMetadata {
   options?: string[] | null;
   default_value?: string | null;
   include_in_litellm_params?: boolean;
+  validation_pattern?: string | null;
+  validation_message?: string | null;
 }
 
 export interface AgentCreateInfo {
@@ -406,6 +409,15 @@ export const getComplexityScorerDefaults = async (): Promise<ComplexityScorerDef
    * recalibration of the defaults cannot leave the form reporting numbers the router no longer uses.
    */
   return await apiClient.get(`/public/complexity_router/scorer_defaults`);
+};
+
+export const getAutoRouterPresets = async (): Promise<AutoRouterPresetsResponse> => {
+  /**
+   * Fetch the auto-router preset catalog from the proxy's public endpoint. The template picker
+   * renders from this rather than from a copy in the dashboard, so a catalog update propagates
+   * without a dashboard release.
+   */
+  return await apiClient.get(`/public/autorouter_presets`);
 };
 
 export const getAgentCreateMetadata = async (): Promise<AgentCreateInfo[]> => {
@@ -2040,6 +2052,7 @@ interface UiSpendLogsParams {
   min_spend?: number;
   max_spend?: number;
   exclude_internal_health_checks?: boolean;
+  group_by_session?: boolean;
 }
 
 interface UiSpendLogsCallOptions {
