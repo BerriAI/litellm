@@ -1969,17 +1969,25 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             kwargs, model_group, fallback=live_candidate_model_names
         )
         configured: Final = self._index.get(self.llm_router).resolve_any(model_group, team_id, candidate_model_names)
-        if not configured:
-            return None
-
         tags: Final = _order_tags_for_identity_resolution(
             _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name),
             kwargs,
             metadata_variable_name,
         )
-        if not tags:
-            return None
-
+        # Deliberately not an early `return None` when `configured` or
+        # `tags` is empty (Cursor Bugbot finding: that used to make
+        # `_release_own_concurrency_keys` fall back to an unconditional
+        # release): `async_filter_deployments` hits this exact same
+        # "nothing configured" / "no matching tag" check on *this hop's own
+        # admission* before it could ever queue a concurrency reservation,
+        # so an empty `configured` or `tags` here means this hop reserved
+        # nothing of its own to release either -- `_own_concurrency_keys_for_hop`
+        # already returns an empty set for either case on its own, without
+        # needing this function to special-case it. `None` is reserved for
+        # the genuinely ambiguous causes above (no router, no
+        # `standard_logging_object`, no `model_group`), where this hop's own
+        # admission *could* have reserved something we have no way to
+        # recompute -- those still need the unconditional fallback.
         return _HopContext(
             standard_logging_object=standard_logging_object,
             configured=configured,
@@ -1999,22 +2007,28 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         computed them -- never "every reservation currently pending", which
         would also release a still-live `abatch_completion` sibling branch's
         own reservation (see `_PENDING_CONCURRENCY_KEYS_FIELD`'s docstring).
-        Falls back to the pre-existing unconditional release only when
-        `context` itself couldn't be resolved (nothing configured for this
-        tag/model, or an identity-extraction edge case) -- in which case there
-        is no way to tell a sibling's reservation apart from this hop's own
-        anyway, so this only ever matters for the single-branch case that
-        release already handled correctly before `abatch_completion` existed.
 
-        A resolved `context` whose own hop reserved *no* concurrency slot at
-        all (no concurrency-unit limit matches its model/tags/deployment --
-        e.g. only a token or dollar limit is configured for this tag) must
-        release nothing, not fall through to the unconditional path: on
-        `abatch_completion` that shared pending list can still hold a
-        genuinely live sibling branch's own reservation (a different
-        deployment/model_group whose admission did reserve one), and this
-        hop reserving zero keys is not the same signal as `context` failing
-        to resolve at all.
+        A resolved `context` whose own hop matched no concurrency-unit limit
+        at all (Cursor Bugbot finding: "no `tag_rate_limits` configured for
+        this model" is the common case) must release nothing, not fall
+        through to the unconditional path below: `async_filter_deployments`
+        hits that identical "nothing configured"/"no matching tag" check on
+        *this exact hop's own admission*, before it could ever queue a
+        concurrency reservation, so this hop reserved nothing of its own to
+        release either -- `_resolve_hop_context` folds both into an
+        empty-but-resolved `context` rather than `None` for exactly this
+        reason (see its own docstring).
+
+        `context is None` means `_resolve_hop_context` hit one of its
+        genuinely ambiguous causes instead (no router, no
+        `standard_logging_object`, no `model_group`) -- cases where this
+        hop's own admission *could* have reserved something, but there is
+        no reliable data left to recompute what. Only those fall back to
+        the pre-existing unconditional release, the same as before
+        `abatch_completion` existed: e.g. a *different* registered
+        CustomLogger rejecting the request before this hop's own call ever
+        ran (so no `standard_logging_object` was ever built) must still
+        release this hook's own successfully reserved slot.
         """
         if context is None:
             return await self._pop_pending_concurrency_keys(kwargs)

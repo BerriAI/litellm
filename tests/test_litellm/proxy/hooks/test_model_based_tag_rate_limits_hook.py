@@ -3389,6 +3389,140 @@ async def test_batch_sibling_reserving_no_concurrency_slot_does_not_release_a_st
         )
 
 
+@pytest.mark.asyncio
+async def test_batch_sibling_with_no_tag_rate_limits_at_all_does_not_release_a_still_executing_siblings_slot(
+    time_controller,
+):
+    """
+    Cursor Bugbot finding: `_release_own_concurrency_keys` still fell back to
+    an unconditional release whenever `_resolve_hop_context` returned `None`
+    -- including the common case of a hop whose own model has no
+    `tag_rate_limits` configured at all, so `resolve_any` finds nothing and
+    `_resolve_hop_context` bails out. That same "nothing configured" check
+    is also the *first* thing this hop's own admission does, before it could
+    ever queue a concurrency reservation -- so a `None` context means this
+    hop reserved nothing of its own, the same as a resolved context with no
+    matching concurrency-unit limit. On `abatch_completion` the still-live
+    sibling's own reservation must survive this branch's completion.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp-conc",
+                "dep-conc",
+                {
+                    "concurrency_limits": {
+                        "limits": [{"name": "inflight", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300}]
+                    }
+                },
+            ),
+            _deployment("grp-none", "dep-none", {}),
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
+    conc_healthy = [d for d in router.model_list if d["model_info"]["id"] == "dep-conc"]
+    none_healthy = [d for d in router.model_list if d["model_info"]["id"] == "dep-none"]
+
+    async def _admit(model: str, healthy: list) -> None:
+        await limiter.async_filter_deployments(
+            model=model, healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+        )
+
+    # Both branches of one abatch_completion dispatch admit under the
+    # identical shared model_call_details, each its own asyncio.Task -- see
+    # the concurrency-sibling tests above for why that models two
+    # independent admission lineages.
+    await asyncio.create_task(_admit("grp-conc", conc_healthy))
+    await asyncio.create_task(_admit("grp-none", none_healthy))
+
+    # The unconfigured branch finishes first. Its own success event resolves
+    # no context at all (nothing configured for "grp-none"), and reserved no
+    # concurrency slot of its own -- it must not touch the sibling's.
+    kwargs["standard_logging_object"] = {
+        "model_group": "grp-none",
+        "model_id": "dep-none",
+        "total_tokens": 10,
+        "response_cost": 0.01,
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    # The concurrency-limited branch's own slot must still be held: a fresh
+    # request against the same tag/model is rejected under the limit=1 cap.
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp-conc",
+            healthy_deployments=conc_healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_hop_matching_two_concurrency_scoped_entries_releases_both_reservations(time_controller):
+    """
+    #38347's global hook had a real bug on completely ordinary, non-batch
+    traffic: a request matching multiple concurrency-scoped TagRateLimitEntry
+    policies reserved one key per matching policy at admission but a
+    terminal event released only one entry total, leaking every other match
+    until its safety TTL. Verifies this hook's own release path -- which
+    computes `only_keys` as the full set of every matching policy's own key,
+    not a single arbitrary one -- actually releases all of them, not just
+    the first.
+    """
+    limiter = _make_limiter(time_controller)
+    router = litellm.Router(
+        model_list=[
+            _deployment(
+                "grp",
+                "dep-1",
+                {
+                    "concurrency_limits": {
+                        "limits": [
+                            {"name": "per-user", "tag_id": "end_user_id", "limit": 1, "period_seconds": 300},
+                            {"name": "per-team", "tag_id": "team_id", "limit": 1, "period_seconds": 300},
+                        ]
+                    }
+                },
+            )
+        ]
+    )
+    limiter.update_variables(llm_router=router)
+    request_kwargs, kwargs = _call_context(["end_user_id:u1", "team_id:t1"])
+    healthy = router.model_list
+
+    admitted = await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+    )
+    assert admitted == healthy
+    pending = kwargs.get(_PENDING_CONCURRENCY_KEYS_FIELD)
+    assert pending is not None and len(pending) == 2
+
+    kwargs["standard_logging_object"] = {
+        "model_group": "grp",
+        "model_id": "dep-1",
+        "total_tokens": 10,
+        "response_cost": 0.01,
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    assert not kwargs.get(_PENDING_CONCURRENCY_KEYS_FIELD)
+
+    # Isolated per-policy checks: a follow-up request carrying only one tag
+    # exercises only that one policy, so each must independently show its
+    # own limit=1 slot free again, not just "no exception" from whichever
+    # one entry a partial release happened to free.
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}}
+    )
+    await limiter.async_filter_deployments(
+        model="grp", healthy_deployments=healthy, messages=None, request_kwargs={"metadata": {"tags": ["team_id:t1"]}}
+    )
+
+
 def _request_limit_router(limit: int) -> "litellm.Router":
     return litellm.Router(
         model_list=[
