@@ -1,4 +1,0 @@
-Traceback (most recent call last):
-  File "/private/tmp/claude-501/-Users-yucheng/f91f6cab-22ae-4e37-937b-8968eeabc06c/scratchpad/rig/launch.py", line 2, in <module>
-    port = int(sys.argv[1])
-ValueError: invalid literal for int() with base 10: '/private/tmp/claude-501/-Users-yucheng/f91f6cab-22ae-4e37-937b-8968eeabc06c/scratchpad/../scratchpad/../../../dev/null'
