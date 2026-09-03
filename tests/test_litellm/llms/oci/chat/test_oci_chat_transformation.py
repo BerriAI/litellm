@@ -2041,3 +2041,57 @@ class TestOCIStreamWrapperDoneSentinel:
         wrapper = _make_stream_wrapper(_STREAM_GENERIC_MODEL)
         with pytest.raises(OCIError, match="Chunk cannot be parsed as JSON"):
             wrapper.chunk_creator("data: [DONE] trailing garbage")
+
+
+_GENERIC_TOOL_CALL_EVENT = (
+    'data: {"index":0,"message":{"role":"ASSISTANT","content":[],'
+    '"toolCalls":[{"type":"FUNCTION","id":"call_1","name":"get_weather","arguments":"{}"}]}}'
+)
+_GENERIC_TOOL_TERMINAL_EVENT = (
+    'data: {"index":0,"message":{"role":"ASSISTANT","content":[]},"finishReason":"TOOL_CALLS"}'
+)
+
+
+def _drain_stream(model: str, events: list[str]) -> list:
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"custom_llm_provider": "oci", "litellm_params": {}}
+    wrapper = OCIStreamWrapper(
+        completion_stream=iter(events),
+        model=model,
+        custom_llm_provider="oci",
+        logging_obj=logging_obj,
+    )
+    return list(wrapper)
+
+
+class TestOCIStreamWrapperTerminalChunk:
+    """OCI's ``chunk_creator`` override bypasses the shared handler's
+    finish-reason bookkeeping, so the shared end-of-stream finalizer used to
+    append a synthetic ``stop`` chunk after OCI's own terminal chunk, silently
+    downgrading a ``tool_calls`` completion for any client that reads the
+    finish reason off the last chunk."""
+
+    def test_generic_tool_call_stream_ends_on_tool_calls(self):
+        chunks = _drain_stream(
+            _STREAM_GENERIC_MODEL,
+            [_GENERIC_TOOL_CALL_EVENT, _GENERIC_TOOL_TERMINAL_EVENT, "data: [DONE]"],
+        )
+
+        assert [chunk.choices[0].finish_reason for chunk in chunks] == [None, "tool_calls"]
+        assert len({chunk.id for chunk in chunks}) == 1
+
+    def test_generic_text_stream_emits_exactly_one_finish_reason(self):
+        chunks = _drain_stream(
+            _STREAM_GENERIC_MODEL,
+            [_GENERIC_TEXT_EVENT.format(text="1"), _GENERIC_TERMINAL_EVENT, "data: [DONE]"],
+        )
+
+        assert [chunk.choices[0].finish_reason for chunk in chunks] == [None, "stop"]
+
+    def test_cohere_stream_emits_exactly_one_finish_reason(self):
+        chunks = _drain_stream(
+            _STREAM_COHERE_MODEL,
+            [_COHERE_TEXT_EVENT.format(text="123"), _COHERE_TERMINAL_EVENT],
+        )
+
+        assert [chunk.choices[0].finish_reason for chunk in chunks] == [None, "stop"]
