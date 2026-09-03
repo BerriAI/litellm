@@ -68,6 +68,14 @@ def asyncify(
     return wrapper
 
 
+def is_event_loop_running() -> bool:
+    try:
+        _ = asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
 def run_async_function(async_function, *args, **kwargs):
     """
     Helper utility to run an async function in a sync context.

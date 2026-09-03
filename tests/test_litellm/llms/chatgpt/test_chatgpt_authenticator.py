@@ -6,6 +6,7 @@ from unittest.mock import mock_open, patch
 import pytest
 
 from litellm.llms.chatgpt.authenticator import Authenticator
+from litellm.llms.chatgpt.common_utils import GetAccessTokenError
 
 
 def _make_jwt(payload: dict) -> str:
@@ -53,6 +54,47 @@ class TestChatGPTAuthenticator:
         ):
             token = authenticator.get_access_token()
             assert token == "token-new"
+
+    @pytest.mark.asyncio
+    async def test_get_access_token_refuses_device_code_login_in_event_loop(self, authenticator):
+        with (
+            patch("builtins.open", side_effect=FileNotFoundError),
+            patch.object(authenticator, "_login_device_code") as mock_login,
+            patch.object(authenticator, "_wait_for_access_token") as mock_wait,
+        ):
+            with pytest.raises(GetAccessTokenError) as exc:
+                authenticator.get_access_token()
+
+        assert exc.value.status_code == 401
+        assert "event loop" in str(exc.value)
+        mock_login.assert_not_called()
+        mock_wait.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_access_token_refuses_cooldown_wait_in_event_loop(self, authenticator):
+        auth_data = json.dumps({"device_code_requested_at": time.time()})
+
+        with (
+            patch("builtins.open", mock_open(read_data=auth_data)),
+            patch.object(authenticator, "_login_device_code") as mock_login,
+            patch.object(authenticator, "_wait_for_access_token") as mock_wait,
+        ):
+            with pytest.raises(GetAccessTokenError) as exc:
+                authenticator.get_access_token()
+
+        assert exc.value.status_code == 401
+        assert "event loop" in str(exc.value)
+        mock_login.assert_not_called()
+        mock_wait.assert_not_called()
+
+    def test_get_access_token_device_code_login_without_event_loop(self, authenticator):
+        with (
+            patch("builtins.open", side_effect=FileNotFoundError),
+            patch.object(authenticator, "_login_device_code", return_value={"access_token": "tok"}),
+        ):
+            token = authenticator.get_access_token()
+
+        assert token == "tok"
 
     def test_get_account_id_from_id_token(self, authenticator):
         id_token = _make_jwt(

@@ -9,6 +9,7 @@ import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.asyncify import is_event_loop_running
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
 from .common_utils import (
@@ -65,6 +66,18 @@ class Authenticator:
                     return refreshed["access_token"]
                 except RefreshAccessTokenError as exc:
                     verbose_logger.warning("ChatGPT refresh token failed, re-login required: %s", exc)
+
+        if is_event_loop_running():
+            raise GetAccessTokenError(
+                message=(
+                    "ChatGPT device-code login needs a human and cannot run inside a running event loop "
+                    "(for example the LiteLLM proxy). Log in once outside the proxy with "
+                    '`python -c "from litellm.llms.chatgpt.authenticator import Authenticator; '
+                    'Authenticator().get_access_token()"` and mount the resulting '
+                    f"{self.auth_file} into the proxy, or set CHATGPT_TOKEN_DIR to a directory that already holds it."
+                ),
+                status_code=401,
+            )
 
         cooldown_remaining: Final = self._get_device_code_cooldown_remaining(auth_data)
         if cooldown_remaining > 0:

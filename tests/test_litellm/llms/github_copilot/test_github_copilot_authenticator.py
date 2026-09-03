@@ -89,6 +89,19 @@ class TestGitHubCopilotAuthenticator:
             assert token == mock_token
             authenticator._login.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_get_access_token_refuses_device_code_login_in_event_loop(self, authenticator):
+        with (
+            patch("builtins.open", side_effect=FileNotFoundError),
+            patch.object(authenticator, "_login") as mock_login,
+        ):
+            with pytest.raises(GetAccessTokenError) as exc:
+                authenticator.get_access_token()
+
+        assert exc.value.status_code == 401
+        assert "event loop" in str(exc.value)
+        mock_login.assert_not_called()
+
     def test_get_access_token_failure(self, authenticator):
         """Test that an exception is raised after multiple login failures."""
         with (
@@ -305,5 +318,5 @@ class TestGitHubCopilotAuthenticator:
              patch("litellm.llms.github_copilot.authenticator._get_httpx_client", return_value=mock_client), \
              patch.object(authenticator, "get_access_token", return_value="access-tok"):
             authenticator._refresh_api_key()
-            assert mock_client.get.call_args[0][0] == custom_url
 
+            assert mock_client.get.call_args[0][0] == custom_url
