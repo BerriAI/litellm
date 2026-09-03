@@ -568,6 +568,102 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_spend_logs_ui_group_by_session_sorts_by_session_total_spend(monkeypatch):
+    """
+    With group_by_session=true, sort_by=spend must order sessions by their
+    in-window total spend (what the UI's Cost column shows), not by the
+    representative row's own spend — and the helper column must not leak
+    into API rows.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.spend_tracking.spend_management_endpoints import ui_view_spend_logs
+
+    page_rows = [
+        {
+            "request_id": "req-1",
+            "metadata": "{}",
+            "session_id": "sess-1",
+            "session_spend_in_window": 42.5,
+        },
+    ]
+    mock_prisma = _make_ui_spend_logs_mock(count_total=1, page_rows=page_rows)
+    # A session_id row triggers a third query_raw (session stats enrichment).
+    mock_prisma.db.query_raw = AsyncMock(side_effect=[[{"total_count": 1}], page_rows, []])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+    mock_request = MagicMock()
+    mock_request.url.path = "/spend/logs/ui"
+
+    response = await ui_view_spend_logs(
+        request=mock_request,
+        api_key=None,
+        user_id=None,
+        request_id=None,
+        start_date="2026-02-16 00:00:00",
+        end_date="2026-02-16 23:59:59",
+        page=1,
+        page_size=50,
+        sort_by="spend",
+        sort_order="desc",
+        user_api_key_dict=auth,
+        group_by_session=True,
+    )
+
+    group_key = "COALESCE(NULLIF(session_id, ''), request_id), api_key"
+    page_sql = mock_prisma.db.query_raw.call_args_list[1][0][0]
+    assert f"SUM(spend) OVER (PARTITION BY {group_key}) AS session_spend_in_window" in page_sql, (
+        f"grouped spend sort must compute the per-session in-window total. SQL was:\n{page_sql}"
+    )
+    assert "ORDER BY session_spend_in_window DESC, request_id" in page_sql, (
+        f"grouped spend sort must order by the session total, not the representative row. SQL was:\n{page_sql}"
+    )
+    assert "session_spend_in_window" not in response["data"][0], (
+        "the ORDER BY helper column must not leak into API rows"
+    )
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_ui_ungrouped_spend_sort_keeps_plain_column(monkeypatch):
+    """
+    Without group_by_session (the /spend/logs/v2 shape), every row displays its
+    own spend, so sort_by=spend must stay a plain `ORDER BY spend` on the raw
+    column — no window SUM, no helper column.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.spend_tracking.spend_management_endpoints import ui_view_spend_logs
+
+    page_rows = [{"request_id": "req-1", "metadata": "{}", "session_id": None}]
+    mock_prisma = _make_ui_spend_logs_mock(count_total=1, page_rows=page_rows)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+    mock_request = MagicMock()
+    mock_request.url.path = "/spend/logs/ui"
+
+    await ui_view_spend_logs(
+        request=mock_request,
+        api_key=None,
+        user_id=None,
+        request_id=None,
+        start_date="2026-02-16 00:00:00",
+        end_date="2026-02-16 23:59:59",
+        page=1,
+        page_size=50,
+        sort_by="spend",
+        sort_order="desc",
+        user_api_key_dict=auth,
+        group_by_session=False,
+    )
+
+    page_sql = mock_prisma.db.query_raw.call_args_list[1][0][0]
+    assert "session_spend_in_window" not in page_sql, (
+        f"ungrouped queries must not pay for the window sum. SQL was:\n{page_sql}"
+    )
+    assert "ORDER BY spend DESC" in page_sql, f"ungrouped spend sort must stay on the raw column. SQL was:\n{page_sql}"
+
+
+@pytest.mark.asyncio
 async def test_spend_logs_ui_request_id_lookup_with_grouping_returns_exact_row(monkeypatch):
     """
     A request_id lookup with group_by_session=true must still resolve the

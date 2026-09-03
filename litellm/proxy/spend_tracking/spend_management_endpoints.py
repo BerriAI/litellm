@@ -2614,6 +2614,8 @@ async def ui_view_spend_logs(
             sql_params.append(f"%{error_message}%")
             p += 1
 
+        session_grouping: Final = group_by_session is True
+
         # Build the ORDER BY expression. ttft_ms is computed from
         # completionStartTime - startTime; non-streaming rows (where
         # completionStartTime is null or equals endTime) yield NULL, so we
@@ -2623,7 +2625,12 @@ async def ui_view_spend_logs(
         # semantics.
         _sql_dir: Final = "ASC" if order_direction == "asc" else "DESC"
         _nulls_clause = ""
-        if order_column == "ttft_ms":
+        # The Cost column displays the session total, so a grouped spend sort orders
+        # by the window SUM (computed before DISTINCT ON prunes to one row per session).
+        sort_by_session_spend: Final = session_grouping and order_column == "spend"
+        if sort_by_session_spend:
+            _order_expr = "session_spend_in_window"
+        elif order_column == "ttft_ms":
             _order_expr = (
                 'CASE WHEN "completionStartTime" IS NULL '
                 'OR "completionStartTime" = "endTime" THEN NULL '
@@ -2636,7 +2643,6 @@ async def ui_view_spend_logs(
             _order_expr = order_column
 
         joined_conditions: Final = " AND ".join(sql_conditions)
-        session_grouping: Final = group_by_session is True
         count_group_clause: Final = f"GROUP BY {_SESSION_GROUP_KEY_SQL}" if session_grouping else ""
         count_query: Final = f"""
             SELECT COUNT(*) AS total_count
@@ -2663,11 +2669,17 @@ async def ui_view_spend_logs(
                 organization_id, end_user, requester_ip_address,
                 session_id, status, mcp_namespaced_tool_name, agent_id,
                 COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms"""
+        grouped_select_columns: Final = (
+            f"{select_columns},\n"
+            f"                        SUM(spend) OVER (PARTITION BY {_SESSION_GROUP_KEY_SQL}) AS session_spend_in_window"
+            if sort_by_session_spend
+            else select_columns
+        )
         sql_query: Final = (
             f"""
                 SELECT * FROM (
                     SELECT DISTINCT ON ({_SESSION_GROUP_KEY_SQL})
-                        {select_columns}
+                        {grouped_select_columns}
                     FROM "LiteLLM_SpendLogs"
                     WHERE {joined_conditions}
                     ORDER BY {_SESSION_GROUP_KEY_SQL}, call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC
@@ -2688,6 +2700,12 @@ async def ui_view_spend_logs(
         sql_params.extend([page_size, skip])
 
         data: Final = await prisma_client.db.query_raw(sql_query, *sql_params)
+
+        if sort_by_session_spend:
+            # ORDER BY helper only; the response already carries session_total_spend.
+            for row in data:
+                if isinstance(row, dict):
+                    row.pop("session_spend_in_window", None)
 
         _hydrate_spend_log_metadata(data)
 
