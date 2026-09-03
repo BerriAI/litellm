@@ -20,9 +20,9 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_tool_reference_parts_from_tool_messages,
+    flatten_top_level_schema_combinators,
     get_tool_call_names,
     hoist_images_from_tool_messages,
-    tool_with_flattened_parameters,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
@@ -68,6 +68,19 @@ else:
 
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _tool_with_flattened_parameters(tool: Mapping[str, object]) -> Mapping[str, object]:
+    function: Final = tool.get("function")
+    if not isinstance(function, dict):
+        return tool
+    parameters: Final = function.get("parameters")
+    if not isinstance(parameters, dict):
+        return tool
+    flattened: Final = flatten_top_level_schema_combinators(parameters)
+    if flattened is parameters:
+        return tool
+    return {**tool, "function": {**function, "parameters": flattened}}  # mutable-ok: request tools are JSON dicts
 
 
 class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
@@ -179,6 +192,15 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             model_specific_params.append(
                 "user"
             )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
+
+        from litellm.utils import supports_reasoning
+
+        try:
+            if supports_reasoning(model=model, custom_llm_provider="openai"):
+                model_specific_params.append("reasoning_effort")
+        except Exception:
+            pass
+
         return base_params + model_specific_params
 
     @staticmethod
@@ -453,7 +475,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         ):
             return _NO_TOOLS_UPDATE
         flattened: Final = [  # mutable-ok: request tools are a JSON list
-            tool_with_flattened_parameters(tool) if isinstance(tool, dict) else tool for tool in tools
+            _tool_with_flattened_parameters(tool) if isinstance(tool, dict) else tool for tool in tools
         ]
         return MappingProxyType({"tools": flattened})
 
