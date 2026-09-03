@@ -214,9 +214,9 @@ class DualCache(BaseCache):
                     if value is not None:
                         self.in_memory_cache.set_cache(key, value, **self._backfill_kwargs(kwargs))
 
-            return [
+            return list(  # mutable-ok: public list contract
                 redis_result.get(key) if value is None else value for key, value in zip(keys, result)
-            ]  # mutable-ok: public list contract
+            )
         except Exception:
             verbose_logger.error(traceback.format_exc())
 
