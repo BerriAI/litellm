@@ -7,6 +7,8 @@ from litellm.router_strategy.adaptive_router import adaptive_router as ar_module
 import pytest
 
 from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
+from litellm.router_strategy.adaptive_router.bandit import BanditCell
+from litellm.router_strategy.adaptive_router.config import SAMPLE_CAP
 from litellm.router_strategy.adaptive_router.signals import Turn
 from litellm.types.router import (
     AdaptiveRouterConfig,
@@ -269,6 +271,73 @@ async def test_record_turn_bounds_feedback_contexts_and_evicts_least_recent_sess
 
 
 @pytest.mark.asyncio
+async def test_record_efficiency_pushes_to_queue():
+    r = _make_router()
+    r.queue.add_state_delta = AsyncMock()
+
+    reward = await r.record_efficiency(
+        model_name="fast",
+        request_type=RequestType.GENERAL,
+        latency_seconds=0.5,
+        completion_tokens=50,
+    )
+
+    assert 0.0 <= reward <= 1.0
+    r.queue.add_state_delta.assert_awaited_once()
+    call_kwargs = r.queue.add_state_delta.call_args.kwargs
+    assert call_kwargs["delta_alpha_eff"] == reward
+    assert call_kwargs["delta_beta_eff"] == 1.0 - reward
+    assert call_kwargs["delta_alpha"] == 0.0
+    assert call_kwargs["delta_beta"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_record_efficiency_zeroes_reward_on_failure():
+    r = _make_router()
+    r.queue.add_state_delta = AsyncMock()
+
+    reward = await r.record_efficiency(
+        model_name="fast",
+        request_type=RequestType.GENERAL,
+        latency_seconds=0.1,
+        completion_tokens=50,
+        is_failure=True,
+    )
+
+    assert reward == 0.0
+    call_kwargs = r.queue.add_state_delta.call_args.kwargs
+    assert call_kwargs["delta_alpha_eff"] == 0.0
+    assert call_kwargs["delta_beta_eff"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_record_efficiency_at_sample_cap_does_not_persist_rejected_update():
+    """Regression: when the in-memory efficiency posterior is at SAMPLE_CAP, apply_efficiency_delta
+    rejects the update and leaves the cell unchanged. record_efficiency must not enqueue a DB write
+    for a delta that was never actually applied in memory -- otherwise the DB and in-memory state
+    diverge, and the row can persist an efficiency posterior the live cell never had."""
+    r = _make_router()
+    cell_key = (RequestType.GENERAL, "fast")
+    r._cells[cell_key] = BanditCell(
+        alpha=r._cells[cell_key].alpha,
+        beta=r._cells[cell_key].beta,
+        alpha_eff=SAMPLE_CAP - 1.0,
+        beta_eff=1.0,
+    )
+    r.queue.add_state_delta = AsyncMock()
+
+    await r.record_efficiency(
+        model_name="fast",
+        request_type=RequestType.GENERAL,
+        latency_seconds=0.5,
+        completion_tokens=50,
+    )
+
+    r.queue.add_state_delta.assert_not_awaited()
+    assert r._cells[cell_key].alpha_eff == SAMPLE_CAP - 1.0
+
+
+@pytest.mark.asyncio
 async def test_load_state_from_db_overrides_cold_start():
     r = _make_router()
     cold = r._cells[(RequestType.GENERAL, "fast")]
@@ -286,6 +355,46 @@ async def test_load_state_from_db_overrides_cold_start():
     new_cell = r._cells[(RequestType.GENERAL, "fast")]
     assert (new_cell.alpha, new_cell.beta) == (42.0, 13.0)
     assert (new_cell.alpha, new_cell.beta) != (cold.alpha, cold.beta)
+
+
+@pytest.mark.asyncio
+async def test_load_state_from_db_loads_efficiency_posterior():
+    r = _make_router()
+
+    fake_row = MagicMock()
+    fake_row.request_type = "general"
+    fake_row.model_name = "fast"
+    fake_row.alpha = 42.0
+    fake_row.beta = 13.0
+    fake_row.alpha_eff = 6.0
+    fake_row.beta_eff = 4.0
+
+    prisma = MagicMock()
+    prisma.db.litellm_adaptiverouterstate.find_many = AsyncMock(return_value=[fake_row])
+    await r.load_state_from_db(prisma)
+
+    new_cell = r._cells[(RequestType.GENERAL, "fast")]
+    assert (new_cell.alpha_eff, new_cell.beta_eff) == (6.0, 4.0)
+
+
+@pytest.mark.asyncio
+async def test_load_state_from_db_defaults_efficiency_when_row_lacks_columns():
+    """A row from before alpha_eff/beta_eff existed should load as the uninformative
+    Beta(1, 1) prior, not crash or silently carry over an unrelated attribute."""
+    r = _make_router()
+
+    class _LegacyRow:
+        request_type = "general"
+        model_name = "fast"
+        alpha = 42.0
+        beta = 13.0
+
+    prisma = MagicMock()
+    prisma.db.litellm_adaptiverouterstate.find_many = AsyncMock(return_value=[_LegacyRow()])
+    await r.load_state_from_db(prisma)
+
+    new_cell = r._cells[(RequestType.GENERAL, "fast")]
+    assert (new_cell.alpha_eff, new_cell.beta_eff) == (1.0, 1.0)
 
 
 @pytest.mark.asyncio
