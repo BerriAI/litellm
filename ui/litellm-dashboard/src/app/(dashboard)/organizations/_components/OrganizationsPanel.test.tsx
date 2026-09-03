@@ -18,12 +18,13 @@ vi.mock("@/components/mcp_server_management/MCPServerSelector", () => ({
 type AuthState = { accessToken: string | null; userId: string | null; userRole: string | null };
 const SIGNED_OUT: AuthState = { accessToken: null, userId: null, userRole: null };
 const SIGNED_IN: AuthState = { accessToken: "sk-test", userId: "user-1", userRole: "Admin" };
-let authState: AuthState = SIGNED_OUT;
+const mockUseAuthorized = vi.fn<() => AuthState>(() => SIGNED_OUT);
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
-  default: () => authState,
+  default: () => mockUseAuthorized(),
 }));
 
-const makeOrganization = (organization_id: string, organization_alias: string): Organization => ({
+type ServerOrganization = Omit<Organization, "organization_alias"> & { organization_alias: string | null };
+const makeOrganization = (organization_id: string, organization_alias: string | null): ServerOrganization => ({
   organization_id,
   organization_alias,
   budget_id: "",
@@ -42,24 +43,28 @@ const makeOrganization = (organization_id: string, organization_alias: string): 
 });
 const ALPHA_ORG_ID = "ff9eb074-3f07-4e13-91fb-5337fb10d760";
 const BETA_ORG_ID = "0a1b2c3d-1111-4222-8333-444455556666";
-const SERVER_ORGANIZATIONS: Organization[] = [
+const NO_ALIAS_ORG_ID = "7b6a5f4e-0000-4aaa-8bbb-cccddd111222";
+const SERVER_ORGANIZATIONS: readonly ServerOrganization[] = [
   makeOrganization(ALPHA_ORG_ID, "Alpha Org"),
   makeOrganization(BETA_ORG_ID, "Beta Org"),
   makeOrganization("9f8e7d6c-9999-4888-8777-666655554444", "Gamma Org"),
 ];
-const matchesServerFilters = (organization: Organization, orgId: string | null, orgAlias: string | null) => {
+const matchesServerFilters = (organization: ServerOrganization, orgId: string | null, orgAlias: string | null) => {
   const idMatches = !orgId || organization.organization_id === orgId;
-  const aliasMatches = !orgAlias || organization.organization_alias.toLowerCase().includes(orgAlias.toLowerCase());
+  const aliasMatches =
+    !orgAlias || (organization.organization_alias?.toLowerCase().includes(orgAlias.toLowerCase()) ?? false);
   return idMatches && aliasMatches;
 };
+const fakeOrganizationList =
+  (organizations: readonly ServerOrganization[]) =>
+  (_accessToken: string, orgId: string | null = null, orgAlias: string | null = null) =>
+    Promise.resolve(organizations.filter((organization) => matchesServerFilters(organization, orgId, orgAlias)));
+const mockOrganizationListCall = vi.fn(fakeOrganizationList(SERVER_ORGANIZATIONS));
 vi.mock("@/components/networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/networking")>();
   return {
     ...actual,
-    organizationListCall: (_accessToken: string, orgId: string | null = null, orgAlias: string | null = null) =>
-      Promise.resolve(
-        SERVER_ORGANIZATIONS.filter((organization) => matchesServerFilters(organization, orgId, orgAlias)),
-      ),
+    organizationListCall: (...args: Parameters<typeof mockOrganizationListCall>) => mockOrganizationListCall(...args),
     modelAvailableCall: () => Promise.resolve({ data: [] }),
   };
 });
@@ -90,9 +95,18 @@ const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
 interface RenderPanelOptions {
   premiumUser?: boolean;
   searchParams?: string;
+  auth?: AuthState;
+  organizations?: readonly ServerOrganization[];
 }
 
-const renderPanel = ({ premiumUser = true, searchParams = "" }: RenderPanelOptions = {}) => {
+const renderPanel = ({
+  premiumUser = true,
+  searchParams = "",
+  auth = SIGNED_OUT,
+  organizations = SERVER_ORGANIZATIONS,
+}: RenderPanelOptions = {}) => {
+  mockUseAuthorized.mockReturnValue(auth);
+  mockOrganizationListCall.mockImplementation(fakeOrganizationList(organizations));
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -122,7 +136,6 @@ const expectQueryString = (queryString: string) =>
   waitFor(() => expect(onUrlUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ queryString })));
 
 beforeEach(() => {
-  authState = SIGNED_OUT;
   capturedTableProps = null;
   mockOrgInfoView.mockClear();
   onUrlUpdate.mockClear();
@@ -213,10 +226,9 @@ describe("OrganizationsPanel - org detail deep link (?org=)", () => {
 });
 
 describe("OrganizationsPanel - search by organization name or ID", () => {
-  const renderSignedInPanel = async () => {
-    authState = SIGNED_IN;
-    renderPanel();
-    await waitFor(() => expect(capturedTableProps?.organizations).toHaveLength(SERVER_ORGANIZATIONS.length));
+  const renderSignedInPanel = async (organizations: readonly ServerOrganization[] = SERVER_ORGANIZATIONS) => {
+    renderPanel({ auth: SIGNED_IN, organizations });
+    await waitFor(() => expect(capturedTableProps?.organizations).toHaveLength(organizations.length));
   };
 
   const search = (value: string) =>
@@ -244,5 +256,13 @@ describe("OrganizationsPanel - search by organization name or ID", () => {
 
     await waitFor(() => expect(capturedTableProps?.organizations).toEqual([]));
     expect(capturedTableProps?.searchActive).toBe(true);
+  });
+
+  it("still finds a row by id when the server hands back a null alias", async () => {
+    await renderSignedInPanel([...SERVER_ORGANIZATIONS, makeOrganization(NO_ALIAS_ORG_ID, null)]);
+
+    search(NO_ALIAS_ORG_ID);
+
+    await waitFor(() => expect(visibleOrganizationIds()).toEqual([NO_ALIAS_ORG_ID]));
   });
 });

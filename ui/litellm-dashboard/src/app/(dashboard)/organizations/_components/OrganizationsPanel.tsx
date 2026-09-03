@@ -21,10 +21,9 @@ interface OrganizationsPanelProps {
 
 const matchesOrganizationSearch = (organization: Organization, search: string): boolean => {
   const needle = search.trim().toLowerCase();
-  return (
-    needle === "" ||
-    organization.organization_alias.toLowerCase().includes(needle) ||
-    organization.organization_id.toLowerCase().includes(needle)
+  if (needle === "") return true;
+  return [organization.organization_alias, organization.organization_id].some((field) =>
+    field?.toLowerCase().includes(needle),
   );
 };
 
