@@ -16,7 +16,7 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.router_strategy.complexity_router.complexity_router import (
     _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
     _CLASSIFICATION_WITH_CONVERSATION,
@@ -4265,6 +4265,26 @@ class TestSessionAffinity:
             complexity_router_config=basic_config,
         )
         request_kwargs = self._request_kwargs("session-1")
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        second = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert first.model == "o1-preview"
+        assert second.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_proxy_generated_session_id_never_pins(self, mock_router_instance, session_affinity_config):
+        """A session id the proxy generated for a request that had none is per request, so
+        it must not create a pin even with session_affinity enabled."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = {"metadata": {"session_id": "generated-1", SESSION_ID_GENERATED_METADATA_KEY: True}}
         first = await router.async_pre_routing_hook(
             model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
         )

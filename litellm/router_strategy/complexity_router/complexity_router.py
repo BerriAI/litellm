@@ -26,7 +26,11 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 from pydantic import BaseModel, create_model
 
 from litellm._logging import verbose_router_logger
-from litellm.constants import EMPTY_MAPPING, RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import (
+    EMPTY_MAPPING,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
+    SESSION_ID_GENERATED_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
@@ -2712,7 +2716,7 @@ class ComplexityRouter(CustomLogger):
         """Resolve a client-supplied session_id."""
         for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
             session_id = metadata.get("session_id")
-            if session_id is not None:
+            if session_id is not None and not metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
                 return str(session_id)
         return None
 
