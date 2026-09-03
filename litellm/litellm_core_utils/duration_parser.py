@@ -12,8 +12,6 @@ from datetime import datetime, time, timedelta, timezone, tzinfo
 from typing import Final
 from zoneinfo import ZoneInfo
 
-from litellm._logging import verbose_logger
-
 _BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
     "hourly": "1h",
     "daily": "24h",
@@ -135,20 +133,14 @@ def get_next_standardized_reset_time(
     # Set up timezone and normalize current time
     current_time, _ = _setup_timezone(current_time, timezone_str)
 
-    # Parse duration
     value, unit = _parse_duration(_normalize_duration(duration))
-    if value is None:
-        verbose_logger.warning(
-            "Unrecognized budget_duration %r; falling back to a next-midnight reset. "
-            "Use the <int><unit> format (e.g. '1h', '7d', '30d', '1mo').",
-            duration,
+    if value is None or unit not in {"s", "m", "h", "d", "w", "mo"}:
+        raise ValueError(
+            f"Invalid budget_duration {duration!r}. Use the <int><unit> format (e.g. '1h', '7d', '30d', '1mo')."
         )
-        return current_time.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
 
-    # Midnight of the current day in the specified timezone
     base_midnight: Final = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # Handle different time units
     if unit == "d":
         return _handle_day_reset(current_time, base_midnight, value, reset_time_of_day)
     elif unit == "w":
@@ -159,11 +151,7 @@ def get_next_standardized_reset_time(
         return _handle_minute_reset(current_time, base_midnight, value)
     elif unit == "s":
         return _handle_second_reset(current_time, base_midnight, value)
-    elif unit == "mo":
-        return _handle_month_reset(current_time, base_midnight, value, reset_time_of_day)
-    else:
-        # Unrecognized unit, default to next midnight
-        return base_midnight + timedelta(days=1)
+    return _handle_month_reset(current_time, base_midnight, value, reset_time_of_day)
 
 
 def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> tuple[datetime, tzinfo]:
