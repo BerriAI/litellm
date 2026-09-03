@@ -221,6 +221,64 @@ class TestVertexAITextToSpeechConfig:
         )
         assert optional_params["vertex_voice_dict"]["modelName"] == routed_model
 
+    def test_dispatch_maps_gemini_cloud_tts_params_when_provider_config_skipped(self):
+        config = VertexAITextToSpeechConfig()
+        handler = MagicMock()
+        handler.text_to_speech_handler.return_value = "ok"
+
+        result = config.dispatch_text_to_speech(
+            model="gemini-3.1-flash-tts-preview",
+            input="Hi",
+            voice={
+                "name": "Umbriel",
+                "modelName": "gemini-2.5-flash-tts",
+            },
+            optional_params={"response_format": "mp3"},
+            litellm_params_dict={},
+            logging_obj=MagicMock(),
+            timeout=10,
+            extra_headers=None,
+            base_llm_http_handler=handler,
+            aspeech=False,
+            api_base=None,
+            api_key=None,
+        )
+
+        assert result == "ok"
+        mapped_params = handler.text_to_speech_handler.call_args.kwargs["text_to_speech_optional_params"]
+        assert mapped_params["audioEncoding"] == "MP3"
+        assert mapped_params["vertex_voice_dict"]["name"] == "Umbriel"
+        assert mapped_params["vertex_voice_dict"]["modelName"] == "gemini-3.1-flash-tts-preview"
+
+    def test_dispatch_keeps_pre_mapped_cloud_tts_params(self):
+        config = VertexAITextToSpeechConfig()
+        handler = MagicMock()
+        handler.text_to_speech_handler.return_value = "ok"
+        optional_params = {
+            "audioEncoding": "OGG_OPUS",
+            "vertex_voice_dict": {"languageCode": "en-US", "name": "en-US-Chirp3-HD-Charon"},
+        }
+
+        config.dispatch_text_to_speech(
+            model="chirp",
+            input="Hi",
+            voice="en-US-Chirp3-HD-Charon",
+            optional_params=optional_params,
+            litellm_params_dict={},
+            logging_obj=MagicMock(),
+            timeout=10,
+            extra_headers=None,
+            base_llm_http_handler=handler,
+            aspeech=False,
+            api_base=None,
+            api_key=None,
+        )
+
+        call_kwargs = handler.text_to_speech_handler.call_args.kwargs
+        assert call_kwargs["voice"] == "en-US-Chirp3-HD-Charon"
+        assert call_kwargs["text_to_speech_optional_params"] is optional_params
+        assert call_kwargs["text_to_speech_optional_params"]["audioEncoding"] == "OGG_OPUS"
+
     @patch.object(  # test-quality-ok: isolates provider credentials while testing Gemini request serialization
         VertexAITextToSpeechConfig, "_ensure_access_token"
     )

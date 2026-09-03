@@ -284,6 +284,31 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             "modelName": model_name,
         }
 
+    @staticmethod
+    def _dispatch_voice_name(voice: str | dict | None) -> str | None:
+        if isinstance(voice, str):
+            return voice
+        if not isinstance(voice, dict):
+            return None
+        name: Final = voice.get("name")
+        return name if isinstance(name, str) else None
+
+    def _cloud_tts_dispatch_params(
+        self,
+        model: str,
+        voice: str | dict | None,
+        optional_params: dict,
+        kwargs: dict,
+    ) -> tuple[str | None, dict]:
+        if "audioEncoding" in optional_params:
+            return self._dispatch_voice_name(voice), optional_params
+        return self.map_openai_params(
+            model=model,
+            optional_params=optional_params,
+            voice=voice,
+            kwargs=kwargs,
+        )
+
     def dispatch_text_to_speech(
         self,
         model: str,
@@ -317,14 +342,12 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         vertex_project: Final = self.safe_get_vertex_ai_project(litellm_params_dict)
         vertex_location: Final = self.safe_get_vertex_ai_location(litellm_params_dict)
 
-        # Convert voice to string if it's a dict (extract name)
-        # Actual voice mapping happens in map_openai_params
-        voice_str: str | None = None
-        if isinstance(voice, str):
-            voice_str = voice
-        elif isinstance(voice, dict):
-            # Extract voice name from dict if needed
-            voice_str = voice.get("name") if voice else None
+        mapped_voice, mapped_params = self._cloud_tts_dispatch_params(
+            model=model,
+            voice=voice,
+            optional_params=optional_params,
+            kwargs=kwargs,
+        )
 
         # Store credentials in litellm_params for use in transform methods
         litellm_params_dict.update(
@@ -340,9 +363,9 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         response: Final = base_llm_http_handler.text_to_speech_handler(
             model=model,
             input=input,
-            voice=voice_str,
+            voice=mapped_voice,
             text_to_speech_provider_config=self,
-            text_to_speech_optional_params=optional_params,
+            text_to_speech_optional_params=mapped_params,
             custom_llm_provider="vertex_ai",
             litellm_params=litellm_params_dict,
             logging_obj=logging_obj,
