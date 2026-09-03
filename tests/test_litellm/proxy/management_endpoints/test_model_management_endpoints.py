@@ -1,5 +1,6 @@
 import inspect
 import asyncio
+import contextlib
 import json
 from typing import Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -875,6 +876,7 @@ class TestDeleteModelClearsRouterRegistry:
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
         mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.query_raw = AsyncMock(return_value=[])
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=db_row)
         mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
 
@@ -936,6 +938,7 @@ class TestDeleteModelClearsRouterRegistry:
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
         mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.query_raw = AsyncMock(return_value=[])
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=db_row)
         mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
 
@@ -2079,6 +2082,7 @@ class TestAddAndDeleteModelLifecycle:
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
         mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.query_raw = AsyncMock(return_value=[])
         mock_prisma.db.litellm_proxymodeltable.create = AsyncMock(return_value=db_row)
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
             return_value=db_row
@@ -2191,6 +2195,7 @@ class TestDeleteTeamBYOKModelGhost:
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
         mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.query_raw = AsyncMock(return_value=[])
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
             return_value=db_row
         )
@@ -2273,6 +2278,7 @@ class TestDeleteTeamBYOKModelGhost:
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
         mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.query_raw = AsyncMock(return_value=[])
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
             return_value=db_row
         )
@@ -2349,6 +2355,7 @@ class TestDeleteTeamBYOKModelGhost:
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
         mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.query_raw = AsyncMock(return_value=[])
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
             return_value=deleted_row
         )
@@ -2434,6 +2441,7 @@ class TestDeleteTeamBYOKModelGhost:
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
         mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.query_raw = AsyncMock(return_value=[])
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
             return_value=db_row
         )
@@ -2515,6 +2523,7 @@ class TestDeleteTeamBYOKModelGhost:
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
         mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.query_raw = AsyncMock(return_value=[])
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
             return_value=db_row
         )
@@ -2584,6 +2593,7 @@ class TestDeleteModelTeamAuth:
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
         mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.query_raw = AsyncMock(return_value=[])
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
             return_value=db_row
         )
@@ -2702,6 +2712,7 @@ class TestDeleteModelTeamAuth:
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
         mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.query_raw = AsyncMock(return_value=[])
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
             return_value=db_row
         )
@@ -3844,6 +3855,7 @@ class TestDeleteEvictionsHoldTheReconcileLock:
 
         prisma = MagicMock()
         prisma.db.litellm_proxymodeltable = table
+        prisma.db.query_raw = AsyncMock(return_value=[])
 
         router = MagicMock()
         router.delete_deployment = MagicMock(return_value=True)
@@ -4654,3 +4666,179 @@ class TestBlockModelResponseSerialization:
         assert body["model_id"] == "m-block-1"
         assert body["blocked"] is blocked
         assert body["litellm_params"] == {"model": "openai/gpt-4o-mini", "api_key": "encrypted-value"}
+
+
+class TestAccessGroupModelSync:
+    """A rename or delete of a deployment must land in every unified access group that names it."""
+
+    _PS = "litellm.proxy.proxy_server"
+    _MOD = "litellm.proxy.management_endpoints.model_management_endpoints"
+    _INVALIDATE = "litellm.proxy.management_helpers.access_group_model_sync.invalidate_access_group_caches"
+
+    @staticmethod
+    def _admin():
+        return UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin")
+
+    @staticmethod
+    def _prisma_with_row(model_id: str, model_name: str, deployment_count: int):
+        row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name=model_name,
+            litellm_params={"model": "openai/gpt-5.6"},
+            model_info={"id": model_id},
+            created_by="admin",
+            updated_by="admin",
+        )
+
+        async def query_raw(sql, *params):
+            if sql.startswith("SELECT COUNT(*)"):
+                return [{"deployment_count": deployment_count}]
+            return [{"access_group_id": "ag-1"}]
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.query_raw = AsyncMock(side_effect=query_raw)
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=row)
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=row)
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=row)
+        return mock_prisma
+
+    @staticmethod
+    def _access_group_updates(mock_prisma):
+        return [
+            call
+            for call in mock_prisma.db.query_raw.await_args_list
+            if call.args[0].startswith('UPDATE "LiteLLM_AccessGroupTable"')
+        ]
+
+    @contextlib.contextmanager
+    def _endpoint_env(self, mock_prisma, router):
+        with contextlib.ExitStack() as stack:
+            for target in (
+                patch(f"{self._PS}.prisma_client", mock_prisma),
+                patch(f"{self._PS}.llm_router", router),
+                patch(f"{self._PS}.store_model_in_db", True),
+                patch(f"{self._PS}.premium_user", True),
+                patch(f"{self._PS}.proxy_logging_obj", MagicMock()),
+                patch(f"{self._PS}.user_api_key_cache", MagicMock()),
+                patch(f"{self._MOD}.ModelManagementAuthChecks.can_user_make_model_call", new=AsyncMock(return_value=None)),
+                patch(
+                    f"{self._MOD}.clear_cache",
+                    new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+                ),
+                patch(f"{self._MOD}.encrypt_value_helper", side_effect=lambda value, **kwargs: value),
+            ):
+                stack.enter_context(target)
+            yield stack.enter_context(patch(self._INVALIDATE, new=AsyncMock()))
+
+    @pytest.mark.asyncio
+    async def test_patch_model_rename_rewrites_the_groups_that_named_the_model(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        mock_prisma = self._prisma_with_row("m-rename", "gpt-5.6", deployment_count=0)
+        router = MagicMock()
+        router.get_model_ids.return_value = ["m-rename"]
+
+        with self._endpoint_env(mock_prisma, router) as invalidate:
+            await patch_model(
+                model_id="m-rename",
+                patch_data=updateDeployment(model_name="gpt-5.6-eu"),
+                user_api_key_dict=self._admin(),
+            )
+
+        written = mock_prisma.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        assert written["model_name"] == "gpt-5.6-eu"
+        (update_call,) = self._access_group_updates(mock_prisma)
+        assert "array_replace" in update_call.args[0]
+        assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
+        invalidate.assert_awaited_once_with(("ag-1",))
+
+    @pytest.mark.asyncio
+    async def test_patch_model_rename_appends_when_a_sibling_deployment_keeps_the_old_name(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        mock_prisma = self._prisma_with_row("m-rename", "gpt-5.6", deployment_count=1)
+        router = MagicMock()
+        router.get_model_ids.return_value = ["m-rename"]
+
+        with self._endpoint_env(mock_prisma, router):
+            await patch_model(
+                model_id="m-rename",
+                patch_data=updateDeployment(model_name="gpt-5.6-eu"),
+                user_api_key_dict=self._admin(),
+            )
+
+        (update_call,) = self._access_group_updates(mock_prisma)
+        assert "array_append" in update_call.args[0]
+        assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
+
+    @pytest.mark.asyncio
+    async def test_patch_model_without_a_rename_leaves_access_groups_alone(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        mock_prisma = self._prisma_with_row("m-same", "gpt-5.6", deployment_count=0)
+        router = MagicMock()
+        router.get_model_ids.return_value = ["m-same"]
+
+        with self._endpoint_env(mock_prisma, router) as invalidate:
+            await patch_model(model_id="m-same", patch_data=updateDeployment(blocked=True), user_api_key_dict=self._admin())
+
+        mock_prisma.db.query_raw.assert_not_awaited()
+        invalidate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_delete_model_drops_the_name_from_groups_when_nothing_backs_it(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete, delete_model
+
+        mock_prisma = self._prisma_with_row("m-doomed", "gpt-5.6", deployment_count=0)
+        router = MagicMock()
+        router.get_model_ids.return_value = []
+
+        with self._endpoint_env(mock_prisma, router) as invalidate:
+            await delete_model(model_info=ModelInfoDelete(id="m-doomed"), user_api_key_dict=self._admin())
+
+        (update_call,) = self._access_group_updates(mock_prisma)
+        assert "array_remove" in update_call.args[0]
+        assert update_call.args[1:] == ("gpt-5.6",)
+        invalidate.assert_awaited_once_with(("ag-1",))
+
+    @pytest.mark.asyncio
+    async def test_delete_model_keeps_the_name_while_a_sibling_deployment_backs_it(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import ModelInfoDelete, delete_model
+
+        mock_prisma = self._prisma_with_row("m-doomed", "gpt-5.6", deployment_count=1)
+        router = MagicMock()
+        router.get_model_ids.return_value = []
+
+        with self._endpoint_env(mock_prisma, router) as invalidate:
+            await delete_model(model_info=ModelInfoDelete(id="m-doomed"), user_api_key_dict=self._admin())
+
+        assert self._access_group_updates(mock_prisma) == []
+        invalidate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_model_persists_a_new_model_name_and_rewrites_the_groups(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_model
+        from litellm.types.router import ModelInfo, updateLiteLLMParams
+
+        mock_prisma = self._prisma_with_row("m-terraform", "gpt-5.6", deployment_count=0)
+        router = MagicMock()
+        router.get_model_ids.return_value = ["m-terraform"]
+
+        with self._endpoint_env(mock_prisma, router) as invalidate:
+            await update_model(
+                model_params=updateDeployment(
+                    model_name="gpt-5.6-eu",
+                    litellm_params=updateLiteLLMParams(model="openai/gpt-5.6"),
+                    model_info=ModelInfo(id="m-terraform"),
+                ),
+                user_api_key_dict=self._admin(),
+            )
+
+        written = mock_prisma.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        assert written["model_name"] == "gpt-5.6-eu"
+        (update_call,) = self._access_group_updates(mock_prisma)
+        assert "array_replace" in update_call.args[0]
+        assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
+        invalidate.assert_awaited_once_with(("ag-1",))
