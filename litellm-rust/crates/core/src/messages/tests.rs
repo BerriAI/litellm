@@ -439,3 +439,118 @@ async fn messages_rejects_unsupported_provider() {
 
     assert!(matches!(err, Error::InvalidProvider(provider) if provider == "openai"));
 }
+
+#[tokio::test]
+async fn messages_stream_frames_yields_complete_frames_and_forces_stream_flag() {
+    use futures_util::StreamExt;
+
+    use super::messages_stream_frames;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("addr");
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let request = read_http_request(&mut socket).await;
+        // Send the SSE body in multiple writes so frames span network chunks.
+        let body = concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\"}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\"}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        );
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("writes response head");
+        let bytes = body.as_bytes();
+        for chunk in [&bytes[..40], &bytes[40..90], &bytes[90..]] {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            socket.write_all(chunk).await.expect("writes body chunk");
+        }
+        request
+    });
+
+    let mut stream = messages_stream_frames(MessagesRequest {
+        model: "claude-sonnet-4-5",
+        // `stream` deliberately omitted: the entrypoint must force it upstream.
+        body: json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}]
+        }),
+        api_key: Some("sk-ant"),
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("anthropic"),
+        extra_headers: None,
+        timeout: Some(Duration::from_secs(5)),
+    })
+    .await
+    .expect("stream request succeeds");
+
+    let mut frames = Vec::new();
+    while let Some(frame) = stream.next().await {
+        frames.push(String::from_utf8(frame.expect("frame decodes")).expect("frame is utf8"));
+    }
+    assert_eq!(
+        frames,
+        vec![
+            "event: message_start\ndata: {\"type\":\"message_start\"}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\"}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        ]
+    );
+
+    let request = server.await.expect("server task completes");
+    let (_, body) = request.split_once("\r\n\r\n").expect("has body");
+    let sent_body: Value = serde_json::from_str(body).expect("body is json");
+    assert_eq!(sent_body["stream"], Value::Bool(true));
+}
+
+#[tokio::test]
+async fn messages_stream_frames_maps_upstream_error_status() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("addr");
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let _ = read_http_request(&mut socket).await;
+        let body = "{\"error\":\"rate limited\"}";
+        let response = format!(
+            "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("writes response");
+    });
+
+    use super::messages_stream_frames;
+
+    let err = match messages_stream_frames(MessagesRequest {
+        model: "claude-sonnet-4-5",
+        body: json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": true
+        }),
+        api_key: Some("sk-ant"),
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("anthropic"),
+        extra_headers: None,
+        timeout: Some(Duration::from_secs(5)),
+    })
+    .await
+    {
+        Err(err) => err,
+        Ok(_) => panic!("provider error should propagate before the stream"),
+    };
+
+    assert!(matches!(err, Error::Http { status: 429, .. }));
+}

@@ -45,11 +45,16 @@ pub(super) async fn execute_messages_provider_call(
 pub(super) async fn execute_messages_provider_stream(
     request: MessagesRequest<'_>,
 ) -> Result<reqwest::Response, Error> {
-    let request = prepare_provider_request(request)?;
+    let mut request = prepare_provider_request(request)?;
     if request.provider != ANTHROPIC_MESSAGES_PROVIDER {
         return Err(Error::InvalidRequest(
             "streaming messages is not supported for this provider".to_string(),
         ));
+    }
+    // The streaming entrypoints only make sense for `stream: true`; force it so
+    // a host cannot accidentally ask for SSE and receive a buffered JSON body.
+    if let Some(body) = request.body.as_object_mut() {
+        body.insert("stream".to_string(), serde_json::Value::Bool(true));
     }
 
     let mut request_builder = http_client().post(&request.url).json(&request.body);

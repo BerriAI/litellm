@@ -8,6 +8,7 @@
 //! can splice the event stream to its own caller.
 
 use crate::Error;
+use crate::http_utils::SseFrameStream;
 mod client;
 mod common_utils;
 mod handler;
@@ -25,6 +26,16 @@ pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesR
 
 pub async fn messages_stream(request: MessagesRequest<'_>) -> Result<reqwest::Response, Error> {
     execute_messages_provider_stream(request).await
+}
+
+/// The streaming variant that yields complete server-sent-event frames.
+///
+/// Unlike [`messages_stream`], which hands back the raw upstream response for a
+/// host to splice, this entrypoint keeps frame decoding in core and yields one
+/// complete `event:`/`data:` frame per item, reassembled across network chunks.
+pub async fn messages_stream_frames(request: MessagesRequest<'_>) -> Result<SseFrameStream, Error> {
+    let response = execute_messages_provider_stream(request).await?;
+    Ok(SseFrameStream::new(response))
 }
 
 #[cfg(test)]

@@ -102,6 +102,8 @@ mod tests {
                 "atranscription",
                 "messages",
                 "amessages",
+                "amessages_stream",
+                "MessagesStream",
                 "chat_completions_decline",
                 "chat_completions",
                 "achat_completions",
