@@ -9,6 +9,7 @@ from typing import Final
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -59,7 +60,7 @@ class PredibaseChatCompletion:
         print_verbose: Callable,
         encoding,
         api_key: str,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
         tenant_id: str,
@@ -250,7 +251,7 @@ class PredibaseChatCompletion:
         print_verbose: Callable,
         encoding,
         api_key,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         data: dict,
         timeout: float | httpx.Timeout,
         optional_params=None,

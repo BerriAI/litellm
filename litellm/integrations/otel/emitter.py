@@ -146,7 +146,7 @@ class SpanEmitter:
         For callers that own and manage their own span lifecycle. ``tracer``
         overrides the bound tracer for this span only, used for per-request
         multi-tenant credential routing. ``links`` records related-but-not-parent
-        spans (e.g. the transport span of an MCP message, per MCP semconv).
+        spans (e.g. the trace context an MCP client propagated in ``params._meta``).
         """
         return (tracer or self._tracer).start_span(
             name,
@@ -155,6 +155,12 @@ class SpanEmitter:
             start_time=start_time_ns,
             links=list(links) if links else None,
         )
+
+    def mark_emitted(self, dedup_key: str | None, role: SpanRole) -> None:
+        """Register a span emitted outside :meth:`emit` (the boundary-opened
+        LLM-call span closed via :meth:`finish_span`) so a later :meth:`emit`
+        for the same ``(dedup_key, role)`` deduplicates against it."""
+        self._seen(dedup_key, role)
 
     def _seen(self, dedup_key: str | None, role: SpanRole) -> bool:
         """Return True once a ``(dedup_key, role)`` pair has been emitted.
@@ -190,8 +196,8 @@ class SpanEmitter:
 
         Return the span, or ``None`` if it was deduplicated away. ``tracer``
         overrides the bound tracer for this span, used for per-request routing.
-        ``links`` records related-but-not-parent spans (the transport span of an
-        MCP message).
+        ``links`` records related-but-not-parent spans (e.g. the trace context an
+        MCP client propagated in ``params._meta``).
         """
         # LLM-call and MCP tool-call spans carry a dedup key (their request's
         # call id), so a sync+async double-firing coalesces. ``isinstance`` narrows

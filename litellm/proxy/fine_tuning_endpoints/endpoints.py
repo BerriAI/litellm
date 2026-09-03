@@ -17,6 +17,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
+    validate_managed_id_requirement,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.utils import LiteLLMFineTuningJob
@@ -132,8 +133,20 @@ async def create_fine_tuning_job(
         )
 
         ## CHECK IF MANAGED FILE ID
-        unified_file_id: Union[str, Literal[False]] = False
+        unified_file_id: str | Literal[False] = False
         training_file: Final = fine_tuning_request.training_file
+        await validate_managed_id_requirement(
+            resource_id=training_file,
+            resource_kind="file",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
+        await validate_managed_id_requirement(
+            resource_id=fine_tuning_request.validation_file,
+            resource_kind="file",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
         response: LiteLLMFineTuningJob | None = None
         if training_file:
             unified_file_id = _is_base64_encoded_unified_file_id(training_file)
@@ -246,6 +259,12 @@ async def retrieve_fine_tuning_job(
     try:
         if premium_user is not True:
             raise ValueError(f"Only premium users can use this endpoint + {CommonProxyErrors.not_premium_user.value}")
+        await validate_managed_id_requirement(
+            resource_id=fine_tuning_job_id,
+            resource_kind="fine-tuning job",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
         # Include original request and headers in the data
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
@@ -269,7 +288,7 @@ async def retrieve_fine_tuning_job(
         custom_llm_provider = request_body.get("custom_llm_provider", None) or custom_llm_provider
 
         ## CHECK IF MANAGED FILE ID
-        unified_finetuning_job_id: Union[str, Literal[False]] = False
+        unified_finetuning_job_id: str | Literal[False] = False
         response: LiteLLMFineTuningJob | None = None
         if fine_tuning_job_id:
             unified_finetuning_job_id = _is_base64_encoded_unified_file_id(fine_tuning_job_id)
@@ -513,6 +532,12 @@ async def cancel_fine_tuning_job(
     try:
         if premium_user is not True:
             raise ValueError(f"Only premium users can use this endpoint + {CommonProxyErrors.not_premium_user.value}")
+        await validate_managed_id_requirement(
+            resource_id=fine_tuning_job_id,
+            resource_kind="fine-tuning job",
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        )
         # Include original request and headers in the data
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
@@ -536,7 +561,7 @@ async def cancel_fine_tuning_job(
         custom_llm_provider: Final = request_body.get("custom_llm_provider", None)
 
         ## CHECK IF MANAGED FILE ID
-        unified_finetuning_job_id: Union[str, Literal[False]] = False
+        unified_finetuning_job_id: str | Literal[False] = False
         response: LiteLLMFineTuningJob | None = None
         if fine_tuning_job_id:
             unified_finetuning_job_id = _is_base64_encoded_unified_file_id(fine_tuning_job_id)

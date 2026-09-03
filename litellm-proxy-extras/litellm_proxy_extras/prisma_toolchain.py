@@ -14,9 +14,22 @@ then fails on a Node binary that was never written. Deleting a cache directory
 that exists without a Node binary is what turns a killed bootstrap back into a
 recoverable one.
 
-Both budgets are overridable so an operator can widen them without a release:
-``LITELLM_PRISMA_BOOTSTRAP_TIMEOUT`` for the toolchain install and
-``LITELLM_PRISMA_COMMAND_TIMEOUT`` for every individual Prisma command.
+``prisma migrate deploy`` is the other command whose runtime is not a
+constant: it grows with the number of pending migrations, so a fresh database
+that has to replay every migration this package ships overruns a per-command
+budget sized for the short bookkeeping commands, on a laptop as much as on a
+slow CI runner. The Python ``prisma`` wrapper spawns Node and the schema engine
+as separate children, so killing the wrapper on timeout leaves them running:
+the retry then contends with that orphan for Prisma's advisory lock and cannot
+finish any sooner. Migrate deploy therefore runs under its own budget.
+
+All three budgets are overridable so an operator can widen them without a
+release: ``LITELLM_PRISMA_BOOTSTRAP_TIMEOUT`` for the toolchain install,
+``LITELLM_PRISMA_MIGRATE_DEPLOY_TIMEOUT`` for ``prisma migrate deploy`` and
+``LITELLM_PRISMA_COMMAND_TIMEOUT`` for every other Prisma command. The
+per-command budget used to bound migrate deploy as well, so a deployment that
+raised it above the deploy default keeps that larger budget for deploy unless
+the deploy override says otherwise.
 """
 
 import math
@@ -36,10 +49,12 @@ except ImportError:
 
 PRISMA_COMMAND_TIMEOUT_ENV_VAR = "LITELLM_PRISMA_COMMAND_TIMEOUT"
 PRISMA_BOOTSTRAP_TIMEOUT_ENV_VAR = "LITELLM_PRISMA_BOOTSTRAP_TIMEOUT"
+PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR = "LITELLM_PRISMA_MIGRATE_DEPLOY_TIMEOUT"
 NODEENV_CACHE_DIR_ENV_VAR = "PRISMA_NODEENV_CACHE_DIR"
 
 DEFAULT_PRISMA_COMMAND_TIMEOUT = 60.0
 DEFAULT_PRISMA_BOOTSTRAP_TIMEOUT = 600.0
+DEFAULT_PRISMA_MIGRATE_DEPLOY_TIMEOUT = 600.0
 
 BOOTSTRAP_ARG = "--version"
 
@@ -88,6 +103,15 @@ def prisma_bootstrap_timeout() -> float:
     )
 
 
+def prisma_migrate_deploy_timeout() -> float:
+    """Seconds one ``prisma migrate deploy`` may run for, however many migrations are pending."""
+    if os.getenv(PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR) is not None:
+        return _timeout_from_env(
+            PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR, DEFAULT_PRISMA_MIGRATE_DEPLOY_TIMEOUT
+        )
+    return max(DEFAULT_PRISMA_MIGRATE_DEPLOY_TIMEOUT, prisma_command_timeout())
+
+
 def nodeenv_cache_dir() -> Optional[Path]:
     """Where Prisma installs its private Node runtime, or None if unknowable."""
     override = os.getenv(NODEENV_CACHE_DIR_ENV_VAR)
@@ -121,9 +145,13 @@ def heal_incomplete_nodeenv_cache() -> bool:
     Prisma invocation reinstalls it instead of failing on a missing binary.
     """
     cache_dir = nodeenv_cache_dir()
-    if cache_dir is None or not cache_dir.is_dir():
+    if cache_dir is None:
         return False
-    if node_binary_path(cache_dir).exists():
+    try:
+        if not cache_dir.is_dir() or node_binary_path(cache_dir).exists():
+            return False
+    except OSError as e:
+        logger.warning("Could not inspect the Node toolchain at %s: %s", cache_dir, e)
         return False
     logger.warning(
         "Node toolchain at %s has no %s, so a previous install was interrupted. "

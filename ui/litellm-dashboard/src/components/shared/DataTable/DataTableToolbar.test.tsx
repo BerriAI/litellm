@@ -66,7 +66,7 @@ describe("DataTableToolbar", () => {
     const user = userEvent.setup();
     render(<Harness />);
     await user.click(screen.getByTestId("filter-chip-remove-name"));
-    expect(screen.queryByTestId("filter-chip-name")).toBeNull();
+    expect(screen.queryByTestId("filter-chip-name")).not.toBeInTheDocument();
     expect(names()).toEqual(["Alice", "Bob"]);
   });
 
@@ -74,7 +74,7 @@ describe("DataTableToolbar", () => {
     const user = userEvent.setup();
     render(<Harness />);
     await user.click(screen.getByTestId("datatable-clear-filters"));
-    expect(screen.queryByTestId("filter-chip-name")).toBeNull();
+    expect(screen.queryByTestId("filter-chip-name")).not.toBeInTheDocument();
     expect(names()).toEqual(["Alice", "Bob"]);
   });
 

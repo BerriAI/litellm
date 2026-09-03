@@ -1,7 +1,7 @@
 import os
 import threading
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
     Protocol = _Protocol
     OpenTelemetryConfig = _OpenTelemetryConfig
-    Span = Union[_Span, Any]
+    Span = _Span | Any
     OpenTelemetry = _OpenTelemetry
     LITELLM_TRACER_NAME: str
 else:
@@ -430,7 +430,8 @@ class ArizePhoenixLogger(OpenTelemetry):
 
         otlp_auth_headers = None
         if api_key is not None:
-            otlp_auth_headers = f"Authorization=Bearer {api_key}"
+            auth_header_key = "authorization" if protocol == "otlp_grpc" else "Authorization"
+            otlp_auth_headers = f"{auth_header_key}=Bearer {api_key}"
         elif "app.phoenix.arize.com" in endpoint:
             raise ValueError("PHOENIX_API_KEY must be set when using Phoenix Cloud (app.phoenix.arize.com).")
 

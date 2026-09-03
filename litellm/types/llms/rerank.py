@@ -1,5 +1,3 @@
-from typing import Optional
-
 from typing_extensions import (
     TypedDict,
 )
@@ -8,4 +6,4 @@ from typing_extensions import (
 class InfinityRerankResult(TypedDict):
     index: int
     relevance_score: float
-    document: Optional[str]
+    document: str | None

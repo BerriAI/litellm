@@ -1,66 +1,42 @@
 "use client";
 
-import { Card, Descriptions, Skeleton, Space, Typography } from "antd";
 import { Shield } from "lucide-react";
 
-const { Title, Text } = Typography;
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+
+const CONTENT_WIDTHS = ["w-24", "w-48", "w-60", "w-44", "w-52"];
+
 export default function SSOSettingsLoadingSkeleton() {
-  const descriptionsConfig = {
-    column: {
-      xxl: 1,
-      xl: 1,
-      lg: 1,
-      md: 1,
-      sm: 1,
-      xs: 1,
-    },
-  };
-
   return (
-    <Card>
-      <Space direction="vertical" size="large" className="w-full">
-        {/* Header Section */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Shield className="w-6 h-6 text-gray-400" />
-            <div>
-              <Title level={3}>SSO Configuration</Title>
-              <Text type="secondary">Manage Single Sign-On authentication settings</Text>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <Skeleton.Button active size="default" style={{ width: 170, height: 32 }} />
-            <Skeleton.Button active size="default" style={{ width: 190, height: 32 }} />
+    <Card role="status" aria-label="Loading SSO configuration">
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Shield className="size-6 text-muted-foreground" />
+          <div>
+            <h3 className="text-lg font-semibold text-foreground">SSO Configuration</h3>
+            <p className="text-sm text-muted-foreground">Manage Single Sign-On authentication settings</p>
           </div>
         </div>
-
-        {/* Descriptions Table Skeleton */}
-        <Descriptions bordered {...descriptionsConfig}>
-          {/* Provider Row */}
-          <Descriptions.Item label={<Skeleton.Node active style={{ width: 80, height: 16 }} />}>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <Skeleton.Node active style={{ width: 100, height: 16 }} />
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-8 w-40" />
+          <Skeleton className="h-8 w-48" />
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="divide-y divide-border overflow-hidden rounded-md border border-border">
+          {CONTENT_WIDTHS.map((width) => (
+            <div key={width} className="grid grid-cols-3">
+              <div className="bg-muted/50 px-4 py-3">
+                <Skeleton className="h-4 w-20" />
+              </div>
+              <div className="col-span-2 px-4 py-3">
+                <Skeleton className={`h-4 ${width}`} />
+              </div>
             </div>
-          </Descriptions.Item>
-
-          <Descriptions.Item label={<Skeleton.Node active style={{ width: 80, height: 16 }} />}>
-            <Skeleton.Node active style={{ width: 200, height: 16 }} />
-          </Descriptions.Item>
-
-          <Descriptions.Item label={<Skeleton.Node active style={{ width: 80, height: 16 }} />}>
-            <Skeleton.Node active style={{ width: 250, height: 16 }} />
-          </Descriptions.Item>
-
-          <Descriptions.Item label={<Skeleton.Node active style={{ width: 80, height: 16 }} />}>
-            <Skeleton.Node active style={{ width: 180, height: 16 }} />
-          </Descriptions.Item>
-
-          <Descriptions.Item label={<Skeleton.Node active style={{ width: 80, height: 16 }} />}>
-            <Skeleton.Node active style={{ width: 220, height: 16 }} />
-          </Descriptions.Item>
-        </Descriptions>
-      </Space>
+          ))}
+        </div>
+      </CardContent>
     </Card>
   );
 }

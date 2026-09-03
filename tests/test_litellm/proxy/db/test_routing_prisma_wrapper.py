@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 
 # NOTE: do NOT patch sys.modules["prisma"] file-wide via an autouse fixture.
@@ -100,6 +99,49 @@ def test_per_model_reads_route_to_reader_writes_to_writer():
     assert actions.delete is writer_inner.litellm_usertable.delete
     assert actions.update_many is writer_inner.litellm_usertable.update_many
     assert actions.delete_many is writer_inner.litellm_usertable.delete_many
+
+
+def test_writer_pinned_client_bypasses_reader_routing():
+    """Regression for #38556: read-after-write reconciles must see the writer's
+    just-committed rows, so WriterPinnedClient must resolve reads to the writer
+    even when a read replica is configured."""
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper, WriterPinnedClient
+
+    writer, writer_inner, reader, reader_inner = _make_wrappers()
+    writer_inner.litellm_proxymodeltable = _model_actions_mock("writer_models")
+    reader_inner.litellm_proxymodeltable = _model_actions_mock("reader_models")
+    routing = RoutingPrismaWrapper(writer=writer, reader=reader)
+
+    pinned = WriterPinnedClient(routing)
+
+    assert pinned.db is writer
+    assert pinned.db.litellm_proxymodeltable.find_many is writer_inner.litellm_proxymodeltable.find_many
+
+
+def test_writer_pinned_client_passes_through_single_db():
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+
+    writer, _, _, _ = _make_wrappers()
+
+    assert WriterPinnedClient(writer).db is writer
+
+
+def test_writer_pinned_client_yields_to_routed_reads_when_writer_down():
+    """The pin must not break reader-only degraded mode: a proxy that starts
+    during a primary outage still loads DB-backed models from the replica, so
+    while the writer is degraded the pin resolves to the routed wrapper."""
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper, WriterPinnedClient
+
+    writer, writer_inner, reader, reader_inner = _make_wrappers()
+    writer_inner.litellm_proxymodeltable = _model_actions_mock("writer_models")
+    reader_inner.litellm_proxymodeltable = _model_actions_mock("reader_models")
+    routing = RoutingPrismaWrapper(writer=writer, reader=reader)
+    routing._writer_unavailable = True
+
+    pinned = WriterPinnedClient(routing)
+
+    assert pinned.db is routing
+    assert pinned.db.litellm_proxymodeltable.find_many is reader_inner.litellm_proxymodeltable.find_many
 
 
 @pytest.mark.asyncio
@@ -991,3 +1033,52 @@ async def test_recreate_keeps_writer_unavailable_when_writer_recreate_fails():
         await routing.recreate_prisma_client("writer-url")
 
     assert routing.writer_unavailable is True
+
+
+def test_prisma_client_premints_an_entra_token_for_the_reader(monkeypatch):
+    """Under Azure Entra auth the reader has to be pre-minted the same way the RDS
+    reader already is: Prisma is constructed with a `datasource` URL, so a reader built
+    from the operator's placeholder URL would never carry a real token."""
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+    from litellm.proxy.db.token_auth import AzureEntraTokenAuth
+
+    monkeypatch.setenv("AZURE_POSTGRESQL_AUTH", "true")
+    monkeypatch.delenv("IAM_TOKEN_DB_AUTH", raising=False)
+    monkeypatch.setenv(
+        "DATABASE_URL_READ_REPLICA",
+        "postgresql://litellm%40contoso.com@reader.postgres.database.azure.com:5432/litellm",
+    )
+
+    captured_kwargs: Dict[str, Any] = {}
+
+    class FakePrisma:
+        def __init__(self, **kwargs):
+            captured_kwargs.update(kwargs)
+
+        async def connect(self):
+            return None
+
+    fake_prisma_module = MagicMock()
+    fake_prisma_module.Prisma = FakePrisma
+    monkeypatch.setitem(sys.modules, "prisma", fake_prisma_module)
+
+    with patch(
+        "litellm.secret_managers.get_azure_ad_token_provider.get_azure_ad_token_provider",
+        return_value=lambda: "ENTRA-TOKEN",
+    ):
+        from litellm.proxy.utils import PrismaClient
+
+        client = PrismaClient(
+            database_url="postgresql://litellm@writer.postgres.database.azure.com:5432/litellm",
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert isinstance(client.db, RoutingPrismaWrapper)
+    assert captured_kwargs["datasource"] == {
+        "url": "postgresql://litellm%40contoso.com:ENTRA-TOKEN@reader.postgres.database.azure.com:5432/litellm"
+    }
+    assert os.environ["DATABASE_URL_READ_REPLICA"] == captured_kwargs["datasource"]["url"]
+    assert isinstance(client.db._reader.token_auth, AzureEntraTokenAuth)
+    assert isinstance(client.db._writer.token_auth, AzureEntraTokenAuth)
+    assert isinstance(client.db._writer, PrismaWrapper)

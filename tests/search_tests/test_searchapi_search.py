@@ -10,13 +10,11 @@ Tests the SearchAPI.io search provider implementation including:
 
 import json
 import os
-import sys
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.llms.searchapi.search.transformation import SearchAPIConfig
 from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult

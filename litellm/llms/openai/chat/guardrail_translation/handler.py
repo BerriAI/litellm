@@ -14,19 +14,34 @@ Pattern Overview:
 This pattern can be replicated for other message formats (e.g., Anthropic).
 """
 
+import json
+import time
+import uuid
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, Union, cast
+
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
+    StreamingScanKey,
     StreamTransformSink,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    blocked_chat_stream_usage,
+    effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
-    openai_messages_without_system,
-    openai_messages_without_tool,
+    merge_guardrailed_scoped_messages,
+    merge_returned_tools_into_request_tools,
+    openai_tool_name,
+    role_out_of_guardrail_scope,
+    scoped_structured_message_indices,
+    stream_item_field,
+    stream_item_fingerprint,
+    stream_item_items,
 )
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -42,7 +57,14 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from fastapi import HTTPException
+
+    from litellm.integrations.custom_guardrail import (
+        CustomGuardrail,
+        ModifyResponseException,
+    )
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy._types import UserAPIKeyAuth
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -71,8 +93,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
-    ) -> Any:
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> dict:
         """
         Process input messages by applying guardrails to text content.
         """
@@ -82,6 +104,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
 
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
@@ -101,6 +124,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 tool_call_task_mappings=tool_call_task_mappings,
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
+                scan_only_tool_results=scan_only_tool_results,
             )
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -110,16 +134,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check
-            structured_messages = self.get_structured_messages(data)
+            structured_messages: Final = self.get_structured_messages(data)
+            scoped_message_indices: Final = scoped_structured_message_indices(
+                structured_messages or [],
+                scan_only_tool_results=scan_only_tool_results,
+                skip_system=skip_system,
+                skip_tool=skip_tool,
+            )
             if structured_messages:
-                if skip_system:
-                    structured_messages = openai_messages_without_system(structured_messages)
-                if skip_tool:
-                    structured_messages = openai_messages_without_tool(structured_messages)
-                inputs["structured_messages"] = structured_messages
+                inputs["structured_messages"] = [structured_messages[index] for index in scoped_message_indices]
             # Pass tools (function definitions) to the guardrail
             tools: Final = data.get("tools")
-            if tools:
+            if tools and not scan_only_tool_results:
                 inputs["tools"] = tools
             # Include model information if available
             model: Final = data.get("model")
@@ -138,14 +164,30 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrailed_tool_calls: Final = guardrailed_inputs.get("tool_calls", [])
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
-                data["tools"] = guardrailed_tools
+                data["tools"] = (
+                    merge_returned_tools_into_request_tools(
+                        request_tools=tools,
+                        returned_tools=guardrailed_tools,
+                        tool_name=openai_tool_name,
+                    )
+                    if scan_only_tool_results
+                    else guardrailed_tools
+                )
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")
             if (
                 guardrailed_structured_messages is not None
                 and guardrailed_structured_messages is not original_structured_messages
             ):
-                data["messages"] = guardrailed_structured_messages
+                data["messages"] = (
+                    guardrailed_structured_messages
+                    if guardrail_to_apply.structured_messages_cover_full_request()
+                    else merge_guardrailed_scoped_messages(
+                        full_messages=structured_messages or [],
+                        scoped_indices=scoped_message_indices,
+                        guardrailed_scoped=guardrailed_structured_messages,
+                    )
+                )
             else:
                 # Step 3: Map guardrail responses back to original message structure
                 if guardrailed_texts and texts_to_check:
@@ -194,16 +236,19 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         tool_call_task_mappings: list[tuple[int, int]],
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
+        scan_only_tool_results: bool = False,
     ) -> None:
         """
         Extract text content, images, and tool calls from a message.
 
         Override this method to customize text/image/tool call extraction logic.
         """
-        role: Final = str(message.get("role") or "").lower()
-        if skip_system_message and role == "system":
-            return
-        if skip_tool_message and role == "tool":
+        if role_out_of_guardrail_scope(
+            str(message.get("role") or "").lower(),
+            skip_system_message=skip_system_message,
+            skip_tool_message=skip_tool_message,
+            scan_only_tool_results=scan_only_tool_results,
+        ):
             return
 
         content: Final = message.get("content", None)
@@ -297,10 +342,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         response: "ModelResponse",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
-        user_api_key_dict: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict | None = None,
-    ) -> Any:
+    ) -> ModelResponse:
         """
         Process output response by applying guardrails to text content.
 
@@ -354,11 +399,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 if "response" not in request_data:
                     request_data["response"] = response
 
-            # Add user API key metadata with prefixed keys
-            if "litellm_metadata" not in request_data:
-                user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-                if user_metadata:
-                    request_data["litellm_metadata"] = user_metadata
+            self.merge_user_api_key_metadata_into_request(request_data, user_api_key_dict)
 
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
@@ -408,8 +449,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
-        user_api_key_dict: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
     ) -> list["ModelResponseStream"]:
@@ -458,19 +499,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         *,
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None,
-        user_api_key_dict: Any | None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
+        user_api_key_dict: "UserAPIKeyAuth | None",
         request_data: dict | None,
     ) -> list["ModelResponseStream"]:
         """Block-only streaming path: run the guardrail so an in-flight BLOCK can
         terminate the stream. Text rewrites are not propagated to the client here
         (see ``_process_streaming_transform`` for the incremental_diff path)."""
-        # check if the stream has ended
-        has_stream_ended = False
-        for chunk in responses_so_far:
-            if chunk.choices and chunk.choices[0].finish_reason is not None:
-                has_stream_ended = True
-                break
+        has_stream_ended: Final = self._first_choice_has_finished(responses_so_far)
 
         if has_stream_ended:
             # convert to model response
@@ -527,11 +563,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 if "responses" not in request_data:
                     request_data["responses"] = responses_so_far
 
-            # Add user API key metadata with prefixed keys
-            if "litellm_metadata" not in request_data:
-                user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-                if user_metadata:
-                    request_data["litellm_metadata"] = user_metadata
+            self.merge_user_api_key_metadata_into_request(request_data, user_api_key_dict)
 
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
@@ -562,6 +594,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         )
 
         return responses_so_far
+
+    def build_stream_error_items(
+        self,
+        exc: "HTTPException",
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[bytes] | None:
+        import json
+
+        from litellm.proxy.common_request_processing import sse_error_payload
+
+        _, error_obj = sse_error_payload(exc)
+        return (f'data: {{"error": {json.dumps(error_obj)}}}\n\n'.encode(),)
 
     @staticmethod
     def _accumulate_string_content_by_choice_index(
@@ -594,8 +638,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         *,
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None,
-        user_api_key_dict: Any | None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
+        user_api_key_dict: "UserAPIKeyAuth | None",
         request_data: dict | None,
         sink: StreamTransformSink,
     ) -> None:
@@ -625,10 +669,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             request_data = {"responses": responses_so_far}
         elif "responses" not in request_data:
             request_data["responses"] = responses_so_far
-        if "litellm_metadata" not in request_data:
-            user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-            if user_metadata:
-                request_data["litellm_metadata"] = user_metadata
+        self.merge_user_api_key_metadata_into_request(request_data, user_api_key_dict)
 
         inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
         if responses_so_far and getattr(responses_so_far[0], "model", None):
@@ -663,8 +704,33 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             indices[i]: coerce_stream_holdback_value(holdback[i]) for i in range(len(indices)) if i < len(holdback)
         }
 
+    def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        chunks: Final = tuple(chunk for chunk in responses_so_far if isinstance(chunk, ModelResponseStream))
+        stream_ended: Final = self._first_choice_has_finished(responses_so_far)
+        return StreamingScanKey(
+            texts=tuple(self._combine_streaming_texts(chunks).values()),
+            tool_calls=self._streamed_tool_call_fingerprints(responses_so_far) if stream_ended else (),
+            stream_ended=stream_ended,
+        )
+
+    @staticmethod
+    def _streamed_tool_call_fingerprints(responses_so_far: Sequence[object]) -> tuple[str, ...]:
+        return tuple(
+            stream_item_fingerprint(tool_call)
+            for chunk in responses_so_far
+            for choice in _stream_chunk_choices(chunk)
+            for tool_call in stream_item_items(stream_item_field(choice, "delta"), "tool_calls")
+        )
+
+    @staticmethod
+    def _first_choice_has_finished(responses_so_far: Sequence[object]) -> bool:
+        first_choices: Final = tuple(
+            choices[0] for choices in (_stream_chunk_choices(chunk) for chunk in responses_so_far) if choices
+        )
+        return any(stream_item_field(choice, "finish_reason") is not None for choice in first_choices)
+
     def _combine_streaming_texts(
-        self, responses_so_far: list["ModelResponseStream"]
+        self, responses_so_far: Sequence["ModelResponseStream"]
     ) -> dict[tuple[int, int | None], str]:
         """
         Combine all streaming chunks into complete text per choice.
@@ -762,7 +828,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Determine content source and tool calls based on choice type
         content = None
-        tool_calls: list[Any] | None = None
+        tool_calls: Sequence[object] | None = None
         if isinstance(choice, litellm.Choices):
             content = choice.message.content
             tool_calls = choice.message.tool_calls
@@ -972,3 +1038,129 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                 else:
                                     # Subsequent chunks - clear the text
                                     content_item["text"] = ""
+
+    def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
+        """
+        True once any relayed chunk carries a non-null ``finish_reason``.
+
+        The unified guardrail's ``end_of_stream_only`` streaming path probes
+        this via ``hasattr`` to withhold the terminal chunks until
+        end-of-stream moderation runs, so a block can replace the finish
+        instead of trailing after a ``finish_reason`` the client already saw.
+        """
+        return any(
+            stream_item_field(choice, "finish_reason") is not None
+            for item in responses_so_far
+            for choice in _stream_chunk_choices(item)
+        )
+
+    def build_block_sse_chunks(
+        self,
+        exc: "ModifyResponseException",
+        stream_started: bool = False,
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[bytes]:
+        """
+        Build OpenAI chat-completions SSE chunks that deliver the guardrail
+        block message and terminate the stream cleanly, mirroring the
+        non-streaming block response: ``finish_reason`` ``content_filter`` plus
+        the real usage the upstream call consumed.
+
+        - ``stream_started`` False (buffered / pre-stream): nothing has been
+          sent, so open a standalone completion with a ``role`` delta.
+        - ``stream_started`` True (sampling / mid-stream): chunks already
+          reached the client, so continue the in-progress completion (reuse its
+          id/created/model, content-only delta).
+
+        The proxy's data generator appends ``data: [DONE]`` itself.
+        """
+        chunk_id, created, model = _blocked_stream_identity(exc, responses_so_far or ())
+        prompt_tokens, completion_tokens = blocked_chat_stream_usage(exc.original_response)
+        continuation_delta: Final[_BlockedChunkDelta] = {"content": exc.message}
+        standalone_delta: Final[_BlockedChunkDelta] = {"role": "assistant", "content": exc.message}
+        message_chunk: Final[_BlockedChunk] = {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": (
+                {
+                    "index": 0,
+                    "delta": continuation_delta if stream_started else standalone_delta,
+                    "finish_reason": None,
+                },
+            ),
+        }
+        final_chunk: Final[_BlockedChunk] = {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": ({"index": 0, "delta": {}, "finish_reason": "content_filter"},),
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
+        }
+        return _chat_sse_chunk(message_chunk), _chat_sse_chunk(final_chunk)
+
+
+class _BlockedChunkDelta(TypedDict, total=False):
+    role: ReadOnly[str]
+    content: ReadOnly[str]
+
+
+class _BlockedChunkChoice(TypedDict):
+    index: ReadOnly[int]
+    delta: ReadOnly[_BlockedChunkDelta]
+    finish_reason: ReadOnly[str | None]
+
+
+class _BlockedChunkUsage(TypedDict):
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+
+
+class _BlockedChunk(TypedDict):
+    id: ReadOnly[str]
+    object: ReadOnly[str]
+    created: ReadOnly[int]
+    model: ReadOnly[str]
+    choices: ReadOnly[tuple[_BlockedChunkChoice, ...]]
+    usage: NotRequired[ReadOnly[_BlockedChunkUsage]]
+
+
+def _chat_sse_chunk(payload: _BlockedChunk) -> bytes:
+    return f"data: {json.dumps(payload)}\n\n".encode()
+
+
+def _stream_chunk_choices(item: object) -> Sequence[object]:
+    choices: Final = stream_item_field(item, "choices")
+    if isinstance(choices, Sequence) and not isinstance(choices, (str, bytes)):
+        return choices
+    return ()
+
+
+def _blocked_stream_identity(
+    exc: "ModifyResponseException", responses_so_far: Sequence[object]
+) -> tuple[str, int, str]:
+    identified: Final = next(
+        (
+            (chunk_id, item)
+            for item in responses_so_far
+            if isinstance(chunk_id := stream_item_field(item, "id"), str) and chunk_id
+        ),
+        None,
+    )
+    if identified is None:
+        return f"chatcmpl-{uuid.uuid4()}", int(time.time()), exc.model
+    chunk_id, source = identified
+    created: Final = stream_item_field(source, "created")
+    model: Final = stream_item_field(source, "model")
+    return (
+        chunk_id,
+        created if isinstance(created, int) else int(time.time()),
+        model if isinstance(model, str) and model else exc.model,
+    )

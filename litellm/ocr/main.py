@@ -21,7 +21,12 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.azure_ai.ocr.common_utils import (
     is_azure_document_intelligence_model,
 )
-from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
+from litellm.llms.base_llm.ocr.transformation import (
+    OCR_REQUEST_FORMAT_PARAM,
+    BaseOCRConfig,
+    OCRResponse,
+    parse_ocr_request_format,
+)
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
 from litellm.types.router import GenericLiteLLMParams
@@ -124,6 +129,24 @@ def _prepare_ocr_request(
     litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
     supported_params: Final = ocr_provider_config.get_supported_ocr_params(model=model)
+    requested_format: Final = kwargs.get(OCR_REQUEST_FORMAT_PARAM)
+    if requested_format is not None:
+        try:
+            parsed_format: Final = parse_ocr_request_format(requested_format)
+        except ValueError as e:
+            raise litellm.exceptions.UnsupportedParamsError(
+                message=f"{e}", model=model, llm_provider=custom_llm_provider
+            ) from e
+        if OCR_REQUEST_FORMAT_PARAM not in supported_params and parsed_format == "native":
+            raise litellm.exceptions.UnsupportedParamsError(
+                message=(
+                    f"`{OCR_REQUEST_FORMAT_PARAM}='native'` is not supported for provider: {custom_llm_provider}, "
+                    f"model: {model}"
+                ),
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+
     non_default_params: Final = {}
     for param in supported_params:
         if param in kwargs:
@@ -166,7 +189,15 @@ def _prepare_ocr_request(
 
 
 def _rust_ocr_supported(prepared_request: _PreparedOCRRequest) -> bool:
+    if prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native":
+        return False
     return prepared_request.custom_llm_provider in _RUST_OCR_PROVIDERS
+
+
+def _rust_ocr_enabled(prepared_request: _PreparedOCRRequest) -> bool:
+    raw_request_override: Final = prepared_request.litellm_params.get("rust")
+    request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
+    return rust_ocr_bridge.rust_ocr_enabled(request_override=request_override)
 
 
 def _rust_bridge_optional_params(
@@ -397,7 +428,7 @@ async def aocr(
         custom_llm_provider = prepared.custom_llm_provider
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
-        if _rust_ocr_supported(prepared) and rust_ocr_bridge.rust_ocr_enabled():
+        if _rust_ocr_supported(prepared) and _rust_ocr_enabled(prepared):
             from litellm.secret_managers.main import get_secret_str
 
             rust_response: Final = await _run_rust_aocr(
@@ -669,7 +700,7 @@ def ocr(
         custom_llm_provider = prepared.custom_llm_provider
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
-        if _rust_ocr_supported(prepared) and rust_ocr_bridge.rust_ocr_enabled():
+        if _rust_ocr_supported(prepared) and _rust_ocr_enabled(prepared):
             from litellm.secret_managers.main import get_secret_str
 
             rust_response: Final = _run_rust_ocr(

@@ -5,6 +5,7 @@ This hook is called before making an LLM request when a vector store is configur
 It searches the vector store for relevant context and appends it to the messages.
 """
 
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
@@ -13,7 +14,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import CallTypes, StandardCallbackDynamicParams
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
     VectorStoreResultContent,
@@ -80,10 +81,17 @@ class VectorStorePreCallHook(CustomLogger):
 
             # Get prisma_client for database fallback
             prisma_client = None
+            llm_router = None
             try:
-                from litellm.proxy.proxy_server import prisma_client as _prisma_client
+                from litellm.proxy.proxy_server import (
+                    llm_router as _llm_router,
+                )
+                from litellm.proxy.proxy_server import (
+                    prisma_client as _prisma_client,
+                )
 
                 prisma_client = _prisma_client
+                llm_router = _llm_router
             except ImportError:
                 pass
 
@@ -114,12 +122,26 @@ class VectorStorePreCallHook(CustomLogger):
                 vector_store_id = vector_store_to_run.get("vector_store_id", "")
                 custom_llm_provider = vector_store_to_run.get("custom_llm_provider")
                 litellm_params_for_vector_store = vector_store_to_run.get("litellm_params", {}) or {}
-                # Call litellm.vector_stores.search() with the required parameters
-                search_response = await litellm.vector_stores.asearch(
+                request_litellm_params = litellm_logging_obj.model_call_details.get("litellm_params", {})
+                request_metadata = (
+                    request_litellm_params.get("metadata", {}) if isinstance(request_litellm_params, dict) else {}
+                )
+                if llm_router is not None:
+                    search_function = cast(  # cast-ok: normalize router search callable
+                        Callable[..., Awaitable[VectorStoreSearchResponse]],
+                        llm_router.avector_store_search,
+                    )
+                else:
+                    search_function = cast(  # cast-ok: normalize SDK search callable
+                        Callable[..., Awaitable[VectorStoreSearchResponse]],
+                        litellm.vector_stores.asearch,
+                    )
+                search_response = await search_function(
                     **{
                         "vector_store_id": vector_store_id,
                         "query": query,
                         "custom_llm_provider": custom_llm_provider,
+                        "metadata": request_metadata,
                         **litellm_params_for_vector_store,
                     },
                 )
@@ -226,7 +248,7 @@ class VectorStorePreCallHook(CustomLogger):
         self,
         request_data: dict,
         response: Any,
-        call_type: Any | None,
+        call_type: CallTypes | None,
     ) -> Any | None:
         """
         Add search results to the response after successful LLM call.
@@ -283,7 +305,7 @@ class VectorStorePreCallHook(CustomLogger):
         self,
         request_data: dict,
         response_chunk: Any,
-        call_type: Any | None,
+        call_type: CallTypes | None,
     ) -> Any | None:
         """
         Add search results to the final streaming chunk.

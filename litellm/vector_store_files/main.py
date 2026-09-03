@@ -4,7 +4,7 @@ import asyncio
 import contextvars
 from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Final, Union
+from typing import Any, Final
 
 import httpx
 
@@ -28,7 +28,7 @@ from litellm.vector_store_files.utils import VectorStoreFileRequestUtils
 
 base_llm_http_handler = BaseLLMHTTPHandler()
 
-VectorStoreFileAttributeValue = Union[str, int, float, bool]
+VectorStoreFileAttributeValue = str | int | float | bool
 VectorStoreFileAttributes = dict[str, VectorStoreFileAttributeValue]
 
 

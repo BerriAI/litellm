@@ -4,8 +4,13 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints import endpoints as agent_endpoints
+from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+    RestrictedAgentAccess,
+    UnrestrictedAgentAccess,
+)
 from litellm.proxy.agent_endpoints.endpoints import (
     _attach_keys_to_agents,
     _check_agent_management_permission,
@@ -308,7 +313,7 @@ async def test_attach_keys_to_agents_groups_by_agent_and_omits_secret():
 
     # Query is scoped to the agents being returned, not the whole key table.
     where = mock_prisma.db.litellm_verificationtoken.find_many.call_args.kwargs["where"]
-    assert where == {"agent_id": {"in": ["agent-1", "agent-2"]}}
+    assert where == {"agent_id": {"in": ("agent-1", "agent-2")}}
 
     # agent-1 gets both of its keys; agent-2 gets None.
     assert agent_without_keys.keys is None
@@ -480,11 +485,15 @@ class TestAgentRBACInternalUserViewOnly:
         assert resp.status_code == 403
 
 
+SENTINEL_AGENT_API_KEY = "sk-test-sentinel-do-not-use"
+
+
 class TestAgentRBACProxyAdminViewOnly:
     """Read-only proxy admins go through the object-permission scoped branch on
     GET /v1/agents (the admin fast path stays full PROXY_ADMIN only, so viewers
-    cannot fan out health checks beyond their allowlist), and secret unredaction
-    also stays gated on full PROXY_ADMIN."""
+    cannot fan out health checks beyond their allowlist). litellm_params
+    secrets are redacted for every caller, admin included (LIT-6736); only the
+    virtual-key/header visibility stays gated on full PROXY_ADMIN."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, monkeypatch):
@@ -497,17 +506,20 @@ class TestAgentRBACProxyAdminViewOnly:
                 agent_id=f"agent-{index}",
                 agent_name=f"Agent {index}",
                 agent_card_params=_sample_agent_card_params(),
-                litellm_params={"api_key": "sk-super-secret-agent-key"},
+                litellm_params={"api_key": SENTINEL_AGENT_API_KEY},
             )
             for index in (1, 2)
         ]
         self.mock_registry = MagicMock()
         self.mock_registry.get_agent_list = MagicMock(return_value=self.agents)
+        self.mock_registry.ids_for_agent = MagicMock(side_effect=lambda agent_id: frozenset({agent_id}))
         monkeypatch.setattr(ar_mod, "global_agent_registry", self.mock_registry)
 
-        self.allowed_agents_spy = AsyncMock(return_value=["someone-elses-agent"])
+        self.allowed_agents_spy = AsyncMock(
+            return_value=RestrictedAgentAccess(frozenset({"someone-elses-agent"}))
+        )
         monkeypatch.setattr(
-            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.resolve_agent_access",
             self.allowed_agents_spy,
         )
 
@@ -536,9 +548,9 @@ class TestAgentRBACProxyAdminViewOnly:
         self.allowed_agents_spy.assert_awaited_once()
 
     def test_should_still_redact_secrets_for_view_only_admin(self):
-        """An unrestricted viewer (empty allowlist means no restrictions) sees the
-        same agents as an admin but with keys stripped and litellm_params masked."""
-        self.allowed_agents_spy.return_value = []
+        """An unrestricted viewer sees the same agents as an admin but with keys
+        stripped; litellm_params secrets never appear in either response."""
+        self.allowed_agents_spy.return_value = UnrestrictedAgentAccess()
         viewer_resp = self._list_agents(self.viewer_client)
         admin_resp = self._list_agents(self.admin_client)
 
@@ -546,14 +558,12 @@ class TestAgentRBACProxyAdminViewOnly:
         viewer_by_id = {agent["agent_id"]: agent for agent in viewer_resp.json()}
         assert set(viewer_by_id) == {"agent-1", "agent-2"}
         assert viewer_by_id["agent-1"]["keys"] is None
-        assert "sk-super-secret-agent-key" not in viewer_resp.text
+        assert SENTINEL_AGENT_API_KEY not in viewer_resp.text
 
         admin_by_id = {agent["agent_id"]: agent for agent in admin_resp.json()}
         assert admin_by_id["agent-1"]["keys"][0]["token"] == "hash-aaa"
-        assert (
-            admin_by_id["agent-1"]["litellm_params"]["api_key"]
-            == "sk-super-secret-agent-key"
-        )
+        assert SENTINEL_AGENT_API_KEY not in admin_resp.text
+        assert admin_by_id["agent-1"]["litellm_params"]["api_key"] == REDACTED_BY_LITELM_STRING
 
 
 class TestAgentRBACProxyAdmin:
@@ -608,6 +618,109 @@ class TestAgentRBACProxyAdmin:
             )
             # Security scheme is the LiteLLM scheme.
             assert "LiteLLMKey" in stored_card["securitySchemes"]
+
+    def test_create_agent_response_never_echoes_secret(self):
+        """LIT-6736: POST /v1/agents must not echo the stored secret back, even
+        though it's the caller's own value and even for a proxy admin."""
+        with patch("litellm.proxy.proxy_server.prisma_client"):  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            self.mock_registry.get_agent_by_name = MagicMock(return_value=None)
+            self.mock_registry.add_agent_to_db = AsyncMock(
+                return_value=AgentResponse(
+                    agent_id="agent-123",
+                    agent_name="Test Agent",
+                    agent_card_params=_sample_agent_card_params(),
+                    litellm_params={
+                        "aws_secret_access_key": SENTINEL_AGENT_API_KEY,
+                        "model": "bedrock/agentcore/my-agent",
+                    },
+                )
+            )
+            self.mock_registry.register_agent = MagicMock()
+
+            resp = self.admin_client.post(
+                "/v1/agents",
+                json={
+                    "agent_name": "Test Agent",
+                    "agent_card_params": _sample_agent_card_params(),
+                    "litellm_params": {
+                        "aws_secret_access_key": SENTINEL_AGENT_API_KEY,
+                        "model": "bedrock/agentcore/my-agent",
+                    },
+                },
+                headers={"Authorization": "Bearer k"},
+            )
+
+            assert resp.status_code == 200
+            assert SENTINEL_AGENT_API_KEY not in resp.text
+            body = resp.json()
+            assert body["litellm_params"]["aws_secret_access_key"] == REDACTED_BY_LITELM_STRING
+            assert body["litellm_params"]["model"] == "bedrock/agentcore/my-agent"
+
+    def test_update_agent_response_never_echoes_secret(self):
+        """LIT-6736: PUT /v1/agents/{id} must not echo the stored secret back."""
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+                return_value={
+                    "agent_id": "agent-123",
+                    "agent_name": "Existing Agent",
+                    "agent_card_params": _sample_agent_card_params(),
+                }
+            )
+            self.mock_registry.update_agent_in_db = AsyncMock(
+                return_value=AgentResponse(
+                    agent_id="agent-123",
+                    agent_name="Test Agent",
+                    agent_card_params=_sample_agent_card_params(),
+                    litellm_params={"aws_secret_access_key": SENTINEL_AGENT_API_KEY},
+                )
+            )
+            self.mock_registry.deregister_agent = MagicMock()
+            self.mock_registry.register_agent = MagicMock()
+
+            resp = self.admin_client.put(
+                "/v1/agents/agent-123",
+                json={
+                    "agent_name": "Test Agent",
+                    "agent_card_params": _sample_agent_card_params(),
+                    "litellm_params": {"aws_secret_access_key": REDACTED_BY_LITELM_STRING},
+                },
+                headers={"Authorization": "Bearer k"},
+            )
+
+            assert resp.status_code == 200
+            assert SENTINEL_AGENT_API_KEY not in resp.text
+            assert resp.json()["litellm_params"]["aws_secret_access_key"] == REDACTED_BY_LITELM_STRING
+
+    def test_patch_agent_response_never_echoes_secret(self):
+        """LIT-6736: PATCH /v1/agents/{id} must not echo the stored secret back."""
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+                return_value={
+                    "agent_id": "agent-123",
+                    "agent_name": "Existing Agent",
+                    "agent_card_params": _sample_agent_card_params(),
+                }
+            )
+            self.mock_registry.patch_agent_in_db = AsyncMock(
+                return_value=AgentResponse(
+                    agent_id="agent-123",
+                    agent_name="Renamed Agent",
+                    agent_card_params=_sample_agent_card_params(),
+                    litellm_params={"aws_secret_access_key": SENTINEL_AGENT_API_KEY},
+                )
+            )
+            self.mock_registry.deregister_agent = MagicMock()
+            self.mock_registry.register_agent = MagicMock()
+
+            resp = self.admin_client.patch(
+                "/v1/agents/agent-123",
+                json={"agent_name": "Renamed Agent"},
+                headers={"Authorization": "Bearer k"},
+            )
+
+            assert resp.status_code == 200
+            assert SENTINEL_AGENT_API_KEY not in resp.text
+            assert resp.json()["litellm_params"]["aws_secret_access_key"] == REDACTED_BY_LITELM_STRING
 
     def test_should_allow_admin_to_delete_agent(self):
         existing = {
