@@ -318,4 +318,10 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  llm_shield: {
+    provider: "LLM Shield",
+    guardrailNameSuggestion: "LLM Shield",
+    mode: "pre_call",
+    defaultOn: false,
+  },
 };
