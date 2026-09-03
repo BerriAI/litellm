@@ -15,7 +15,7 @@ import { SearchSelect } from "@/components/shared/SearchSelect";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
-import { ColumnFiltersState, OnChangeFn, PaginationState, SortingState, Updater } from "@tanstack/react-table";
+import { ColumnFiltersState, functionalUpdate, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { KeyRound } from "lucide-react";
 import { createParser, parseAsInteger, parseAsString, parseAsStringLiteral, useQueryState, useQueryStates } from "nuqs";
 import React, { useCallback, useMemo, useState } from "react";
@@ -66,9 +66,6 @@ const TABLE_STATE = {
   filter_user: parseAsString.withDefault(""),
   filter_key_id: parseAsString.withDefault(""),
 };
-
-const resolveUpdater = <T,>(updater: Updater<T>, current: T): T =>
-  typeof updater === "function" ? updater(current) : updater;
 
 const toSortOrder = (active: SortingState[number]): "asc" | "desc" => (active.desc ? "desc" : "asc");
 
@@ -148,7 +145,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
 
   const handleSortingChange = useCallback<OnChangeFn<SortingState>>(
     (updaterOrValue) => {
-      const active = resolveUpdater(updaterOrValue, sorting)[0];
+      const active = functionalUpdate(updaterOrValue, sorting)[0];
       void setTableState({
         sort_by: active?.id ?? null,
         sort_order: active ? toSortOrder(active) : null,
@@ -160,7 +157,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
 
   const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>(
     (updaterOrValue) => {
-      const next = resolveUpdater(updaterOrValue, columnFilters);
+      const next = functionalUpdate(updaterOrValue, columnFilters);
       const nextFilters = {
         filter_team: filterValue(next, "team_id"),
         filter_org: filterValue(next, "org_id"),
@@ -175,7 +172,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
 
   const handlePaginationChange = useCallback<OnChangeFn<PaginationState>>(
     (updaterOrValue) => {
-      const next = resolveUpdater(updaterOrValue, tablePagination);
+      const next = functionalUpdate(updaterOrValue, tablePagination);
       void setTableState({ page: next.pageIndex + 1, page_size: next.pageSize });
     },
     [tablePagination, setTableState],
