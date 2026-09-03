@@ -499,3 +499,16 @@ class TestAzureAIServiceTierCostCalculation:
 
         assert flex_prompt < standard_prompt
         assert flex_completion < standard_completion
+
+
+def test_codestral_2501_model_info_and_cost():
+    model_info = get_model_info(model="Codestral-2501", custom_llm_provider="azure_ai")
+    usage = Usage(prompt_tokens=1_000_000, completion_tokens=1_000_000, total_tokens=2_000_000)
+
+    prompt_cost, completion_cost = cost_per_token(model="Codestral-2501", usage=usage)
+
+    assert model_info["mode"] == "chat"
+    assert model_info["max_input_tokens"] == 256000
+    assert model_info["max_output_tokens"] == 4096
+    assert prompt_cost == pytest.approx(0.3)
+    assert completion_cost == pytest.approx(0.9)
