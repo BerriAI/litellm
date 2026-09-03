@@ -7,11 +7,14 @@ repository.workspace = true
 
 [dependencies]
 base64.workspace = true
+futures-util.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tokio-tungstenite.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, optional = true }
 sha2.workspace = true
@@ -35,6 +38,7 @@ bedrock-auth = [
 observability = ["dep:tracing-subscriber"]
 
 [dev-dependencies]
+futures-channel = "0.3"
 rstest.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber.workspace = true

@@ -1,11 +1,10 @@
-use crate::callback_bindings::PythonProviderObserver;
 use crate::errors::ocr_error_to_pyerr;
-use crate::marshal::{NativeRequestContext, NativeRequestOptions};
-use litellm_ai_gateway::integrations::types::RequestHooks;
-use litellm_ai_gateway::io::ocr::OcrRequest;
-use litellm_ai_gateway::io::ocr::ocr_with_observer as run_route;
+use crate::marshal::{NativeRequestContext, NativeRequestOptions, required_value};
+use crate::ocr_callbacks::PythonOcrObserver;
 use litellm_core::Error;
+use litellm_core::ocr::{OcrRequest, ocr_with_observer};
 use litellm_core::request_context::LiteLlmRequestContext;
+use litellm_core::request_options::RequestOptions;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 use std::future::Future;
@@ -26,7 +25,7 @@ fn prepare_ocr(
     python_context: crate::execution::PythonCallContext<'_>,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
     let context: LiteLlmRequestContext = context.into();
-    let provider_admitted = litellm_ai_gateway::io::ocr::ocr_admitted(
+    let provider_admitted = litellm_core::ocr::ocr_admitted(
         &input.model,
         options.provider("mistral"),
         context.capabilities.request_format.as_deref(),
@@ -52,19 +51,22 @@ fn prepare_ocr(
         input.document
     };
     let document: Value = litellm_python_interop::from_py(document.bind(py))?;
-    let mut observer = PythonProviderObserver::new(callback_adapter, python_context)?;
+    let document = required_value("document", document, Value::is_object, "dict")?;
+    let call_id = context.litellm_call_id.clone();
+    let options: RequestOptions = options.into();
+    let mut observer = PythonOcrObserver::new(callback_adapter, python_context)?;
     Ok(async move {
-        run_route(
+        ocr_with_observer(
             OcrRequest {
                 model: &input.model,
                 document,
+                api_key: options.api_key.as_deref(),
+                api_base: options.api_base.as_deref(),
+                custom_llm_provider: options.custom_llm_provider.as_deref(),
+                extra_headers: options.extra_headers,
                 optional_params: input.optional_params,
-            },
-            &options.into(),
-            &context,
-            RequestHooks {
-                callbacks: Vec::new(),
-                guardrails: Vec::new(),
+                timeout: options.timeout,
+                litellm_call_id: call_id.as_deref(),
             },
             &mut observer,
         )

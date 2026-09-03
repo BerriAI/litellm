@@ -6,7 +6,6 @@ use litellm_core::request_context::LiteLlmRequestContext;
 use litellm_core::request_options::RequestOptions;
 use serde_json::Value;
 
-mod common_utils;
 mod handler;
 mod hooks;
 mod prepare;
