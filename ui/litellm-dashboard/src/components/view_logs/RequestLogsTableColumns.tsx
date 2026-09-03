@@ -13,7 +13,7 @@ import { AgentBadge, AgentIcon, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } fr
 
 export interface RequestLogsTableColumnsDeps {
   onKeyHashClick: (keyHash: string) => void;
-  onSessionClick: (sessionId: string) => void;
+  onSessionClick: (log: LogEntry) => void;
 }
 
 const readMetaString = (metadata: Record<string, unknown> | undefined, key: string): string | undefined => {
@@ -61,11 +61,13 @@ export const getRequestLogsTableColumns = ({
       const isAgent = AGENT_CALL_TYPES.includes(log.call_type);
       const sessionLlmCount = log.session_llm_count ?? (isMcp || isAgent ? 0 : sessionCount);
       const sessionAgentCount = log.session_agent_count ?? (isAgent ? sessionCount : 0);
-      const sessionMcpCount = log.session_mcp_count ?? (isMcp ? sessionCount : 0);
+      const sessionMcpCount = log.mcp_tool_call_count ?? (isMcp ? sessionCount : 0);
 
-      if (isMcp) return <McpBadge />;
-      if (isAgent && sessionCount <= 1) return <AgentBadge />;
-      if (sessionCount <= 1) return <LlmBadge />;
+      if (sessionCount <= 1) {
+        if (isMcp) return <McpBadge />;
+        if (isAgent) return <AgentBadge />;
+        return <LlmBadge />;
+      }
 
       const sessionTypeBadge = (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-info/10 text-info border border-info/20 rounded-full text-[11px] font-medium whitespace-nowrap">
@@ -113,7 +115,7 @@ export const getRequestLogsTableColumns = ({
     header: "Session ID",
     size: 120,
     enableSorting: false,
-    cell: ({ row }) => <IdCell value={row.original.session_id} onClick={onSessionClick} />,
+    cell: ({ row }) => <IdCell value={row.original.session_id} onClick={() => onSessionClick(row.original)} />,
   },
   {
     id: "request_id",
@@ -224,10 +226,13 @@ export const getRequestLogsTableColumns = ({
     cell: ({ row }) => {
       const log = row.original;
       const provider = log.custom_llm_provider;
-      const modelName = log.model ?? "";
+      const sessionModels = log.session_models ?? [];
+      const modelNames = sessionModels.length > 0 ? sessionModels : [log.model ?? ""];
+      const modelLabel = log.session_models_truncated ? `${modelNames.join(", ")}, ...` : modelNames.join(", ");
+      const isSingleModel = modelNames.length === 1;
       return (
         <div className="flex items-center space-x-2">
-          {provider && (
+          {provider && isSingleModel && (
             <img
               src={getLogoUrl(log, provider)}
               alt=""
@@ -237,7 +242,14 @@ export const getRequestLogsTableColumns = ({
               }}
             />
           )}
-          <CellTooltip content={modelName} trigger={<span className="max-w-[15ch] truncate block">{modelName}</span>} />
+          <CellTooltip
+            content={modelLabel}
+            trigger={
+              <span className={isSingleModel ? "max-w-[15ch] truncate block" : "min-w-0 truncate block"}>
+                {modelLabel}
+              </span>
+            }
+          />
         </div>
       );
     },
@@ -251,13 +263,20 @@ export const getRequestLogsTableColumns = ({
     meta: { numeric: true },
     cell: ({ row }) => {
       const log = row.original;
+      const showSessionTotal = (log.session_total_count || 1) > 1 && log.session_total_tokens != null;
+      const total = showSessionTotal ? log.session_total_tokens : log.total_tokens;
+      const prompt = showSessionTotal ? log.session_total_prompt_tokens : log.prompt_tokens;
+      const completion = showSessionTotal ? log.session_total_completion_tokens : log.completion_tokens;
       return (
-        <span className="text-sm">
-          {String(log.total_tokens || "0")}
-          <span className="text-muted-foreground text-xs ml-1">
-            ({String(log.prompt_tokens || "0")}+{String(log.completion_tokens || "0")})
+        <div className="flex flex-col items-end">
+          <span className="text-sm">
+            {String(total || "0")}
+            <span className="text-muted-foreground text-xs ml-1">
+              ({String(prompt || "0")}+{String(completion || "0")})
+            </span>
           </span>
-        </span>
+          {showSessionTotal && <span className="text-[10px] text-muted-foreground">session total</span>}
+        </div>
       );
     },
   },

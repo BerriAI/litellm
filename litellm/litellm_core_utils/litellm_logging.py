@@ -901,6 +901,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         request_kwargs: dict[str, object] | None = None,  # mutable-ok: marker stamped into live request kwargs
+        injected_for_every_deployment: bool = False,
     ) -> tuple[str, list[AllMessageValues], dict]:
         from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 
@@ -933,6 +934,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 AnthropicCacheControlHook.record_gateway_injection(
                     request_kwargs,
                     AnthropicCacheControlHook.count_request_cache_breakpoints(messages) - breakpoints_before,
+                    injected_for_every_deployment=injected_for_every_deployment,
                 )
         self.messages = messages
         return model, messages, non_default_params
@@ -950,6 +952,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         request_kwargs: dict[str, object] | None = None,  # mutable-ok: marker stamped into live request kwargs
+        injected_for_every_deployment: bool = False,
     ) -> tuple[str, list[AllMessageValues], dict]:
         from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 
@@ -985,6 +988,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 AnthropicCacheControlHook.record_gateway_injection(
                     request_kwargs,
                     AnthropicCacheControlHook.count_request_cache_breakpoints(messages) - breakpoints_before,
+                    injected_for_every_deployment=injected_for_every_deployment,
                 )
         self.messages = messages
         return model, messages, non_default_params
@@ -2959,13 +2963,25 @@ class Logging(LiteLLMLoggingBaseClass):
                     "Model=%s not found in completion cost map. Setting 'response_cost' to None", self.model
                 )
                 self.model_call_details["response_cost"] = None
+            except Exception:  # noqa: BLE001  # cost calculation must never block later callbacks (slot release)
+                verbose_logger.exception(
+                    "Error calculating streaming response cost for model=%s. Setting 'response_cost' to None",
+                    self.model,
+                )
+                self.model_call_details["response_cost"] = None
 
             self._merge_hidden_params_from_response_into_metadata(complete_streaming_response)
 
             ## STANDARDIZED LOGGING PAYLOAD
-            self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
-                complete_streaming_response, start_time, end_time
-            )
+            try:
+                self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
+                    complete_streaming_response, start_time, end_time
+                )
+            except Exception:  # noqa: BLE001  # payload build must never block later callbacks (slot release)
+                verbose_logger.exception(
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception building the standard logging payload "
+                    "for a streaming response; callbacks still run without it"
+                )
 
             # print standard logging payload
             if (standard_logging_payload := self.model_call_details.get("standard_logging_object")) is not None:
@@ -3005,32 +3021,39 @@ class Logging(LiteLLMLoggingBaseClass):
         ## LOGGING HOOK ##
 
         for callback in callbacks:
-            if isinstance(callback, CustomGuardrail):
-                from litellm.types.guardrails import GuardrailEventHooks
+            try:
+                if isinstance(callback, CustomGuardrail):
+                    from litellm.types.guardrails import GuardrailEventHooks
 
-                if (
-                    callback.should_run_guardrail(
-                        data=self.model_call_details,
-                        event_type=GuardrailEventHooks.logging_only,
+                    if (
+                        callback.should_run_guardrail(
+                            data=self.model_call_details,
+                            event_type=GuardrailEventHooks.logging_only,
+                        )
+                        is not True
+                    ):
+                        continue
+
+                    self.model_call_details, result = await callback.async_logging_hook(
+                        kwargs=self.model_call_details,
+                        result=result,
+                        call_type=self.call_type,
                     )
-                    is not True
-                ):
-                    continue
-
-                self.model_call_details, result = await callback.async_logging_hook(
-                    kwargs=self.model_call_details,
-                    result=result,
-                    call_type=self.call_type,
+                elif isinstance(callback, CustomLogger):
+                    result = redact_message_input_output_from_custom_logger(
+                        result=result, litellm_logging_obj=self, custom_logger=callback
+                    )
+                    self.model_call_details, result = await callback.async_logging_hook(
+                        kwargs=self.model_call_details,
+                        result=result,
+                        call_type=self.call_type,
+                    )
+            except Exception:  # noqa: BLE001  # one failing hook must not skip later callbacks (slot release)
+                verbose_logger.error(
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred in async_logging_hook %s",
+                    traceback.format_exc(),
                 )
-            elif isinstance(callback, CustomLogger):
-                result = redact_message_input_output_from_custom_logger(
-                    result=result, litellm_logging_obj=self, custom_logger=callback
-                )
-                self.model_call_details, result = await callback.async_logging_hook(
-                    kwargs=self.model_call_details,
-                    result=result,
-                    call_type=self.call_type,
-                )
+                self._handle_callback_failure(callback=callback)
 
         self.has_run_logging(event_type="async_success")
 
@@ -4371,13 +4394,15 @@ def _init_custom_logger_compatible_class(
             from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
             if is_otel_v2_enabled():
-                from litellm.integrations.otel.logger import OpenTelemetryV2
+                from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger
+                from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 
                 for callback in _in_memory_loggers:
-                    if type(callback) is OpenTelemetryV2:
+                    if isinstance(callback, OpenTelemetryV2):
                         return callback
-                otel_logger_v2: Final = OpenTelemetryV2(
-                    **_get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
+                otel_settings: Final = _get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
+                otel_logger_v2: Final = build_otel_v2_logger(
+                    config=OpenTelemetryV2Config(**otel_settings), settings=otel_settings
                 )
                 _in_memory_loggers.append(otel_logger_v2)
                 _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
@@ -4740,7 +4765,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
 
     if not is_otel_v2_enabled():
         return None
-    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger
     from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
 
     preset_fn: Final = PRESET_BY_CALLBACK.get(callback_name)
@@ -4755,7 +4780,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
         # If env vars are missing or the preset raises, defer to the legacy path
         # so customers get the same error story they had before V2 landed.
         return None
-    v2_logger: Final = OpenTelemetryV2(config=config, callback_name=callback_name)
+    v2_logger: Final = build_otel_v2_logger(config=config, callback_name=callback_name)
     _in_memory_loggers.append(v2_logger)
     return v2_logger
 

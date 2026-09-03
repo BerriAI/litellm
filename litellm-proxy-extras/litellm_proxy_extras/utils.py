@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
@@ -15,8 +16,11 @@ from litellm_proxy_extras.replica_identity import (
     apply_replica_identity_full,
 )
 from litellm_proxy_extras.prisma_toolchain import (
+    PRISMA_COMMAND_TIMEOUT_ENV_VAR,
+    PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR,
     ensure_prisma_toolchain,
     prisma_command_timeout,
+    prisma_migrate_deploy_timeout,
 )
 
 
@@ -39,6 +43,40 @@ def _get_prisma_env() -> dict:
 
 
 _MIGRATION_TS_RE = re.compile(r"^(\d{14})_")
+
+_MIGRATION_DEADLOCK_MARKER = "deadlock detected"
+
+MAX_MIGRATE_DEPLOY_ATTEMPTS = 4
+
+
+@dataclass(frozen=True)
+class _MigrateAttemptBudget:
+    """Retries left, and the recoveries already run.
+
+    A recovery that lands something new costs nothing, so a database full of
+    objects `prisma db push` created works through them one per pass. Anything
+    that made no progress spends an attempt, so a stuck run still gives up.
+    """
+
+    attempts_left: int
+    recoveries: frozenset[str] = frozenset()
+
+    @property
+    def exhausted(self) -> bool:
+        return self.attempts_left <= 0
+
+    @property
+    def attempt_number(self) -> int:
+        return MAX_MIGRATE_DEPLOY_ATTEMPTS - self.attempts_left + 1
+
+    def spend(self) -> "_MigrateAttemptBudget":
+        return replace(self, attempts_left=self.attempts_left - 1)
+
+    def after_recovery(self, recovery: str) -> "_MigrateAttemptBudget":
+        if recovery in self.recoveries:
+            return self.spend()
+        return replace(self, recoveries=self.recoveries | {recovery})
+
 
 _SPEND_LOGS_ALTER_RE = re.compile(r'^ALTER\s+TABLE\s+"LiteLLM_SpendLogs"\s', re.IGNORECASE)
 _SPEND_LOGS_ARTIFACT_DROP_RE = re.compile(
@@ -261,6 +299,50 @@ class ProxyExtrasDBManager:
             capture_output=True,
             env=prisma_env,
         )
+
+    @staticmethod
+    def _roll_back_migration_best_effort(migration_name: str) -> None:
+        """Mark a migration rolled back, tolerating a concurrent resolver
+        having already done it."""
+        try:
+            ProxyExtrasDBManager._roll_back_migration(migration_name)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            pass
+
+    @staticmethod
+    def _failed_migration_logs(migration_name: str) -> Optional[str]:
+        """Return failed migration logs, or None if the ledger is unavailable."""
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            return None
+
+        try:
+            import psycopg
+        except ImportError:
+            return None
+
+        cleaned_url = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
+        ledger_table = psycopg.sql.SQL("{}.{}").format(
+            psycopg.sql.Identifier(
+                ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"
+            ),
+            psycopg.sql.Identifier("_prisma_migrations"),
+        )
+        try:
+            with psycopg.connect(
+                cleaned_url, connect_timeout=10, autocommit=True
+            ) as conn:
+                row = conn.execute(
+                    psycopg.sql.SQL(
+                        "SELECT logs FROM {} "
+                        "WHERE migration_name = %s AND finished_at IS NULL "
+                        "AND rolled_back_at IS NULL"
+                    ).format(ledger_table),
+                    (migration_name,),
+                ).fetchone()
+        except (psycopg.OperationalError, psycopg.DatabaseError):
+            return None
+        return (row[0] or "") if row else ""
 
     @staticmethod
     def _resolve_specific_migration(migration_name: str):
@@ -658,7 +740,8 @@ class ProxyExtrasDBManager:
         v2 migration resolver (opt-in via --use_v2_migration_resolver).
 
         Runs `prisma migrate deploy` and handles standard recovery paths
-        (P3005 baseline, P3009/P3018 idempotent errors). Critically, it does
+        (P3005 baseline, P3009/P3018 idempotent errors, deadlocks against a
+        concurrent migrate deploy). Critically, it does
         NOT call `_resolve_all_migrations` — the diff-and-force recovery that
         caused schema thrashing when two LiteLLM versions contended for the
         same DB during rolling deploys.
@@ -666,6 +749,9 @@ class ProxyExtrasDBManager:
         Ahead-of-HEAD state (DB has migrations newer than this build ships)
         is logged as a warning, not a fatal error — users whose DBs got into
         weird shapes from the old thrashing should still be able to start.
+
+        The retry budget only counts attempts that made no progress: see
+        _MigrateAttemptBudget.
         """
         schema_path = ProxyExtrasDBManager._get_prisma_dir() + "/schema.prisma"
         migrations_dir = ProxyExtrasDBManager._get_prisma_dir()
@@ -698,12 +784,14 @@ class ProxyExtrasDBManager:
 
         original_dir = os.getcwd()
         os.chdir(migrations_dir)
+        deploy_timeout = prisma_migrate_deploy_timeout()
+        budget = _MigrateAttemptBudget(attempts_left=MAX_MIGRATE_DEPLOY_ATTEMPTS)
         try:
-            for attempt in range(4):
+            while not budget.exhausted:
                 try:
                     result = subprocess.run(
                         [_get_prisma_command(), "migrate", "deploy"],
-                        timeout=prisma_command_timeout(),
+                        timeout=deploy_timeout,
                         check=True,
                         capture_output=True,
                         text=True,
@@ -713,120 +801,157 @@ class ProxyExtrasDBManager:
                     return True
 
                 except subprocess.TimeoutExpired:
-                    logger.info(
-                        f"prisma migrate deploy attempt {attempt + 1} timed out, retrying"
+                    logger.warning(
+                        "prisma migrate deploy attempt %s timed out after %ss, retrying. "
+                        "Raise %s if this database needs longer to apply its pending migrations.",
+                        budget.attempt_number,
+                        deploy_timeout,
+                        PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR,
                     )
-                    time.sleep(random.randrange(5, 15))
-                    continue
+                    next_budget = budget.spend()
 
                 except subprocess.CalledProcessError as e:
-                    stderr = e.stderr or ""
+                    next_budget = ProxyExtrasDBManager._budget_after_deploy_failure(
+                        e, budget, schema_path
+                    )
 
-                    if "P3005" in stderr and "database schema is not empty" in stderr:
-                        logger.info(
-                            "Schema exists but no migrations ledger — creating baseline"
-                        )
-                        ProxyExtrasDBManager._create_baseline_migration(schema_path)
-                        continue
-
-                    if "P3009" in stderr:
-                        migration_match = re.search(r"`(\d+_\S+?)`", stderr)
-                        if (
-                            migration_match
-                            and ProxyExtrasDBManager._is_idempotent_error(stderr)
-                        ):
-                            name = migration_match.group(1)
-                            logger.info(
-                                f"Migration {name} failed idempotently — marking applied and retrying"
-                            )
-                            try:
-                                ProxyExtrasDBManager._roll_back_migration(name)
-                            except (
-                                subprocess.CalledProcessError,
-                                subprocess.TimeoutExpired,
-                            ):
-                                pass  # may already be rolled-back
-                            try:
-                                ProxyExtrasDBManager._resolve_specific_migration(name)
-                            except (
-                                subprocess.CalledProcessError,
-                                subprocess.TimeoutExpired,
-                            ) as resolve_err:
-                                # We're already inside the outer
-                                # `except CalledProcessError` handler —
-                                # re-raising CalledProcessError from here
-                                # would escape as itself, bypassing
-                                # proxy_cli.py's `except RuntimeError`.
-                                raise RuntimeError(
-                                    f"Failed to mark migration {name} as applied "
-                                    f"after idempotent recovery. Manual "
-                                    f"intervention may be required.\n\n"
-                                    f"Detail: {resolve_err}"
-                                ) from resolve_err
-                            continue
-                        raise RuntimeError(
-                            "Database migration failed and cannot be auto-recovered. "
-                            f"Manual intervention required.\n\nPrisma error:\n{stderr}"
-                        ) from e
-
-                    if "P3018" in stderr:
-                        if ProxyExtrasDBManager._is_permission_error(stderr):
-                            raise RuntimeError(
-                                "Database migration failed due to insufficient "
-                                "permissions. Please grant the required privileges "
-                                f"and retry.\n\nPrisma error:\n{stderr}"
-                            ) from e
-
-                        migration_match = re.search(
-                            r"Migration name: (\d+_\S+)", stderr
-                        )
-                        if (
-                            migration_match
-                            and ProxyExtrasDBManager._is_idempotent_error(stderr)
-                        ):
-                            name = migration_match.group(1)
-                            logger.info(
-                                f"Migration {name} SQL hit idempotent error — marking applied and retrying"
-                            )
-                            try:
-                                ProxyExtrasDBManager._roll_back_migration(name)
-                            except (
-                                subprocess.CalledProcessError,
-                                subprocess.TimeoutExpired,
-                            ):
-                                pass  # may already be rolled-back
-                            try:
-                                ProxyExtrasDBManager._resolve_specific_migration(name)
-                            except (
-                                subprocess.CalledProcessError,
-                                subprocess.TimeoutExpired,
-                            ) as resolve_err:
-                                raise RuntimeError(
-                                    f"Failed to mark migration {name} as applied "
-                                    f"after idempotent recovery. Manual "
-                                    f"intervention may be required.\n\n"
-                                    f"Detail: {resolve_err}"
-                                ) from resolve_err
-                            continue
-
-                        raise RuntimeError(
-                            "Database migration failed and cannot be auto-recovered. "
-                            f"Manual intervention required.\n\nPrisma error:\n{stderr}"
-                        ) from e
-
-                    raise RuntimeError(
-                        "Database migration failed and cannot be auto-recovered. "
-                        f"Manual intervention required.\n\nPrisma error:\n{stderr}"
-                    ) from e
+                if next_budget.attempts_left < budget.attempts_left:
+                    time.sleep(random.randrange(5, 15))
+                budget = next_budget  # rebind-ok: the loop carries the budget from one migrate deploy pass to the next
 
             raise RuntimeError(
-                "Database migration failed after 4 attempts (retry loop "
-                "exhausted by timeouts or repeated idempotent-recovery "
-                "continues). Check database connectivity, load, and "
-                "_prisma_migrations ledger state."
+                f"Database migration failed after {MAX_MIGRATE_DEPLOY_ATTEMPTS} "
+                "attempts that made no progress (timeouts, deadlock retries, or a "
+                "recovery that had already run once). Check database connectivity, "
+                "load, and _prisma_migrations ledger state, and raise "
+                f"{PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR} if the attempts timed out."
             )
         finally:
             os.chdir(original_dir)
+
+    @staticmethod
+    def _budget_after_deploy_failure(
+        error: subprocess.CalledProcessError,
+        budget: "_MigrateAttemptBudget",
+        schema_path: str,
+    ) -> "_MigrateAttemptBudget":
+        """Recover from one failed `prisma migrate deploy`, and price the pass.
+
+        Returns the budget the next pass runs under, or raises when the failure
+        is not one this resolver knows how to recover from.
+        """
+        stderr = error.stderr or ""
+
+        if "P3005" in stderr and "database schema is not empty" in stderr:
+            logger.info("Schema exists but no migrations ledger — creating baseline")
+            if ProxyExtrasDBManager._create_baseline_migration(schema_path):
+                return budget.after_recovery("baseline")
+            return budget.spend()
+
+        if "P3009" in stderr:
+            migration_match = re.search(r"`(\d+_\S+?)`", stderr)
+            if migration_match and ProxyExtrasDBManager._is_idempotent_error(stderr):
+                name = migration_match.group(1)
+                logger.info(
+                    f"Migration {name} failed idempotently — marking applied and retrying"
+                )
+                ProxyExtrasDBManager._mark_migration_applied(name)
+                return budget.after_recovery(f"resolved:{name}")
+            if migration_match:
+                migration_name = migration_match.group(1)
+                ledger_logs = ProxyExtrasDBManager._failed_migration_logs(migration_name)
+                if ledger_logs is not None and (
+                    ledger_logs == "" or _MIGRATION_DEADLOCK_MARKER in ledger_logs
+                ):
+                    logger.info(
+                        "Migration %s failed in a concurrent migrate deploy "
+                        "deadlock race, rolling its ledger row back and retrying",
+                        migration_name,
+                    )
+                    ProxyExtrasDBManager._roll_back_migration_best_effort(migration_name)
+                    return budget.spend()
+            raise RuntimeError(
+                "Database migration failed and cannot be auto-recovered. "
+                f"Manual intervention required.\n\nPrisma error:\n{stderr}"
+            ) from error
+
+        if "P3018" in stderr:
+            if ProxyExtrasDBManager._is_permission_error(stderr):
+                raise RuntimeError(
+                    "Database migration failed due to insufficient "
+                    "permissions. Please grant the required privileges "
+                    f"and retry.\n\nPrisma error:\n{stderr}"
+                ) from error
+
+            migration_match = re.search(r"Migration name: (\d+_\S+)", stderr)
+            if migration_match and ProxyExtrasDBManager._is_idempotent_error(stderr):
+                name = migration_match.group(1)
+                logger.info(
+                    f"Migration {name} SQL hit idempotent error — marking applied and retrying"
+                )
+                ProxyExtrasDBManager._mark_migration_applied(name)
+                return budget.after_recovery(f"resolved:{name}")
+
+            if migration_match and _MIGRATION_DEADLOCK_MARKER in stderr:
+                logger.info(
+                    "Migration %s deadlocked against a concurrent "
+                    "migrate deploy, rolling its ledger row back "
+                    "and retrying",
+                    migration_match.group(1),
+                )
+                ProxyExtrasDBManager._roll_back_migration_best_effort(
+                    migration_match.group(1)
+                )
+                return budget.spend()
+
+            raise RuntimeError(
+                "Database migration failed and cannot be auto-recovered. "
+                f"Manual intervention required.\n\nPrisma error:\n{stderr}"
+            ) from error
+
+        if _MIGRATION_DEADLOCK_MARKER in stderr:
+            logger.info(
+                "prisma migrate deploy attempt %s deadlocked against "
+                "a concurrent migrate deploy, retrying",
+                budget.attempt_number,
+            )
+            return budget.spend()
+
+        if "P1002" in stderr and "advisory lock" in stderr:
+            logger.info(
+                "prisma migrate deploy attempt %s timed out waiting for "
+                "the advisory lock a concurrent migrate deploy holds, retrying",
+                budget.attempt_number,
+            )
+            return budget.spend()
+
+        raise RuntimeError(
+            "Database migration failed and cannot be auto-recovered. "
+            f"Manual intervention required.\n\nPrisma error:\n{stderr}"
+        ) from error
+
+    @staticmethod
+    def _mark_migration_applied(name: str) -> None:
+        """Roll a failed ledger row back if it is still there, then mark it applied."""
+        try:
+            ProxyExtrasDBManager._roll_back_migration(name)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            pass  # may already be rolled-back
+        try:
+            ProxyExtrasDBManager._resolve_specific_migration(name)
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+        ) as resolve_err:
+            # We're called from inside an `except CalledProcessError` handler —
+            # re-raising CalledProcessError from here would escape as itself,
+            # bypassing proxy_cli.py's `except RuntimeError`.
+            raise RuntimeError(
+                f"Failed to mark migration {name} as applied "
+                f"after idempotent recovery. Manual "
+                f"intervention may be required.\n\n"
+                f"Detail: {resolve_err}"
+            ) from resolve_err
 
     @staticmethod
     def apply_replica_identity_full_if_requested() -> bool:
@@ -908,7 +1033,7 @@ class ProxyExtrasDBManager:
                         # Set migrations directory for Prisma
                         result = subprocess.run(
                             [_get_prisma_command(), "migrate", "deploy"],
-                            timeout=prisma_command_timeout(),
+                            timeout=prisma_migrate_deploy_timeout(),
                             check=True,
                             capture_output=True,
                             text=True,
@@ -1126,7 +1251,11 @@ class ProxyExtrasDBManager:
                     )
                     return True
             except subprocess.TimeoutExpired:
-                logger.info(f"Attempt {attempt + 1} timed out")
+                logger.warning(
+                    "Attempt %s timed out. Raise %s if this database needs longer to apply its schema.",
+                    attempt + 1,
+                    PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR if use_migrate else PRISMA_COMMAND_TIMEOUT_ENV_VAR,
+                )
                 time.sleep(random.randrange(5, 15))
             except subprocess.CalledProcessError as e:
                 attempts_left = 3 - attempt

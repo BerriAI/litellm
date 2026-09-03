@@ -30,6 +30,7 @@ from mcp.types import (
     TextResourceContents,
 )
 from mcp.types import Tool as MCPTool
+from pydantic import AnyUrl
 
 from litellm.constants import MCP_METADATA_TIMEOUT
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -2270,7 +2271,9 @@ class TestMCPServerManager:
         """prompts/list on an OBO server must exchange the caller's bearer, not connect with none."""
         server = self._token_exchange_server("te-prompts")
         st = await self._capture_subject_token(
-            lambda m: m.get_prompts_from_server(server=server, raw_headers={"authorization": "Bearer subj-jwt"})
+            lambda m: m.get_prompts_from_server(
+                server=server, user_api_key_auth=None, raw_headers={"authorization": "Bearer subj-jwt"}
+            )
         )
         assert st == "subj-jwt"
 
@@ -2279,7 +2282,9 @@ class TestMCPServerManager:
         """resources/list on an OBO server must exchange the caller's bearer."""
         server = self._token_exchange_server("te-resources")
         st = await self._capture_subject_token(
-            lambda m: m.get_resources_from_server(server=server, raw_headers={"authorization": "Bearer subj-jwt"})
+            lambda m: m.get_resources_from_server(
+                server=server, user_api_key_auth=None, raw_headers={"authorization": "Bearer subj-jwt"}
+            )
         )
         assert st == "subj-jwt"
 
@@ -2290,6 +2295,7 @@ class TestMCPServerManager:
         st = await self._capture_subject_token(
             lambda m: m.read_resource_from_server(
                 server=server,
+                user_api_key_auth=None,
                 url="https://up.example.com/r",
                 raw_headers={"authorization": "Bearer subj-jwt"},
             )
@@ -2307,7 +2313,9 @@ class TestMCPServerManager:
             auth_type=MCPAuth.none,
         )
         st = await self._capture_subject_token(
-            lambda m: m.get_prompts_from_server(server=server, raw_headers={"authorization": "Bearer subj-jwt"})
+            lambda m: m.get_prompts_from_server(
+                server=server, user_api_key_auth=None, raw_headers={"authorization": "Bearer subj-jwt"}
+            )
         )
         assert st is None
 
@@ -3254,7 +3262,7 @@ class TestMCPServerManager:
             new_callable=AsyncMock,
             return_value=mock_client,
         ):
-            prompts = await manager.get_prompts_from_server(server, add_prefix=True)
+            prompts = await manager.get_prompts_from_server(server, user_api_key_auth=None, add_prefix=True)
 
         mock_client.list_prompts.assert_awaited_once()
         assert len(prompts) == 1
@@ -3289,6 +3297,7 @@ class TestMCPServerManager:
         ):
             result = await manager.get_prompt_from_server(
                 server=server,
+                user_api_key_auth=None,
                 prompt_name="hello",
                 arguments={"tone": "casual"},
             )
@@ -3334,6 +3343,7 @@ class TestMCPServerManager:
         ):
             result = await manager.get_resources_from_server(
                 server=server,
+                user_api_key_auth=None,
                 mcp_auth_header="auth",
                 extra_headers={"X-Test": "1"},
                 add_prefix=True,
@@ -3391,6 +3401,7 @@ class TestMCPServerManager:
         ):
             result = await manager.get_resource_templates_from_server(
                 server=server,
+                user_api_key_auth=None,
                 mcp_auth_header="auth",
                 extra_headers=None,
                 add_prefix=False,
@@ -3441,6 +3452,7 @@ class TestMCPServerManager:
         ) as mock_create_client:
             result = await manager.read_resource_from_server(
                 server=server,
+                user_api_key_auth=None,
                 url="https://example.com/resource",
                 mcp_auth_header="auth",
                 extra_headers={"X-Test": "1"},
@@ -5872,6 +5884,7 @@ class TestMCPServerManager:
         """
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
+            MCPServerAccess,
         )
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 
@@ -5891,19 +5904,22 @@ class TestMCPServerManager:
             object_permission_id="perm_123",
         )
 
-        # Mock MCPRequestHandler.get_allowed_mcp_servers to verify it receives user_api_key_auth
+        # Mock MCPRequestHandler.get_mcp_server_access to verify it receives user_api_key_auth
         with patch.object(
             MCPRequestHandler,
-            "get_allowed_mcp_servers",
+            "get_mcp_server_access",
             new_callable=AsyncMock,
         ) as mock_get_allowed:
             # Configure mock to return servers from object_permission
-            mock_get_allowed.return_value = ["test_server_1", "test_server_2"]
+            mock_get_allowed.return_value = MCPServerAccess(
+                server_ids=("test_server_1", "test_server_2"),
+                scope="scoped",
+            )
 
             # Call get_allowed_mcp_servers with user_api_key_auth
             result = await manager.get_allowed_mcp_servers(user_api_key_auth)
 
-            # Verify MCPRequestHandler.get_allowed_mcp_servers was called with user_api_key_auth
+            # Verify MCPRequestHandler.get_mcp_server_access was called with user_api_key_auth
             mock_get_allowed.assert_called_once()
             call_args = mock_get_allowed.call_args
             assert call_args[0][0] is user_api_key_auth  # First positional arg should be user_api_key_auth
@@ -6060,6 +6076,7 @@ class TestMCPServerManager:
         from litellm.proxy import proxy_server as proxy_server_module
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
+            MCPServerAccess,
         )
         from litellm.proxy._experimental.mcp_server.mcp_context import (
             _mcp_active_toolset_id,
@@ -6092,9 +6109,12 @@ class TestMCPServerManager:
                 patch.object(manager, "get_allow_all_keys_server_ids", return_value=["global-server"]),
                 patch.object(
                     MCPRequestHandler,
-                    "get_allowed_mcp_servers",
+                    "get_mcp_server_access",
                     new_callable=AsyncMock,
-                    return_value=["toolset-server"],
+                    return_value=MCPServerAccess(
+                        server_ids=("toolset-server",),
+                        scope="scoped",
+                    ),
                 ),
             ):
                 result = await manager.get_allowed_mcp_servers(user_api_key_auth)
@@ -6192,6 +6212,79 @@ class TestMCPServerManager:
             result = await manager.get_allowed_mcp_servers(user_api_key_auth)
 
         assert set(result) == {"global-server", "submitted-server"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "flag_enabled, via_virtual_key, resolved_server_ids, scope, submitted_server_ids, expected_server_ids",
+        [
+            (False, True, ("granted",), "scoped", (), {"granted", "public"}),
+            (True, True, ("granted",), "scoped", (), {"granted"}),
+            (True, True, ("granted", "public"), "scoped", (), {"granted", "public"}),
+            (True, True, (), "scoped", (), set()),
+            (True, True, (), "unscoped", (), {"public"}),
+            (
+                True,
+                True,
+                ("team-granted",),
+                "scoped",
+                ("submitted",),
+                {"team-granted", "submitted"},
+            ),
+            (
+                True,
+                True,
+                ("team-granted",),
+                "scoped",
+                ("public",),
+                {"team-granted", "public"},
+            ),
+            (True, False, ("granted",), "scoped", (), {"granted", "public"}),
+        ],
+        ids=(
+            "flag_off_preserves_allow_all",
+            "flag_on_scoped_key_excludes_allow_all",
+            "flag_on_keeps_allow_all_when_granted",
+            "flag_on_restricted_empty_excludes_allow_all",
+            "flag_on_unscoped_key_preserves_allow_all",
+            "flag_on_preserves_submitted_byom",
+            "flag_on_preserves_submitted_byom_when_it_is_allow_all",
+            "flag_on_non_virtual_key_preserves_allow_all",
+        ),
+    )
+    async def test_allow_all_keys_scope_flag(
+        self,
+        flag_enabled,
+        via_virtual_key,
+        resolved_server_ids,
+        scope,
+        submitted_server_ids,
+        expected_server_ids,
+    ):  # test-quality-ok: parameterized matrix covers the scope state machine
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPServerAccess
+
+        manager = MCPServerManager()
+        auth = UserAPIKeyAuth(api_key="sk-test", user_id="user-123")
+        auth.via_virtual_key = via_virtual_key
+        access = MCPServerAccess(server_ids=resolved_server_ids, scope=scope)
+
+        with (
+            patch.object(manager, "get_allow_all_keys_server_ids", return_value=["public"]),
+            patch.object(
+                manager,
+                "_get_active_submitted_mcp_server_ids_for_user",
+                new=AsyncMock(return_value=list(submitted_server_ids)),
+            ),
+        ):
+            assert (
+                set(
+                    await manager.get_allowed_mcp_servers(
+                        auth,
+                        access=access,
+                        general_settings={"mcp_allow_all_keys_respects_mcp_scope": flag_enabled},
+                    )
+                )
+                == expected_server_ids
+            )
 
     @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_anonymous_delegate_requires_oauth2(self):
@@ -11006,3 +11099,294 @@ class TestOpenApiHandlerRelaysUpstreamAuth:
 
         assert result.isError is True
         assert "upstream returned HTTP 503" in result.content[0].text
+
+
+class TestLitellmAdmissionKeyIsNeverTheSubjectToken:
+    """The bearer that admitted the request as a LiteLLM key must not be sent to the IdP as the
+    RFC 8693 subject_token (or ID-JAG assertion). Only ``x-litellm-api-key`` disambiguates: with it
+    present, ``Authorization`` is the caller's own identity token and is exchanged as before."""
+
+    _ADMISSION_KEY: Final = "sk-litellm-virtual-key"
+    _USER_TOKEN: Final = "user-idp-jwt"
+
+    @staticmethod
+    def _token_exchange_server(server_id: str) -> MCPServer:
+        return MCPServer(
+            server_id=server_id,
+            name=f"{server_id}-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+
+    @staticmethod
+    def _id_jag_server(server_id: str) -> MCPServer:
+        return MCPServer(
+            server_id=server_id,
+            name=f"{server_id}-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_id_jag,
+            client_id="cid",
+            client_secret="csec",
+            token_exchange_endpoint="https://idp.example.com/token",
+            id_jag_resource_token_endpoint="https://resource-as.example.com/token",
+        )
+
+    @staticmethod
+    def _recording_provider() -> MagicMock:
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        provider: Final = MagicMock()
+        provider.resolve_credentials = AsyncMock(
+            return_value=Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+        )
+        return provider
+
+    @staticmethod
+    def _subjects_seen_by(provider: MagicMock) -> list[str | None]:
+        return [
+            call.args[0].inbound_token.get_secret_value() if call.args[0].inbound_token else None
+            for call in provider.resolve_credentials.call_args_list
+        ]
+
+    @staticmethod
+    def _manager_with_recording_client() -> MCPServerManager:
+        manager: Final = MCPServerManager()
+        client: Final = AsyncMock()
+        client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        client.list_prompts = AsyncMock(return_value=[])
+        client.read_resource = AsyncMock(return_value=ReadResourceResult(contents=[]))
+        manager._create_mcp_client = AsyncMock(return_value=client)
+        return manager
+
+    @staticmethod
+    def _subject_token_given_to_client(manager: MCPServerManager) -> str | None:
+        return manager._create_mcp_client.call_args.kwargs["subject_token"]
+
+    async def _call_tool_subject(self, server: MCPServer, oauth2_headers, raw_headers, user_api_key_auth):
+        manager: Final = self._manager_with_recording_client()
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            proxy_logging_obj=None,
+            user_api_key_auth=user_api_key_auth,
+        )
+        return self._subject_token_given_to_client(manager)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag])
+    async def test_tools_call_with_only_the_litellm_key_has_no_subject(self, auth_type):
+        server = (
+            self._token_exchange_server("te-call")
+            if auth_type == MCPAuth.oauth2_token_exchange
+            else self._id_jag_server("jag-call")
+        )
+        subject_token = await self._call_tool_subject(
+            server,
+            oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_rest_tools_call_with_only_the_litellm_key_has_no_subject(self):
+        """The REST facade passes no oauth2_headers; the bearer is reached through raw_headers only."""
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-rest"),
+            oauth2_headers=None,
+            raw_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_tools_call_exchanges_the_user_token_when_x_litellm_api_key_admits(self):
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-split"),
+            oauth2_headers={"Authorization": f"Bearer {self._USER_TOKEN}"},
+            raw_headers={
+                "X-LiteLLM-API-Key": f"Bearer {self._ADMISSION_KEY}",
+                "authorization": f"Bearer {self._USER_TOKEN}",
+            },
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token == self._USER_TOKEN
+
+    @pytest.mark.asyncio
+    async def test_tools_call_with_an_empty_x_litellm_api_key_has_no_subject(self):
+        """Admission ignores an empty ``x-litellm-api-key`` and validates ``Authorization`` instead."""
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-empty-header"),
+            oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            raw_headers={"x-litellm-api-key": "", "authorization": f"Bearer {self._ADMISSION_KEY}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_tools_call_with_the_same_litellm_key_in_both_headers_has_no_subject(self):
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-same-key"),
+            oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            raw_headers={
+                "x-litellm-api-key": self._ADMISSION_KEY,
+                "authorization": f"Bearer {self._ADMISSION_KEY}",
+            },
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_tools_call_with_a_different_litellm_key_in_authorization_has_no_subject(self):
+        """A second ``sk-`` virtual key next to ``x-litellm-api-key`` is still a gateway credential."""
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-second-key"),
+            oauth2_headers={"Authorization": "Bearer sk-another-virtual-key"},
+            raw_headers={
+                "x-litellm-api-key": f"Bearer {self._ADMISSION_KEY}",
+                "authorization": "Bearer sk-another-virtual-key",
+            },
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_tools_call_exchanges_the_bearer_when_jwt_admission_left_api_key_unset(self):
+        subject_token = await self._call_tool_subject(
+            self._token_exchange_server("te-jwt"),
+            oauth2_headers={"Authorization": f"Bearer {self._USER_TOKEN}"},
+            raw_headers={"authorization": f"Bearer {self._USER_TOKEN}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key=None, user_id="alice"),
+        )
+        assert subject_token == self._USER_TOKEN
+
+    @pytest.mark.asyncio
+    async def test_tools_list_with_only_the_litellm_key_has_no_subject(self):
+        manager: Final = self._manager_with_recording_client()
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=[])
+        await manager._get_tools_from_server(
+            server=self._token_exchange_server("te-list-key"),
+            oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+        assert self._subject_token_given_to_client(manager) is None
+
+    @pytest.mark.asyncio
+    async def test_prompts_list_with_only_the_litellm_key_has_no_subject(self):
+        manager: Final = self._manager_with_recording_client()
+        await manager.get_prompts_from_server(
+            server=self._token_exchange_server("te-prompts-key"),
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+            raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+        )
+        assert self._subject_token_given_to_client(manager) is None
+
+    @pytest.mark.asyncio
+    async def test_resource_read_with_only_the_litellm_key_has_no_subject(self):
+        manager: Final = self._manager_with_recording_client()
+        await manager.read_resource_from_server(
+            server=self._token_exchange_server("te-read-key"),
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+            url=AnyUrl("file:///notes.txt"),
+            raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+        )
+        assert self._subject_token_given_to_client(manager) is None
+
+    @pytest.mark.asyncio
+    async def test_resource_read_exchanges_the_user_token_when_x_litellm_api_key_admits(self):
+        manager: Final = self._manager_with_recording_client()
+        await manager.read_resource_from_server(
+            server=self._token_exchange_server("te-read-split"),
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+            url=AnyUrl("file:///notes.txt"),
+            raw_headers={
+                "x-litellm-api-key": f"Bearer {self._ADMISSION_KEY}",
+                "authorization": f"Bearer {self._USER_TOKEN}",
+            },
+        )
+        assert self._subject_token_given_to_client(manager) == self._USER_TOKEN
+
+    @pytest.mark.asyncio
+    async def test_openapi_call_never_hands_the_litellm_key_to_the_exchanger(self):
+        provider: Final = self._recording_provider()
+        manager = MCPServerManager(cred_provider=provider)
+        server = MCPServer(
+            server_id="te-openapi",
+            name="te_openapi",
+            server_name="te_openapi",
+            url=None,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+            spec_path="https://api.example.com/openapi.json",
+        )
+        user_auth = UserAPIKeyAuth(api_key="hashed-key", user_id="alice")
+
+        await manager.resolve_openapi_upstream_auth(
+            mcp_server=server,
+            oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+            raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+            mcp_auth_header=None,
+            user_api_key_auth=user_auth,
+            forwarded_headers=None,
+        )
+        await manager.resolve_openapi_upstream_auth(
+            mcp_server=server,
+            oauth2_headers={"Authorization": f"Bearer {self._USER_TOKEN}"},
+            raw_headers={
+                "x-litellm-api-key": f"Bearer {self._ADMISSION_KEY}",
+                "authorization": f"Bearer {self._USER_TOKEN}",
+            },
+            mcp_auth_header=None,
+            user_api_key_auth=user_auth,
+            forwarded_headers=None,
+        )
+        assert self._subjects_seen_by(provider) == [None, self._USER_TOKEN]
+
+    @pytest.mark.asyncio
+    async def test_preflight_challenges_instead_of_exchanging_the_litellm_key(self):
+        provider: Final = self._recording_provider()
+        manager = MCPServerManager(cred_provider=provider)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_token_exchange(
+                server=self._token_exchange_server("te-preflight-key"),
+                oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
+                user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+                raw_headers={"authorization": f"Bearer {self._ADMISSION_KEY}"},
+            )
+        assert exc_info.value.status_code == 401
+        headers = exc_info.value.headers or {}
+        assert "resource_metadata" in (headers.get("WWW-Authenticate") or headers.get("www-authenticate") or "")
+        assert self._subjects_seen_by(provider) == []
+
+    @pytest.mark.asyncio
+    async def test_preflight_exchanges_the_user_token_when_x_litellm_api_key_admits(self):
+        provider: Final = self._recording_provider()
+        manager = MCPServerManager(cred_provider=provider)
+
+        await manager.preflight_token_exchange(
+            server=self._token_exchange_server("te-preflight-split"),
+            oauth2_headers={"Authorization": f"Bearer {self._USER_TOKEN}"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+            raw_headers={
+                "x-litellm-api-key": f"Bearer {self._ADMISSION_KEY}",
+                "authorization": f"Bearer {self._USER_TOKEN}",
+            },
+        )
+        assert self._subjects_seen_by(provider) == [self._USER_TOKEN]

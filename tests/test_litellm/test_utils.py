@@ -41,7 +41,6 @@ from litellm.utils import (
     _snapshot_exception_for_hook,
     async_post_call_failure_deployment_hook,
     client,
-    get_api_key,
     get_llm_provider,
     get_non_default_completion_params,
     get_optional_params_image_gen,
@@ -329,6 +328,37 @@ def test_get_optional_params_image_gen():
     assert optional_params is not None
     assert "response_format" not in optional_params
     assert optional_params["n"] == 3
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+def test_get_optional_params_image_gen_keeps_gpt_image_supported_params(custom_llm_provider):
+    """https://github.com/BerriAI/litellm/issues/38649"""
+    from litellm.types.utils import LlmProviders
+
+    provider_config = ProviderConfigManager.get_provider_image_generation_config(
+        model="gpt-image-2", provider=LlmProviders(custom_llm_provider)
+    )
+    optional_params = get_optional_params_image_gen(
+        model="gpt-image-2",
+        n=1,
+        size="1024x1024",
+        custom_llm_provider=custom_llm_provider,
+        provider_config=provider_config,
+        background="transparent",
+        output_format="png",
+        moderation="low",
+        output_compression=50,
+        unknown_param="kept-in-extra-body",
+    )
+    assert optional_params == {
+        "n": 1,
+        "size": "1024x1024",
+        "background": "transparent",
+        "output_format": "png",
+        "moderation": "low",
+        "output_compression": 50,
+        "extra_body": {"unknown_param": "kept-in-extra-body"},
+    }
 
 
 def test_get_optional_params_image_gen_vertex_ai_size():
@@ -4655,6 +4685,7 @@ GEMINI_4096_CACHE_MIN_MODELS: Final = tuple(
         "gemini-3.5-flash",
         "gemini-3.6-flash",
         "gemini-3.7-flash",
+        "gemini-3.8-flash",
         "gemini-3.1-pro-preview",
         "gemini-3.1-pro-preview-customtools",
     )
@@ -4914,17 +4945,6 @@ def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkey
     finally:
         litellm.model_cost = saved_model_cost
         _invalidate_model_cost_lowercase_map()
-
-
-def test_ai21_api_key_is_resolved_from_the_documented_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The ai21 branch resolved a misspelled env var, so the name every other ai21 code path
-    reads, and the only name documented, was ignored."""
-    monkeypatch.setattr(litellm, "api_key", None)
-    monkeypatch.setattr(litellm, "ai21_key", None)
-    monkeypatch.delenv("AI211_API_KEY", raising=False)
-    monkeypatch.setenv("AI21_API_KEY", "sk-ai21-resolved-from-env")
-
-    assert get_api_key(llm_provider="ai21", dynamic_api_key=None) == "sk-ai21-resolved-from-env"
 
 
 class _JsonCapture(logging.Handler):

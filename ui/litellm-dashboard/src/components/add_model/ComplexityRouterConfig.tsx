@@ -36,10 +36,11 @@ import ContextWindowEscalationConfig from "./ContextWindowEscalationConfig";
 import { Restricted, restrictedBy } from "./TierRestrictions";
 import { type TierSetAction, applyTierSetAction, setFallbackTier } from "./tier_set_actions";
 import {
-  REASONING_EFFORT_OPTIONS,
   ReasoningEffort,
   TierModelParamsByTier,
+  classifierEffortOptionsForModels,
   setTierModelReasoningEffort,
+  tierEffortOptionsForModels,
   tierRowLabel,
 } from "./complexity_router_tiers";
 import TierModelEffortRows from "./TierModelEffortRows";
@@ -124,11 +125,12 @@ export const CLASSIFICATION_RUBRIC_KEYS = Object.keys(CLASSIFICATION_RUBRIC_DESC
 export interface ClassifierLLMConfig {
   model: string;
   timeout_ms: number;
+  reasoning_effort?: ReasoningEffort;
   classification_rubric?: ClassificationRubric;
   system_prompt?: string;
 }
 
-export type ClassifierType = "heuristic" | "llm" | "heuristic_first";
+export type ClassifierType = "heuristic" | "heuristic_v2" | "llm" | "heuristic_first" | "hybrid";
 
 /**
  * Whether this router can call classifier_llm_config.model. Mirrors the backend's
@@ -136,7 +138,7 @@ export type ClassifierType = "heuristic" | "llm" | "heuristic_first";
  * control and payload key, so a new chaining type cannot strip knobs the operator set.
  */
 export const usesLlmClassifier = (classifierType: ClassifierType): boolean =>
-  classifierType === "llm" || classifierType === "heuristic_first";
+  classifierType === "llm" || classifierType === "heuristic_first" || classifierType === "hybrid";
 
 export type ClassifierFallback = "heuristic" | "default_model";
 
@@ -161,7 +163,9 @@ export const heuristicScoringRoleFor = (
   classifierType: ClassifierType,
   classifierFallback: ClassifierFallback | undefined,
 ): HeuristicScoringRole => {
-  if (classifierType === "heuristic" || classifierType === "heuristic_first") return "decides";
+  if (classifierType === "heuristic_v2") return "never";
+  if (classifierType === "heuristic" || classifierType === "heuristic_first" || classifierType === "hybrid")
+    return "decides";
   return (classifierFallback ?? DEFAULT_CLASSIFIER_FALLBACK) === "heuristic" ? "fallback_only" : "never";
 };
 
@@ -188,13 +192,19 @@ const builtInTierInfo = (rowId: string): { label: string; description: string; e
   return builtIn ? TIER_DESCRIPTIONS[builtIn] : undefined;
 };
 
+const tierConfigIntroText = (value: ComplexityRouterConfigValue): string => {
+  if (value.classifier_type === "heuristic_v2") {
+    return "The complexity router classifies each request with a calibrated local four-tier model (no API calls). Configure which model(s) handle each tier.";
+  }
+  if (heuristicScoringRole(value) === "never") {
+    return "The complexity router classifies each request with your classifier model and routes it to that tier. Configure which model(s) handle each tier.";
+  }
+  return "The complexity router automatically classifies requests by complexity using rule-based scoring (no API calls, <1ms latency). Configure which model(s) handle each tier.";
+};
+
 const TierConfigIntro: React.FC<{ value: ComplexityRouterConfigValue }> = ({ value }) => (
   <>
-    <span className="block mb-6 text-muted-foreground">
-      {heuristicScoringRole(value) === "never"
-        ? "The complexity router classifies each request with your classifier model and routes it to that tier. Configure which model(s) handle each tier."
-        : "The complexity router automatically classifies requests by complexity using rule-based scoring (no API calls, <1ms latency). Configure which model(s) handle each tier."}
-    </span>
+    <span className="block mb-6 text-muted-foreground">{tierConfigIntroText(value)}</span>
 
     <span className="block mb-4 text-xs text-muted-foreground">
       {restrictedBy(value, "displayNames")?.reason ??
@@ -397,9 +407,12 @@ export interface ComplexityRouterConfigValue {
   classification_prompt?: string;
   /** Highest tier the scorer may decide alone under heuristic_first. Required by that type, rejected by the others. */
   heuristic_first_max_tier?: string;
+  /** How near a tier boundary a score may land before hybrid defers to the classifier. Required by that type, rejected by the others. */
+  hybrid_boundary_margin?: number;
   classification_mode?: ClassificationMode;
   session_affinity?: boolean;
   modality_routing?: boolean;
+  modality_pin_override?: boolean;
   deployment_affinity?: boolean;
   /** Plan-mode floor as a tier ROW ID, unset meaning off. The wire carries the row's name. */
   plan_mode_min_tier?: string;
@@ -508,6 +521,9 @@ export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: Comp
   tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
 
 export const DEFAULT_HEURISTIC_FIRST_MAX_TIER = "SIMPLE";
+
+/** What the Hybrid radio starts at. Required by that type, so the form always has a value to send. */
+export const DEFAULT_HYBRID_BOUNDARY_MARGIN = 0.03;
 
 /**
  * Tiers the heuristic_first threshold may name. The top tier is excluded because it would short
@@ -618,14 +634,8 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   const removeTierRow = (id: string) => dispatch({ kind: "remove", id });
   const exitToBuiltInTiers = () => dispatch({ kind: "restore" });
 
-  // An absent list means the proxy does not send the field yet, so every level is offered as before.
-  // An empty list is the group's own answer that its deployments share no level, and is left empty.
-  const effortOptionsByModel: Record<string, string[]> = Object.fromEntries(
-    modelInfo.map((model) => [
-      model.model_group,
-      model.supported_reasoning_efforts ?? (model.supports_reasoning ? [...REASONING_EFFORT_OPTIONS] : []),
-    ]),
-  );
+  const tierEffortOptionsByModel = tierEffortOptionsForModels(modelInfo);
+  const classifierEffortOptionsByModel = classifierEffortOptionsForModels(modelInfo);
 
   // Embedding models can't serve a chat-completion role, so they're excluded here.
   const modelOptions = modelInfo
@@ -732,7 +742,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <TierModelEffortRows
                     tierLabel={label}
                     models={row.models}
-                    effortOptionsByModel={effortOptionsByModel}
+                    effortOptionsByModel={tierEffortOptionsByModel}
                     paramsByModel={row.params}
                     onEffortChange={(model, effort) => handleTierModelEffortChange(row.id, model, effort)}
                   />
@@ -804,6 +814,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 value={value}
                 onChange={onChange}
                 modelOptions={modelOptions}
+                effortOptionsByModel={classifierEffortOptionsByModel}
                 customTechnicalKeywords={customTechnicalKeywords}
                 onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
                 showValidationErrors={showValidationErrors}

@@ -19,11 +19,12 @@ import { all_admin_roles } from "@/utils/roles";
 import { type ModelWriteScope } from "@/utils/modelPermissions";
 import TeamDropdown from "../common_components/team_dropdown";
 import { type AddAutoRouterValues, handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
-import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
+import { fetchAvailableModels, type ModelGroup } from "@/components/llm_calls/fetch_models";
 import { autoRouterListKey, fetchAllModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
   effectiveClassifierType,
+  usesLlmClassifier,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
@@ -37,6 +38,7 @@ import {
   buildComplexityRouterConfig,
   getKeywordTierRulesError,
   getClassifierModelError,
+  getClassifierReasoningEffortError,
   getMissingTiersError,
   getPlanModeTierError,
   getSemanticConfigError,
@@ -50,8 +52,6 @@ import AutoRouterConnectionTest from "./auto_router_connection_test";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
 import { toast } from "@/lib/toast";
 import {
-  getAllPresets,
-  getPresetByKey,
   getMissingModelsInPreset,
   getReferencedModelsError,
   buildEmptyPrefill,
@@ -62,6 +62,7 @@ import {
   PresetPrefill,
   AutoRouterPreset,
 } from "@/lib/autorouter_presets";
+import { useAutoRouterPresets } from "@/app/(dashboard)/hooks/autoRouter/useAutoRouterPresets";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AddAutoRouterTabProps {
@@ -102,9 +103,7 @@ const presetDisabledHint = (availability: PresetAvailability): string | null => 
 // caller-specific missing-model reason gets the alarming red treatment.
 const isPresetHintAlarming = (availability: PresetAvailability): boolean => availability.kind === "missing_models";
 
-// getAllPresets() already returns a stable, module-level array (see autorouter_presets.ts), so
-// this is resolved once at import time rather than re-called from inside the component every render.
-const presets = getAllPresets();
+const NO_PRESETS: AutoRouterPreset[] = [];
 
 // A one-line summary of what's configured, shown when the detailed section is collapsed so a
 // caller can see the shape of the config without opening it.
@@ -123,14 +122,21 @@ export const getSubmitBlockedReason = (
   config: ComplexityRouterConfigValue,
   keywordTierRules: KeywordTierRule[],
   referencedModelsParams: Parameters<typeof getReferencedModelsError>[0],
-  availability: ModelAvailability,
-): string | null =>
-  (config.custom_tier_set ? getCustomTierRowsError(config.custom_tier_set) : getTierLabelsError(config.tier_labels)) ??
-  getMissingTiersError(activeTierRows(config)) ??
-  getPlanModeTierError(config.plan_mode_min_tier, activeTierRows(config)) ??
-  getKeywordTierRulesError(keywordTierRules, activeTierRows(config)) ??
-  getClassifierModelError(config) ??
-  getReferencedModelsError(referencedModelsParams, availability);
+  ...capabilities: [availability: ModelAvailability, modelInfo?: readonly ModelGroup[]]
+): string | null => {
+  const [availability, modelInfo = []] = capabilities;
+  return (
+    (config.custom_tier_set
+      ? getCustomTierRowsError(config.custom_tier_set)
+      : getTierLabelsError(config.tier_labels)) ??
+    getMissingTiersError(activeTierRows(config)) ??
+    getPlanModeTierError(config.plan_mode_min_tier, activeTierRows(config)) ??
+    getKeywordTierRulesError(keywordTierRules, activeTierRows(config)) ??
+    getClassifierModelError(config) ??
+    getClassifierReasoningEffortError(config, modelInfo) ??
+    getReferencedModelsError(referencedModelsParams, availability)
+  );
+};
 
 const autoRouterSchema = (requiresTeamScope: boolean) =>
   z.object({
@@ -229,6 +235,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   });
   const modelsLoading = groupsLoading || deploymentsLoading;
   const modelInfo = React.useMemo(() => data ?? [], [data]);
+  const {
+    data: presetsData,
+    isPending: presetsPending,
+    isError: presetsError,
+    refetch: refetchPresets,
+  } = useAutoRouterPresets();
+  const presets = presetsData ?? NO_PRESETS;
+  const presetsUnavailable = presetsError && presetsData === undefined;
   // react-query keeps the last successful list around when a later refetch fails, so isError alone
   // can't tell "never loaded" apart from "loaded, then a background refetch errored" - only the
   // former leaves us with nothing trustworthy to verify a preset's models against.
@@ -277,7 +291,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       presets
         .map((preset) => ({ preset, availability: presetAvailability(preset) }))
         .sort((a, b) => Number(b.availability.kind === "available") - Number(a.availability.kind === "available")),
-    [presetAvailability],
+    [presets, presetAvailability],
   );
 
   const templateItems = React.useMemo(
@@ -307,7 +321,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
-    const preset = getPresetByKey(presetKey);
+    const preset = presets.find((p) => p.key === presetKey);
     // Refuse to apply a preset whose models are not verified available. The dropdown disables
     // these options, so this is a guard against a stale click resolving after the list changed.
     if (!preset) return;
@@ -333,6 +347,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     keywordTierRules,
     referencedModelsParams,
     groupsOnlyAvailability,
+    modelInfo,
   );
 
   const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
@@ -342,6 +357,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     planModeMinTier: complexityRouterConfig.plan_mode_min_tier,
     classificationPrompt: complexityRouterConfig.classification_prompt,
     heuristicFirstMaxTier: complexityRouterConfig.heuristic_first_max_tier,
+    hybridBoundaryMargin: complexityRouterConfig.hybrid_boundary_margin,
     classificationMode: complexityRouterConfig.classification_mode,
     tierLabels: complexityRouterConfig.tier_labels,
     classifierType: complexityRouterConfig.classifier_type,
@@ -352,6 +368,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     classifierFallback: complexityRouterConfig.classifier_fallback,
     sessionAffinity: complexityRouterConfig.session_affinity ?? DEFAULT_SESSION_AFFINITY,
     modalityRouting: complexityRouterConfig.modality_routing ?? false,
+    modalityPinOverride: complexityRouterConfig.modality_pin_override ?? false,
     deploymentAffinity: complexityRouterConfig.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
     customTechnicalKeywords,
     keywordTierRules,
@@ -383,6 +400,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         keywordTierRules,
         referencedModelsParams,
         groupsOnlyAvailability,
+        modelInfo,
       ) ?? getSemanticConfigError({ semanticMatchingEnabled, embeddingModel, keywordTierRules });
     if (blockedReason) {
       setShowValidationErrors(true);
@@ -455,6 +473,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       semanticMatchingEnabled,
       embeddingModel,
       defaultModel: resolveComplexityDefaultModel(complexityRouterConfig, complexityRouterConfig.default_model),
+      classifier: usesLlmClassifier(effectiveClassifierType(complexityRouterConfig))
+        ? {
+            model: complexityRouterConfig.classifier_llm_config?.model ?? "",
+            reasoningEffort: complexityRouterConfig.classifier_llm_config?.reasoning_effort,
+          }
+        : undefined,
     };
     const targets = buildAutoRouterTestTargets(testTargetParams);
 
@@ -537,6 +561,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                     </button>
                   </div>
                 )}
+                {presetsPending && <div className="text-xs mt-1 text-muted-foreground">Loading templates...</div>}
+                {presetsUnavailable && (
+                  <div className="text-xs mt-1 text-destructive">
+                    Could not load templates, so only Custom Configuration is shown.{" "}
+                    <button type="button" className="underline" onClick={() => void refetchPresets()}>
+                      Retry
+                    </button>
+                  </div>
+                )}
               </div>
 
               {requiresTeamScope && (
@@ -548,7 +581,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                     "Select the team this auto router belongs to. Only keys for this team will be able to call it.",
                   )}
                 >
-                  {({ id, value, onChange }) => <TeamDropdown id={id} value={value} onChange={onChange} />}
+                  {({ id, value, onChange }) => (
+                    <TeamDropdown id={id} value={value} onChange={(next) => onChange(next ?? "")} />
+                  )}
                 </FormField>
               )}
 

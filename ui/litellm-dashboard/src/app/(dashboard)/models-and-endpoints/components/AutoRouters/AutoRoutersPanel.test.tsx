@@ -140,6 +140,7 @@ const renderPanel = (canModify = true) =>
       accessToken="token"
       userRole="Admin"
       userID="u-admin"
+      isViewOnly={false}
       teams={null}
       createScope={canModify ? "unscoped-ok" : "forbidden"}
     />,

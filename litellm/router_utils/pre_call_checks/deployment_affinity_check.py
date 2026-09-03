@@ -21,7 +21,7 @@ from typing_extensions import TypedDict
 
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY
+from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import AllMessageValues
@@ -82,6 +82,7 @@ class DeploymentAffinityCheck(CustomLogger):
     """
 
     CACHE_KEY_PREFIX = "deployment_affinity:v1"
+    USER_ID_AFFINITY_PREFIX: Final = "user_id:"
 
     def __init__(
         self,
@@ -254,18 +255,9 @@ class DeploymentAffinityCheck(CustomLogger):
         return f"{cls.CACHE_KEY_PREFIX}:session:{model_group}:{hashed_user_key}:{session_id}"
 
     @staticmethod
-    def _get_user_key_from_metadata_dict(metadata: dict) -> str | None:
-        # NOTE: affinity is keyed on the *API key hash* provided by the proxy (not the
-        # OpenAI `user` parameter, which is an end-user identifier).
-        user_key: Final = metadata.get("user_api_key_hash")
-        if user_key is None:
-            return None
-        return str(user_key)
-
-    @staticmethod
     def _get_session_id_from_metadata_dict(metadata: dict) -> str | None:
         session_id: Final = metadata.get("session_id")
-        if session_id is None:
+        if session_id is None or metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
             return None
         return str(session_id)
 
@@ -285,22 +277,30 @@ class DeploymentAffinityCheck(CustomLogger):
         return metadata_dicts
 
     @staticmethod
-    def _get_user_key_from_request_kwargs(request_kwargs: dict) -> str | None:
+    def _first_metadata_value(metadata_dicts: Sequence[dict], key: str) -> str | None:
+        value: Final = next((metadata[key] for metadata in metadata_dicts if metadata.get(key) is not None), None)
+        return None if value is None else str(value)
+
+    @classmethod
+    def _get_user_key_from_request_kwargs(cls, request_kwargs: dict) -> str | None:
         """
         Extract a stable affinity key from request kwargs.
 
-        Source (proxy): `metadata.user_api_key_hash`
+        Source (proxy): `metadata.user_api_key_hash` for virtual-key callers. JWT-authenticated
+        callers carry no key hash, so their `metadata.user_api_key_user_id` stands in for it,
+        namespaced under `USER_ID_AFFINITY_PREFIX` so a user id can never alias a key hash.
 
         Note: the OpenAI `user` parameter is an end-user identifier and is intentionally
         not used for deployment affinity.
         """
-        # Check metadata dicts (Proxy usage)
-        for metadata in DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs):
-            user_key = DeploymentAffinityCheck._get_user_key_from_metadata_dict(metadata=metadata)
-            if user_key is not None:
-                return user_key
-
-        return None
+        metadata_dicts: Final = cls._iter_metadata_dicts(request_kwargs)
+        user_api_key_hash: Final = cls._first_metadata_value(metadata_dicts, "user_api_key_hash")
+        if user_api_key_hash is not None:
+            return user_api_key_hash
+        user_id: Final = cls._first_metadata_value(metadata_dicts, "user_api_key_user_id")
+        if user_id is None:
+            return None
+        return f"{cls.USER_ID_AFFINITY_PREFIX}{user_id}"
 
     @staticmethod
     def _get_session_id_from_request_kwargs(request_kwargs: dict) -> str | None:
@@ -427,6 +427,8 @@ class DeploymentAffinityCheck(CustomLogger):
         """
         request_kwargs = request_kwargs or {}
         typed_healthy_deployments: Final = cast(list[dict], healthy_deployments)
+        if request_kwargs.get("_target_order") is not None:
+            return typed_healthy_deployments
 
         (
             enable_user_key,
@@ -531,9 +533,9 @@ class DeploymentAffinityCheck(CustomLogger):
             return typed_healthy_deployments
 
         verbose_router_logger.debug(
-            "DeploymentAffinityCheck: api-key affinity hit -> deployment=%s user_key=%s",
+            "DeploymentAffinityCheck: caller affinity hit -> deployment=%s user_key=%s",
             model_id,
-            self._shorten_for_logs(user_key),
+            self._shorten_for_logs(self._hash_user_key(user_key)),
         )
         return [deployment]
 
@@ -624,7 +626,7 @@ class DeploymentAffinityCheck(CustomLogger):
                         deployment_model_name,
                         model_id,
                         self.ttl_seconds,
-                        self._shorten_for_logs(user_key),
+                        self._shorten_for_logs(self._hash_user_key(user_key)),
                     )
                 else:
                     verbose_router_logger.debug(

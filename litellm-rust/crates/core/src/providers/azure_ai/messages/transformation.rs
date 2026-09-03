@@ -1,4 +1,4 @@
-use crate::error::{CoreError, CoreResult};
+use crate::error::Error;
 use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
 use crate::messages::types::{
     AnthropicMessage, AnthropicMessagesRequest, AnthropicMessagesResponse, ContentBlock,
@@ -28,12 +28,12 @@ pub const AZURE_ANTHROPIC_MESSAGES_CONFIG: AzureAnthropicMessagesConfig =
 pub fn resolve_azure_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> CoreResult<String> {
+) -> Result<String, Error> {
     non_empty(api_key)
         .map(str::to_string)
         .or_else(|| env_lookup(AZURE_API_KEY_ENV).filter(|value| !value.trim().is_empty()))
         .ok_or_else(|| {
-            CoreError::Auth(
+            Error::Auth(
                 "Missing Azure API Key - Set `api_key` or the AZURE_API_KEY environment variable"
                     .to_string(),
             )
@@ -43,12 +43,12 @@ pub fn resolve_azure_api_key(
 pub fn complete_azure_anthropic_url(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> CoreResult<String> {
+) -> Result<String, Error> {
     let api_base = non_empty(api_base)
         .map(str::to_string)
         .or_else(|| env_lookup(AZURE_API_BASE_ENV).filter(|value| !value.trim().is_empty()))
         .ok_or_else(|| {
-            CoreError::Auth(
+            Error::Auth(
                 "Missing Azure API Base - Set `api_base` or the AZURE_API_BASE environment variable. \
                  Expected format: https://<resource-name>.services.ai.azure.com/anthropic"
                     .to_string(),
@@ -142,12 +142,13 @@ fn fold_system_role_messages(request: AnthropicMessagesRequest) -> AnthropicMess
 }
 
 impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn complete_url(
         &self,
         api_base: Option<&str>,
         _model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String> {
+    ) -> Result<String, Error> {
         complete_azure_anthropic_url(api_base, env_lookup)
     }
 
@@ -155,7 +156,7 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
         &self,
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String> {
+    ) -> Result<String, Error> {
         resolve_azure_api_key(api_key, env_lookup)
     }
 
@@ -174,7 +175,7 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
     fn transform_request(
         &self,
         request: AnthropicMessagesRequest,
-    ) -> CoreResult<AnthropicMessagesRequest> {
+    ) -> Result<AnthropicMessagesRequest, Error> {
         let mut request = fold_system_role_messages(request);
         if let Some(system) = request.system.as_mut() {
             strip_scope_from_system(system);
@@ -190,7 +191,7 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
         &self,
         model: &str,
         response: AnthropicMessagesResponse,
-    ) -> CoreResult<AnthropicMessagesResponse> {
+    ) -> Result<AnthropicMessagesResponse, Error> {
         self.anthropic.transform_response(model, response)
     }
 }
@@ -268,7 +269,7 @@ mod tests {
             "https://env.services.ai.azure.com/anthropic/v1/messages"
         );
         let err = complete_azure_anthropic_url(Some("  "), &|_| None).expect_err("missing base");
-        assert!(matches!(err, CoreError::Auth(_)));
+        assert!(matches!(err, Error::Auth(_)));
     }
 
     #[test]
@@ -284,7 +285,7 @@ mod tests {
         );
         assert!(matches!(
             resolve_azure_api_key(None, &|_| None).expect_err("missing key"),
-            CoreError::Auth(_)
+            Error::Auth(_)
         ));
     }
 

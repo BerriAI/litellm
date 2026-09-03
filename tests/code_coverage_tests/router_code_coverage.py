@@ -81,6 +81,12 @@ ignored_function_names = [
     "_merge_tools_from_deployment",  # Tested indirectly via _update_kwargs_with_deployment (test files lack "router" in name)
     "_invalidate_access_groups_cache",  # Tested indirectly via set_model_list, upsert_model etc. (test files lack "router" in name)
     "has_buffered_provider_output",  # Property, so its reads in test_router.py are never an ast.Call
+    "_resolved_provider",  # Tested via get_pattern in test_pattern_match_deployments.py (file lacks "router" in name)
+    "_request_header",  # Tested through Claude Code session routing in test_router.py
+    "_claude_code_session_router_cache_key",  # Tested through Claude Code session routing in test_router.py
+    "_delete_claude_code_session_router_binding",  # Tested through Redis cleanup failure in test_router.py
+    "_resolve_claude_code_session_router",  # Tested through Claude Code session routing in test_router.py
+    "_get_claude_code_session_router_binding",  # Tested through the two-worker session routing test in test_router.py
 ]
 
 

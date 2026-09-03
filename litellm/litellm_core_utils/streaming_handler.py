@@ -54,6 +54,7 @@ FUNCTION_CALL_ATTRIBUTE: Final = "function_call"
 _SYNC_ITER_EXHAUSTED: Final = object()
 
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
+_USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
 
 
 def _next_sync_or_exhausted(it: Any) -> object:
@@ -1886,8 +1887,8 @@ class CustomStreamWrapper:
     @staticmethod
     def _resolve_provider_reported_cost(usage_cost: object) -> float | None:
         """
-        Providers report usage.cost either as a number or, for Perplexity, as a
-        breakdown object whose total lives under ``total_cost``.
+        Providers report usage.cost either as a number or as a breakdown object
+        whose total lives under ``total_cost``.
         """
         if isinstance(usage_cost, bool):
             return None
@@ -1900,12 +1901,10 @@ class CustomStreamWrapper:
     @staticmethod
     def _propagate_usage_cost_to_hidden_params(
         response: "ModelResponse",
+        custom_llm_provider: str | None,
     ) -> None:
-        """
-        If the assembled response carries a provider-reported cost on
-        usage.cost, copy it into _hidden_params so litellm's cost
-        calculator uses it instead of a token-based estimate.
-        """
+        if custom_llm_provider not in _USAGE_COST_HEADER_PROVIDERS:
+            return
         _usage: Final[Usage | None] = getattr(response, "usage", None)
         _cost: Final = CustomStreamWrapper._resolve_provider_reported_cost(getattr(_usage, "cost", None))
         if _cost is not None:
@@ -2020,7 +2019,7 @@ class CustomStreamWrapper:
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
-                    self._propagate_usage_cost_to_hidden_params(complete_streaming_response)
+                    self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
 
                     setattr(
                         response,
@@ -2270,7 +2269,7 @@ class CustomStreamWrapper:
 
             response: Final = self.model_response_creator()
             if complete_streaming_response is not None:
-                self._propagate_usage_cost_to_hidden_params(complete_streaming_response)
+                self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
 
                 setattr(
                     response,
@@ -2338,6 +2337,9 @@ class CustomStreamWrapper:
         else:
             self.sent_last_chunk = True
             processed_chunk: Final = self.finish_reason_handler()
+            if self.stream_options is None:
+                usage: Final = calculate_total_usage(chunks=self.chunks)
+                processed_chunk._hidden_params["usage"] = usage  # pyright: ignore[reportPrivateUsage]  # sync parity
             # see sync __next__'s sibling branch: deliberately do NOT restore
             # here - this chunk is still this call's own data, and restoring
             # before returning it would corrupt the caller's own log

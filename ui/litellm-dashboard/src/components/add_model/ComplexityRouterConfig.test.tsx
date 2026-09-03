@@ -127,6 +127,31 @@ describe("ComplexityRouterConfig", () => {
     expect(onChange).toHaveBeenCalledWith(expectedValue);
   });
 
+  it("selects heuristic v2 without requiring a classifier model or showing weighted scoring", () => {
+    const onChange = vi.fn();
+    const { rerender } = renderWithProviders(
+      <ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={onChange} />,
+    );
+
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    fireEvent.click(screen.getByText("Heuristic v2"));
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classifier_type: "heuristic_v2",
+        classifier_llm_config: undefined,
+      }),
+    );
+
+    const heuristicV2Value: ComplexityRouterConfigValue = { ...defaultValue, classifier_type: "heuristic_v2" };
+    rerender(<ComplexityRouterConfig modelInfo={mockModelInfo} value={heuristicV2Value} onChange={onChange} />);
+
+    expect(screen.queryByText("Classifier Model")).not.toBeInTheDocument();
+    expect(screen.queryByText("Advanced scoring")).not.toBeInTheDocument();
+    expect(screen.getByText(/estimates success probability for all four tiers/)).toBeInTheDocument();
+    expect(screen.queryByText(/Score < 0.15/)).not.toBeInTheDocument();
+  });
+
   it("should show classifier fields and use the configured values when classifier_type is llm", () => {
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
@@ -855,6 +880,44 @@ describe("ComplexityRouterConfig modality panel", () => {
 
     expect(screen.getByRole("switch", { name: "Route image requests to vision-capable models" })).toBeChecked();
   });
+
+  // The backend ignores modality_pin_override unless modality_routing is on, so offering it while
+  // image routing is off would let an operator save a flag that does nothing.
+  it("disables the pin-override switch while image routing is off", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Modality Routing"));
+
+    const override = screen.getByRole("switch", { name: "Override session pin for image requests" });
+    expect(override).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(override);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("writes modality_pin_override through onChange once image routing is on", () => {
+    const onChange = vi.fn();
+    const value = { ...defaultValue, modality_routing: true };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={value} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Modality Routing"));
+
+    const override = screen.getByRole("switch", { name: "Override session pin for image requests" });
+    expect(override).not.toBeChecked();
+    fireEvent.click(override);
+
+    expect(onChange).toHaveBeenCalledWith({ ...value, modality_pin_override: true });
+  });
+
+  it("renders a stored modality_pin_override=true as on", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, modality_routing: true, modality_pin_override: true }}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Modality Routing"));
+
+    expect(screen.getByRole("switch", { name: "Override session pin for image requests" })).toBeChecked();
+  });
 });
 
 describe("ComplexityRouterConfig affinity panel", () => {
@@ -1061,6 +1124,109 @@ describe("ComplexityRouterConfig per-model reasoning effort", () => {
   });
 });
 
+describe("ComplexityRouterConfig classifier reasoning effort", () => {
+  const llmValue: ComplexityRouterConfigValue = {
+    ...defaultValue,
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-4", timeout_ms: 3000 },
+  };
+
+  const renderClassifier = (value: ComplexityRouterConfigValue = llmValue, onChange = vi.fn()) => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={value} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    return onChange;
+  };
+
+  it("defaults to the classifier provider setting and offers only supported efforts", async () => {
+    renderClassifier();
+    const user = userEvent.setup();
+    const select = screen.getByRole("combobox", { name: "Reasoning effort for classifier model gpt-4" });
+    expect(select).toHaveTextContent("Default");
+    await user.click(select);
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      "Default",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+  });
+
+  it("stores an explicit effort on the classifier config", async () => {
+    const onChange = renderClassifier();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Reasoning effort for classifier model gpt-4" }));
+    await user.click(await screen.findByRole("option", { name: "high" }));
+    expect(onChange).toHaveBeenCalledWith({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
+    });
+  });
+
+  it("removes the effort override when Default is selected", async () => {
+    const onChange = renderClassifier({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Reasoning effort for classifier model gpt-4" }));
+    await user.click(await screen.findByRole("option", { name: "Default" }));
+    expect(onChange).toHaveBeenCalledWith(llmValue);
+  });
+
+  it("clears the old effort when the classifier model changes", async () => {
+    const onChange = renderClassifier({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Classifier Model" }));
+    await user.click(await screen.findByRole("option", { name: "gpt-3.5-turbo" }));
+    expect(onChange).toHaveBeenCalledWith({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    });
+  });
+
+  it.each(["click", "enter"] as const)(
+    "keeps the effort when the selected model is confirmed by %s",
+    async (action) => {
+      const onChange = renderClassifier({
+        ...llmValue,
+        classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
+      });
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("combobox", { name: "Classifier Model" }));
+      if (action === "click") await user.click(await screen.findByRole("option", { name: "gpt-4" }));
+      else await user.keyboard("{Enter}");
+      expect(onChange).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["gpt-4", "max", "max (unsupported)", /not supported by every deployment/],
+    ["claude-3-opus", "low", "low (unverified)", /cannot be verified/],
+  ])("keeps a saved exceptional value visible for %s", (model, effort, label, warning) => {
+    renderClassifier({
+      ...llmValue,
+      classifier_llm_config: { model, timeout_ms: 3000, reasoning_effort: effort },
+    });
+    expect(screen.getByRole("combobox", { name: `Reasoning effort for classifier model ${model}` })).toHaveTextContent(
+      label,
+    );
+    expect(screen.getByText(warning)).toBeInTheDocument();
+  });
+
+  it.each(["claude-3-opus", "gpt-3.5-turbo"])("hides the effort control when %s has no advertised options", (model) => {
+    renderClassifier({
+      ...llmValue,
+      classifier_llm_config: { model, timeout_ms: 3000 },
+    });
+    expect(
+      screen.queryByRole("combobox", { name: `Reasoning effort for classifier model ${model}` }),
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("ComplexityRouterConfig reasoning effort gating", () => {
   it("offers no effort select for a model group without reasoning support", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
@@ -1169,12 +1335,13 @@ describe("ComplexityRouterConfig custom technical keywords", () => {
   });
 
   it("hides the keywords when the scorer never runs, so they cannot imply an effect they have none", () => {
-    openClassificationPanel({
+    const llmWithDefaultFallback = {
       ...defaultValue,
-      classifier_type: "llm",
+      classifier_type: "llm" as const,
       classifier_llm_config: llmConfig,
-      classifier_fallback: "default_model",
-    });
+      classifier_fallback: "default_model" as const,
+    };
+    openClassificationPanel(llmWithDefaultFallback);
     expect(screen.queryByText("Custom Technical Keywords")).not.toBeInTheDocument();
   });
 });

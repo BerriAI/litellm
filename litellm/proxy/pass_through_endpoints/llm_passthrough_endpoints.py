@@ -1730,8 +1730,18 @@ def get_vertex_ai_allowed_incoming_headers(request: Request) -> dict:
     return headers
 
 
+def _is_vertex_anthropic_count_tokens_route(endpoint: str) -> bool:
+    return endpoint.rsplit("/", 1)[-1].split(":", 1)[0] == "count-tokens"
+
+
+def _upstream_headers_for_vertex_route(endpoint: str, headers: Mapping[str, str]) -> Mapping[str, str]:
+    if not _is_vertex_anthropic_count_tokens_route(endpoint):
+        return headers
+    return MappingProxyType({name: value for name, value in headers.items() if name.lower() != "anthropic-beta"})
+
+
 def get_vertex_pass_through_handler(
-    call_type: Literal["discovery", "aiplatform"],  # noqa: UP037
+    call_type: Literal["discovery", "aiplatform"],  # noqa: UP037  # ruff reports quoted Literal values here
 ) -> BaseVertexAIPassThroughHandler:
     if call_type == "discovery":
         return VertexAIDiscoveryPassThroughHandler()
@@ -2128,7 +2138,7 @@ async def _base_vertex_proxy_route(
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=target,
-        custom_headers=headers,
+        custom_headers=_upstream_headers_for_vertex_route(endpoint, headers),
         is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
 
@@ -2961,7 +2971,6 @@ async def handle_gigachat_passthrough_router_model(
     """
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
-    # Detect streaming based on request body
     is_streaming: Final = request_body.get("stream", False)  # pyright: ignore[reportUnknownVariableType]  # request_body is dict[Unknown, Unknown]
 
     data: dict[str, Any] = await _read_request_body(
@@ -2997,7 +3006,6 @@ async def handle_gigachat_passthrough_router_model(
     data["json"] = request_body
     data["custom_llm_provider"] = "gigachat"
 
-    # Remove sensitive keys from data
     keys: Final = [  # mutable-ok: list of keys to remove from data
         "gigachat_auth_url",
         "gigachat_access_token",

@@ -3,7 +3,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 from fastapi import HTTPException
 from starlette.datastructures import Headers
@@ -303,6 +303,12 @@ def _admission_failure_fallback(
     ):
         raise _gateway_dcr_challenge(request, request_route, mcp_servers, invalid_token=bearer_presented) from exc
     raise exc
+
+
+@dataclass(frozen=True, slots=True)
+class MCPServerAccess:
+    server_ids: tuple[str, ...]
+    scope: Literal["unscoped", "scoped", "unresolved"] = "unscoped"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1149,10 +1155,11 @@ class MCPRequestHandler:
         would miss a real outage wrapped inside it."""
         from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 
-        if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
+        outage: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(e)
+        if outage is not None:
             raise HTTPException(
                 status_code=503,
-                detail="Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
+                detail=PrismaDBExceptionHandler.database_unavailable_message(outage),
             ) from None
 
     @staticmethod
@@ -1455,6 +1462,18 @@ class MCPRequestHandler:
         *,
         keyless_source: bool = False,
     ) -> list[str]:
+        access: Final = await MCPRequestHandler.get_mcp_server_access(
+            user_api_key_auth,
+            keyless_source=keyless_source,
+        )
+        return list(access.server_ids)
+
+    @staticmethod
+    async def get_mcp_server_access(
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+        *,
+        keyless_source: bool = False,
+    ) -> MCPServerAccess:
         """
         Get list of allowed MCP servers for the given user/key based on permissions.
 
@@ -1477,13 +1496,17 @@ class MCPRequestHandler:
         """
         from litellm.proxy.proxy_server import general_settings
 
+        key_object_permission: Final = MCPRequestHandler._get_key_object_permission(user_api_key_auth)
+
         try:
             # A keyless admitted subject resolves per source BEFORE any single-source rule here. Ordering
             # matters: the no_mcp_servers opt-out below reads the caller's own object_permission, so above
             # this branch a user's own opt-out would wrongly zero their TEAMS' grants too (each source is
             # independent; an opt-out silences only its own source, inside the recursive call).
             if _is_mcp_admitted_user_subject(user_api_key_auth) and user_api_key_auth is not None:
-                return await MCPRequestHandler._resolve_admitted_subject_servers(user_api_key_auth)
+                return MCPServerAccess(
+                    server_ids=tuple(await MCPRequestHandler._resolve_admitted_subject_servers(user_api_key_auth)),
+                )
 
             # Get allowed servers from key and team
             allowed_mcp_servers_for_key = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
@@ -1491,7 +1514,7 @@ class MCPRequestHandler:
             # The key explicitly opted out of every MCP server. This overrides
             # team inheritance and additive grants (mirrors no-default-models).
             if SpecialMCPServerNames.no_mcp_servers.value in allowed_mcp_servers_for_key:
-                return []
+                return MCPServerAccess(server_ids=(), scope="scoped")
 
             allowed_mcp_servers_for_team = await MCPRequestHandler._get_allowed_mcp_servers_for_team(user_api_key_auth)
 
@@ -1571,7 +1594,7 @@ class MCPRequestHandler:
                         "require_end_user_mcp_access_defined=True and end_user %s has no MCP permissions - blocking MCP access",
                         user_api_key_auth.end_user_id,
                     )
-                    return []
+                    return MCPServerAccess(server_ids=(), scope="scoped")
 
             #########################################################
             # Check agent permissions if agent_id is set on the key
@@ -1600,14 +1623,22 @@ class MCPRequestHandler:
             #########################################################
             # Apply org-level ceiling if org_id is set
             #########################################################
-            allowed_mcp_servers = await MCPRequestHandler._apply_primary_org_ceiling(
+            allowed_mcp_servers, org_restricts = await MCPRequestHandler._apply_primary_org_ceiling(
                 allowed_mcp_servers,
                 user_api_key_auth,
                 has_lower_level_mcp_restrictions,
                 keyless_source=keyless_source,
             )
 
-            return list(set(allowed_mcp_servers))
+            declares_key_mcp_scope: Final = getattr(key_object_permission, "mcp_servers", None) is not None
+            return MCPServerAccess(
+                server_ids=tuple(set(allowed_mcp_servers)),
+                scope=(
+                    "scoped"
+                    if has_lower_level_mcp_restrictions or org_restricts or declares_key_mcp_scope
+                    else "unscoped"
+                ),
+            )
         except Exception as e:
             if isinstance(e, UnloadableEntitlementError):
                 # A ceiling we KNOW exists and cannot read. Denying is the only answer that does not
@@ -1615,7 +1646,10 @@ class MCPRequestHandler:
                 verbose_logger.warning("Denying MCP access, entitlement unreadable: %s", e)
             else:
                 verbose_logger.warning("Failed to get allowed MCP servers: %s", e)
-            return []
+            return MCPServerAccess(
+                server_ids=(),
+                scope="scoped" if getattr(key_object_permission, "mcp_servers", None) is not None else "unresolved",
+            )
 
     @staticmethod
     async def _apply_primary_org_ceiling(
@@ -1623,7 +1657,7 @@ class MCPRequestHandler:
         user_api_key_auth: UserAPIKeyAuth | None,
         has_lower_level_mcp_restrictions: bool,
         keyless_source: bool = False,
-    ) -> list[str]:
+    ) -> tuple[list[str], bool]:
         """Cap the resolved server list by this caller's org ceiling: an explicit org list intersects
         lower-level restrictions (else becomes the ceiling); no org or an empty list leaves it unchanged.
 
@@ -1637,7 +1671,7 @@ class MCPRequestHandler:
         cannot be read raises out of ``_get_allowed_mcp_servers_for_org`` and never arrives here as
         ``None``, so key auth cannot silently shed a ceiling an operator did configure."""
         if not (user_api_key_auth and user_api_key_auth.org_id):
-            return allowed_mcp_servers
+            return allowed_mcp_servers, False
         allowed_mcp_servers_for_org: Final = await MCPRequestHandler._get_allowed_mcp_servers_for_org(user_api_key_auth)
         if allowed_mcp_servers_for_org is None:
             verbose_logger.warning(
@@ -1645,9 +1679,9 @@ class MCPRequestHandler:
                 user_api_key_auth.org_id,
                 "denying (keyless admitted subject)" if keyless_source else "leaving uncapped (key auth)",
             )
-            return [] if keyless_source else allowed_mcp_servers
+            return ([] if keyless_source else allowed_mcp_servers), False
         if len(allowed_mcp_servers_for_org) == 0:
-            return allowed_mcp_servers
+            return allowed_mcp_servers, False
         if has_lower_level_mcp_restrictions or keyless_source:
             # Org can only cap lower-level restrictions. A keyless admitted source ALWAYS takes this
             # arm: its model unions GRANTS, so an org list may only narrow a source, never become one.
@@ -1656,7 +1690,7 @@ class MCPRequestHandler:
             # No lower-level restrictions → org list becomes the ceiling.
             capped = allowed_mcp_servers_for_org
         verbose_logger.debug("Applied org ceiling filter. Final allowed servers: %s", capped)
-        return capped
+        return capped, True
 
     @staticmethod
     def _scoped_source_auth(

@@ -17489,3 +17489,71 @@ async def test_check_project_key_limits_still_rejects_real_model_outside_project
 
     assert exc_info.value.status_code == 400
     assert "Model 'gpt-5.4-mini' not in project's allowed models" in exc_info.value.detail["error"]
+
+
+def test_generate_key_request_blank_team_id_is_personal():
+    """The UI Team-field clear submits team_id=""; it must count as no team (LIT-3925)."""
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _is_team_key,
+    )
+
+    cleared = GenerateKeyRequest(team_id="")
+    assert cleared.team_id is None
+    assert _is_team_key(data=cleared) is False
+    assert RegenerateKeyRequest(team_id="").team_id is None
+    assert GenerateKeyRequest(team_id="team-1").team_id == "team-1"
+
+
+def test_generate_key_request_blank_organization_and_project_id_are_unset():
+    from litellm.proxy._types import RegenerateKeyRequest
+
+    cleared = GenerateKeyRequest(organization_id="", project_id="")
+    assert cleared.organization_id is None
+    assert cleared.project_id is None
+    assert "organization_id" not in cleared.model_dump(exclude_none=True)
+    assert RegenerateKeyRequest(organization_id="").organization_id is None
+    assert GenerateKeyRequest(organization_id="org-1", project_id="proj-1").organization_id == "org-1"
+    assert GenerateKeyRequest(organization_id="org-1", project_id="proj-1").project_id == "proj-1"
+
+
+def test_key_request_blank_organization_id_is_unset():
+    from litellm.proxy._types import RegenerateKeyRequest, UpdateKeyRequest
+
+    assert GenerateKeyRequest(organization_id="").organization_id is None
+    assert RegenerateKeyRequest(organization_id="").organization_id is None
+    assert UpdateKeyRequest(key="sk-1", organization_id="").organization_id is None
+    assert GenerateKeyRequest(organization_id="org-1").organization_id == "org-1"
+    assert UpdateKeyRequest(key="sk-1", organization_id="org-1").organization_id == "org-1"
+
+
+def test_key_generation_check_blank_team_id_uses_personal_permissions(monkeypatch):
+    """key_generation_check with team_id="" must take the personal-key path instead
+    of failing the team lookup with "Unable to find team object" (LIT-3925)."""
+    from litellm.proxy._types import KeyManagementRoutes
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        key_generation_check,
+    )
+
+    monkeypatch.setattr(
+        litellm,
+        "key_generation_settings",
+        {
+            "team_key_generation": {"allowed_team_member_roles": ["admin"]},
+            "personal_key_generation": {"allowed_user_roles": ["proxy_admin", "internal_user"]},
+        },
+    )
+
+    assert (
+        key_generation_check(
+            team_table=None,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-alice",
+                user_id="alice",
+            ),
+            data=GenerateKeyRequest(key_alias="personal", team_id=""),
+            route=KeyManagementRoutes.KEY_GENERATE,
+        )
+        is True
+    )
