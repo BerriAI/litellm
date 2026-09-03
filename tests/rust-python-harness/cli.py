@@ -9,9 +9,11 @@ from .catalog import load_catalog
 from .models import HarnessCase, Strategy
 from .runner import run_pytest
 from .ui import make_dashboard
+from .validate_ledger import FunctionReport, build_function_report
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COVERAGE_ROOT = REPO_ROOT / "target" / "rust-python-harness"
+SDK_FUNCTION_CHOICES = ("ocr", "messages", "responses", "count_tokens")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -40,8 +42,16 @@ def _parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         dest="sdk_functions",
-        choices=("ocr", "messages", "responses", "count_tokens"),
+        choices=SDK_FUNCTION_CHOICES,
         help="run only this SDK function",
+    )
+    parser.add_argument(
+        "--validate-ledger",
+        action="store_true",
+        help=(
+            "report Python<->Rust test-parity ledger gaps and drift instead of "
+            "running the dashboard; narrow with --function"
+        ),
     )
     parser.add_argument(
         "--plain",
@@ -100,7 +110,7 @@ def _interactive_filters(strategies: Sequence[Strategy]) -> tuple[set[str], set[
     )
     sdk_functions = _pick_values(
         "SDK functions",
-        [(name, name) for name in ("ocr", "messages", "responses", "count_tokens")],
+        [(name, name) for name in SDK_FUNCTION_CHOICES],
     )
     return strategy_ids, sdk_functions
 
@@ -131,6 +141,38 @@ def _print_catalog(strategies: Sequence[Strategy]) -> None:
             print(f"  {case.sdk_function:12} {case.coverage.value:14} {selectors}")
 
 
+def _print_function_report(report: FunctionReport) -> None:
+    print(f"\n{report.sdk_function}")
+    if report.ledger is None or report.audit is None:
+        print("  no ledger yet")
+        return
+    ledger, audit = report.ledger, report.audit
+    print(
+        f"  {ledger.mapped_count}/{ledger.total_count} python tests mapped to rust "
+        f"({ledger.percentage}%)"
+    )
+    print(f"  {len(ledger.rust_only_tests)} rust-only tests with no python counterpart")
+    if audit.is_clean:
+        print("  ledger is in sync with the live test files")
+        return
+    for label, items in (
+        ("ledger references a python test that no longer exists", audit.missing_python_tests),
+        ("python test exists but is not tracked in the ledger", audit.stale_python_tests),
+        ("ledger references a rust test that no longer exists", audit.missing_rust_tests),
+        ("rust test exists but is not tracked in the ledger", audit.stale_rust_tests),
+    ):
+        for item in items:
+            print(f"  {label}: {item}")
+
+
+def _validate_ledger(sdk_functions: set[str]) -> int:
+    functions = sdk_functions or set(SDK_FUNCTION_CHOICES)
+    reports = tuple(build_function_report(function) for function in sorted(functions))
+    for report in reports:
+        _print_function_report(report)
+    return 0 if all(report.is_clean for report in reports) else 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.coverage and importlib.util.find_spec("pytest_cov") is None:
@@ -138,6 +180,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--coverage requires the project's pytest-cov dependency; run with "
             "`poetry run python -m tests.rust-python-harness --coverage`"
         )
+    if args.validate_ledger:
+        return _validate_ledger(set(args.sdk_functions))
     strategies = load_catalog()
     if args.list:
         _print_catalog(strategies)
