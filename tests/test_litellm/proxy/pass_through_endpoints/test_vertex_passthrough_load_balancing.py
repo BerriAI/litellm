@@ -5,6 +5,7 @@ import pytest
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     _base_vertex_proxy_route,
+    _upstream_headers_for_vertex_route,
 )
 from litellm.types.router import DeploymentTypedDict
 
@@ -346,6 +347,93 @@ async def test_vertex_passthrough_forwards_anthropic_beta_header():
 
         # Verify that headers_passed_through is False (since we have credentials)
         assert headers_passed_through is False
+
+
+VERTEX_ANTHROPIC_MODELS_PREFIX = "v1/projects/test-project/locations/global/publishers/anthropic/models/"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_segment", "expects_anthropic_beta"),
+    [
+        ("count-tokens:rawPredict", False),
+        ("claude-sonnet-4-6:streamRawPredict", True),
+    ],
+)
+async def test_vertex_passthrough_drops_anthropic_beta_only_on_count_tokens(
+    model_segment: str, expects_anthropic_beta: bool
+):
+    with (
+        patch(  # test-quality-ok: the route reads this proxy global at call time, nothing injects it
+            "litellm.proxy.proxy_server.llm_router", None
+        ),
+        patch(  # test-quality-ok: the route reads this proxy global at call time, nothing injects it
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router"
+        ) as mock_pt_router,
+        patch(  # test-quality-ok: the route offers no injection point for its header preparation
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._prepare_vertex_auth_headers",
+            new_callable=AsyncMock,
+        ) as mock_prep_headers,
+        patch(  # test-quality-ok: the upstream call is captured here, the route offers no injection point
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route,
+        patch(  # test-quality-ok: the route calls auth directly rather than through Depends
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
+            new_callable=AsyncMock,
+        ) as mock_auth,
+        patch(  # test-quality-ok: the route reads the request body for this, a MagicMock request has none
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
+        mock_pt_router.get_vertex_credentials.return_value = MagicMock()
+        mock_prep_headers.return_value = (
+            {
+                "anthropic-beta": "tool-search-tool-2025-10-19,web-search-2025-03-05",
+                "content-type": "application/json",
+                "Authorization": "Bearer vertex-access-token",
+            },
+            "https://aiplatform.googleapis.com",
+            False,
+            "test-project",
+            "global",
+        )
+        mock_create_route.return_value = AsyncMock()
+        mock_auth.return_value = UserAPIKeyAuth(api_key="sk-litellm-secret-key")
+
+        await _base_vertex_proxy_route(
+            endpoint=f"{VERTEX_ANTHROPIC_MODELS_PREFIX}{model_segment}",
+            request=MagicMock(),
+            fastapi_response=MagicMock(),
+            get_vertex_pass_through_handler=MagicMock(),
+        )
+
+        upstream_headers = mock_create_route.call_args.kwargs["custom_headers"]
+        assert ("anthropic-beta" in upstream_headers) is expects_anthropic_beta
+        assert upstream_headers["Authorization"] == "Bearer vertex-access-token"
+        assert upstream_headers["content-type"] == "application/json"
+
+
+def test_upstream_headers_for_vertex_route_filters_anthropic_beta_by_route():
+    headers = {
+        "Anthropic-Beta": "effort-2025-11-24",
+        "content-type": "application/json",
+        "Authorization": "Bearer vertex-access-token",
+    }
+
+    count_tokens_headers = _upstream_headers_for_vertex_route(
+        f"{VERTEX_ANTHROPIC_MODELS_PREFIX}count-tokens:rawPredict", headers
+    )
+    model_headers = _upstream_headers_for_vertex_route(
+        f"{VERTEX_ANTHROPIC_MODELS_PREFIX}claude-sonnet-4-6:rawPredict", headers
+    )
+
+    assert dict(count_tokens_headers) == {
+        "content-type": "application/json",
+        "Authorization": "Bearer vertex-access-token",
+    }
+    assert dict(model_headers) == headers
 
 
 @pytest.mark.asyncio

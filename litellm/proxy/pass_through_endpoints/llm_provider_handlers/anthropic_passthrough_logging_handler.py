@@ -108,6 +108,7 @@ class AnthropicPassthroughLoggingHandler:
             start_time=start_time,
             end_time=end_time,
             logging_obj=logging_obj,
+            response_id=optional_str(response_body.get("id")),
         )
 
         return {
@@ -172,7 +173,7 @@ class AnthropicPassthroughLoggingHandler:
             return AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
                 all_chunks=all_chunks, model=model, speed=speed
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # the usage-only fallback must never raise out of failure logging
             verbose_proxy_logger.warning("Anthropic passthrough: usage-only fallback failed (model=%s): %s", model, e)
             return None
 
@@ -190,7 +191,7 @@ class AnthropicPassthroughLoggingHandler:
                 model=model,
                 speed=speed,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # any assembly error falls back to usage-only cost
             verbose_proxy_logger.warning(
                 "Anthropic passthrough: stream assembly raised (model=%s): %s; falling "
                 "back to usage-only cost from raw SSE events.",
@@ -245,7 +246,7 @@ class AnthropicPassthroughLoggingHandler:
                 model=AnthropicPassthroughLoggingHandler._resolve_costing_model(model, litellm_logging_obj),
                 logging_obj=litellm_logging_obj,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # an uncostable partial stream must still log as a failure
             verbose_proxy_logger.warning(
                 "Anthropic passthrough: could not cost the partial usage of a failed stream (model=%s): %s", model, e
             )
@@ -277,8 +278,9 @@ class AnthropicPassthroughLoggingHandler:
         )
 
     @staticmethod
-    def _extract_model_from_anthropic_chunks(
+    def _extract_message_start_field(
         all_chunks: Sequence[str | bytes],
+        field: str,
     ) -> str | None:
         for raw in all_chunks:
             text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
@@ -292,10 +294,22 @@ class AnthropicPassthroughLoggingHandler:
                 if not isinstance(data, dict):
                     continue
                 if data.get("type") == "message_start":
-                    model = (data.get("message") or {}).get("model")
-                    if model:
-                        return model
+                    value = (data.get("message") or {}).get(field)
+                    if isinstance(value, str) and value:
+                        return value
         return None
+
+    @staticmethod
+    def _extract_model_from_anthropic_chunks(
+        all_chunks: Sequence[str | bytes],
+    ) -> str | None:
+        return AnthropicPassthroughLoggingHandler._extract_message_start_field(all_chunks, "model")
+
+    @staticmethod
+    def _extract_response_id_from_anthropic_chunks(
+        all_chunks: Sequence[str | bytes],
+    ) -> str | None:
+        return AnthropicPassthroughLoggingHandler._extract_message_start_field(all_chunks, "id")
 
     @staticmethod
     def _stream_was_interrupted(
@@ -380,6 +394,7 @@ class AnthropicPassthroughLoggingHandler:
         start_time: datetime,
         end_time: datetime,
         logging_obj: LiteLLMLoggingObj,
+        response_id: str | None = None,
     ):
         """
         Create the standard logging object for Anthropic passthrough
@@ -419,8 +434,7 @@ class AnthropicPassthroughLoggingHandler:
                 json.dumps(kwargs, indent=4, default=str),
             )
 
-            # set litellm_call_id to logging response object
-            litellm_model_response.id = logging_obj.litellm_call_id
+            litellm_model_response.id = response_id or logging_obj.litellm_call_id
             litellm_model_response.model = model
             logging_obj.model_call_details["model"] = model
             if not logging_obj.model_call_details.get("custom_llm_provider"):
@@ -470,6 +484,7 @@ class AnthropicPassthroughLoggingHandler:
             start_time=start_time,
             end_time=end_time,
             logging_obj=litellm_logging_obj,
+            response_id=AnthropicPassthroughLoggingHandler._extract_response_id_from_anthropic_chunks(all_chunks),
         )
 
         return {

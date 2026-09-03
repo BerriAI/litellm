@@ -678,7 +678,7 @@ class BaseAnthropicMessagesStreamingIterator:
         PassThroughStreamingHandler.schedule_stream_failure_logging(
             litellm_logging_obj=self.litellm_logging_obj,
             endpoint_type=EndpointType.ANTHROPIC,
-            request_body=self.request_body or {},
+            request_body=self.request_body,
             raw_bytes=collected_chunks,
             exception=exc,
         )
