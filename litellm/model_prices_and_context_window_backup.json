@@ -58466,6 +58466,9 @@
         "max_output_tokens": 32000,
         "max_tokens": 32000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 0.0,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58483,6 +58486,9 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 5e-05,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58500,6 +58506,9 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 5e-05,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58517,6 +58526,9 @@
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 5e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58534,6 +58546,9 @@
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 2.5e-05,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58551,6 +58566,9 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 2.5e-05,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58568,6 +58586,9 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 2.5e-05,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58585,6 +58606,9 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 2.5e-05,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58602,6 +58626,9 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 2.5e-05,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58622,6 +58649,9 @@
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
         "source": "https://opencode.ai/docs/zen",
@@ -58643,6 +58673,9 @@
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
         "source": "https://opencode.ai/docs/zen",
@@ -58661,6 +58694,9 @@
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 1.5e-05,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58678,6 +58714,9 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 1e-05,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58694,6 +58733,9 @@
         "max_output_tokens": 384000,
         "max_tokens": 384000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 2.8e-07,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58710,6 +58752,9 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 0.0,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58726,6 +58771,9 @@
         "max_output_tokens": 384000,
         "max_tokens": 384000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 3.84e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58742,6 +58790,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/models"
+        ],
         "output_cost_per_token": 3e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58761,6 +58812,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/models"
+        ],
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_above_200k_tokens": 1.8e-05,
         "source": "https://opencode.ai/docs/zen",
@@ -58779,6 +58833,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/models"
+        ],
         "output_cost_per_token": 9e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58796,6 +58853,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/models"
+        ],
         "output_cost_per_token": 2.5e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58813,6 +58873,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/models"
+        ],
         "output_cost_per_token": 7.5e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58830,6 +58893,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/models"
+        ],
         "output_cost_per_token": 7.5e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58847,6 +58913,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/models"
+        ],
         "output_cost_per_token": 7.5e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58864,6 +58933,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 3.2000000000000003e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58879,6 +58951,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 4.4e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58894,6 +58969,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 4.4e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58909,7 +58987,10 @@
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 8.5e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58926,7 +59007,10 @@
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 8.5e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58943,7 +59027,10 @@
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 4.0000000000000003e-07,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58960,7 +59047,10 @@
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 8.5e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58977,7 +59067,10 @@
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 8.5e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -58994,7 +59087,10 @@
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 1e-05,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59011,7 +59107,10 @@
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 2e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59028,7 +59127,10 @@
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 1.4e-05,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59045,7 +59147,10 @@
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 1.4e-05,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59062,7 +59167,10 @@
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 1.4e-05,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59079,7 +59187,10 @@
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 1.4e-05,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59097,7 +59208,10 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_above_272k_tokens": 2.25e-05,
         "source": "https://opencode.ai/docs/zen",
@@ -59115,7 +59229,10 @@
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 4.5e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59132,7 +59249,10 @@
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 1.25e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59149,7 +59269,10 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 0.00018,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59167,7 +59290,10 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 3e-05,
         "output_cost_per_token_above_272k_tokens": 4.5e-05,
         "source": "https://opencode.ai/docs/zen",
@@ -59185,7 +59311,10 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 0.00018,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59205,7 +59334,10 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 1.2e-06,
         "output_cost_per_token_above_272k_tokens": 1.8000000000000001e-06,
         "source": "https://opencode.ai/docs/zen",
@@ -59227,7 +59359,10 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
         "source": "https://opencode.ai/docs/zen",
@@ -59249,7 +59384,10 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_above_272k_tokens": 2.25e-05,
         "source": "https://opencode.ai/docs/zen",
@@ -59269,7 +59407,10 @@
         "max_input_tokens": 500000,
         "max_output_tokens": 500000,
         "max_tokens": 500000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 6e-06,
         "output_cost_per_token_above_200k_tokens": 1.2e-05,
         "source": "https://opencode.ai/docs/zen",
@@ -59289,7 +59430,10 @@
         "max_input_tokens": 500000,
         "max_output_tokens": 500000,
         "max_tokens": 500000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 6e-06,
         "output_cost_per_token_above_200k_tokens": 1.2e-05,
         "source": "https://opencode.ai/docs/zen",
@@ -59307,7 +59451,10 @@
         "max_input_tokens": 256000,
         "max_output_tokens": 256000,
         "max_tokens": 256000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 2e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59325,6 +59472,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 3e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59341,6 +59491,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 4e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59357,6 +59510,9 @@
         "max_output_tokens": 262144,
         "max_tokens": 262144,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 4e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59374,6 +59530,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 1.5e-05,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59391,6 +59550,9 @@
         "max_output_tokens": 32000,
         "max_tokens": 32000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 0.0,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59406,6 +59568,9 @@
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 0.0,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59421,6 +59586,9 @@
         "max_output_tokens": 32000,
         "max_tokens": 32000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 0.0,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59437,6 +59605,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 1.2e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59452,6 +59623,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 1.2e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59467,6 +59641,9 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 1.2e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59482,7 +59659,10 @@
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 4.25e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59499,7 +59679,10 @@
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 0.0,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59516,7 +59699,10 @@
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 0.0,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59534,6 +59720,9 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 0.0,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59549,6 +59738,9 @@
         "max_output_tokens": 262144,
         "max_tokens": 262144,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 0.0,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59566,6 +59758,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 1.2e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59583,6 +59778,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 3e-06,
         "source": "https://opencode.ai/docs/zen",
         "supports_function_calling": true,
@@ -59599,6 +59797,9 @@
         "max_output_tokens": 384000,
         "max_tokens": 384000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 6.6e-07,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59615,6 +59816,9 @@
         "max_output_tokens": 384000,
         "max_tokens": 384000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 6.6e-07,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59632,6 +59836,9 @@
         "max_output_tokens": 384000,
         "max_tokens": 384000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 1.98e-06,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59648,6 +59855,9 @@
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 3.2000000000000003e-06,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59663,6 +59873,9 @@
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 4.4e-06,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59678,6 +59891,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 4.4e-06,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59694,6 +59910,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 4.4e-06,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59710,6 +59929,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 2.5e-07,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59730,7 +59952,10 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 1.2e-06,
         "output_cost_per_token_above_272k_tokens": 1.8000000000000001e-06,
         "source": "https://opencode.ai/docs/go",
@@ -59750,7 +59975,10 @@
         "max_input_tokens": 500000,
         "max_output_tokens": 500000,
         "max_tokens": 500000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 6e-06,
         "output_cost_per_token_above_200k_tokens": 1.2e-05,
         "source": "https://opencode.ai/docs/go",
@@ -59770,7 +59998,10 @@
         "max_input_tokens": 500000,
         "max_output_tokens": 500000,
         "max_tokens": 500000,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 6e-06,
         "output_cost_per_token_above_200k_tokens": 1.2e-05,
         "source": "https://opencode.ai/docs/go",
@@ -59789,6 +60020,9 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 5.8e-07,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59804,6 +60038,9 @@
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 2.501e-06,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59819,6 +60056,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 3e-06,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59835,6 +60075,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 4e-06,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59851,6 +60094,9 @@
         "max_output_tokens": 262144,
         "max_tokens": 262144,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 4e-06,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59868,6 +60114,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 1.5e-05,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59885,6 +60134,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 1.2e-06,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59900,6 +60152,9 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 2e-06,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59918,6 +60173,9 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 3e-06,
         "output_cost_per_token_above_256k_tokens": 6e-06,
         "source": "https://opencode.ai/docs/go",
@@ -59934,6 +60192,9 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 2.8e-07,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59950,6 +60211,9 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
         "output_cost_per_token": 8.7e-07,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59965,6 +60229,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 1.2e-06,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59980,6 +60247,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 1.2e-06,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -59997,6 +60267,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 1.2e-06,
         "output_cost_per_token_above_512k_tokens": 2.4e-06,
         "source": "https://opencode.ai/docs/go",
@@ -60013,7 +60286,10 @@
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 2.0000000000000002e-07,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -60030,7 +60306,10 @@
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
-        "mode": "chat",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "output_cost_per_token": 2.0000000000000002e-07,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -60049,6 +60328,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 1.2e-06,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -60069,6 +60351,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 3e-06,
         "output_cost_per_token_above_256k_tokens": 6e-06,
         "source": "https://opencode.ai/docs/go",
@@ -60087,6 +60372,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 7.5e-06,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -60106,6 +60394,9 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 1.6000000000000001e-06,
         "output_cost_per_token_above_256k_tokens": 4.8e-06,
         "source": "https://opencode.ai/docs/go",
@@ -60124,6 +60415,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 4.6999999999999995e-07,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,
@@ -60142,6 +60436,9 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
+        "supported_endpoints": [
+            "/v1/messages"
+        ],
         "output_cost_per_token": 6e-06,
         "source": "https://opencode.ai/docs/go",
         "supports_function_calling": true,

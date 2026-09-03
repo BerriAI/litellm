@@ -2080,6 +2080,12 @@ if TYPE_CHECKING:
     from .llms.opencode.chat.transformation import (
         OpenCodeZenChatConfig as OpenCodeZenChatConfig,
     )
+    from .llms.opencode.responses.transformation import (
+        OpenCodeGoResponsesAPIConfig as OpenCodeGoResponsesAPIConfig,
+    )
+    from .llms.opencode.responses.transformation import (
+        OpenCodeZenResponsesAPIConfig as OpenCodeZenResponsesAPIConfig,
+    )
     from .llms.inception.chat.transformation import (
         InceptionChatConfig as InceptionChatConfig,
     )

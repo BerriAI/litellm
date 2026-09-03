@@ -1329,7 +1329,7 @@
         "url": "https://docs.litellm.ai/docs/providers/opencode",
         "endpoints": {
           "chat_completions": true,
-          "messages": true,
+          "messages": false,
           "responses": true,
           "embeddings": false,
           "image_generations": false,
@@ -1338,8 +1338,8 @@
           "moderations": false,
           "batches": false,
           "rerank": false,
-          "a2a": true,
-          "interactions": true
+          "a2a": false,
+          "interactions": false
         }
       },
       "opencode_go": {
@@ -1347,7 +1347,7 @@
         "url": "https://docs.litellm.ai/docs/providers/opencode",
         "endpoints": {
           "chat_completions": true,
-          "messages": true,
+          "messages": false,
           "responses": true,
           "embeddings": false,
           "image_generations": false,
@@ -1356,8 +1356,8 @@
           "moderations": false,
           "batches": false,
           "rerank": false,
-          "a2a": true,
-          "interactions": true
+          "a2a": false,
+          "interactions": false
         }
       },
     "lemonade": {
@@ -1365,7 +1365,7 @@
       "url": "https://docs.litellm.ai/docs/providers/lemonade",
       "endpoints": {
         "chat_completions": true,
-        "messages": true,
+        "messages": false,
         "responses": true,
         "embeddings": false,
         "image_generations": false,
@@ -1374,8 +1374,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": true,
-        "interactions": true
+        "a2a": false,
+        "interactions": false
       }
     },
     "libertai": {

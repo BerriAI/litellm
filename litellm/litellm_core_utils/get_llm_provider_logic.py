@@ -353,10 +353,10 @@ def get_llm_provider(
                         dynamic_api_key = get_secret_str("LAMBDA_API_KEY")
                     elif endpoint == "https://opencode.ai/zen/go/v1":
                         custom_llm_provider = "opencode_go"  # rebind-ok: dispatch chain rebinds this param
-                        dynamic_api_key = get_secret_str("OPENCODE_API_KEY") or get_secret_str("OPENCODE_ZEN_API_KEY")
+                        dynamic_api_key = api_key or get_secret_str("OPENCODE_API_KEY")
                     elif endpoint == "https://opencode.ai/zen/v1":
                         custom_llm_provider = "opencode"  # rebind-ok: dispatch chain rebinds this param
-                        dynamic_api_key = get_secret_str("OPENCODE_API_KEY") or get_secret_str("OPENCODE_ZEN_API_KEY")
+                        dynamic_api_key = api_key or get_secret_str("OPENCODE_API_KEY")
                     elif endpoint == "https://api.inceptionlabs.ai/v1":
                         custom_llm_provider = "inception"
                         dynamic_api_key = get_secret_str("INCEPTION_API_KEY")

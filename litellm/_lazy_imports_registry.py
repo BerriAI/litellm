@@ -322,6 +322,11 @@ LLM_CONFIG_NAMES: Final = (
     "LambdaAIChatConfig",
     "OpenCodeZenChatConfig",
     "OpenCodeGoChatConfig",
+    "OpenCodeZenMessagesChatConfig",
+    "OpenCodeGoMessagesChatConfig",
+    "OpenCodeZenGeminiChatConfig",
+    "OpenCodeZenResponsesAPIConfig",
+    "OpenCodeGoResponsesAPIConfig",
     "InceptionChatConfig",
     "HyperbolicChatConfig",
     "VercelAIGatewayConfig",
@@ -1204,6 +1209,26 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "LambdaAIChatConfig": (".llms.lambda_ai.chat.transformation", "LambdaAIChatConfig"),
     "OpenCodeZenChatConfig": (".llms.opencode.chat.transformation", "OpenCodeZenChatConfig"),
     "OpenCodeGoChatConfig": (".llms.opencode.chat.transformation", "OpenCodeGoChatConfig"),
+    "OpenCodeZenMessagesChatConfig": (
+        ".llms.opencode.chat.transformation",
+        "OpenCodeZenMessagesChatConfig",
+    ),
+    "OpenCodeGoMessagesChatConfig": (
+        ".llms.opencode.chat.transformation",
+        "OpenCodeGoMessagesChatConfig",
+    ),
+    "OpenCodeZenGeminiChatConfig": (
+        ".llms.opencode.chat.transformation",
+        "OpenCodeZenGeminiChatConfig",
+    ),
+    "OpenCodeZenResponsesAPIConfig": (
+        ".llms.opencode.responses.transformation",
+        "OpenCodeZenResponsesAPIConfig",
+    ),
+    "OpenCodeGoResponsesAPIConfig": (
+        ".llms.opencode.responses.transformation",
+        "OpenCodeGoResponsesAPIConfig",
+    ),
     "InceptionChatConfig": (
         ".llms.inception.chat.transformation",
         "InceptionChatConfig",
