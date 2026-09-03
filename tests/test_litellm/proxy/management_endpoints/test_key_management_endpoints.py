@@ -6347,6 +6347,114 @@ def test_build_key_filter_conditions_key_hash_narrows_team_admin_visibility():
     assert {"token": "hashed-token-123"} in where["AND"], f"key_hash not ANDed: {where}"
 
 
+def _search_clause(search: str, token: str) -> dict:
+    return {"OR": [{"token": token}, {"key_alias": {"contains": search, "mode": "insensitive"}}]}
+
+
+def test_build_key_filter_conditions_search_hashes_raw_key_and_ors_alias_contains():
+    """
+    LIT-4741: `search` matches a key by its alias (case-insensitive contains) OR by
+    its ID. A pasted raw sk- key is hashed to its token first; an already-hashed
+    value is used verbatim.
+    """
+    from litellm.proxy._types import hash_token
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    raw_where = json.loads(
+        json.dumps(
+            _build_key_filter_conditions(
+                user_id=None,
+                team_id=None,
+                organization_id=None,
+                key_alias=None,
+                key_hash=None,
+                exclude_team_id=None,
+                admin_team_ids=None,
+                search="sk-raw",
+            )
+        )
+    )
+    assert _search_clause("sk-raw", hash_token("sk-raw")) in raw_where["AND"], f"raw search not ANDed: {raw_where}"
+
+    hashed_where = json.loads(
+        json.dumps(
+            _build_key_filter_conditions(
+                user_id=None,
+                team_id=None,
+                organization_id=None,
+                key_alias=None,
+                key_hash=None,
+                exclude_team_id=None,
+                admin_team_ids=None,
+                search="already-hashed-token",
+            )
+        )
+    )
+    assert _search_clause("already-hashed-token", "already-hashed-token") in hashed_where["AND"], (
+        f"hashed search not used verbatim: {hashed_where}"
+    )
+
+
+def test_build_key_filter_conditions_search_narrows_team_admin_visibility():
+    """
+    LIT-4741, same class as LIT-3243: `search` must be a top-level AND so it
+    narrows a team admin's admin-team branch instead of being bypassed by it.
+    """
+    from litellm.proxy._types import hash_token
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = json.loads(
+        json.dumps(
+            _build_key_filter_conditions(
+                user_id="team-admin-user",
+                team_id=None,
+                organization_id=None,
+                key_alias=None,
+                key_hash=None,
+                exclude_team_id=None,
+                admin_team_ids=["team-a"],
+                member_team_ids=["team-a"],
+                include_created_by_keys=False,
+                search="sk-member",
+            )
+        )
+    )
+
+    assert where.get("AND"), f"expected top-level AND, got: {where}"
+    assert _search_clause("sk-member", hash_token("sk-member")) in where["AND"], f"search not ANDed: {where}"
+    assert json.dumps({"team_id": {"in": ["team-a"]}}) in json.dumps(where)
+
+
+@pytest.mark.asyncio
+async def test_list_key_helper_applies_search_to_prisma_where():
+    """LIT-4741: `search` given to _list_key_helper must reach the Prisma where clause."""
+    from litellm.proxy._types import hash_token
+
+    mock_prisma_client = AsyncMock()
+    mock_find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_verificationtoken.find_many = mock_find_many
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+
+    await _list_key_helper(
+        prisma_client=mock_prisma_client,
+        page=1,
+        size=50,
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        search="sk-raw",
+    )
+
+    where = json.loads(json.dumps(mock_find_many.call_args.kwargs["where"]))
+    assert _search_clause("sk-raw", hash_token("sk-raw")) in where["AND"], f"search not in Prisma where: {where}"
+
+
 @pytest.mark.asyncio
 async def test_generate_key_negative_max_budget():
     """
@@ -14867,6 +14975,50 @@ async def test_list_keys_non_admin_cannot_opt_into_substring():
         user, user_id=None, substring_matching=True
     )
     assert kwargs["use_substring_matching"] is False
+    assert kwargs["user_id"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_list_keys_hashes_raw_key_hash_before_validation():
+    """LIT-4741: a raw sk- key pasted as key_hash is hashed before the ownership
+    check and the query, so a non-admin filtering by their own raw key gets the
+    row instead of the 'Key Hash not found.' 403."""
+    from litellm.proxy._types import hash_token
+
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice")
+    validate = AsyncMock(
+        return_value=LiteLLM_UserTable(
+            user_id="alice", user_email="alice@example.com", teams=[], organization_memberships=[]
+        )
+    )
+    helper = AsyncMock(return_value={"keys": [], "total_count": 0, "current_page": 1, "total_pages": 0})
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_list_check",
+            validate,
+        ),
+        patch("litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper", helper),
+    ):
+        await list_keys(
+            request=MagicMock(),
+            user_api_key_dict=user,
+            status=None,
+            user_id=None,
+            key_hash="sk-raw",
+        )
+
+    assert validate.call_args.kwargs["key_hash"] == hash_token("sk-raw")
+    assert helper.call_args.kwargs["key_hash"] == hash_token("sk-raw")
+
+
+@pytest.mark.asyncio
+async def test_list_keys_search_is_honored_for_non_admin():
+    """LIT-4741: unlike substring_matching, `search` is not admin-gated. A non-admin's
+    search reaches the helper while their own-user scoping stays in place."""
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="alice")
+    kwargs = await _list_keys_capture_helper_kwargs(user, user_id=None, search="sk-raw")
+    assert kwargs["search"] == "sk-raw"
     assert kwargs["user_id"] == "alice"
 
 
