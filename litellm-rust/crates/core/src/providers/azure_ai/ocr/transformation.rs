@@ -689,6 +689,15 @@ mod tests {
         assert_native_fields_preserved(&response);
     }
 
+    #[tokio::test]
+    async fn document_intelligence_async_response_preserves_native_fields() {
+        let response = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
+            .async_transform_ocr_response("prebuilt-layout", succeeded_response())
+            .await
+            .expect("response transforms");
+        assert_native_fields_preserved(&response);
+    }
+
     #[test]
     fn document_intelligence_response_tolerates_missing_native_fields() {
         let response = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
@@ -738,6 +747,23 @@ mod tests {
             succeeded_response_with_native_only_fields(),
             mapped_params(json!({"req_format": "native"})),
         );
+        assert_eq!(
+            response.provider_native_response,
+            Some(succeeded_response_with_native_only_fields())
+        );
+        assert_native_fields_preserved(&response);
+    }
+
+    #[tokio::test]
+    async fn document_intelligence_async_native_format_retains_raw_operation() {
+        let response = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
+            .async_transform_ocr_response_with_params(
+                "prebuilt-layout",
+                succeeded_response_with_native_only_fields(),
+                &mapped_params(json!({"req_format": "native"})),
+            )
+            .await
+            .expect("response transforms");
         assert_eq!(
             response.provider_native_response,
             Some(succeeded_response_with_native_only_fields())
