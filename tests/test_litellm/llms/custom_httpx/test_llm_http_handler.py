@@ -2295,6 +2295,25 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
     assert retry_authorization != first_attempt_headers["Authorization"]
 
 
+def test_aws_signing_overrides_only_fills_missing_credentials():
+    from litellm.llms.custom_httpx.llm_http_handler import _aws_signing_overrides
+
+    overrides = _aws_signing_overrides(
+        {"temperature": 0.2, "aws_region_name": "us-west-2"},
+        {
+            "aws_role_name": "arn:aws:iam::000000000000:role/attributed",
+            "aws_session_name": "user-123",
+            "aws_region_name": "us-east-1",
+            "api_key": "not-an-aws-param",
+        },
+    )
+
+    assert dict(overrides) == {
+        "aws_role_name": "arn:aws:iam::000000000000:role/attributed",
+        "aws_session_name": "user-123",
+    }
+
+
 class TestServerFulfilledToolsInRequest:
     """_server_fulfilled_tools_in_request gates the buffered (non-leaking) streaming
     mode for server-fulfilled tools like headroom_retrieve."""

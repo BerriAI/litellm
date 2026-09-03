@@ -1,9 +1,14 @@
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
-import litellm
-from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.llms.base_llm.vector_store.transformation import (
+    BaseQueryEmbeddingVectorStoreConfig,
+    VectorStoreEmbeddingExecutor,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
@@ -37,7 +42,7 @@ MILVUS_OPTIONAL_PARAMS: Final = {
 }
 
 
-class MilvusVectorStoreConfig(BaseVectorStoreConfig):
+class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
     """
     Configuration for Milvus Vector Store
 
@@ -118,77 +123,78 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: str | list[str],
+        query: str | Sequence[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
-        extra_body: dict[str, Any] | None = None,
-        router: "Router | None" = None,
-    ) -> tuple[str, dict[str, Any]]:
-        """
-        Transform search request for Azure AI Search API
+        litellm_params: Mapping[str, object],
+        extra_body: Mapping[str, object] | None = None,
+        router: Router | None = None,
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
+    ) -> tuple[str, dict[str, object]]:
+        query_text: Final = self.query_text(query)
+        query_vector: Final = self.embed_query(query_text, litellm_params, embedding_executor, router)
+        return self._search_request(
+            vector_store_id,
+            query_text,
+            query_vector,
+            vector_store_search_optional_params,
+            api_base,
+            litellm_logging_obj,
+            litellm_params,
+        )
 
-        Generates embeddings using litellm.embeddings and constructs Azure AI Search request
-        """
-        # Convert query to string if it's a list
-        if isinstance(query, list):
-            query = " ".join(query)
+    async def atransform_search_vector_store_request(
+        self,
+        vector_store_id: str,
+        query: str | Sequence[str],
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        api_base: str,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_params: Mapping[str, object],
+        extra_body: Mapping[str, object] | None = None,
+        router: Router | None = None,
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
+    ) -> tuple[str, dict[str, object]]:
+        query_text: Final = self.query_text(query)
+        query_vector: Final = await self.aembed_query(query_text, litellm_params, embedding_executor, router)
+        return self._search_request(
+            vector_store_id,
+            query_text,
+            query_vector,
+            vector_store_search_optional_params,
+            api_base,
+            litellm_logging_obj,
+            litellm_params,
+        )
 
-        # Get embedding model from litellm_params (required)
-        embedding_model: Final = litellm_params.get("litellm_embedding_model")
-        if not embedding_model:
-            raise ValueError(
-                "embedding_model is required in litellm_params for Milvus. You can call any litellm embedding model."
-                "Example: litellm_params['embedding_model'] = 'azure/text-embedding-3-large'"
+    @staticmethod
+    def _search_request(
+        vector_store_id: str,
+        query_text: str,
+        query_vector: Sequence[float],
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        api_base: str,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
+        scope: Final = {
+            key: value
+            for key, value in (
+                ("dbName", litellm_params.get("milvus_db_name")),
+                ("partitionNames", litellm_params.get("milvus_partition_names")),
             )
-
-        embedding_config: Final = litellm_params.get("litellm_embedding_config", {})
-        if not embedding_config:
-            raise ValueError(
-                "embedding_config is required in litellm_params for Milvus. You can call any litellm embedding model."
-                "Example: litellm_params['embedding_config'] = {'api_base': 'https://krris-mh44uf7y-eastus2.cognitiveservices.azure.com/', 'api_key': 'os.environ/AZURE_API_KEY', 'api_version': '2025-09-01'}"
-            )
-
-        # Get top_k (number of results to return)
-        # Generate embedding for the query using litellm.embeddings
-        try:
-            embedding_response: Final = litellm.embedding(
-                model=embedding_model,
-                input=[query],
-                **embedding_config,
-            )
-            query_vector: Final = embedding_response.data[0]["embedding"]
-        except Exception as e:
-            raise Exception(f"Failed to generate embedding for query: {e}")
-
-        # Azure AI Search endpoint for search
-        index_name: Final = vector_store_id  # vector_store_id is the index name
-        url: Final = f"{api_base}/v2/vectordb/entities/search"
-
-        # Build the request body for Azure AI Search with vector search
-        request_body: Final[dict[str, Any]] = {
-            "collectionName": index_name,
+            if value
+        }
+        litellm_logging_obj.model_call_details["input"] = query_text
+        litellm_logging_obj.model_call_details["embedding_model"] = litellm_params.get("litellm_embedding_model")
+        return f"{api_base}/v2/vectordb/entities/search", {
+            "collectionName": vector_store_id,
             "data": [query_vector],
             "annsField": "book_intro_vector",
             **vector_store_search_optional_params,
+            **scope,
         }
-
-        db_name: Final = litellm_params.get("milvus_db_name")
-        if db_name:
-            request_body["dbName"] = db_name
-
-        partition_names: Final = litellm_params.get("milvus_partition_names")
-        if partition_names:
-            request_body["partitionNames"] = partition_names
-
-        #########################################################
-        # Update logging object with details of the request
-        #########################################################
-        litellm_logging_obj.model_call_details["input"] = query
-        litellm_logging_obj.model_call_details["embedding_model"] = embedding_model
-
-        return url, request_body
 
     def transform_search_vector_store_response(
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
