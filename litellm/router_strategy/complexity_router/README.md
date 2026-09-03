@@ -274,6 +274,49 @@ except that the heuristic outcome is the one already computed rather than a seco
 Spend logs record `routing_decision.cause` as `heuristic_first_short_circuit` when the classifier
 was skipped, and `llm_classifier` when it ran, so the two are told apart per request.
 
+### Hybrid
+
+`classifier_type: hybrid` also scores locally first, but it asks a different question than
+`heuristic_first`. Where heuristic-first asks how CHEAP the scorer's tier is and pays for the
+classifier on everything above a ceiling, hybrid asks how DECIDED the score is and pays for the
+classifier only where the score lands near a tier boundary. A confident score keeps its tier at
+every tier, the most expensive one included:
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        classifier_type: hybrid
+        hybrid_boundary_margin: 0.03
+        classifier_llm_config:
+          model: gpt-4o-mini
+        tiers:
+          SIMPLE: gpt-4o-mini
+          MEDIUM: gpt-4o
+          COMPLEX: claude-sonnet-4
+          REASONING: o1-preview
+```
+
+A request routes on the scorer's own tier when its score is further than `hybrid_boundary_margin`
+from every active boundary. Everything else goes to the classifier: a score inside the band, where a
+hair's difference would have named the adjacent tier and its model pool, and a prompt where no
+dimension fired at all, which has no opinion to be confident about. `hybrid_boundary_margin` is
+required for this type and rejected on the others, the same way `heuristic_first_max_tier` is
+required for heuristic-first, so the two modes are told apart by the knob each one takes rather than
+by a shared field that means something different per type.
+
+Pick the margin against the score distribution rather than by intuition. The scorer combines a small
+set of discretely weighted dimensions, so achievable scores cluster on a lumpy grid instead of
+spreading smoothly, and widening the margin admits whole clusters at once rather than a few more
+requests. Spend logs record `routing_decision.cause` as `hybrid_short_circuit` when the classifier
+was skipped and `llm_classifier` when it ran.
+
+Operator-defined tier sets (`tier_definitions`) are not supported here, for the same reason they are
+not supported under heuristic-first: the scorer only produces the built-in tiers. Classifier failure
+behaves exactly as it does under `classifier_type: llm`.
+
 ### Reasoning Override
 
 If 2+ reasoning markers are detected in the user message, the request is promoted to the REASONING tier even when the weighted score maps lower, so complex reasoning tasks get the appropriate model. The promotion requires the score to reach `reasoning_override_min_score`, which tracks `tier_boundaries.simple_medium` unless set, so stock phrases on an otherwise trivial prompt cannot buy the top tier. Set it to `0` to promote on the markers alone.

@@ -26,6 +26,7 @@ from litellm.llms.base_llm.auth.token_exchange import (
     MAX_RESPONSE_BYTES,
     endpoint_url_for_error_message,
     redact_oauth_error_body,
+    require_posted_response,
     validate_token_endpoint_url,
 )
 from litellm.llms.base_llm.auth.types import InsecureTokenUrl, SyncTokenPoster
@@ -85,9 +86,7 @@ class _HttpxSyncKeycloakPoster:
             )
         except httpx.HTTPStatusError as e:
             return e.response
-        if response is None:
-            raise httpx.TransportError("keycloak token endpoint returned no response")
-        return response
+        return require_posted_response(response, "keycloak token endpoint")
 
 
 _DEFAULT_POSTER: Final[SyncTokenPoster] = _HttpxSyncKeycloakPoster()

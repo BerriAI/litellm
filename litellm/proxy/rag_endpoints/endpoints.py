@@ -729,7 +729,7 @@ async def rag_query(
         # conflict so callers cannot override the store's provider or credentials.
         managed_store: Final = resolved_stores.get(retrieval_config["vector_store_id"])
         store_data: Final = (
-            await build_request_data_from_managed_vector_store(managed_store)
+            build_request_data_from_managed_vector_store(managed_store)
             if managed_store is not None
             else MappingProxyType({})
         )

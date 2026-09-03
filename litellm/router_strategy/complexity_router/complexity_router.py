@@ -26,7 +26,11 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 from pydantic import BaseModel, create_model
 
 from litellm._logging import verbose_router_logger
-from litellm.constants import EMPTY_MAPPING, RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import (
+    EMPTY_MAPPING,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
+    SESSION_ID_GENERATED_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
@@ -799,6 +803,7 @@ class ClassificationOutcome(NamedTuple):
         "reasoning_override",
         "llm_classifier",
         "heuristic_first_short_circuit",
+        "hybrid_short_circuit",
         "housekeeping",
         "classifier_plugin",
         "classifier_fallback",
@@ -1241,6 +1246,15 @@ class ComplexityRouter(CustomLogger):
 
         return tier, weighted_score, tuple(signals), "heuristic_scorer"
 
+    def _is_near_tier_boundary(self, score: float, margin: float) -> bool:
+        boundaries: Final = self._effective_tier_boundaries()
+        active_boundaries: Final = (
+            boundaries["simple_medium"],
+            boundaries["medium_complex"],
+            boundaries["complex_reasoning"],
+        )
+        return any(abs(score - boundary) <= margin for boundary in active_boundaries)
+
     def _effective_reasoning_override_min_score(self) -> float:
         """The score a request must reach before the reasoning-marker override may promote it.
 
@@ -1367,6 +1381,8 @@ class ComplexityRouter(CustomLogger):
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
         if self.config.classifier_type == "heuristic_first" and self.config.classifier_llm_config is not None:
             return await self._classify_heuristic_first(prompt, system_prompt, request_kwargs, messages)
+        if self.config.classifier_type == "hybrid" and self.config.classifier_llm_config is not None:
+            return await self._classify_hybrid(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type != "llm" or self.config.classifier_llm_config is None:
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
@@ -1416,6 +1432,29 @@ class ComplexityRouter(CustomLogger):
         )
         if decided_cheaply:
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="heuristic_first_short_circuit")
+        return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
+
+    async def _classify_hybrid(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: dict[str, Any] | None,  # mutable-ok: handed to _classify_with_llm as-is
+        messages: Sequence[Mapping[str, object]] | None,
+    ) -> ClassificationOutcome:
+        """Score locally, and only pay for the classifier when the score sits near a tier boundary.
+
+        Where heuristic_first asks how CHEAP the scorer's tier is, this asks how DECIDED it is, so a
+        confident score keeps its tier at every tier including the most expensive one. Two things make
+        a score undecided: landing within hybrid_boundary_margin of an active boundary, where a
+        hair's difference in score would have named the adjacent tier and its model pool, and firing
+        no dimension at all, which scores 0.0 and lands SIMPLE by default rather than by evidence.
+        """
+        tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
+        scored: Final = ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
+        margin: Final = self.config.hybrid_boundary_margin
+        decided: Final = margin is not None and bool(signals) and not self._is_near_tier_boundary(score, margin)
+        if decided:
+            return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="hybrid_short_circuit")
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
 
     async def _llm_classifier_outcome(
@@ -2677,7 +2716,7 @@ class ComplexityRouter(CustomLogger):
         """Resolve a client-supplied session_id."""
         for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
             session_id = metadata.get("session_id")
-            if session_id is not None:
+            if session_id is not None and not metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
                 return str(session_id)
         return None
 

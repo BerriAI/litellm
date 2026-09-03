@@ -381,6 +381,14 @@ def _new_exchange_handler() -> "HTTPHandler":
     return handler
 
 
+def require_posted_response(response: httpx.Response | None, endpoint_label: str) -> httpx.Response:
+    """The legacy ``HTTPHandler`` carries no return annotation, so a patched or stubbed client can
+    hand a poster ``None`` back; a transport error beats dereferencing it."""
+    if response is None:
+        raise httpx.TransportError(f"{endpoint_label} returned no response")
+    return response
+
+
 class _HttpxSyncTokenPoster:
     """Default poster: a dedicated HTTPHandler (no logging_obj, so litellm's
     pre/post-call body logging never sees the exchange POST); returns the
@@ -407,9 +415,7 @@ class _HttpxSyncTokenPoster:
             )
         except httpx.HTTPStatusError as e:
             return e.response
-        if response is None:
-            raise httpx.TransportError("token endpoint returned no response")
-        return response
+        return require_posted_response(response, "token endpoint")
 
 
 class _ServiceLoggingHooks(Protocol):

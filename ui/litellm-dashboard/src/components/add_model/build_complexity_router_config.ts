@@ -107,6 +107,7 @@ export interface BuildComplexityRouterConfigParams {
   classifierFallback: ClassifierFallback | undefined;
   classificationPrompt: string | undefined;
   heuristicFirstMaxTier: string | undefined;
+  hybridBoundaryMargin?: number;
   classificationMode: ClassificationMode | undefined;
   sessionAffinity: boolean;
   modalityRouting?: boolean;
@@ -163,6 +164,7 @@ export interface ComplexityRouterConfigPayload {
   classifier_fallback?: ClassifierFallback;
   classification_prompt?: string;
   heuristic_first_max_tier?: string;
+  hybrid_boundary_margin?: number;
   classification_mode: ClassificationMode;
   session_affinity: boolean;
   deployment_affinity: boolean;
@@ -352,6 +354,7 @@ const classifierWireFields = (
     classifierLlmConfig,
     classifierFallback,
     heuristicFirstMaxTier,
+    hybridBoundaryMargin,
     classifierContextWindowSize,
     classifierContextBudgetChars,
     classifierContextIncludeAssistantTurns,
@@ -360,6 +363,7 @@ const classifierWireFields = (
     | "classifierLlmConfig"
     | "classifierFallback"
     | "heuristicFirstMaxTier"
+    | "hybridBoundaryMargin"
     | "classifierContextWindowSize"
     | "classifierContextBudgetChars"
     | "classifierContextIncludeAssistantTurns"
@@ -371,6 +375,8 @@ const classifierWireFields = (
     classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
   ...(effectiveType === "heuristic_first" &&
     heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
+  ...(effectiveType === "hybrid" &&
+    hybridBoundaryMargin !== undefined && { hybrid_boundary_margin: hybridBoundaryMargin }),
   ...(usesLlmClassifier(effectiveType) &&
     classifierContextWindowSize !== undefined && {
       classifier_context_window_size: classifierContextWindowSize,
@@ -399,6 +405,7 @@ export const buildComplexityRouterConfig = ({
   classifierFallback,
   classificationPrompt,
   heuristicFirstMaxTier,
+  hybridBoundaryMargin,
   classificationMode,
   sessionAffinity,
   modalityRouting,
@@ -444,6 +451,7 @@ export const buildComplexityRouterConfig = ({
     classifierLlmConfig,
     classifierFallback,
     heuristicFirstMaxTier,
+    hybridBoundaryMargin,
     classifierContextWindowSize,
     classifierContextBudgetChars,
     classifierContextIncludeAssistantTurns,

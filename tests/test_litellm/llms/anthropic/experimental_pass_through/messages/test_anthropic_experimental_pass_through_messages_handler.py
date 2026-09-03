@@ -951,6 +951,38 @@ def test_gate_passthrough_skipped_when_only_chat_completions_supported(monkeypat
     assert "config" not in captured
 
 
+@pytest.mark.parametrize(
+    "model_info, expected_ttl_support",
+    [
+        ({"supported_endpoints": ["/v1/messages"]}, False),
+        ({"supported_endpoints": ["/v1/messages"], "cache_control_ttl": True}, True),
+        ({"supported_endpoints": ["/v1/messages"], "cache_control_ttl": "yes"}, False),
+    ],
+)
+def test_gate_passthrough_forwards_cache_control_ttl_only_when_deployment_opts_in(
+    monkeypatch, model_info, expected_ttl_support
+):
+    """The passthrough config strips cache_control.ttl unless the deployment sets
+    model_info.cache_control_ttl to exactly true."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    captured, _ = _gate_stubs(monkeypatch)
+
+    result = anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="openai/some-model",
+        api_key="sk-test",
+        api_base="https://host/v1",
+        model_info=model_info,
+    )
+
+    assert result == "native-passthrough"
+    assert captured["config"].supports_cache_control_ttl() is expected_ttl_support
+
+
 def test_first_party_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_flag():
     """Regional and provider-prefixed Claude 4.8+/5 entries carry
     ``supports_mid_conversation_system``, but the bare first-party keys

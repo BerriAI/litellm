@@ -3,7 +3,9 @@ from unittest.mock import patch
 import httpx
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
+import litellm
 from litellm.exceptions import Timeout
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr import initialize_guardrail
@@ -12,8 +14,8 @@ from litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr.crowdstrike_aidr 
     CrowdStrikeAIDRHandler,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
-from litellm.types.guardrails import Guardrail, LitellmParams
-from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
+from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams
+from litellm.types.utils import Delta, GenericGuardrailAPIInputs, ModelResponse, ModelResponseStream
 
 
 @pytest.fixture
@@ -1578,3 +1580,139 @@ async def test_unparseable_transformed_response_fails_closed_under_fail_open() -
 
     assert exc_info.value.status_code == 500
     assert "failing closed" in exc_info.value.detail["error"]
+
+
+def _initialize_from_config(**litellm_params_kwargs: object) -> CrowdStrikeAIDRHandler:
+    litellm_params = LitellmParams(
+        guardrail="crowdstrike_aidr",
+        api_key="pts_crowdstrike_tokenid",
+        api_base="https://api.crowdstrike.com/aidr/aiguard",
+        default_on=True,
+        **litellm_params_kwargs,
+    )
+    guardrail = Guardrail(guardrail_name="crowdstrike-aidr-guard", litellm_params=litellm_params)
+    return initialize_guardrail(litellm_params=litellm_params, guardrail=guardrail)
+
+
+@pytest.mark.parametrize(
+    ("mode", "runs_pre_call", "runs_post_call"),
+    [("post_call", False, True), ("pre_call", True, False), (["pre_call", "post_call"], True, True)],
+)
+def test_initialize_guardrail_honors_configured_mode(
+    mode: str | list[str], runs_pre_call: bool, runs_post_call: bool
+) -> None:
+    handler = _initialize_from_config(mode=mode)
+
+    assert handler.should_run_guardrail({}, GuardrailEventHooks.pre_call) is runs_pre_call
+    assert handler.should_run_guardrail({}, GuardrailEventHooks.post_call) is runs_post_call
+
+
+def test_initialize_guardrail_rejects_unsupported_mode_instead_of_running_other_hooks() -> None:
+    with pytest.raises(ValueError, match="during_call is not in the supported event hooks"):
+        _initialize_from_config(mode="during_call")
+
+
+def test_initialize_guardrail_defaults_streaming_params() -> None:
+    handler = _initialize_from_config(mode="post_call")
+
+    assert handler.streaming_end_of_stream_only is False
+    assert handler.streaming_sampling_rate == 5
+
+
+@pytest.mark.parametrize(
+    "configured",
+    [
+        {"streaming_end_of_stream_only": True, "streaming_sampling_rate": 50},
+        {"optional_params": {"streaming_end_of_stream_only": True, "streaming_sampling_rate": 50}},
+    ],
+)
+def test_initialize_guardrail_forwards_streaming_params(configured: dict[str, object]) -> None:
+    handler = _initialize_from_config(mode="post_call", **configured)
+
+    assert handler.streaming_end_of_stream_only is True
+    assert handler.streaming_sampling_rate == 50
+
+
+def test_initialize_guardrail_rejects_non_positive_sampling_rate() -> None:
+    with pytest.raises(ValidationError):
+        _initialize_from_config(mode="post_call", streaming_sampling_rate=0)
+
+
+def test_update_in_memory_litellm_params_reapplies_streaming_params() -> None:
+    handler = _initialize_from_config(mode="post_call")
+
+    handler.update_in_memory_litellm_params(
+        LitellmParams(
+            guardrail="crowdstrike_aidr",
+            mode="post_call",
+            streaming_end_of_stream_only=True,
+            streaming_sampling_rate=7,
+        )
+    )
+
+    assert handler.streaming_end_of_stream_only is True
+    assert handler.streaming_sampling_rate == 7
+
+
+def _stream_chunk(content: str, finish_reason: str | None) -> ModelResponseStream:
+    return ModelResponseStream(
+        model="gpt-4",
+        choices=[
+            litellm.StreamingChoices(
+                index=0, delta=Delta(role="assistant", content=content), finish_reason=finish_reason
+            )
+        ],
+    )
+
+
+async def _guard_calls_for_stream(handler: CrowdStrikeAIDRHandler, chunk_texts: list[str]) -> int:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+
+    async def stream():
+        for i, content in enumerate(chunk_texts):
+            yield _stream_chunk(content, "stop" if i == len(chunk_texts) - 1 else None)
+
+    calls = 0
+
+    def _allow(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            status_code=200, json={"result": {"blocked": False, "transformed": False}}, request=request
+        )
+
+    request_data = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "guardrail_to_apply": handler,
+        "metadata": {"guardrails": ["crowdstrike-aidr-guard"]},
+    }
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_allow)) as client:
+        await handler.async_handler.close()
+        handler.async_handler.client = client
+        async for _ in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/chat/completions"),
+            response=stream(),
+            request_data=request_data,
+        ):
+            pass
+    return calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured", "expected_calls"),
+    [
+        ({}, 3),
+        ({"streaming_sampling_rate": 2}, 6),
+        ({"streaming_end_of_stream_only": True}, 1),
+        ({"streaming_end_of_stream_only": True, "streaming_sampling_rate": 2}, 1),
+    ],
+)
+async def test_streaming_params_from_config_control_output_scan_cadence(
+    configured: dict[str, object], expected_calls: int
+) -> None:
+    """10 chunks: default samples at 5 and 10 plus the final pass, rate 2 samples 5 times plus final, end-of-stream scans once."""
+    handler = _initialize_from_config(mode="post_call", **configured)
+
+    assert await _guard_calls_for_stream(handler, list("ABCDEFGHIJ")) == expected_calls

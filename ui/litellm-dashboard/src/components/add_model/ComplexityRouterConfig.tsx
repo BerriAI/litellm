@@ -128,7 +128,7 @@ export interface ClassifierLLMConfig {
   system_prompt?: string;
 }
 
-export type ClassifierType = "heuristic" | "heuristic_v2" | "llm" | "heuristic_first";
+export type ClassifierType = "heuristic" | "heuristic_v2" | "llm" | "heuristic_first" | "hybrid";
 
 /**
  * Whether this router can call classifier_llm_config.model. Mirrors the backend's
@@ -136,7 +136,7 @@ export type ClassifierType = "heuristic" | "heuristic_v2" | "llm" | "heuristic_f
  * control and payload key, so a new chaining type cannot strip knobs the operator set.
  */
 export const usesLlmClassifier = (classifierType: ClassifierType): boolean =>
-  classifierType === "llm" || classifierType === "heuristic_first";
+  classifierType === "llm" || classifierType === "heuristic_first" || classifierType === "hybrid";
 
 export type ClassifierFallback = "heuristic" | "default_model";
 
@@ -162,7 +162,8 @@ export const heuristicScoringRoleFor = (
   classifierFallback: ClassifierFallback | undefined,
 ): HeuristicScoringRole => {
   if (classifierType === "heuristic_v2") return "never";
-  if (classifierType === "heuristic" || classifierType === "heuristic_first") return "decides";
+  if (classifierType === "heuristic" || classifierType === "heuristic_first" || classifierType === "hybrid")
+    return "decides";
   return (classifierFallback ?? DEFAULT_CLASSIFIER_FALLBACK) === "heuristic" ? "fallback_only" : "never";
 };
 
@@ -404,6 +405,8 @@ export interface ComplexityRouterConfigValue {
   classification_prompt?: string;
   /** Highest tier the scorer may decide alone under heuristic_first. Required by that type, rejected by the others. */
   heuristic_first_max_tier?: string;
+  /** How near a tier boundary a score may land before hybrid defers to the classifier. Required by that type, rejected by the others. */
+  hybrid_boundary_margin?: number;
   classification_mode?: ClassificationMode;
   session_affinity?: boolean;
   modality_routing?: boolean;
@@ -515,6 +518,9 @@ export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: Comp
   tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
 
 export const DEFAULT_HEURISTIC_FIRST_MAX_TIER = "SIMPLE";
+
+/** What the Hybrid radio starts at. Required by that type, so the form always has a value to send. */
+export const DEFAULT_HYBRID_BOUNDARY_MARGIN = 0.03;
 
 /**
  * Tiers the heuristic_first threshold may name. The top tier is excluded because it would short

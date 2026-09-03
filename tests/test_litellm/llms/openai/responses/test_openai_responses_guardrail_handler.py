@@ -5,6 +5,8 @@ Tests the handler's ability to process input/output for the Responses API
 with guardrail transformations.
 """
 
+import copy
+from collections.abc import Callable
 from typing import Any, List, Literal, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,6 +20,10 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
+)
+from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
+from litellm.responses.litellm_completion_transformation.transformation import (
+    LiteLLMCompletionResponsesConfig,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.responses.main import GenericResponseOutputItem, OutputText
@@ -1287,14 +1293,14 @@ class TestOpenAIResponsesHandlerToolInjection:
     """A tool a guardrail injects must survive the write-back to Responses format."""
 
     def test_merge_keeps_guardrail_appended_tool(self):
-        """_merge_tools_after_guardrail must not drop the extra appended tool."""
-        handler = OpenAIResponsesHandler()
+        """merge_guardrailed_tools must not drop the extra appended tool."""
         original = [{"type": "function", "name": "a"}]
-        remapped = [
-            {"type": "function", "name": "a"},
-            {"type": "function", "name": "b"},
+        groups = [form.chat_tools for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(original)]
+        guardrailed = [
+            *groups[0],
+            {"type": "function", "function": {"name": "b", "description": "", "parameters": {"type": "object"}}},
         ]
-        merged = handler._merge_tools_after_guardrail(original, remapped)
+        merged = merge_guardrailed_tools(original, groups, guardrailed)
         assert [t["name"] for t in merged] == ["a", "b"]
 
     @pytest.mark.asyncio
@@ -1321,6 +1327,194 @@ class TestOpenAIResponsesHandlerToolInjection:
         names = [t.get("name") for t in result["tools"]]
         assert "get_weather" in names
         assert "injected_tool" in names
+
+
+class ToolEditingGuardrail(CustomGuardrail):
+    """Guardrail that rewrites the flattened chat tools it was handed through ``edit``"""
+
+    def __init__(self, edit: Callable[[list[dict]], list[dict]], **kwargs):
+        super().__init__(**kwargs)
+        self.edit = edit
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Any | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        inputs["tools"] = self.edit(list(inputs.get("tools") or []))
+        return inputs
+
+
+def _codex_request(input_value):
+    """A Responses API request shaped like what the Codex CLI sends when an MCP server is configured"""
+    return {
+        "model": "gpt-5.3-codex",
+        "input": input_value,
+        "tools": [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Weather lookup",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                "strict": False,
+            },
+            {
+                "type": "namespace",
+                "name": "mcp__confluence",
+                "description": "Confluence tools",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "confluence_get_page",
+                        "description": "Get a page",
+                        "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+                        "strict": False,
+                    },
+                    {
+                        "type": "function",
+                        "name": "confluence_search",
+                        "description": "Search pages",
+                        "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+                        "strict": False,
+                    },
+                ],
+            },
+            {
+                "type": "custom",
+                "name": "apply_patch",
+                "description": "Apply a patch",
+                "format": {"type": "grammar", "syntax": "lark", "definition": 'start: "x"'},
+            },
+            {"type": "web_search"},
+        ],
+    }
+
+
+def _tool_named(tools, name):
+    return next(tool for tool in tools if tool.get("name") == name)
+
+
+class TestOpenAIResponsesHandlerNamespaceTools:
+    """Codex sends MCP tools as ``namespace`` tools; a guardrail must never flatten them (GH #39183)"""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "input_value",
+        ["hi", [{"role": "user", "content": "hi", "type": "message"}]],
+        ids=["string_input", "list_input"],
+    )
+    async def test_pass_through_guardrail_leaves_tools_untouched(self, input_value):
+        data = _codex_request(input_value)
+        expected_tools = copy.deepcopy(data["tools"])
+
+        result = await OpenAIResponsesHandler().process_input_messages(
+            data, MockPassThroughGuardrail(guardrail_name="test")
+        )
+
+        assert result["tools"] == expected_tools
+
+    @pytest.mark.asyncio
+    async def test_appending_guardrail_keeps_namespace_and_adds_tool(self):
+        data = _codex_request("hi")
+        expected_tools = copy.deepcopy(data["tools"])
+
+        result = await OpenAIResponsesHandler().process_input_messages(
+            data, ToolAppendingGuardrail(guardrail_name="test")
+        )
+
+        assert result["tools"][:-1] == expected_tools
+        assert result["tools"][-1]["type"] == "function"
+        assert result["tools"][-1]["name"] == "injected_tool"
+
+    @pytest.mark.asyncio
+    async def test_dropping_one_member_prunes_only_that_member(self):
+        data = _codex_request("hi")
+        expected_tools = copy.deepcopy(data["tools"])
+        guardrail = ToolEditingGuardrail(
+            edit=lambda tools: [t for t in tools if t["function"]["name"] != "mcp__confluence__confluence_search"],
+            guardrail_name="test",
+        )
+
+        result = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        namespace = _tool_named(result["tools"], "mcp__confluence")
+        assert [member["name"] for member in namespace["tools"]] == ["confluence_get_page"]
+        assert namespace["tools"][0] == expected_tools[1]["tools"][0]
+        assert [t for t in result["tools"] if t is not namespace] == [expected_tools[0], *expected_tools[2:]]
+
+    @pytest.mark.asyncio
+    async def test_editing_a_member_lands_on_that_member_without_the_namespace_prefix(self):
+        data = _codex_request("hi")
+        expected_tools = copy.deepcopy(data["tools"])
+
+        def redact_search(tools):
+            for tool in tools:
+                if tool["function"]["name"] == "mcp__confluence__confluence_search":
+                    tool["function"]["description"] = "Confluence tools\n\nREDACTED"
+            return tools
+
+        result = await OpenAIResponsesHandler().process_input_messages(
+            data, ToolEditingGuardrail(edit=redact_search, guardrail_name="test")
+        )
+
+        namespace = _tool_named(result["tools"], "mcp__confluence")
+        assert namespace["tools"][0] == expected_tools[1]["tools"][0]
+        assert namespace["tools"][1] == {**expected_tools[1]["tools"][1], "description": "REDACTED"}
+        assert {k: v for k, v in namespace.items() if k != "tools"} == {
+            k: v for k, v in expected_tools[1].items() if k != "tools"
+        }
+
+    @pytest.mark.asyncio
+    async def test_dropping_every_member_drops_the_namespace(self):
+        data = _codex_request("hi")
+        expected_tools = copy.deepcopy(data["tools"])
+        guardrail = ToolEditingGuardrail(
+            edit=lambda tools: [t for t in tools if not t["function"]["name"].startswith("mcp__confluence__")],
+            guardrail_name="test",
+        )
+
+        result = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert result["tools"] == [expected_tools[0], *expected_tools[2:]]
+
+    @pytest.mark.asyncio
+    async def test_edited_top_level_function_is_rewritten_in_place(self):
+        data = _codex_request("hi")
+        expected_tools = copy.deepcopy(data["tools"])
+
+        def rename_weather(tools):
+            for tool in tools:
+                if tool["function"]["name"] == "get_weather":
+                    tool["function"]["description"] = "Weather lookup (guarded)"
+            return tools
+
+        result = await OpenAIResponsesHandler().process_input_messages(
+            data, ToolEditingGuardrail(edit=rename_weather, guardrail_name="test")
+        )
+
+        assert result["tools"][0] == {**expected_tools[0], "description": "Weather lookup (guarded)"}
+        assert result["tools"][1:] == expected_tools[1:]
+
+
+class TestOpenAIResponsesHandlerMalformedTools:
+    @pytest.mark.asyncio
+    async def test_request_tools_that_are_not_a_list_never_reach_the_guardrail(self):
+        handler = OpenAIResponsesHandler()
+        seen: list[list[dict]] = []
+
+        def record(tools):
+            seen.append(tools)
+            return tools
+
+        guardrail = ToolEditingGuardrail(edit=record, guardrail_name="test")
+        data = {"input": "hi", "tools": {"type": "function", "name": "get_weather"}}
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        assert seen == [[]]
+        assert result["input"] == "hi"
 
 
 class TestBuildBlockSseChunks:
@@ -1537,3 +1731,93 @@ class TestBuildBlockSseChunks:
         dones = [payload for payload in payloads if payload["type"] == "response.output_item.done"]
         assert len(dones) == 1
         assert dones[0]["item"]["content"][0]["text"] == "Blocked by policy."
+
+
+class TestOpenAIResponsesHandlerStreamingScanKey:
+    """get_streaming_scan_key mirrors what process_output_streaming_response would scan"""
+
+    @staticmethod
+    def _delta(sequence_number, text):
+        return {
+            "type": "response.output_text.delta",
+            "sequence_number": sequence_number,
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": text,
+        }
+
+    def test_no_events_yields_no_key(self):
+        assert OpenAIResponsesHandler().get_streaming_scan_key([]) is None
+
+    def test_key_accumulates_deltas_while_the_stream_is_open(self):
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
+
+        key = OpenAIResponsesHandler().get_streaming_scan_key([self._delta(0, "hel"), self._delta(1, "lo")])
+        assert key == StreamingScanKey(texts=("hello",))
+
+    def test_typed_delta_events_accumulate_like_dicts(self):
+        from litellm.types.llms.openai import OutputTextDeltaEvent
+
+        events = [
+            OutputTextDeltaEvent(
+                type="response.output_text.delta",
+                item_id="msg_1",
+                output_index=0,
+                content_index=0,
+                delta=text,
+                sequence_number=i,
+            )
+            for i, text in enumerate(("hel", "lo"))
+        ]
+        key = OpenAIResponsesHandler().get_streaming_scan_key(events)
+        assert key.texts == ("hello",)
+        assert key.stream_ended is False
+
+    def test_events_without_text_leave_the_key_unchanged(self):
+        handler = OpenAIResponsesHandler()
+        events = [self._delta(0, "hi")]
+        quiet = events + [{"type": "response.in_progress", "sequence_number": 1}]
+        assert handler.get_streaming_scan_key(quiet) == handler.get_streaming_scan_key(events)
+
+    @staticmethod
+    def _completed(sequence_number, output):
+        return {"type": "response.completed", "sequence_number": sequence_number, "response": {"output": output}}
+
+    def test_completed_event_keys_on_the_final_output_text(self):
+        handler = OpenAIResponsesHandler()
+        message = {"type": "message", "content": [{"type": "output_text", "text": "hi"}]}
+        open_key = handler.get_streaming_scan_key([self._delta(0, "hi")])
+        ended_key = handler.get_streaming_scan_key([self._delta(0, "hi"), self._completed(1, [message])])
+        assert ended_key.stream_ended is True
+        assert ended_key == open_key
+
+    def test_completed_event_with_a_function_call_changes_the_key(self):
+        handler = OpenAIResponsesHandler()
+        message = {"type": "message", "content": [{"type": "output_text", "text": "hi"}]}
+        function_call = {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"}
+        open_key = handler.get_streaming_scan_key([self._delta(0, "hi")])
+        ended_key = handler.get_streaming_scan_key([self._delta(0, "hi"), self._completed(1, [message, function_call])])
+        assert ended_key.texts == ("hi",)
+        assert len(ended_key.tool_calls) == 1 and "get_weather" in ended_key.tool_calls[0]
+        assert ended_key != open_key
+
+    def test_completed_event_reads_every_output_text_part(self):
+        from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+        item = GenericResponseOutputItem(
+            type="message",
+            id="msg_1",
+            status="completed",
+            role="assistant",
+            content=[
+                OutputText(type="output_text", text="one", annotations=[]),
+                OutputText(type="output_text", text="two", annotations=[]),
+            ],
+        )
+        key = OpenAIResponsesHandler().get_streaming_scan_key([self._completed(0, [item])])
+        assert key.texts == ("one", "two")
+
+    def test_output_item_done_round_is_never_deduped(self):
+        done = {"type": "response.output_item.done", "sequence_number": 1, "item": {"type": "function_call"}}
+        assert OpenAIResponsesHandler().get_streaming_scan_key([self._delta(0, "hi"), done]) is None
