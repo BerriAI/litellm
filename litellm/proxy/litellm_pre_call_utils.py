@@ -734,9 +734,10 @@ def apply_missing_session_id_policy(
     general_settings: Mapping[str, object] | None,
     request: Request,
 ) -> None:
+    for metadata_key in ("metadata", "litellm_metadata"):
+        if isinstance(client_metadata := data.get(metadata_key), dict):
+            client_metadata.pop(SESSION_ID_OMITTED_METADATA_KEY, None)
     metadata: Final = data.get(_metadata_variable_name)
-    if isinstance(metadata, dict):
-        metadata.pop(SESSION_ID_OMITTED_METADATA_KEY, None)
     policy: Final = general_settings.get("missing_session_id") if general_settings else None
     if policy is None or not _is_llm_inference_route(request):
         return

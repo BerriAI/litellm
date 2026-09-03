@@ -608,7 +608,8 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
 def _omits_session_id_when_missing(metadata: Mapping[str, object] | None) -> bool:
     """The pre-call stamp pins `omit` on for the requests that carry it, so a config reload between pre-call and spend
     logging cannot fabricate a session. `apply_missing_session_id_policy` drops any client-supplied copy of the key
-    before stamping, so a caller cannot forge it. Requests that never reach the pre-call helper, router-model
+    from both metadata buckets before stamping, which the merge of `litellm_metadata` into `metadata` makes
+    necessary, so a caller cannot forge it. Requests that never reach the pre-call helper, router-model
     passthrough among them, carry no stamp, so they fall back to the configured policy and `omit` still covers their
     spend logs."""
     if metadata is not None and metadata.get(SESSION_ID_OMITTED_METADATA_KEY):
