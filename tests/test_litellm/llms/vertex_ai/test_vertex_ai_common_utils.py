@@ -993,7 +993,7 @@ def test_construct_target_url_with_version_prefix():
         ),
     ],
 )
-def test_construct_target_url_versionless_project_route_gets_api_version(requested_route, expected_url):
+def test_construct_target_url_versionless_project_route_gets_api_version(requested_route: str, expected_url: str) -> None:
     from litellm.llms.vertex_ai.common_utils import construct_target_url
 
     target_url = construct_target_url(
