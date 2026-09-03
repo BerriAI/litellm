@@ -15,7 +15,9 @@ import httpx
 from pydantic import JsonValue
 from typing_extensions import ReadOnly, TypedDict
 
+import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -438,6 +440,14 @@ async def http_request(
     Uses LiteLLM's global cached AsyncHTTPHandler for connection pooling
     and better performance.
 
+    SSRF protection: the URL is resolved and validated (via
+    ``litellm_core_utils.url_utils.validate_url``) before connecting, and
+    redirects are never followed. Requests targeting loopback, private,
+    link-local, or cloud-metadata addresses are blocked. Operators can
+    allow specific internal hosts via ``user_url_allowed_hosts`` in
+    ``general_settings``, or disable validation with
+    ``litellm.user_url_validation = False``.
+
     Args:
         url: The URL to request
         method: HTTP method (GET, POST, PUT, DELETE, PATCH). Defaults to GET.
@@ -471,6 +481,20 @@ async def http_request(
     if not is_valid_url(url):
         return _http_error_response(f"Invalid URL: {url}")
 
+    # SSRF protection: block requests that resolve to internal/private/metadata
+    # targets before any connection is made. Legitimate internal services can
+    # be reached by adding them to `user_url_allowed_hosts` in general_settings.
+    # `litellm.user_url_validation = False` disables this check entirely.
+    validated_url = url
+    request_headers = headers
+    if getattr(litellm, "user_url_validation", True):
+        try:
+            validated_url, host_header = validate_url(url)
+            request_headers = {**(headers or {}), "Host": host_header}
+        except (SSRFError, ValueError) as e:
+            verbose_proxy_logger.warning("Custom code http_request SSRF blocked: %s", e)
+            return _http_error_response(f"Blocked: {e}")
+
     # Validate and normalize method
     method = method.upper()
     allowed_methods: Final = {"GET", "POST", "PUT", "DELETE", "PATCH"}
@@ -490,7 +514,7 @@ async def http_request(
     )
 
     try:
-        response: Final = await _execute_http_request(client, method, url, headers, body, timeout)
+        response: Final = await _execute_http_request(client, method, validated_url, request_headers, body, timeout)
         return _http_success_response(response)
 
     except httpx.TimeoutException as e:
@@ -515,19 +539,51 @@ async def _execute_http_request(
     body: JsonValue,
     timeout: float,
 ) -> httpx.Response:
-    """Execute the HTTP request using the appropriate client method."""
+    """Execute the HTTP request using the appropriate client method.
+
+    Redirects are disabled on every method so a 3xx response cannot bypass
+    the SSRF validation performed by the caller.
+    """
     json_body, data_body = _prepare_http_body(body)
 
     if method == "GET":
-        return await client.get(url=url, headers=headers)
+        return await client.get(url=url, headers=headers, follow_redirects=False)
     elif method == "POST":
-        return await client.post(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout)
+        return await client.post(
+            url=url,
+            headers=headers,
+            json=json_body,
+            data=data_body,
+            timeout=timeout,
+            follow_redirects=False,
+        )
     elif method == "PUT":
-        return await client.put(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout)
+        return await client.put(
+            url=url,
+            headers=headers,
+            json=json_body,
+            data=data_body,
+            timeout=timeout,
+            follow_redirects=False,
+        )
     elif method == "DELETE":
-        return await client.delete(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout)
+        return await client.delete(
+            url=url,
+            headers=headers,
+            json=json_body,
+            data=data_body,
+            timeout=timeout,
+            follow_redirects=False,
+        )
     elif method == "PATCH":
-        return await client.patch(url=url, headers=headers, json=json_body, data=data_body, timeout=timeout)
+        return await client.patch(
+            url=url,
+            headers=headers,
+            json=json_body,
+            data=data_body,
+            timeout=timeout,
+            follow_redirects=False,
+        )
     else:
         raise ValueError(f"Unsupported HTTP method: {method}")
 

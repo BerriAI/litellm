@@ -683,7 +683,9 @@ class AsyncHTTPHandler:
         logging_obj: LiteLLMLoggingObject | None = None,
         files: RequestFiles | None = None,
         content: _RequestContent | None = None,
+        follow_redirects: bool | None = None,
     ):
+        _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
         start_time: Final = time.time()
         try:
             if timeout is None:
@@ -703,7 +705,7 @@ class AsyncHTTPHandler:
                 files=files,
                 content=request_content,
             )
-            response: Final = await self.client.send(req, stream=stream)
+            response: Final = await self.client.send(req, stream=stream, follow_redirects=_follow_redirects)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
@@ -718,6 +720,7 @@ class AsyncHTTPHandler:
                     params=params,
                     headers=headers,
                     stream=stream,
+                    follow_redirects=follow_redirects,
                 )
             finally:
                 await new_client.aclose()
@@ -751,7 +754,9 @@ class AsyncHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
         content: _RequestContent | None = None,
+        follow_redirects: bool | None = None,
     ):
+        _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
         try:
             if timeout is None:
                 timeout = self.timeout
@@ -769,7 +774,7 @@ class AsyncHTTPHandler:
                 timeout=timeout,
                 content=request_content,
             )
-            response: Final = await self.client.send(req)
+            response: Final = await self.client.send(req, follow_redirects=_follow_redirects)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
@@ -784,6 +789,7 @@ class AsyncHTTPHandler:
                     params=params,
                     headers=headers,
                     stream=stream,
+                    follow_redirects=follow_redirects,
                 )
             finally:
                 await new_client.aclose()
@@ -815,7 +821,9 @@ class AsyncHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
         content: _RequestContent | None = None,
+        follow_redirects: bool | None = None,
     ):
+        _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
         try:
             if timeout is None:
                 timeout = self.timeout
@@ -833,7 +841,7 @@ class AsyncHTTPHandler:
                 timeout=timeout,
                 content=request_content,
             )
-            response: Final = await self.client.send(req)
+            response: Final = await self.client.send(req, follow_redirects=_follow_redirects)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
@@ -848,6 +856,7 @@ class AsyncHTTPHandler:
                     params=params,
                     headers=headers,
                     stream=stream,
+                    follow_redirects=follow_redirects,
                 )
             finally:
                 await new_client.aclose()
@@ -879,7 +888,9 @@ class AsyncHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
         content: _RequestContent | None = None,
+        follow_redirects: bool | None = None,
     ):
+        _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
         try:
             if timeout is None:
                 timeout = self.timeout
@@ -897,7 +908,7 @@ class AsyncHTTPHandler:
                 timeout=timeout,
                 content=request_content,
             )
-            response: Final = await self.client.send(req, stream=stream)
+            response: Final = await self.client.send(req, stream=stream, follow_redirects=_follow_redirects)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
@@ -912,6 +923,7 @@ class AsyncHTTPHandler:
                     params=params,
                     headers=headers,
                     stream=stream,
+                    follow_redirects=follow_redirects,
                 )
             finally:
                 await new_client.aclose()
@@ -930,12 +942,14 @@ class AsyncHTTPHandler:
         headers: dict | None = None,
         stream: bool = False,
         content: _RequestContent | None = None,
+        follow_redirects: bool | None = None,
     ):
         """
         Making POST request for a single connection client.
 
         Used for retrying connection client errors.
         """
+        _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
         # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
         request_data, request_content = _prepare_request_data_and_content(data, content)
 
@@ -948,7 +962,7 @@ class AsyncHTTPHandler:
             headers=headers,
             content=request_content,
         )
-        response: Final = await client.send(req, stream=stream)
+        response: Final = await client.send(req, stream=stream, follow_redirects=_follow_redirects)
         response.raise_for_status()
         return response
 
