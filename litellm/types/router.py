@@ -106,6 +106,20 @@ class RetryPolicy(BaseModel):
     InternalServerErrorRetries: int | None = None
 
 
+OptionalPreCallChecks = list[
+    Literal[
+        "prompt_caching",
+        "router_budget_limiting",
+        "responses_api_deployment_check",
+        "deployment_affinity",
+        "session_affinity",
+        "forward_client_headers_by_model_group",
+        "enforce_model_rate_limits",
+        "encrypted_content_affinity",
+    ]
+]
+
+
 class UpdateRouterConfig(BaseModel):
     """
     Set of params that you can modify via `router.update_settings()`.
@@ -128,6 +142,7 @@ class UpdateRouterConfig(BaseModel):
     model_group_alias: dict[str, str | dict] | None = {}
     enable_tag_filtering: bool | None = None
     tag_routing_prefix: str | None = None
+    optional_pre_call_checks: OptionalPreCallChecks | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -188,6 +203,11 @@ class ModelInfo(MirroredPricingParams):
     # settings) still wins over this, exactly as it already does over the
     # router-wide default.
     enable_tag_filtering: bool | None = None
+
+    # when True, calls routed to this deployment persist a router_metadata block
+    # (requested model group, selected model + provider, router correlation id)
+    # in the spend log row's metadata. Set it on every deployment of the group.
+    internal_router_model: bool | None = None
 
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
@@ -285,6 +305,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
 
     custom_llm_provider: str | None = None
+    rust: bool | None = None
     tpm: int | None = None
     rpm: int | None = None
     itpm: int | None = None
@@ -364,7 +385,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
 
     @model_validator(mode="before")
     @classmethod
-    def preprocess_input_data(cls, data: Any) -> Any:
+    def preprocess_input_data(cls, data: object) -> object:
         """
         Pre-process input data before validation:
         1. Filter out reserved Python keywords ('self', 'params', '__class__') to prevent
@@ -622,6 +643,11 @@ class AlertingConfig(BaseModel):
     alerting_threshold: float | None = 300
 
 
+def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
+    """Resolve a class's annotations, keeping each resolved annotation opaque."""
+    return get_type_hints(model_class)
+
+
 class ModelGroupInfo(BaseModel):
     model_group: str
     providers: list[str]
@@ -650,7 +676,7 @@ class ModelGroupInfo(BaseModel):
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
 
     def __init__(self, **data) -> None:
-        for field_name, field_type in get_type_hints(self.__class__).items():
+        for field_name, field_type in _resolved_annotations(self.__class__).items():
             if field_type is bool and data.get(field_name) is None:
                 data[field_name] = False
         super().__init__(**data)
@@ -857,20 +883,6 @@ class FallbackAccessCheck(Protocol):
     """
 
     async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
-
-
-OptionalPreCallChecks = list[
-    Literal[
-        "prompt_caching",
-        "router_budget_limiting",
-        "responses_api_deployment_check",
-        "deployment_affinity",
-        "session_affinity",
-        "forward_client_headers_by_model_group",
-        "enforce_model_rate_limits",
-        "encrypted_content_affinity",
-    ]
-]
 
 
 class LiteLLM_RouterFileObject(TypedDict, total=False):

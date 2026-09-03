@@ -9,10 +9,48 @@ DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT"
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 ROUTER_MAX_FALLBACKS: Final = int(os.getenv("ROUTER_MAX_FALLBACKS", 5))
 ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS: Final = 2000
+RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
+    {
+        "routing_strategy_args",
+        "routing_strategy",
+        "routing_groups",
+        "allowed_fails",
+        "cooldown_time",
+        "num_retries",
+        "timeout",
+        "max_retries",
+        "retry_after",
+        "fallbacks",
+        "context_window_fallbacks",
+        "retry_policy",
+        "model_group_retry_policy",
+        "model_group_alias",
+        "enable_weighted_failover",
+        "enable_tag_filtering",
+        "tag_routing_prefix",
+        "optional_pre_call_checks",
+    }
+)
+ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
+    {
+        "model_list",
+        "search_tools",
+        "assistants_config",
+        "router_general_settings",
+        "ignore_invalid_deployments",
+        "fallback_access_check",
+    }
+)
 DEFAULT_BATCH_SIZE: Final = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
 DEFAULT_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SECONDS", 5))
 DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_S3_BATCH_SIZE: Final = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
+# https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
+MAX_S3_OBJECT_KEY_BYTES: Final = 1024
+S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
+S3_PREFIX_DIGEST_CHARS: Final = 16
+# s3 allows 2048 bytes of combined metadata headers, which Content-Disposition counts against
+MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))
 DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1))
@@ -130,6 +168,7 @@ MCP_CLIENT_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"
 MCP_TOOL_LISTING_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
 MCP_METADATA_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
+MCP_TOOL_LISTING_MAX_PAGES: Final = 1000
 
 # Allowlist of commands permitted for MCP stdio transport.
 # Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
@@ -484,6 +523,22 @@ FIREWORKS_AI_80_B: Final = int(os.getenv("FIREWORKS_AI_80_B", 80))
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING: Final = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS: Final = int(os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50))
+# Backpressure + lifetime bounds for the /v1/messages streaming relay (see
+# BaseAnthropicMessagesStreamingIterator.async_sse_wrapper). The relay queue is
+# bounded so a slow client throttles the upstream pump instead of letting it
+# buffer the whole response in memory; the detached-drain cap bounds how many
+# post-disconnect drains may run concurrently so client behavior can't create
+# unbounded worker state.
+ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE: Final = int(
+    os.getenv("ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", "1024")
+)
+# Setting this to 0 disables detached draining entirely: every post-disconnect
+# pump bills whatever partial output it has already collected and aborts the
+# upstream stream immediately, instead of continuing to drain for the real
+# terminal usage.
+ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS: Final = int(
+    os.getenv("ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", "100")
+)
 LOGGING_WORKER_CONCURRENCY: Final = int(os.getenv("LOGGING_WORKER_CONCURRENCY", 100))  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = int(os.getenv("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000))
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = float(os.getenv("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0))
@@ -614,6 +669,8 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "nscale",
     "nebius",
     "dashscope",
+    "qwencloud",
+    "qwen_ai_platform",
     "modelscope",
     "moonshot",
     "publicai",
@@ -783,6 +840,7 @@ openai_compatible_endpoints: Final[list] = [
     "inference.api.nscale.com/v1",
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "https://api-inference.modelscope.cn/v1",
     "https://api.moonshot.ai/v1",
     "https://api.publicai.co/v1",
@@ -806,6 +864,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.meta.ai/v1",
     "https://api.cognition.ai/v1",
     "https://api.scx.ai/v1",
+    "https://gigachat.devices.sberbank.ru/api/v1",
 ]
 
 
@@ -855,6 +914,8 @@ openai_compatible_providers: Final[list] = [
     "nscale",
     "nebius",
     "dashscope",
+    "qwencloud",
+    "qwen_ai_platform",
     "modelscope",
     "moonshot",
     "v0",
@@ -885,6 +946,8 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "featherless_ai",
     "nebius",
     "dashscope",
+    "qwencloud",
+    "qwen_ai_platform",
     "modelscope",
     "moonshot",
     "publicai",
@@ -1092,7 +1155,7 @@ nebius_models: Final[set] = set(
     ]
 )
 
-dashscope_models: Final[set] = set(
+dashscope_models: Final[frozenset] = frozenset(
     [
         "qwen-turbo",
         "qwen-plus",
@@ -1106,6 +1169,10 @@ dashscope_models: Final[set] = set(
         "qwen3-30b-a3b",
     ]
 )
+
+qwencloud_models: Final[frozenset] = frozenset(dashscope_models)
+
+qwen_ai_platform_models: Final[frozenset] = frozenset(dashscope_models)
 
 nebius_embedding_models: Final[set] = set(
     [
@@ -1223,6 +1290,7 @@ BEDROCK_CONVERSE_MODELS: Final = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-fable-5-1",
     "anthropic.claude-fable-5",
     "anthropic.claude-sonnet-5",
     "anthropic.claude-opus-5",
@@ -1410,6 +1478,12 @@ DEFAULT_SOFT_BUDGET: Final = float(
 )  # by default all litellm proxy keys have a soft budget of 50.0
 # makes it clear this is a rate limit error for a litellm virtual key
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY: Final = "LiteLLM Virtual Key user_api_key_hash"
+# Prefix of the 401 raised when a submitted virtual key is not shaped like one.
+INVALID_VIRTUAL_KEY_ERROR_MESSAGE: Final = "LiteLLM Virtual Key expected"
+# Attribute stamped on that 401 at its raise site so log routing recognises it by
+# provenance. Message text is caller-influenceable on other 401s, so it must not
+# be used to classify.
+INVALID_VIRTUAL_KEY_ERROR_MARKER: Final = "_litellm_invalid_virtual_key_error"
 
 # Python garbage collection threshold configuration
 # Format: "gen0,gen1,gen2" e.g., "1000,50,50"
@@ -1548,6 +1622,7 @@ KEY_ROTATION_JOB_NAME: Final = "litellm_key_rotation_job"
 EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME: Final = "litellm_expired_ui_session_key_cleanup_job"
 WEEKLY_SPEND_REPORT_JOB_ID: Final = "weekly_spend_report_job"
 MONTHLY_SPEND_REPORT_JOB_ID: Final = "monthly_spend_report_job"
+USER_SPEND_ALERTS_JOB_ID: Final = "user_spend_alerts_job"
 PROMETHEUS_FALLBACK_STATS_JOB_ID: Final = "prometheus_fallback_stats_job"
 SLACK_DAILY_REPORT_LOCK_ID: Final = "slack_daily_report"
 SLACK_MODEL_DEPRECATION_LOCK_ID: Final = "slack_model_deprecation_warning"
@@ -1667,6 +1742,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "anthropic_prompt_caching_ttl",
     "max_ui_session_budget",
     "budget_rollover",
+    "mcp_tool_search",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))
@@ -1728,6 +1804,7 @@ SENTRY_DENYLIST: Final = [
     "jwt_token",
     "private_key",
     "SLACK_WEBHOOK_URL",
+    "ALERTING_WEBHOOK_URL",
     "webhook_url",
     "LANGFUSE_SECRET_KEY",
     # Email Configuration

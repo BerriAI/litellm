@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Final, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
 
 from pydantic import BaseModel
 
@@ -8,6 +8,9 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -40,31 +43,32 @@ class UserApiKeyCache(DualCache):
     @overload
     def get_cache(
         self,
-        key: Any,
-        parent_otel_span: Any = None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
         *,
         model_type: type[T],
-        **kwargs: Any,
+        **kwargs: object,
     ) -> T | None: ...
 
     @overload
     def get_cache(
         self,
-        key: Any,
-        parent_otel_span: Any = None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
-        **kwargs: Any,
+        model_type: None = None,
+        **kwargs: object,
     ) -> Any: ...
 
     def get_cache(
         self,
-        key,
-        parent_otel_span=None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
         model_type: type[BaseModel] | None = None,
-        **kwargs,
-    ) -> Any | BaseModel | None:
+        **kwargs: object,
+    ) -> object:
         if model_type is None and "model_type" in kwargs:
             model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         cached: Final = super().get_cache(key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs)
@@ -85,31 +89,32 @@ class UserApiKeyCache(DualCache):
     @overload
     async def async_get_cache(
         self,
-        key: Any,
-        parent_otel_span: Any = None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
         *,
         model_type: type[T],
-        **kwargs: Any,
+        **kwargs: object,
     ) -> T | None: ...
 
     @overload
     async def async_get_cache(
         self,
-        key: Any,
-        parent_otel_span: Any = None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
-        **kwargs: Any,
+        model_type: None = None,
+        **kwargs: object,
     ) -> Any: ...
 
     async def async_get_cache(
         self,
-        key,
-        parent_otel_span=None,
+        key: str,
+        parent_otel_span: Span | None = None,
         local_only: bool = False,
         model_type: type[BaseModel] | None = None,
-        **kwargs,
-    ) -> Any | BaseModel | None:
+        **kwargs: object,
+    ) -> object:
         if model_type is None and "model_type" in kwargs:
             model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         cached: Final = await super().async_get_cache(
@@ -129,17 +134,17 @@ class UserApiKeyCache(DualCache):
             return None
         return decoded
 
-    def set_cache(self, key, value, local_only: bool = False, **kwargs):
+    def set_cache(self, key: str | None, value: object, local_only: bool = False, **kwargs: object):
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
-        payload: Final = CacheCodec.serialize(value, model_type=model_type)
+        payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
         return super().set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
-    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
+    async def async_set_cache(self, key: str | None, value: object, local_only: bool = False, **kwargs: object):
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
-        payload: Final = CacheCodec.serialize(value, model_type=model_type)
+        payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
         return await super().async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
-    async def async_set_cache_pipeline(self, cache_list: list, local_only: bool = False, **kwargs) -> None:
+    async def async_set_cache_pipeline(self, cache_list: list, local_only: bool = False, **kwargs: object) -> None:
         """
         Batch writes with the same Codec boundary as ``async_set_cache`` without
         ``model_type``: ``BaseModel`` values become JSON-safe dicts; dicts/scalars unchanged.
