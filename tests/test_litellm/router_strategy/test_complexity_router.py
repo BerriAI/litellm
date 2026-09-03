@@ -10089,6 +10089,207 @@ class TestHeuristicFirst:
         assert outcome.cause == "default_model_fallback"
 
 
+# Scores 0.175 with one signal, so it sits 0.025 from simple_medium: the pair of tiers either side of
+# that boundary are different model pools, and a hair's difference in score picks the other one.
+NEAR_BOUNDARY_PROMPT = (
+    "design a distributed cache with consistent hashing, then explain the failure modes step by step"
+)
+
+# Scores 0.075 with signals, the far side of any margin under 0.075: the scorer is decided here.
+CLEAR_OF_BOUNDARY_PROMPT = "explain step by step how consistent hashing rebalances keys"
+
+
+def _hybrid_router(mock_router_instance, **config_overrides):
+    config = {
+        "tiers": dict(HEURISTIC_FIRST_TIERS),
+        "tier_boundaries": dict(HEURISTIC_FIRST_BOUNDARIES),
+        "classifier_type": "hybrid",
+        "hybrid_boundary_margin": 0.03,
+        "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+        **config_overrides,
+    }
+    return ComplexityRouter(
+        model_name="test-complexity-router",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config=config,
+    )
+
+
+class TestHybridConfig:
+    """Config validation for classifier_type='hybrid'."""
+
+    @pytest.mark.parametrize(
+        "overrides, expected",
+        [
+            ({"classifier_llm_config": None}, "classifier_llm_config is required"),
+            ({"hybrid_boundary_margin": None}, "hybrid_boundary_margin is required"),
+            ({"hybrid_boundary_margin": -0.01}, "greater than or equal to 0"),
+            ({"hybrid_boundary_margin": 1.01}, "less than or equal to 1"),
+        ],
+    )
+    def test_rejects_incoherent_config(self, overrides, expected):
+        config = {
+            "tiers": dict(HEURISTIC_FIRST_TIERS),
+            "classifier_type": "hybrid",
+            "hybrid_boundary_margin": 0.03,
+            "classifier_llm_config": {"model": "haiku-classifier"},
+            **overrides,
+        }
+        with pytest.raises(ValidationError, match=expected):
+            ComplexityRouterConfig(**config)
+
+    @pytest.mark.parametrize("classifier_type", ["heuristic", "llm", "custom", "heuristic_first"])
+    def test_margin_rejected_on_every_other_classifier_type(self, classifier_type):
+        """A margin on a router that never compares a score to a boundary is a silent no-op, so it is
+        refused rather than accepted and ignored. heuristic_first is in this list on purpose: its
+        ceiling is a different question from proximity, and accepting both on one router would make
+        two modes out of one classifier_type."""
+        config: dict[str, object] = {
+            "tiers": dict(HEURISTIC_FIRST_TIERS),
+            "classifier_type": classifier_type,
+            "hybrid_boundary_margin": 0.03,
+        }
+        if classifier_type in ("llm", "heuristic_first"):
+            config["classifier_llm_config"] = {"model": "haiku-classifier"}
+        if classifier_type == "heuristic_first":
+            config["heuristic_first_max_tier"] = "SIMPLE"
+        if classifier_type == "custom":
+            config["classifier_plugin"] = _FixedTierClassifier("SIMPLE")
+        with pytest.raises(ValidationError, match="hybrid_boundary_margin is set but classifier_type"):
+            ComplexityRouterConfig(**config)
+
+    def test_the_cheap_tier_ceiling_is_rejected_here(self):
+        """The two modes are told apart by which knob they take, so the ceiling is refused on hybrid
+        exactly as the margin is refused on heuristic_first."""
+        with pytest.raises(ValidationError, match="heuristic_first_max_tier is set but classifier_type"):
+            ComplexityRouterConfig(
+                tiers=dict(HEURISTIC_FIRST_TIERS),
+                classifier_type="hybrid",
+                hybrid_boundary_margin=0.03,
+                heuristic_first_max_tier="SIMPLE",
+                classifier_llm_config={"model": "haiku-classifier"},
+            )
+
+    def test_custom_tier_set_is_rejected(self):
+        """The scorer only emits the four built-in tiers, so it cannot judge proximity on a replaced set."""
+        with pytest.raises(ValidationError, match="tier_definitions requires classifier_type"):
+            ComplexityRouterConfig(
+                classifier_type="hybrid",
+                hybrid_boundary_margin=0.03,
+                classifier_llm_config={"model": "haiku-classifier"},
+                tier_definitions=[{"name": "lo", "description": "x"}, {"name": "hi", "description": "y"}],
+                tiers={"lo": "gpt-4o-mini", "hi": "gpt-4o"},
+            )
+
+    def test_classifier_model_is_a_dependency(self):
+        config = ComplexityRouterConfig(
+            tiers=dict(HEURISTIC_FIRST_TIERS),
+            classifier_type="hybrid",
+            hybrid_boundary_margin=0.03,
+            classifier_llm_config={"model": "haiku-classifier"},
+        )
+        assert config.uses_llm_classifier is True
+
+
+class TestHybrid:
+    """Behavior of the hybrid chain: the scorer keeps its tier unless the score is near a boundary."""
+
+    @pytest.mark.asyncio
+    async def test_near_boundary_prompt_escalates(self, mock_router_instance):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+        router = _hybrid_router(mock_router_instance)
+
+        _tier, score, signals, _cause = router._score_and_classify(NEAR_BOUNDARY_PROMPT)
+        assert signals and abs(score - HEURISTIC_FIRST_BOUNDARIES["simple_medium"]) < 0.03
+
+        outcome = await router.aclassify(NEAR_BOUNDARY_PROMPT)
+        mock_router_instance.acompletion.assert_awaited_once()
+        assert outcome.tier == ComplexityTier.COMPLEX
+        assert outcome.cause == "llm_classifier"
+
+    @pytest.mark.asyncio
+    async def test_score_clear_of_every_boundary_keeps_the_heuristic_tier(self, mock_router_instance):
+        mock_router_instance.acompletion = AsyncMock()
+        router = _hybrid_router(mock_router_instance)
+        outcome = await router.aclassify(CLEAR_OF_BOUNDARY_PROMPT)
+        mock_router_instance.acompletion.assert_not_called()
+        assert outcome.tier == ComplexityTier.SIMPLE
+        assert outcome.cause == "hybrid_short_circuit"
+
+    @pytest.mark.asyncio
+    async def test_an_expensive_tier_short_circuits_too(self, mock_router_instance):
+        """This is the whole difference from heuristic_first, which would have escalated this by tier
+        alone. Hybrid asks whether the score is DECIDED, not whether the tier is cheap."""
+        mock_router_instance.acompletion = AsyncMock()
+        router = _hybrid_router(
+            mock_router_instance,
+            tier_boundaries={"simple_medium": -0.9, "medium_complex": -0.8, "complex_reasoning": -0.7},
+        )
+
+        tier, _score, signals, _cause = router._score_and_classify(CLEAR_OF_BOUNDARY_PROMPT)
+        assert (tier, bool(signals)) == (ComplexityTier.REASONING, True)
+
+        outcome = await router.aclassify(CLEAR_OF_BOUNDARY_PROMPT)
+        mock_router_instance.acompletion.assert_not_called()
+        assert outcome.tier == ComplexityTier.REASONING
+        assert outcome.cause == "hybrid_short_circuit"
+
+    @pytest.mark.asyncio
+    async def test_widening_the_margin_escalates_what_a_narrow_one_kept(self, mock_router_instance):
+        """The margin is the knob: the same prompt short-circuits at 0.03 and escalates at 0.08."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "MEDIUM"}'))
+        router = _hybrid_router(mock_router_instance, hybrid_boundary_margin=0.08)
+        outcome = await router.aclassify(CLEAR_OF_BOUNDARY_PROMPT)
+        mock_router_instance.acompletion.assert_awaited_once()
+        assert outcome.cause == "llm_classifier"
+
+    @pytest.mark.asyncio
+    async def test_a_zero_margin_escalates_only_an_exact_boundary_score(self, mock_router_instance):
+        """0 is a real margin, not an off switch: a score sitting exactly on the line still escalates.
+
+        The boundary is spelled as the scorer's own accumulated float rather than the 0.075 it prints
+        as, because the comparison is on raw floats: a boundary written 0.075 sits 1.4e-17 away from
+        this score and a zero margin correctly declines to call that exact."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "MEDIUM"}'))
+        on_the_line = 0.07499999999999998
+        router = _hybrid_router(
+            mock_router_instance,
+            tier_boundaries={"simple_medium": on_the_line, "medium_complex": 0.35, "complex_reasoning": 0.60},
+            hybrid_boundary_margin=0,
+        )
+
+        _tier, score, _signals, _cause = router._score_and_classify(CLEAR_OF_BOUNDARY_PROMPT)
+        assert score == on_the_line
+
+        outcome = await router.aclassify(CLEAR_OF_BOUNDARY_PROMPT)
+        mock_router_instance.acompletion.assert_awaited_once()
+        assert outcome.cause == "llm_classifier"
+
+    @pytest.mark.asyncio
+    async def test_no_signal_prompt_escalates_however_far_from_a_boundary(self, mock_router_instance):
+        """The scorer with no opinion has no tier to be confident about, so proximity cannot save it."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+        router = _hybrid_router(mock_router_instance)
+
+        tier, score, signals, _cause = router._score_and_classify(NO_SIGNAL_PROMPT)
+        assert (tier, score, signals) == (ComplexityTier.SIMPLE, 0.0, ())
+
+        outcome = await router.aclassify(NO_SIGNAL_PROMPT)
+        mock_router_instance.acompletion.assert_awaited_once()
+        assert outcome.cause == "llm_classifier"
+
+    @pytest.mark.asyncio
+    async def test_classifier_failure_falls_back_to_the_scorer(self, mock_router_instance):
+        mock_router_instance.acompletion = AsyncMock(side_effect=RuntimeError("classifier exploded"))
+        router = _hybrid_router(mock_router_instance)
+        expected_tier, expected_score, expected_signals, _cause = router._score_and_classify(NEAR_BOUNDARY_PROMPT)
+
+        outcome = await router.aclassify(NEAR_BOUNDARY_PROMPT)
+
+        assert (outcome.tier, outcome.score, outcome.signals) == (expected_tier, expected_score, expected_signals)
+        assert outcome.cause == "heuristic_scorer"
+
+
 def _windowed_router(*deployments: tuple) -> Router:
     """Real Router; each deployment is (group, provider_model, declared window or None).
     None means no declared override on a model the cost map does not know: unresolvable."""
@@ -10334,7 +10535,8 @@ class TestContextWindowEscalation:
             litellm_router_instance=_windowed_router(_SMALL, _BIG),
             complexity_router_config=_tier_config(session_affinity=True),
         )
-        session_kwargs = lambda: {"metadata": {"session_id": "s-1", "user_api_key_hash": "k-1"}}  # noqa: E731
+        def session_kwargs() -> dict[str, object]:
+            return {"metadata": {"session_id": "s-1", "user_api_key_hash": "k-1"}}
 
         first = await router.async_pre_routing_hook(
             model="test-router", request_kwargs=session_kwargs(), messages=_OVERSIZED_TURNS
@@ -10357,7 +10559,8 @@ class TestContextWindowEscalation:
             litellm_router_instance=_windowed_router(_SMALL, _BIG),
             complexity_router_config=_tier_config(session_affinity=True),
         )
-        session_kwargs = lambda: {"metadata": {"session_id": "s-2", "user_api_key_hash": "k-2"}}  # noqa: E731
+        def session_kwargs() -> dict[str, object]:
+            return {"metadata": {"session_id": "s-2", "user_api_key_hash": "k-2"}}
 
         pinned = await router.async_pre_routing_hook(
             model="test-router", request_kwargs=session_kwargs(), messages=[{"role": "user", "content": "ok continue"}]

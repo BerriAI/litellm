@@ -6,8 +6,11 @@ External callers (public IPs) only see servers with available_on_public_internet
 """
 
 import ipaddress
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Final
+from urllib.parse import urlparse
 
 from fastapi import Request
 from pydantic import TypeAdapter, ValidationError
@@ -137,7 +140,7 @@ class IPAddressUtils:
     @staticmethod
     def is_request_from_trusted_proxy(
         request: Request,
-        general_settings: dict[str, Any] | None = None,
+        general_settings: Mapping[str, Any] | None = None,
     ) -> bool:
         """
         Return True if X-Forwarded-* headers on this request should be trusted.
@@ -189,6 +192,36 @@ class IPAddressUtils:
         direct_ip: Final = request.client.host if request.client else None
         trusted_networks: Final = IPAddressUtils.parse_trusted_proxy_networks(trusted_ranges)
         return IPAddressUtils.is_trusted_proxy(direct_ip, trusted_networks)
+
+    @staticmethod
+    def is_request_https(
+        request: Request,
+        general_settings: Mapping[str, Any] | None = None,
+    ) -> bool:
+        """
+        Whether this request's PUBLIC-facing origin is HTTPS, for deciding
+        whether a cookie set on the response should be marked ``Secure``.
+
+        litellm only sees a plain-HTTP hop whenever TLS terminates at a
+        reverse proxy, so ``request.url.scheme`` alone cannot answer this in
+        that deployment shape. Resolved from the first trusted signal:
+          1. ``PROXY_BASE_URL`` (operator-declared public origin).
+          2. ``X-Forwarded-Proto``, only when the request's direct peer is a
+             configured trusted proxy -- see ``is_request_from_trusted_proxy``.
+             An untrusted caller cannot spoof this header to strip Secure.
+          3. The request's own literal scheme (direct TLS termination, or no
+             reverse proxy in front of litellm).
+        """
+        configured_base_url: Final = os.environ.get("PROXY_BASE_URL", "").strip()
+        if configured_base_url:
+            return urlparse(configured_base_url).scheme == "https"
+
+        if IPAddressUtils.is_request_from_trusted_proxy(request, general_settings=general_settings):
+            forwarded_proto: Final = request.headers.get("X-Forwarded-Proto")
+            if forwarded_proto:
+                return forwarded_proto.split(",")[0].strip().lower() == "https"
+
+        return request.url.scheme == "https"
 
     @staticmethod
     def extract_client_ip_from_xff_hops(

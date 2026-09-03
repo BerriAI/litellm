@@ -1337,6 +1337,7 @@ class AmazonConverseConfig(BaseConfig):
             )
 
         additional_request_params.pop("parallel_tool_calls", None)
+        additional_request_params.pop("client_metadata", None)
 
         # Only set the topK value in for models that support it
         additional_request_params.update(self._handle_top_k_value(model, inference_params, drop_params))
