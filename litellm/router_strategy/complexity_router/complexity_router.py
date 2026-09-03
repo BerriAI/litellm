@@ -1671,11 +1671,22 @@ class ComplexityRouter(CustomLogger):
         ]
         response_format: Final = classifier_response_format
 
+        classifier_params: Final[Mapping[str, object]] = (
+            MappingProxyType({})
+            if llm_config.reasoning_effort is None
+            else self.litellm_router_instance.params_the_target_accepts(
+                llm_config.model,
+                MappingProxyType({"reasoning_effort": llm_config.reasoning_effort}),
+                MappingProxyType({}),
+            )
+        )
+
         proxy_server_request: Final = {
             "body": {
                 "model": llm_config.model,
                 "messages": messages_for_call,
                 "response_format": response_format,
+                **classifier_params,
             }
         }
 
@@ -1684,6 +1695,7 @@ class ComplexityRouter(CustomLogger):
             messages=messages_for_call,
             response_format=response_format,
             timeout=llm_config.timeout_ms / 1000,
+            **classifier_params,
             metadata=metadata,
             proxy_server_request=proxy_server_request,
             turn_off_message_logging=turn_off_message_logging,

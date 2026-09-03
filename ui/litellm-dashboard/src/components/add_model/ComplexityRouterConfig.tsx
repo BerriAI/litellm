@@ -126,6 +126,7 @@ export interface ClassifierLLMConfig {
   timeout_ms: number;
   classification_rubric?: ClassificationRubric;
   system_prompt?: string;
+  reasoning_effort?: ReasoningEffort;
 }
 
 export type ClassifierType = "heuristic" | "heuristic_v2" | "llm" | "heuristic_first" | "hybrid";

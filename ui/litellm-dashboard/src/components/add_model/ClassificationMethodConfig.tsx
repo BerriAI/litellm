@@ -13,6 +13,7 @@ import ClassifierPromptEditor from "./ClassifierPromptEditor";
 import CustomTierPromptEditor from "./CustomTierPromptEditor";
 import { RestrictedSection, restrictedBy } from "./TierRestrictions";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
+import { REASONING_EFFORT_OPTIONS, ReasoningEffort } from "./complexity_router_tiers";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
   ClassificationFrequency,
@@ -49,6 +50,7 @@ const HEURISTIC_V2_EXPLANATION =
   "the first tier that meets its trained threshold. It runs locally with no classifier API call.";
 
 const CLASSIFIER_TIMEOUT_ID = "classifier-timeout-ms";
+const CLASSIFIER_EFFORT_PROVIDER_DEFAULT = "__provider_default__";
 const CLASSIFIER_CONTEXT_WINDOW_SIZE_ID = "classifier-context-window-size";
 const CLASSIFIER_CONTEXT_BUDGET_CHARS_ID = "classifier-context-budget-chars";
 const HYBRID_BOUNDARY_MARGIN_ID = "hybrid-boundary-margin";
@@ -251,6 +253,12 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   const contextBudget = value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS;
   const contextBudgetQuotesNothing = contextBudget > 0 && contextBudget < MIN_QUOTED_CONTEXT_TURN_CHARS;
   const classificationRubric = value.classifier_llm_config?.classification_rubric ?? DEFAULT_CLASSIFICATION_RUBRIC;
+  const classifierEffort = value.classifier_llm_config?.reasoning_effort;
+  // A stored level the option list does not carry (hand-authored, or a level the picker omits) is
+  // listed anyway, so the control renders with its value selected and can be cleared.
+  const classifierEffortOptions = Array.from(
+    new Set<ReasoningEffort>([...REASONING_EFFORT_OPTIONS, ...(classifierEffort ? [classifierEffort] : [])]),
+  );
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
     const nextValue: ComplexityRouterConfigValue = {
@@ -316,6 +324,18 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         ...value.classifier_llm_config,
         model: value.classifier_llm_config?.model ?? "",
         timeout_ms: timeoutMs,
+      },
+    });
+  };
+
+  const handleClassifierReasoningEffortChange = (reasoningEffort: ReasoningEffort | undefined) => {
+    onChange({
+      ...value,
+      classifier_llm_config: {
+        ...value.classifier_llm_config,
+        model: value.classifier_llm_config?.model ?? "",
+        timeout_ms: value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
+        reasoning_effort: reasoningEffort,
       },
     });
   };
@@ -485,15 +505,44 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         <div className="mt-4 space-y-3">
           <div>
             <strong className="block mb-1 font-semibold">Classifier Model</strong>
-            <SearchSelect
-              options={modelOptions}
-              value={value.classifier_llm_config?.model ?? ""}
-              onValueChange={handleClassifierModelChange}
-              placeholder="Select the model that will classify request complexity"
-              emptyText="No models found"
-              allowClear={false}
-              className={classifierModelMissing ? "border-destructive" : undefined}
-            />
+            <div className="flex items-center gap-2">
+              <SearchSelect
+                options={modelOptions}
+                value={value.classifier_llm_config?.model ?? ""}
+                onValueChange={handleClassifierModelChange}
+                placeholder="Select the model that will classify request complexity"
+                emptyText="No models found"
+                allowClear={false}
+                className={`flex-1 ${classifierModelMissing ? "border-destructive" : ""}`}
+              />
+              {value.classifier_llm_config?.model && (
+                <SimpleTooltip content="Reasoning effort for the classifier call only, so a reasoning classifier model stays cheap without moving effort for the normal traffic that same deployment serves. A level the model does not take is dropped and classification still runs.">
+                  <Select
+                    value={classifierEffort ?? CLASSIFIER_EFFORT_PROVIDER_DEFAULT}
+                    onValueChange={(effort) =>
+                      handleClassifierReasoningEffortChange(
+                        effort === CLASSIFIER_EFFORT_PROVIDER_DEFAULT ? undefined : (effort as ReasoningEffort),
+                      )
+                    }
+                  >
+                    <SelectTrigger
+                      aria-label="Classifier reasoning effort"
+                      className="w-36 shrink-0 text-muted-foreground"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={CLASSIFIER_EFFORT_PROVIDER_DEFAULT}>Default effort</SelectItem>
+                      {classifierEffortOptions.map((effort) => (
+                        <SelectItem key={effort} value={effort}>
+                          {effort} effort
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </SimpleTooltip>
+              )}
+            </div>
             {classifierModelMissing && <span className="text-xs text-destructive">A classifier model is required</span>}
           </div>
           <div>

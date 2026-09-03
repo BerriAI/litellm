@@ -170,6 +170,45 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
   });
 
+  it("writes and clears classifier reasoning effort", async () => {
+    const onChange = vi.fn();
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    const first = renderWithProviders(<ComplexityRouterConfig {...baseProps} value={llmValue} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Classifier reasoning effort" }));
+    await user.click(await screen.findByRole("option", { name: "low effort" }));
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, reasoning_effort: "low" },
+    });
+
+    onChange.mockClear();
+    first.unmount();
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{
+          ...llmValue,
+          classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, reasoning_effort: "low" },
+        }}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    await user.click(screen.getByRole("combobox", { name: "Classifier reasoning effort" }));
+    await user.click(await screen.findByRole("option", { name: "Default effort" }));
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000, reasoning_effort: undefined },
+    });
+  });
+
   it("should default the context window and budget when llm is selected", () => {
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,

@@ -12,6 +12,7 @@ from typing import Annotated, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation, field_serializer, field_validator, model_validator
 
+from litellm.types.llms.openai import REASONING_EFFORT
 from litellm.types.router import AdaptiveRouterWeights, ClassifierPlugin, RoutingPlugin
 
 from .tier_predictor import TrainedTierArtifact
@@ -435,6 +436,18 @@ class ClassifierLLMConfig(BaseModel):
     timeout_ms: int = Field(
         default=3000,
         description="Timeout budget for the classification call, in milliseconds",
+    )
+    reasoning_effort: REASONING_EFFORT | None = Field(
+        default=None,
+        description=(
+            "reasoning_effort sent on the classifier's own call. Classification is a short, "
+            "latency-sensitive call on every request, so a reasoning classifier model is usually "
+            "worth holding at a cheap level. Setting it on the deployment instead moves effort for "
+            "every request that deployment serves, which is wrong when the classifier model also "
+            "serves normal traffic. A level the target refuses is dropped rather than failing the "
+            "call, so classification still runs. Leave unset to send no effort and inherit whatever "
+            "the deployment is configured with. Ignored by classifier types that call no model."
+        ),
     )
     classification_rubric: ClassificationRubric | None = Field(
         default=None,

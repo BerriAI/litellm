@@ -6,6 +6,7 @@ Tests the rule-based complexity scoring and tier assignment logic.
 
 import asyncio
 import logging
+from types import MappingProxyType
 from typing import Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1915,6 +1916,50 @@ class TestLLMClassifier:
         assert outcome.tier == ComplexityTier.COMPLEX
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "request_kwargs",
+        [
+            pytest.param({"metadata": {"user_api_key": "sk-abc"}}, id="chat-completions"),
+            pytest.param({"litellm_metadata": {"user_api_key": "sk-abc"}}, id="messages-and-responses"),
+        ],
+    )
+    async def test_classifier_reasoning_effort_reaches_the_real_router_for_every_metadata_shape(
+        self, llm_classifier_config, request_kwargs
+    ):
+        """The call must retain an accepted effort through the real Router pipeline.
+
+        The two metadata shapes are the classifier's arrival shapes on chat completions versus
+        Messages and Responses. This drives the same real Router path that resolves deployment
+        support instead of an AsyncMock that would accept every param.
+        """
+        llm_classifier_config["classifier_llm_config"]["reasoning_effort"] = "low"
+        real_router = Router(
+            model_list=[
+                {
+                    "model_name": "haiku-classifier",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-classifier",
+                        "mock_response": '{"tier": "COMPLEX"}',
+                    },
+                }
+            ]
+        )
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=real_router,
+            complexity_router_config=llm_classifier_config,
+        )
+
+        outcome = await router.aclassify("hi", request_kwargs=request_kwargs)
+
+        assert outcome.cause == "llm_classifier"
+        assert outcome.tier == ComplexityTier.COMPLEX
+        assert real_router.params_the_target_accepts(
+            "haiku-classifier", {"reasoning_effort": "low"}, {}
+        ) == {}
+
+    @pytest.mark.asyncio
     async def test_aclassify_captures_request_body_in_proxy_server_request(
         self, llm_complexity_router, mock_router_instance
     ):
@@ -2209,6 +2254,60 @@ class TestLLMClassifier:
         assert result.model == "o1-preview"  # REASONING tier model
         call_kwargs = mock_router_instance.acompletion.call_args.kwargs
         assert call_kwargs["metadata"] == {**request_metadata, "internal_call_origin": "autorouter_classifier"}
+
+    @pytest.mark.asyncio
+    async def test_classifier_reasoning_effort_reaches_the_call_and_the_logged_body(
+        self, mock_router_instance, llm_classifier_config
+    ):
+        """A configured classifier reasoning_effort must reach the wire and the spend-log body.
+
+        The target capability filter runs before both the actual call and the logged
+        proxy_server_request body. This makes it impossible for the spend log to claim a level
+        that the provider filter has removed.
+        """
+        llm_classifier_config["classifier_llm_config"]["reasoning_effort"] = "low"
+        mock_router_instance.params_the_target_accepts.return_value = MappingProxyType({"reasoning_effort": "low"})
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=llm_classifier_config,
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        await router.aclassify("hello")
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        assert call_kwargs["reasoning_effort"] == "low"
+        assert call_kwargs["proxy_server_request"]["body"]["reasoning_effort"] == "low"
+
+    @pytest.mark.asyncio
+    async def test_classifier_reasoning_effort_rejected_by_target_is_absent_from_call_and_log(
+        self, mock_router_instance, llm_classifier_config
+    ):
+        """A rejected level must be absent from both consumers of the resolved mapping."""
+        llm_classifier_config["classifier_llm_config"]["reasoning_effort"] = "low"
+        mock_router_instance.params_the_target_accepts.return_value = MappingProxyType({})
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=llm_classifier_config,
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        await router.aclassify("hello")
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        assert "reasoning_effort" not in call_kwargs
+        assert "reasoning_effort" not in call_kwargs["proxy_server_request"]["body"]
+
+    @pytest.mark.asyncio
+    async def test_unset_classifier_reasoning_effort_leaves_the_call_untouched(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """No configured effort means no effort kwarg and no body key."""
+        mock_router_instance.params_the_target_accepts.return_value = MappingProxyType({})
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        await llm_complexity_router.aclassify("hello")
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        mock_router_instance.params_the_target_accepts.assert_not_called()
+        assert "reasoning_effort" not in call_kwargs
+        assert "reasoning_effort" not in call_kwargs["proxy_server_request"]["body"]
 
 
 class TestRouterPreRoutingAliasOverrides:

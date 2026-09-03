@@ -11231,8 +11231,8 @@ class Router:
             return True
         return supported is None or param in supported
 
-    def _tier_params_the_target_accepts(
-        self, model: str, tier_params: Mapping[str, object], request_kwargs: Mapping[str, object]
+    def params_the_target_accepts(
+        self, model: str, params: Mapping[str, object], request_kwargs: Mapping[str, object]
     ) -> Mapping[str, object]:
         """Drop an OpenAI param that no deployment behind ``model`` declares.
 
@@ -11269,24 +11269,22 @@ class Router:
         """
         deployments: Final = self.get_model_list(model_name=model) or ()
         if not deployments:
-            return tier_params
-        allowlisted: Final = self._declared_param_allowlist(tier_params) | self._declared_param_allowlist(
-            request_kwargs
-        )
-        candidates: Final = provider_rejectable_params(tier_params) - self.TIER_PARAMS_NEVER_DROPPED - allowlisted
+            return params
+        allowlisted: Final = self._declared_param_allowlist(params) | self._declared_param_allowlist(request_kwargs)
+        candidates: Final = provider_rejectable_params(params) - self.TIER_PARAMS_NEVER_DROPPED - allowlisted
         unsupported: Final = frozenset(
             param
             for param in candidates
             if not any(self._deployment_accepts_param(deployment, model, param) for deployment in deployments)
         )
         if not unsupported:
-            return tier_params
+            return params
         verbose_router_logger.warning(
-            "litellm.router.py: dropping tier params %s for model=%s, no deployment behind it declares them",
+            "litellm.router.py: dropping params %s for model=%s, no deployment behind it declares them",
             ", ".join(sorted(unsupported)),
             model,
         )
-        return MappingProxyType({key: value for key, value in tier_params.items() if key not in unsupported})
+        return MappingProxyType({key: value for key, value in params.items() if key not in unsupported})
 
     def get_model_list(
         self, model_name: str | None = None, team_id: str | None = None
@@ -12352,11 +12350,11 @@ class Router:
                 messages = pre_routing_hook_response.messages
                 record_pre_routing_selection(request_kwargs, model)
                 if pre_routing_hook_response.litellm_params:
-                    accepted_tier_params: Final = self._tier_params_the_target_accepts(
+                    accepted_params: Final = self.params_the_target_accepts(
                         model, pre_routing_hook_response.litellm_params, request_kwargs
                     )
-                    self._drop_client_effort_carriers_a_tier_pin_supersedes(request_kwargs, accepted_tier_params)
-                    request_kwargs.update(accepted_tier_params)
+                    self._drop_client_effort_carriers_a_tier_pin_supersedes(request_kwargs, accepted_params)
+                    request_kwargs.update(accepted_params)
             #########################################################
 
             # Resolve the strategy and logger AFTER the pre-routing hook, since
@@ -12468,11 +12466,11 @@ class Router:
                 messages = pre_routing_hook_response.messages
                 record_pre_routing_selection(request_kwargs, model)
                 if pre_routing_hook_response.litellm_params:
-                    accepted_tier_params: Final = self._tier_params_the_target_accepts(
+                    accepted_params: Final = self.params_the_target_accepts(
                         model, pre_routing_hook_response.litellm_params, request_kwargs
                     )
-                    self._drop_client_effort_carriers_a_tier_pin_supersedes(request_kwargs, accepted_tier_params)
-                    request_kwargs.update(accepted_tier_params)
+                    self._drop_client_effort_carriers_a_tier_pin_supersedes(request_kwargs, accepted_params)
+                    request_kwargs.update(accepted_params)
 
             # 2. Get healthy deployments
             healthy_deployments: Final = await self.async_get_healthy_deployments(

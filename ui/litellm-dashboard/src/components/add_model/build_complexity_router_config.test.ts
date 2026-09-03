@@ -530,6 +530,17 @@ describe("classifier prompt and fallback", () => {
     expect(config.classifier_llm_config?.system_prompt).toBe("Grade the data sensitivity of the request.");
   });
 
+  it("carries a classifier reasoning_effort to the wire beside a rubric and beside a custom prompt", () => {
+    // Both payload builders rebuild classifier_llm_config from named keys, so an effort the
+    // operator set in config.yaml is wiped by any dashboard edit unless each one carries it.
+    expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, reasoning_effort: "low" }).reasoning_effort).toBe(
+      "low",
+    );
+    const withPrompt = { model: "m", timeout_ms: 1, system_prompt: "x", reasoning_effort: "minimal" } as const;
+    expect(normalizeClassifierLlmConfig(withPrompt)).toEqual(withPrompt);
+    expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1 })).not.toHaveProperty("reasoning_effort");
+  });
+
   it("normalizeClassifierLlmConfig leaves a real prompt untouched and strips an empty one", () => {
     expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "x" })).toEqual({
       model: "m",
@@ -895,6 +906,16 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
 
   it("forces the LLM classifier even when the form still holds heuristic, which the backend rejects", () => {
     expect(build({ classifierType: "heuristic" }).classifier_type).toBe("llm");
+  });
+
+  it("keeps the classifier reasoning_effort, which a custom tier set does not conflict with", () => {
+    // This branch deliberately drops system_prompt and classification_rubric because the backend
+    // rejects those beside tier_definitions. Effort is orthogonal to the tier taxonomy, so
+    // dropping it here would silently lose it on every custom-tier router.
+    const payload = build({
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
+    });
+    expect(payload.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" });
   });
 
   it("turns session pinning off rather than leaving a stale true the backend rejects", () => {

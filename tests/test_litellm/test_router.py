@@ -12021,7 +12021,7 @@ def test_resolved_litellm_models_answers_through_every_channel_a_request_uses(
     assert set(_resolution_router().resolved_litellm_models(model_name)) == set(expected)
 
 
-class TestTierParamsTheTargetAccepts:
+class TestParamsTheTargetAccepts:
     """A tier's litellm_params are applied to every request that tier routes, so one the target
     cannot take raised UnsupportedParamsError before the request left the proxy, turning the whole
     tier into a 400."""
@@ -12041,14 +12041,14 @@ class TestTierParamsTheTargetAccepts:
     def test_drops_a_param_no_deployment_declares(self):
         router = self._router("novita/moonshotai/kimi-k3")
 
-        accepted = router._tier_params_the_target_accepts("tiered", {"reasoning_effort": "max"}, {})
+        accepted = router.params_the_target_accepts("tiered", {"reasoning_effort": "max"}, {})
 
         assert accepted == {}
 
     def test_keeps_a_param_the_deployment_declares(self):
         router = self._router("fireworks_ai/kimi-k3")
 
-        accepted = router._tier_params_the_target_accepts("tiered", {"reasoning_effort": "max"}, {})
+        accepted = router.params_the_target_accepts("tiered", {"reasoning_effort": "max"}, {})
 
         assert accepted == {"reasoning_effort": "max"}
 
@@ -12070,7 +12070,7 @@ class TestTierParamsTheTargetAccepts:
         configuration the request needs while never touching what the provider would reject."""
         router = self._router("novita/moonshotai/kimi-k3")
 
-        accepted = router._tier_params_the_target_accepts("tiered", {control: value, "reasoning_effort": "max"}, {})
+        accepted = router.params_the_target_accepts("tiered", {control: value, "reasoning_effort": "max"}, {})
 
         assert accepted == {control: value}
 
@@ -12090,7 +12090,7 @@ class TestTierParamsTheTargetAccepts:
         drop_params or additional_drop_params would silently disable the operator's sanitization."""
         router = self._router("novita/moonshotai/kimi-k3")
 
-        accepted = router._tier_params_the_target_accepts("tiered", {control: value, "reasoning_effort": "max"}, {})
+        accepted = router.params_the_target_accepts("tiered", {control: value, "reasoning_effort": "max"}, {})
 
         assert accepted == {control: value}
 
@@ -12100,7 +12100,7 @@ class TestTierParamsTheTargetAccepts:
         both sets and allowlists would never 400 and must not be dropped."""
         router = self._router("novita/moonshotai/kimi-k3")
 
-        accepted = router._tier_params_the_target_accepts(
+        accepted = router.params_the_target_accepts(
             "tiered", {"reasoning_effort": "max", "allowed_openai_params": ["reasoning_effort"]}, {}
         )
 
@@ -12109,7 +12109,7 @@ class TestTierParamsTheTargetAccepts:
     def test_request_allowlist_protects_the_param_it_names(self):
         router = self._router("novita/moonshotai/kimi-k3")
 
-        accepted = router._tier_params_the_target_accepts(
+        accepted = router.params_the_target_accepts(
             "tiered", {"reasoning_effort": "max"}, {"allowed_openai_params": ["reasoning_effort"]}
         )
 
@@ -12118,7 +12118,7 @@ class TestTierParamsTheTargetAccepts:
     def test_allowlist_protects_only_the_params_it_names(self):
         router = self._router("novita/moonshotai/kimi-k3")
 
-        accepted = router._tier_params_the_target_accepts(
+        accepted = router.params_the_target_accepts(
             "tiered", {"reasoning_effort": "max", "allowed_openai_params": ["seed"]}, {}
         )
 
@@ -12147,7 +12147,7 @@ class TestTierParamsTheTargetAccepts:
         today the mismatch fails loudly."""
         router = self._router("petals/petals-team/StableBeluga2")
 
-        accepted = router._tier_params_the_target_accepts(
+        accepted = router.params_the_target_accepts(
             "tiered", {"max_completion_tokens": 100, "reasoning_effort": "max"}, {}
         )
 
@@ -12159,7 +12159,7 @@ class TestTierParamsTheTargetAccepts:
         worse than the error they already get."""
         router = self._router("ai21/jamba-1.5-mini")
 
-        accepted = router._tier_params_the_target_accepts(
+        accepted = router.params_the_target_accepts(
             "tiered", {"extra_headers": {"x-tenant": "acme"}, "reasoning_effort": "max"}, {}
         )
 
@@ -12174,7 +12174,7 @@ class TestTierParamsTheTargetAccepts:
             ]
         )
 
-        accepted = router._tier_params_the_target_accepts("tiered", {"reasoning_effort": "max"}, {})
+        accepted = router.params_the_target_accepts("tiered", {"reasoning_effort": "max"}, {})
 
         assert accepted == {"reasoning_effort": "max"}
 
@@ -12247,7 +12247,7 @@ class TestTierParamsTheTargetAccepts:
         """An unresolvable target must never narrow what the request already did."""
         router = self._router("fireworks_ai/kimi-k3")
 
-        accepted = router._tier_params_the_target_accepts("no-such-group", {"reasoning_effort": "max"}, {})
+        accepted = router.params_the_target_accepts("no-such-group", {"reasoning_effort": "max"}, {})
 
         assert accepted == {"reasoning_effort": "max"}
 
