@@ -590,6 +590,44 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
+  it("writes both modality flags as false into the create payload when the panel stays untouched", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "modality-router" } });
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      modality_routing: false,
+      modality_pin_override: false,
+    });
+  });
+
+  it("carries the pin override through to the create payload once image routing unlocks it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "modality-router" } });
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Modality Routing"));
+    await user.click(await screen.findByRole("switch", { name: "Route image requests to vision-capable models" }));
+    await user.click(await screen.findByRole("switch", { name: "Override session pin for image requests" }));
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      modality_routing: true,
+      modality_pin_override: true,
+    });
+  });
+
   // Custom is the escape hatch, not the headline choice, so it's listed after every bundled preset
   // rather than first.
   it("lists Custom Configuration after the bundled presets", () => {
@@ -598,7 +636,14 @@ describe("AddAutoRouterTab", () => {
 
     const labels = visibleOptions().map((option) => option.querySelector(".font-medium")?.textContent);
 
-    expect(labels).toEqual(["Anthropic Family", "Gemini Family", "Lite", "OpenAI Family", "Custom Configuration"]);
+    expect(labels).toEqual([
+      "1M Context",
+      "Anthropic Family",
+      "Gemini Family",
+      "Lite",
+      "OpenAI Family",
+      "Custom Configuration",
+    ]);
   });
 
   describe("routing test", () => {
@@ -1022,7 +1067,14 @@ describe("AddAutoRouterTab", () => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
       const labels = visibleOptions().map((option) => option.querySelector(".font-medium")?.textContent);
-      expect(labels).toEqual(["Anthropic Family", "Gemini Family", "Lite", "OpenAI Family", "Custom Configuration"]);
+      expect(labels).toEqual([
+        "Anthropic Family",
+        "1M Context",
+        "Gemini Family",
+        "Lite",
+        "OpenAI Family",
+        "Custom Configuration",
+      ]);
     });
 
     it.each([
