@@ -1,3 +1,4 @@
+import json
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,7 +20,7 @@ from litellm.proxy.agent_endpoints.endpoints import (
     router,
     user_api_key_auth,
 )
-from litellm.repositories.config_repository import SettingsApplied
+from litellm.repositories.config_repository import SettingsApplied, SettingsTransform, SettingsUpdate
 from litellm.types.agents import AgentResponse
 
 
@@ -1069,15 +1070,22 @@ def test_merged_agent_card_url_has_no_double_slash_without_proxy_base_url(
 class _DbBackedProxyConfig:
     """Stands in for the persisted `litellm_settings` row the DB-backed publish path
     read-modify-writes, so the endpoints are exercised against stored state rather than
-    against whatever `litellm.public_*` global this process happens to hold."""
+    against whatever `litellm.public_*` global this process happens to hold.
+
+    Storage goes through JSON the way the `litellm_config` row does, so every read hands back
+    freshly built values instead of the objects the endpoint still holds a reference to."""
 
     def __init__(self, stored: dict[str, object] | None = None) -> None:
-        self.stored_litellm_settings: dict[str, object] = dict(stored or {})
+        self.stored_litellm_settings_json: str = json.dumps(stored or {})
 
-    async def update_litellm_settings(self, apply):
-        result = apply(dict(self.stored_litellm_settings))
+    @property
+    def stored_litellm_settings(self) -> dict[str, object]:
+        return json.loads(self.stored_litellm_settings_json)
+
+    async def update_litellm_settings(self, apply: SettingsTransform) -> SettingsUpdate:
+        result: Final = apply(json.loads(self.stored_litellm_settings_json))
         if isinstance(result, SettingsApplied):
-            self.stored_litellm_settings = dict(result.settings)
+            self.stored_litellm_settings_json = json.dumps(dict(result.settings))
         return result
 
 
@@ -1105,8 +1113,8 @@ def test_make_agent_public_twice_keeps_both_agents_public(monkeypatch: pytest.Mo
     assert [agent.agent_id for agent in registry.get_public_agent_list()] == ["agent-1", "agent-2"]
 
 
-def test_make_agent_public_rejects_an_already_public_agent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The duplicate guard must still fire when the published list comes back from the DB."""
+def test_make_agent_public_rejects_an_agent_published_only_in_the_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The duplicate guard must fire off the stored list, not just what this process published."""
     import litellm
     from litellm.proxy.agent_endpoints import agent_registry as agent_registry_module
     from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
@@ -1117,12 +1125,13 @@ def test_make_agent_public_rejects_an_already_public_agent(monkeypatch: pytest.M
     monkeypatch.setattr(agent_registry_module, "global_agent_registry", registry)
     monkeypatch.setattr(litellm, "public_agent_groups", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
-    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", _DbBackedProxyConfig())
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_config",
+        _DbBackedProxyConfig({"public_agent_groups": ["agent-1"]}),
+    )
 
-    first: Final = client.post("/v1/agents/agent-1/make_public", headers={"Authorization": "Bearer test-key"})
     duplicate: Final = client.post("/v1/agents/agent-1/make_public", headers={"Authorization": "Bearer test-key"})
 
-    assert first.status_code == 200
     assert duplicate.status_code == 400
     assert "already in public agent groups" in duplicate.json()["detail"]
 
