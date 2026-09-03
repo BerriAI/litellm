@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.url_utils import (
     safe_get,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    HTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
 )
@@ -53,6 +54,20 @@ class _FetchedResponseView(TypedDict):
     """Holds one ``safe_get`` result so the response reads back as ``httpx.Response``."""
 
     response: ReadOnly[httpx.Response]
+
+
+class _VertexEndpointDeployedModel(TypedDict, total=False):
+    model: ReadOnly[str]
+
+
+class _VertexEndpointResponse(TypedDict, total=False):
+    deployedModels: ReadOnly[list[_VertexEndpointDeployedModel]]
+
+
+class _VertexEndpointPayloadView(TypedDict):
+    """Holds one decoded GET endpoints/<id> response so the payload reads back typed."""
+
+    payload: ReadOnly[_VertexEndpointResponse]
 
 
 def _vertex_batch_payload(response: _VertexBatchJsonSource) -> VertexBatchPredictionResponse:
@@ -116,10 +131,18 @@ class VertexAIBatchPrediction(VertexLLM):
             "Authorization": f"Bearer {access_token}",
         }
 
-        vertex_batch_request: Final[VertexAIBatchPredictionJob] = (
+        transformed_batch_request: Final[VertexAIBatchPredictionJob] = (
             VertexAIBatchTransformation.transform_openai_batch_request_to_vertex_ai_batch_request(
-                request=create_batch_data
+                request=create_batch_data,
+                vertex_project=vertex_project or project_id,
+                vertex_location=vertex_location or "us-central1",
             )
+        )
+        vertex_batch_request: Final = self._resolve_fine_tuned_endpoint_model(
+            vertex_batch_request=transformed_batch_request,
+            headers=headers,
+            sync_handler=sync_handler,
+            vertex_location=vertex_location or "us-central1",
         )
 
         if _is_async is True:
@@ -141,6 +164,43 @@ class VertexAIBatchPrediction(VertexLLM):
             response=_json_response
         )
         return vertex_batch_response
+
+    def _resolve_fine_tuned_endpoint_model(
+        self,
+        vertex_batch_request: VertexAIBatchPredictionJob,
+        headers: dict[str, str],
+        sync_handler: HTTPHandler,
+        vertex_location: str,
+    ) -> VertexAIBatchPredictionJob:
+        """
+        A fine-tuned Gemini deployment is configured by its endpoint id, but the v1 batch API only
+        accepts Model resources, so swap the endpoint resource for its deployed tuned model
+        (`projects/../locations/../models/<id>`) read from GET endpoints/<id>.
+        """
+        model: Final = vertex_batch_request.get("model", "")
+        if "/endpoints/" not in model:
+            return vertex_batch_request
+
+        endpoint_url: Final = f"{get_vertex_base_url(vertex_location)}/v1/{model}"
+        response: Final = sync_handler.get(url=endpoint_url, headers=headers)
+        if response.status_code != 200:
+            raise VertexAIError(
+                status_code=response.status_code,
+                message=f"Failed to resolve fine-tuned Vertex endpoint '{model}': {response.text}",
+            )
+
+        payload_view: Final[_VertexEndpointPayloadView] = {"payload": response.json()}
+        deployed_models: Final = payload_view["payload"].get("deployedModels") or []
+        deployed_model: Final = deployed_models[0].get("model", "") if deployed_models else ""
+        if not deployed_model:
+            raise VertexAIError(
+                status_code=400,
+                message=(
+                    f"Vertex endpoint '{model}' has no deployed model, so there is no tuned model "
+                    "resource to run batch predictions against"
+                ),
+            )
+        return {**vertex_batch_request, "model": deployed_model}
 
     async def _async_create_batch(
         self,

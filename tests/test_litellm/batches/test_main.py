@@ -158,6 +158,16 @@ def test_create__vertex_ai_dispatch(seams):
     _assert_only(seams.vertex.create_batch, seams, "create_batch")
 
 
+def test_create__vertex_ai_custom_endpoint_raises_badrequest(seams):
+    """custom_endpoint deployments have no Vertex batch surface; creating a job would target a
+    nonexistent publisher model, so the SDK must 400 before dispatching (LIT-6899)."""
+    with pytest.raises(litellm.exceptions.BadRequestError, match="custom_endpoint"):
+        bm.create_batch(**CREATE_KW, custom_llm_provider="vertex_ai", custom_endpoint=True)
+
+    for m in _all_seam_methods(seams, "create_batch"):
+        m.assert_not_called()
+
+
 def test_create__provider_config_routes_to_base_http_handler(seams):
     """model + a provider batches config (bedrock-style) routes to the generic
     base_llm_http_handler, NOT the per-provider instance."""
