@@ -2,32 +2,24 @@
 
 import React, { useMemo, useState } from "react";
 
-import { useInfiniteKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
-import { useAutoRouters, usePlainModelGroups } from "@/app/(dashboard)/hooks/models/useModels";
-import { PaginatedMultiSelect } from "@/components/shared/PaginatedMultiSelect";
-import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CircleHelp } from "lucide-react";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ApiError } from "@/lib/http/client";
 
 import { usd } from "./costOptimizationUtils";
+import { StartForm } from "./ShadowEvalStartForm";
 import {
   useShadowEvalJob,
   useShadowEvalJobs,
-  useStartShadowEval,
   useStopShadowEval,
   type ShadowEvalJob,
-  type ShadowEvalJobKey,
+  type ShadowEvalJobTarget,
   type ShadowEvalSlice,
 } from "./useShadowEval";
 
@@ -66,42 +58,46 @@ const routerMatchedOrBeatPct = (
     ? 100 - results.overall_shadow_win_rate_pct
     : results.overall_shadow_win_rate_pct + results.overall_tie_rate_pct;
 
-export const shadowedKeyLabel = (key: ShadowEvalJobKey): string =>
-  key.key_alias || key.key_name || `${key.api_key_id.slice(0, 10)}…`;
+export const shadowedTargetLabel = (target: ShadowEvalJobTarget): string =>
+  target.target_alias ||
+  target.key_name ||
+  (target.target_type === "key" ? `${target.target_id.slice(0, 10)}…` : target.target_id);
 
-const shadowedKeysLabel = (job: ShadowEvalJob): string =>
-  job.keys.length === 1 ? shadowedKeyLabel(job.keys[0]) : `${job.keys.length} keys`;
+const shadowedTargetsLabel = (job: ShadowEvalJob): string =>
+  job.targets.length === 1 ? shadowedTargetLabel(job.targets[0]) : `${job.targets.length} targets`;
 
 const totalBudget = (job: ShadowEvalJob): number | null =>
-  job.keys.reduce<number | null>(
-    (sum, key) => (sum === null || key.max_budget == null ? null : sum + key.max_budget),
+  job.targets.reduce<number | null>(
+    (sum, target) => (sum === null || target.max_budget == null ? null : sum + target.max_budget),
     0,
   );
 
-const totalSpend = (job: ShadowEvalJob): number => job.keys.reduce((sum, key) => sum + (key.spend ?? 0), 0);
+const totalSpend = (job: ShadowEvalJob): number => job.targets.reduce((sum, target) => sum + (target.spend ?? 0), 0);
 
-const keySpent = (key: ShadowEvalJobKey): boolean => {
-  const spendBudgetReached = key.max_budget != null && key.spend != null && key.spend >= key.max_budget;
-  const turnValveReached = key.attempt_count != null && key.attempt_count >= key.max_turns;
+const targetSpent = (target: ShadowEvalJobTarget): boolean => {
+  const spendBudgetReached = target.max_budget != null && target.spend != null && target.spend >= target.max_budget;
+  const turnValveReached = target.attempt_count != null && target.attempt_count >= target.max_turns;
   return spendBudgetReached || turnValveReached;
 };
 
-const keyStatus = (job: ShadowEvalJob, key: ShadowEvalJobKey): string => {
-  if (job.status === "completed" || (key.stopped_at == null && keySpent(key))) return "completed";
-  return key.stopped_at != null ? "stopped" : "running";
+const targetStatus = (job: ShadowEvalJob, target: ShadowEvalJobTarget): string => {
+  if (job.status === "completed" || (target.stopped_at == null && targetSpent(target))) return "completed";
+  return target.stopped_at != null ? "stopped" : "running";
 };
+
+const jobRouters = (job: ShadowEvalJob): string => (job.router_names ?? [job.router_name]).join(", ");
 
 const jobHeadline = (job: ShadowEvalJob): React.ReactNode =>
   job.direction === "reverse" ? (
     <>
-      Comparing <span className="font-mono text-xs">{job.router_name}</span> to{" "}
+      Comparing <span className="font-mono text-xs">{jobRouters(job)}</span> to{" "}
       <span className="font-mono text-xs">{job.baseline_model}</span> on {job.shadow_percentage}% of{" "}
-      <span className="font-mono text-xs">{shadowedKeysLabel(job)}</span> traffic
+      <span className="font-mono text-xs">{shadowedTargetsLabel(job)}</span> traffic
     </>
   ) : (
     <>
-      Shadowing {job.shadow_percentage}% of <span className="font-mono text-xs">{shadowedKeysLabel(job)}</span> traffic
-      via <span className="font-mono text-xs">{job.router_name}</span>
+      Shadowing {job.shadow_percentage}% of <span className="font-mono text-xs">{shadowedTargetsLabel(job)}</span>{" "}
+      traffic via <span className="font-mono text-xs">{jobRouters(job)}</span>
     </>
   );
 
@@ -255,13 +251,12 @@ const VerdictBar: React.FC<{ direction: ShadowEvalDirection; results: NonNullabl
   );
 };
 
-const KeyTable: React.FC<{ job: ShadowEvalJob }> = ({ job }) => {
-  const slices = new Map((job.results?.by_key ?? []).map((slice) => [slice.group, slice]));
+const TargetTable: React.FC<{ job: ShadowEvalJob }> = ({ job }) => {
   return (
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>Key</TableHead>
+          <TableHead>Target</TableHead>
           <TableHead>Status</TableHead>
           {["Budget used", "Router wins", `${otherArmLabel(job.direction)} wins`].map((label) => (
             <TableHead key={label} className="text-right">
@@ -271,18 +266,23 @@ const KeyTable: React.FC<{ job: ShadowEvalJob }> = ({ job }) => {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {job.keys.map((key) => {
-          const slice = slices.get(key.api_key_id);
+        {job.targets.map((target) => {
+          const slice = target.verdicts;
           return (
-            <TableRow key={key.api_key_id}>
-              <TableCell className="font-medium text-foreground">{shadowedKeyLabel(key)}</TableCell>
+            <TableRow key={`${target.target_type}:${target.target_id}`}>
+              <TableCell className="font-medium text-foreground">
+                {shadowedTargetLabel(target)}
+                {target.target_type !== "key" && (
+                  <span className="ml-2 text-xs font-normal text-muted-foreground">{target.target_type}</span>
+                )}
+              </TableCell>
               <TableCell>
-                <StatusBadge status={keyStatus(job, key)} />
+                <StatusBadge status={targetStatus(job, target)} />
               </TableCell>
               <TableCell className="text-right tabular-nums">
-                {key.max_budget != null
-                  ? `${usd(key.spend ?? 0)} / ${usd(key.max_budget)}`
-                  : `${(key.attempt_count ?? slice?.turn_count ?? 0).toLocaleString()} / ${key.max_turns.toLocaleString()} turns`}
+                {target.max_budget != null
+                  ? `${usd(target.spend ?? 0)} / ${usd(target.max_budget)}`
+                  : `${(target.attempt_count ?? slice?.turn_count ?? 0).toLocaleString()} / ${target.max_turns.toLocaleString()} turns`}
               </TableCell>
               {slice ? (
                 <>
@@ -318,9 +318,9 @@ const ResultsBody: React.FC<{ job: ShadowEvalJob; resultsError?: boolean }> = ({
   const hasVerdicts = results != null && (results.by_tier.length > 0 || results.by_current_model.length > 0);
   return (
     <>
-      {job.keys.length > 1 && (
+      {job.targets.length > 1 && (
         <div className="border-b">
-          <KeyTable job={job} />
+          <TargetTable job={job} />
         </div>
       )}
       {/* results == null re-stated for TS narrowing; hasVerdicts alone cannot narrow it */}
@@ -343,6 +343,11 @@ const ResultsBody: React.FC<{ job: ShadowEvalJob; resultsError?: boolean }> = ({
             <CostComparison direction={job.direction} results={results} />
           </div>
           <VerdictBar direction={job.direction} results={results} />
+          {(results.by_router ?? []).length > 1 && (
+            <div className="border-b">
+              <SliceTable groupHeader="Router" direction={job.direction} slices={results.by_router ?? []} />
+            </div>
+          )}
           {results.by_current_model.length > 0 && (
             <SliceTable
               groupHeader={job.direction === "reverse" ? "Router pick" : "Compared against"}
@@ -397,282 +402,6 @@ const JobResults: React.FC<{
         </p>
       )}
       <ResultsBody job={job} resultsError={resultsError} />
-    </Card>
-  );
-};
-
-const RECOMMENDED_JUDGE_MODELS = ["anthropic/claude-sonnet-5", "openai/gpt-4o", "gemini/gemini-2.5-pro"] as const;
-
-interface CostMapEntry {
-  litellm_provider?: string;
-  mode?: string;
-}
-
-const useChatModelNames = (): string[] => {
-  const { data: costMap } = useModelCostMap();
-  return useMemo(() => {
-    if (!costMap) return [];
-    const chatModels = Object.entries(costMap as Record<string, CostMapEntry>)
-      .filter(([, value]) => value?.mode === "chat" && value?.litellm_provider)
-      .map(([key, value]) => (key.startsWith(`${value.litellm_provider}/`) ? key : `${value.litellm_provider}/${key}`));
-    return [...new Set(chatModels)].toSorted((a, b) => a.localeCompare(b));
-  }, [costMap]);
-};
-
-const useJudgeModelOptions = (): SearchSelectOption[] => {
-  const chatModels = useChatModelNames();
-  return useMemo(() => {
-    const pinned: SearchSelectOption[] = RECOMMENDED_JUDGE_MODELS.map((model) => ({
-      label: model,
-      value: model,
-      sublabel: "Recommended",
-    }));
-    const pinnedNames = new Set<string>(RECOMMENDED_JUDGE_MODELS);
-    const rest = chatModels.filter((model) => !pinnedNames.has(model)).map((model) => ({ label: model, value: model }));
-    return [...pinned, ...rest];
-  }, [chatModels]);
-};
-
-const useBaselineModelOptions = (): SearchSelectOption[] => {
-  const configuredGroups = usePlainModelGroups();
-  const chatModels = useChatModelNames();
-  return useMemo(() => {
-    const configured = [...configuredGroups]
-      .toSorted((a, b) => a.localeCompare(b))
-      .map((model) => ({ label: model, value: model, sublabel: "Configured on this gateway" }));
-    const rest = chatModels
-      .filter((model) => !configuredGroups.has(model))
-      .map((model) => ({ label: model, value: model }));
-    return [...configured, ...rest];
-  }, [configuredGroups, chatModels]);
-};
-
-const DIRECTION_OPTIONS: readonly { value: ShadowEvalDirection; label: string }[] = [
-  { value: "forward", label: "Adoption check: key's traffic vs the router" },
-  { value: "reverse", label: "Regression check: router's picks vs a baseline" },
-] as const;
-
-const START_FORM_DESCRIPTION: Record<ShadowEvalDirection, string> = {
-  forward:
-    "Duplicates a sampled slice of the selected keys' traffic through the auto-router and has an LLM judge compare both answers blind. Each key gets its own spend budget. The router's answers are never served to users; judge calls bill to the shadowed key.",
-  reverse:
-    "Duplicates a sampled slice of the traffic the auto-router already serves against a fixed baseline model and has an LLM judge compare both answers blind. Each key gets its own spend budget. The baseline's answers are never served to users; judge calls bill to the shadowed key.",
-};
-
-const DURATION_OPTIONS = [
-  { value: "1", label: "1 day" },
-  { value: "3", label: "3 days" },
-  { value: "7", label: "7 days" },
-  { value: "14", label: "14 days" },
-  { value: "30", label: "30 days" },
-] as const;
-
-const Field: React.FC<{ label: string; htmlFor?: string; className?: string; children: React.ReactNode }> = ({
-  label,
-  htmlFor,
-  className,
-  children,
-}) => (
-  <div className={`space-y-1.5 ${className ?? ""}`}>
-    <Label htmlFor={htmlFor} className="text-xs">
-      {label}
-    </Label>
-    {children}
-  </div>
-);
-
-const KeySelect: React.FC<{ value: string[]; onChange: (tokens: string[]) => void }> = ({ value, onChange }) => {
-  const [search, setSearch] = useState("");
-  const { data, isPending, isError, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteKeys(50, {
-    selectedKeyAlias: search || null,
-  });
-  const options = useMemo<SearchSelectOption[]>(
-    () =>
-      (data?.pages ?? [])
-        .flatMap((page) => page.keys)
-        .map((key) => ({
-          label: key.key_alias || key.key_name || key.token,
-          value: key.token,
-          sublabel: key.token,
-        })),
-    [data],
-  );
-  return (
-    <PaginatedMultiSelect
-      inputId="shadow-eval-key"
-      options={options}
-      value={value}
-      onValueChange={onChange}
-      onSearchChange={setSearch}
-      onLoadMore={() => void fetchNextPage()}
-      hasNextPage={hasNextPage}
-      isFetchingNextPage={isFetchingNextPage}
-      isLoading={isPending}
-      placeholder="Search keys by alias"
-      emptyText="No matching keys"
-      errorText={isError ? "Keys could not be loaded. Refresh the page to retry." : undefined}
-    />
-  );
-};
-
-const StartForm: React.FC = () => {
-  const { accessToken } = useAuthorized();
-  const [apiKeyIds, setApiKeyIds] = useState<string[]>([]);
-  const [routerName, setRouterName] = useState("");
-  const [direction, setDirection] = useState<ShadowEvalDirection>("forward");
-  const [baselineModel, setBaselineModel] = useState("");
-  const [percentage, setPercentage] = useState("10");
-  const [durationDays, setDurationDays] = useState("7");
-  const [judgeModel, setJudgeModel] = useState("");
-  const [maxBudget, setMaxBudget] = useState("10");
-  const { data: autoRouters } = useAutoRouters();
-  const judgeModelOptions = useJudgeModelOptions();
-  const baselineModelOptions = useBaselineModelOptions();
-  const start = useStartShadowEval();
-
-  const routerOptions = useMemo<SearchSelectOption[]>(() => {
-    const names = new Set(
-      (autoRouters ?? []).map((deployment) => deployment.model_name).filter((name): name is string => Boolean(name)),
-    );
-    return [...names].toSorted().map((name) => ({ label: name, value: name }));
-  }, [autoRouters]);
-
-  const parsedPct = Number.parseFloat(percentage);
-  const percentageValid = parsedPct >= 0.1 && parsedPct <= 100;
-  const parsedMaxBudget = Number.parseFloat(maxBudget);
-  const maxBudgetValid = parsedMaxBudget >= 0.01 && parsedMaxBudget <= 10000;
-  const baselinePicked = direction === "forward" || baselineModel !== "";
-  const filled = apiKeyIds.length > 0 && [routerName, judgeModel].every((field) => field !== "") && baselinePicked;
-  const boundsValid = percentageValid && maxBudgetValid;
-  const valid = Boolean(accessToken) && filled && boundsValid;
-  const handleStart = () => {
-    const startBody = {
-      api_key_ids: apiKeyIds,
-      router_name: routerName,
-      direction,
-      ...(direction === "reverse" ? { baseline_model: baselineModel } : {}),
-      shadow_percentage: parsedPct,
-      duration_days: Number.parseInt(durationDays, 10),
-      max_budget: parsedMaxBudget,
-      judge_model: judgeModel,
-    };
-    start.mutate(startBody);
-  };
-
-  return (
-    <Card size="sm">
-      <CardHeader>
-        <CardTitle className="text-sm font-medium text-foreground">Start a shadow eval</CardTitle>
-        <p className="text-xs text-muted-foreground">{START_FORM_DESCRIPTION[direction]}</p>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="grid gap-3 sm:grid-cols-3">
-          <Field label="Direction">
-            <Select
-              value={direction}
-              onValueChange={(v: string | null) => setDirection(v === "reverse" ? "reverse" : "forward")}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue>{DIRECTION_OPTIONS.find((o) => o.value === direction)?.label}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {DIRECTION_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="Keys to shadow" htmlFor="shadow-eval-key">
-            <KeySelect value={apiKeyIds} onChange={setApiKeyIds} />
-          </Field>
-          <Field label="Auto-router">
-            <SearchSelect
-              options={routerOptions}
-              value={routerName}
-              onValueChange={setRouterName}
-              placeholder="Select an auto-router"
-              emptyText="No auto-routers configured"
-            />
-          </Field>
-          <Field label="Traffic sampled" htmlFor="shadow-eval-pct">
-            <div className="flex items-center gap-2">
-              <Input
-                id="shadow-eval-pct"
-                type="number"
-                min={0.1}
-                max={100}
-                step={0.1}
-                className="w-24"
-                value={percentage}
-                onChange={(e) => setPercentage(e.target.value)}
-              />
-              <span className="text-sm text-muted-foreground">% of traffic</span>
-            </div>
-            <div>
-              {percentage.trim() !== "" && !percentageValid && (
-                <p className="text-xs text-destructive">Enter a value from 0.1 to 100</p>
-              )}
-            </div>
-          </Field>
-          <Field label="Duration">
-            <Select value={durationDays} onValueChange={(v: string | null) => setDurationDays(v ?? "7")}>
-              <SelectTrigger className="w-full">
-                <SelectValue>{DURATION_OPTIONS.find((o) => o.value === durationDays)?.label}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {DURATION_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="Spend budget">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">$</span>
-              <Input
-                type="number"
-                min={0.01}
-                max={10000}
-                step={0.01}
-                className="w-24"
-                value={maxBudget}
-                onChange={(e) => setMaxBudget(e.target.value)}
-              />
-              <span className="text-sm text-muted-foreground">max shadow + judge spend, per key</span>
-            </div>
-            {maxBudget.trim() !== "" && !maxBudgetValid && (
-              <p className="text-xs text-destructive">Enter a value from 0.01 to 10000</p>
-            )}
-          </Field>
-          {direction === "reverse" && (
-            <Field label="Baseline model">
-              <SearchSelect
-                options={baselineModelOptions}
-                value={baselineModel}
-                onValueChange={setBaselineModel}
-                placeholder="Select a baseline model"
-                emptyText="No chat models available"
-              />
-            </Field>
-          )}
-          <Field label="Judge model" className="sm:col-span-2">
-            <SearchSelect
-              options={judgeModelOptions}
-              value={judgeModel}
-              onValueChange={setJudgeModel}
-              placeholder="Select a judge model"
-              emptyText="No chat models available"
-            />
-          </Field>
-        </div>
-        <Button disabled={!valid || start.isPending} onClick={handleStart}>
-          {start.isPending ? "Starting..." : "Start shadow eval"}
-        </Button>
-      </CardContent>
     </Card>
   );
 };
@@ -774,8 +503,9 @@ const ShadowEvalSection: React.FC = () => {
       <div className="flex flex-wrap items-baseline gap-2">
         <h2 className="text-xl font-semibold text-foreground">Shadow eval</h2>
         <p className="text-sm text-muted-foreground">
-          Blind-judge the auto-router on your real traffic: against the models a key uses today before switching, or
-          against a fixed baseline after it has switched.
+          Blind-judge the auto-router on the real traffic of a key, team, or user (teams and users cover
+          JWT-authenticated traffic): against the models they use today before switching, or against a fixed baseline
+          after they have switched.
         </p>
       </div>
 

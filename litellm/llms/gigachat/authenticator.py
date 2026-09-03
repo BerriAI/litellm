@@ -7,6 +7,8 @@ Based on official GigaChat SDK authentication flow.
 
 import time
 import uuid
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -16,7 +18,7 @@ from litellm.caching.caching import InMemoryCache
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
-    _get_httpx_client,
+    _get_httpx_client,  # pyright: ignore[reportPrivateUsage]  # house cached-client factory has no public alias
     get_async_httpx_client,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -31,8 +33,8 @@ GIGACHAT_SCOPE: Final = "GIGACHAT_API_PERS"
 # Token expiry buffer in milliseconds (refresh token 60s before expiry)
 TOKEN_EXPIRY_BUFFER_MS: Final = 60000
 
-# Cache for access tokens
 _token_cache: Final = InMemoryCache()
+_NO_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class GigaChatAuthError(BaseLLMException):
@@ -63,6 +65,7 @@ def get_access_token(
     credentials: str | None = None,
     scope: str | None = None,
     auth_url: str | None = None,
+    litellm_params: Mapping[str, object] | None = None,
 ) -> str:
     """
     Get valid access token, using cache if available.
@@ -78,71 +81,79 @@ def get_access_token(
     Raises:
         GigaChatAuthError: If authentication fails
     """
-    credentials = credentials or _get_credentials()
-    if not credentials:
+    params: Final = litellm_params or _NO_LITELLM_PARAMS
+
+    access_token: Final = params.get("gigachat_access_token") or get_secret_str("GIGACHAT_ACCESS_TOKEN")
+    if access_token:
+        return access_token
+
+    effective_credentials: Final = credentials or _get_credentials()
+    if not effective_credentials:
         raise GigaChatAuthError(
             status_code=401,
             message="GigaChat credentials not provided. Set GIGACHAT_CREDENTIALS or GIGACHAT_API_KEY environment variable.",
         )
 
-    scope = scope or _get_scope()
-    auth_url = auth_url or _get_auth_url()
+    effective_scope: Final = scope or params.get("gigachat_scope") or _get_scope()
+    effective_auth_url: Final = auth_url or params.get("gigachat_auth_url") or _get_auth_url()
 
-    # Check cache
-    cache_key: Final = f"gigachat_token:{credentials[:16]}"
+    cache_key: Final = f"gigachat_token:{effective_credentials[:16]}"
     cached: Final = _token_cache.get_cache(cache_key)
     if cached:
-        token, expires_at = cached
-        # Check if token is still valid (with buffer)
-        if time.time() * 1000 < expires_at - TOKEN_EXPIRY_BUFFER_MS:
+        _token, _expires_at = cached
+        if time.time() * 1000 < _expires_at - TOKEN_EXPIRY_BUFFER_MS:
             verbose_logger.debug("Using cached GigaChat access token")
-            return token
+            return _token
 
-    # Request new token
-    token, expires_at = _request_token_sync(credentials, scope, auth_url)
+    new_token, new_expires_at = _request_token_sync(effective_credentials, effective_scope, effective_auth_url)  # pyright: ignore[reportArgumentType]  # credential keys may be broader than str
 
-    # Cache token
-    ttl_seconds: Final = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
-    if ttl_seconds > 0:
-        _token_cache.set_cache(cache_key, (token, expires_at), ttl=ttl_seconds)
+    if new_expires_at:
+        ttl_seconds: Final = max(0, (new_expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
+        if ttl_seconds > 0:
+            _token_cache.set_cache(cache_key, (new_token, new_expires_at), ttl=ttl_seconds)
 
-    return token
+    return new_token
 
 
 async def get_access_token_async(
     credentials: str | None = None,
     scope: str | None = None,
     auth_url: str | None = None,
+    litellm_params: Mapping[str, object] | None = None,
 ) -> str:
     """Async version of get_access_token."""
-    credentials = credentials or _get_credentials()
-    if not credentials:
+    params: Final = litellm_params or _NO_LITELLM_PARAMS
+
+    access_token: Final = params.get("gigachat_access_token") or get_secret_str("GIGACHAT_ACCESS_TOKEN")
+    if access_token:
+        return access_token
+
+    effective_credentials: Final = credentials or _get_credentials()
+    if not effective_credentials:
         raise GigaChatAuthError(
             status_code=401,
             message="GigaChat credentials not provided. Set GIGACHAT_CREDENTIALS or GIGACHAT_API_KEY environment variable.",
         )
 
-    scope = scope or _get_scope()
-    auth_url = auth_url or _get_auth_url()
+    effective_scope: Final = scope or params.get("gigachat_scope") or _get_scope()
+    effective_auth_url: Final = auth_url or params.get("gigachat_auth_url") or _get_auth_url()
 
-    # Check cache
-    cache_key: Final = f"gigachat_token:{credentials[:16]}"
+    cache_key: Final = f"gigachat_token:{effective_credentials[:16]}"
     cached: Final = _token_cache.get_cache(cache_key)
     if cached:
-        token, expires_at = cached
-        if time.time() * 1000 < expires_at - TOKEN_EXPIRY_BUFFER_MS:
+        _token, _expires_at = cached
+        if time.time() * 1000 < _expires_at - TOKEN_EXPIRY_BUFFER_MS:
             verbose_logger.debug("Using cached GigaChat access token")
-            return token
+            return _token
 
-    # Request new token
-    token, expires_at = await _request_token_async(credentials, scope, auth_url)
+    new_token, new_expires_at = await _request_token_async(effective_credentials, effective_scope, effective_auth_url)  # pyright: ignore[reportArgumentType]  # credential keys may be broader than str
 
-    # Cache token
-    ttl_seconds: Final = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
-    if ttl_seconds > 0:
-        _token_cache.set_cache(cache_key, (token, expires_at), ttl=ttl_seconds)
+    if new_expires_at:
+        ttl_seconds: Final = max(0, (new_expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
+        if ttl_seconds > 0:
+            _token_cache.set_cache(cache_key, (new_token, new_expires_at), ttl=ttl_seconds)
 
-    return token
+    return new_token
 
 
 def _request_token_sync(
@@ -154,7 +165,7 @@ def _request_token_sync(
     Request new access token from GigaChat OAuth endpoint (sync).
 
     Returns:
-        Tuple of (access_token, expires_at_ms)
+        tuple of (access_token, expires_at_ms)
     """
     headers: Final = {
         "Authorization": f"Basic {credentials}",
@@ -169,7 +180,7 @@ def _request_token_sync(
         client: Final = _get_http_client()
         response: Final = client.post(auth_url, headers=headers, data=data, timeout=30)
         response.raise_for_status()
-        return _parse_token_response(response)
+        return _parse_token_response(response)  # pyright: ignore[reportArgumentType]  # httpx Response may be None at type level
     except httpx.HTTPStatusError as e:
         raise GigaChatAuthError(
             status_code=e.response.status_code,
@@ -204,7 +215,7 @@ async def _request_token_async(
         )
         response: Final = await client.post(auth_url, headers=headers, data=data, timeout=30)
         response.raise_for_status()
-        return _parse_token_response(response)
+        return _parse_token_response(response)  # pyright: ignore[reportArgumentType]  # httpx Response may be None at type level
     except httpx.HTTPStatusError as e:
         raise GigaChatAuthError(
             status_code=e.response.status_code,
@@ -223,7 +234,7 @@ def _parse_token_response(response: httpx.Response) -> tuple[str, int]:
 
     # GigaChat returns either 'tok'/'exp' or 'access_token'/'expires_at'
     access_token: Final = data.get("tok") or data.get("access_token")
-    expires_at = data.get("exp") or data.get("expires_at")
+    expires_at_raw: Final = data.get("exp") or data.get("expires_at")
 
     if not access_token:
         raise GigaChatAuthError(
@@ -232,8 +243,11 @@ def _parse_token_response(response: httpx.Response) -> tuple[str, int]:
         )
 
     # expires_at is in milliseconds
-    if isinstance(expires_at, str):
-        expires_at = int(expires_at)
+    expires_at: int  # rebind-ok: conditionally assigned from str or int
+    if isinstance(expires_at_raw, str):
+        expires_at = int(expires_at_raw)  # rebind-ok: conditionally assigned from str or int
+    else:
+        expires_at = expires_at_raw  # pyright: ignore[reportAssignmentType]  # raw value is int or str; converted above; rebind-ok: conditionally assigned from str or int
 
     verbose_logger.debug("GigaChat access token obtained successfully")
     return access_token, expires_at

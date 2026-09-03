@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.100.0"
+version = "1.101.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.15"
@@ -67,8 +67,8 @@ proxy = [
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.28.1,<2.0",
-    "litellm-proxy-extras==0.4.91",
-    "litellm-enterprise==0.1.62",
+    "litellm-proxy-extras==0.4.92",
+    "litellm-enterprise==0.1.63",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -91,6 +91,11 @@ cli = [
 ]
 extra_proxy = [
     "prisma>=0.11.0,<1.0",
+    # Used by ProxyExtrasDBManager.spend_logs_is_partitioned() to detect a
+    # partitioned LiteLLM_SpendLogs and keep schema reconciliation from
+    # fighting its composite primary key.
+    "psycopg>=3.2,<4.0",
+    "psycopg-binary>=3.2,<4.0",
     "azure-identity>=1.25.2,<2.0",
     "azure-keyvault-secrets>=4.10.0,<5.0",
     # Not in PyPI proxy extra.
@@ -156,7 +161,7 @@ proxy-runtime = [
     "mangum>=0.17.0,<1.0",
     "azure-ai-contentsafety>=1.0.0,<2.0",
     "azure-storage-file-datalake>=12.20.0,<13.0",
-    "pypdf>=6.12.0,<7.0",
+    "pypdf>=6.16.1,<7.0",
     "llm-sandbox>=0.3.39,<1.0",
     "detect-secrets>=1.5.0,<2.0",
 ]
@@ -262,7 +267,7 @@ healthcheck = [
 ]
 
 [build-system]
-requires = ["maturin==1.9.4"]
+requires = ["maturin==1.15.0"]
 build-backend = "maturin"
 
 [tool.maturin]
@@ -270,7 +275,13 @@ manifest-path = "litellm-rust/crates/python-bridge/Cargo.toml"
 module-name = "litellm.rust_bridge._native"
 python-source = "."
 bindings = "pyo3"
-include = ["litellm/proxy/_experimental/out/**"]
+features = ["extension-module"]
+profile = "release"
+editable-profile = "dev"
+include = [
+    "litellm/proxy/_experimental/out/**",
+    "litellm/router_strategy/complexity_router/artifacts/*.json",
+]
 exclude = [
     "litellm/proxy/enterprise",
     "litellm/proxy/enterprise/**",
@@ -284,7 +295,7 @@ exclude = [
 
 [tool.uv]
 constraint-dependencies = [
-    "tornado>=6.5.6",
+    "tornado>=6.5.8",
     "aiohttp>=3.14.2,<4.0",
     "packaging>=24.0",
     "soupsieve>=2.8.4",
@@ -311,7 +322,7 @@ members = ["enterprise", "litellm-proxy-extras"]
 profile = "black"
 
 [tool.commitizen]
-version = "1.100.0"
+version = "1.101.0"
 version_files = [
     "pyproject.toml:^version",
 ]

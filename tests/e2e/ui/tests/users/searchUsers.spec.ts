@@ -1,91 +1,52 @@
-import { test, expect, Page } from "@playwright/test";
+import { test, expect, Page as PlaywrightPage } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
-test.skip("Internal Users Search", () => {
+import { Page } from "../../fixtures/pages";
+import { navigateToPage } from "../../helpers/navigation";
+
+const userRows = (page: PlaywrightPage) => page.getByRole("row").filter({ has: page.getByRole("cell") });
+
+async function goToInternalUsers(page: PlaywrightPage) {
+  await navigateToPage(page, Page.Users);
+  await expect(page.getByRole("columnheader", { name: "User ID" })).toBeVisible({ timeout: 30_000 });
+  await expect(userRows(page)).not.toHaveCount(0, { timeout: 30_000 });
+}
+
+test.describe("Internal Users Search", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
-  async function goToInternalUsers(page: Page) {
-    await page.goto("/ui");
-
-    const tab = page.getByRole("menuitem", { name: "Internal User" });
-    await expect(tab).toBeVisible();
-    await tab.click();
-
-    await expect(page.locator("tbody tr").first()).toBeVisible();
-    await expect(page.locator('[data-slot="skeleton"]')).toHaveCount(0);
-  }
-
-  test("can search users by email", async ({ page }) => {
+  test("narrows the table to the matching email, and restores it when cleared", async ({ page }) => {
     await goToInternalUsers(page);
 
-    const rows = page.locator("tbody tr");
-    const searchInput = page.getByPlaceholder("Search by email...");
+    const search = page.getByPlaceholder("Search by email…");
+    await expect(search).toBeVisible();
 
-    await expect(searchInput).toBeVisible();
+    await search.fill("noteam@");
+    await expect(userRows(page)).toHaveCount(1, { timeout: 30_000 });
+    await expect(userRows(page).first()).toContainText("noteam@test.local");
 
-    // Ensure initial data is loaded
-    const initialCount = await rows.count();
-    expect(initialCount).toBeGreaterThan(0);
-
-    // 🔹 Apply filter + wait for backend response
-    await Promise.all([
-      page.waitForResponse(
-        (res) =>
-          res.url().includes("/user/list") &&
-          res.url().includes("user_email=test%40") && // encoded "test@"
-          res.status() === 200,
-      ),
-      searchInput.fill("test@"),
-    ]);
-    await page.waitForTimeout(5000);
-    const filteredCount = await rows.count();
-    await expect(filteredCount).toBeLessThan(initialCount);
-
-    // 🔹 Clear filter + wait for unfiltered request
-    await Promise.all([
-      page.waitForResponse(
-        (res) => res.url().includes("/user/list") && !res.url().includes("user_email=") && res.status() === 200,
-      ),
-      searchInput.clear(),
-    ]);
-
-    const resetCount = await rows.count();
-    await expect(resetCount).toBe(initialCount);
+    await search.clear();
+    await expect(userRows(page).filter({ hasText: "admin@test.local" })).not.toHaveCount(0, { timeout: 30_000 });
   });
 
-  test("can filter users by user ID and SSO ID", async ({ page }) => {
+  test("filters the table down to one user by user ID", async ({ page }) => {
     await goToInternalUsers(page);
-    const rows = page.locator("tbody tr");
 
-    // Ensure initial data is loaded
-    const initialCount = await rows.count();
-    expect(initialCount).toBeGreaterThan(0);
+    await page.getByRole("button", { name: "Filters" }).click();
+    await page.getByTestId("users-filter-user-id").fill("e2e-internal-noteam");
+    await page.getByTestId("filter-drawer-apply").click();
 
-    const filtersButton = page.getByRole("button", {
-      name: "Filters",
-      exact: true,
-    });
-    await filtersButton.click();
+    await expect(userRows(page)).toHaveCount(1, { timeout: 30_000 });
+    await expect(userRows(page).first()).toContainText("noteam@test.local");
+  });
 
-    const userIdInput = page.getByPlaceholder("Filter by User ID");
-    const ssoIdInput = page.getByPlaceholder("Filter by SSO ID");
-    await Promise.all([
-      page.waitForResponse(
-        (res) => res.url().includes("/user/list") && res.url().includes("user_ids=user") && res.status() === 200,
-      ),
-      userIdInput.fill("user"),
-    ]);
+  test("shows no users when the SSO ID matches nobody", async ({ page }) => {
+    await goToInternalUsers(page);
 
-    await Promise.all([
-      page.waitForResponse(
-        (res) =>
-          res.url().includes("/user/list") &&
-          res.url().includes("user_ids=user") &&
-          res.url().includes("sso_user_ids=sso") &&
-          res.status() === 200,
-      ),
-      ssoIdInput.fill("sso"),
-    ]);
-    const combinedFilteredCount = await rows.count();
-    await expect(combinedFilteredCount).toBeLessThan(initialCount);
+    await page.getByRole("button", { name: "Filters" }).click();
+    await page.getByTestId("users-filter-sso-id").fill("e2e-sso-id-that-matches-nobody");
+    await page.getByTestId("filter-drawer-apply").click();
+
+    await expect(page.getByText("No users found")).toBeVisible({ timeout: 30_000 });
+    await expect(userRows(page).filter({ hasText: "noteam@test.local" })).toHaveCount(0);
   });
 });

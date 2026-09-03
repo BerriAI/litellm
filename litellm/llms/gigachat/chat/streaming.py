@@ -4,13 +4,15 @@ GigaChat Streaming Response Handler
 
 import json
 import uuid
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
+from litellm.llms.gigachat.utils import convert_usage
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
 )
-from litellm.types.utils import GenericStreamingChunk
+from litellm.types.utils import ChatCompletionUsageBlock, GenericStreamingChunk
 
 
 class GigaChatModelResponseIterator:
@@ -26,14 +28,9 @@ class GigaChatModelResponseIterator:
         self.response_iterator = self.streaming_response
         self.json_mode = json_mode
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+    def chunk_parser(self, chunk: Mapping[str, object]) -> GenericStreamingChunk:
         """Parse a single streaming chunk from GigaChat."""
-        text = ""
-        tool_use: ChatCompletionToolCallChunk | None = None
-        is_finished = False
-        finish_reason: str | None = None
-
-        choices: Final = chunk.get("choices", [])
+        choices: Sequence = chunk.get("choices") or ()  # mutable-ok: tuple literal as default
         if not choices:
             return GenericStreamingChunk(
                 text="",
@@ -45,40 +42,62 @@ class GigaChatModelResponseIterator:
             )
 
         choice: Final = choices[0]
-        delta: Final = choice.get("delta", {})
-        finish_reason = choice.get("finish_reason")
+        delta: Mapping[str, object] = choice.get("delta") or {}  # mutable-ok: empty dict default for get
+        chunk_finish_reason: Final = choice.get("finish_reason")
 
         # Extract text content
-        text = delta.get("content", "") or ""
+        text: Final = delta.get("content", "") or ""
 
-        # Handle function_call in stream
-        if finish_reason == "function_call" and delta.get("function_call"):
-            func_call: Final = delta["function_call"]
-            args = func_call.get("arguments", {})
+        usage_block: ChatCompletionUsageBlock | None = None  # rebind-ok: conditionally assigned after stop detection
+        tool_use: ChatCompletionToolCallChunk | None = None  # rebind-ok: conditionally assigned on function_call
+        finish_reason: str | None = chunk_finish_reason
 
-            if isinstance(args, dict):
-                args = json.dumps(args, ensure_ascii=False)
+        raw_function_call: Final = delta.get("function_call")
+        if chunk_finish_reason == "function_call" and isinstance(raw_function_call, Mapping) and raw_function_call:
+            func_call: Final[Mapping[str, object]] = raw_function_call
+            args_raw: Final[object] = func_call.get("arguments") or {}
+            args_str: str  # rebind-ok: conditionally assigned from dict or str
+            if isinstance(args_raw, dict):
+                args_str = json.dumps(args_raw, ensure_ascii=False)  # rebind-ok: build from dict
+            else:
+                args_str = str(args_raw)
 
+            name_raw: Final = func_call.get("name")
             tool_use = ChatCompletionToolCallChunk(
                 id=f"call_{uuid.uuid4().hex[:24]}",
                 type="function",
                 function=ChatCompletionToolCallFunctionChunk(
-                    name=func_call.get("name", ""),
-                    arguments=args,
+                    name=name_raw if isinstance(name_raw, str) else "",
+                    arguments=args_str,
                 ),
                 index=0,
             )
             finish_reason = "tool_calls"
 
-        if finish_reason is not None:
-            is_finished = True
+        usage_data: Final = chunk.get("usage") or {}  # mutable-ok: empty dict default
+        if usage_data and isinstance(usage_data, dict):
+            validated_usage: Final = {k: int(v) for k, v in usage_data.items()}
+            usage = convert_usage(validated_usage)
+            _prompt_details: dict | None = (
+                usage.prompt_tokens_details.model_dump() if usage.prompt_tokens_details else None
+            )  # rebind-ok: conditional
+            _completion_details: dict | None = (
+                usage.completion_tokens_details.model_dump() if usage.completion_tokens_details else None
+            )  # rebind-ok: conditional
+            usage_block = ChatCompletionUsageBlock(  # pyright: ignore[reportCallIssue]  # TypedDict kwarg constructor
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                total_tokens=usage.total_tokens,
+                prompt_tokens_details=_prompt_details,
+                completion_tokens_details=_completion_details,
+            )
 
         return GenericStreamingChunk(
-            text=text,
+            text=str(text),
             tool_use=tool_use,
-            is_finished=is_finished,
+            is_finished=chunk_finish_reason is not None,
             finish_reason=finish_reason or "",
-            usage=None,
+            usage=usage_block,
             index=choice.get("index", 0),
         )
 

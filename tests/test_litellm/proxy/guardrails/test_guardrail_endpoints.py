@@ -917,7 +917,9 @@ async def test_bedrock_guardrail_make_api_request_passes_api_key():
             "Content-Type": "application/json",
             "Authorization": "Bearer test-api-key-789",
         }
-        mock_request_instance.prepare.return_value = Mock()
+        mock_request_instance.prepare.return_value = Mock(
+            headers=mock_request_instance.headers
+        )
         mock_aws_request.return_value = mock_request_instance
 
         await guardrail_hook.make_bedrock_api_request(
@@ -1108,7 +1110,7 @@ async def test_update_guardrail_endpoint(
 
     elif scenario == "sync_fails_invalid_config":
         # Regression for the PUT half of the fix: a TypeError from the sync (the
-        # deleted update_in_memory_guardrail raised exactly this on every PUT)
+        # in-place update_in_memory_guardrail raised exactly this on every PUT)
         # must roll back the DB write and surface a 422, not persist the
         # rejected config with a 200.
         mock_prisma_client = mocker.Mock()

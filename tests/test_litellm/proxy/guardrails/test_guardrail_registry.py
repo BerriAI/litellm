@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -154,51 +155,29 @@ def test_duplicate_config_guardrail_names_get_distinct_stable_ids():
         registry_module.guardrail_initializer_registry.pop("dup_name_test", None)
 
 
-def test_sync_guardrail_from_db_applies_db_dict_params_to_live_instance():
-    """
-    Regression for PUT /guardrails/{id}: the DB row arrives with litellm_params as
-    a plain jsonb dict, and the deleted update_in_memory_guardrail cast it to
-    LitellmParams without constructing one, so vars() raised and the running proxy
-    kept enforcing the stale config forever. The PUT endpoint now routes through
-    sync_guardrail_from_db, which must rebuild the live instance from the dict:
-    new blocked words compiled in, old ones gone, and the event hook re-derived
-    from mode (the base-class setattr path wrote self.mode while dispatch reads
-    self.event_hook, so only a full re-init applies a mode change).
-    """
-    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
-        ContentFilterGuardrail,
+def test_update_in_memory_guardrail():
+    handler = InMemoryGuardrailHandler()
+    handler.guardrail_id_to_custom_guardrail["123"] = CustomGuardrail(
+        guardrail_name="test-guardrail",
+        default_on=False,
+        event_hook=GuardrailEventHooks.pre_call,
     )
 
-    handler = InMemoryGuardrailHandler()
-    gid = "66666666-6666-6666-6666-666666666666"
+    handler.update_in_memory_guardrail(
+        "123",
+        Guardrail(
+            guardrail_name="test-guardrail",
+            litellm_params=LitellmParams(guardrail="test-guardrail", mode="pre_call", default_on=True),
+        ),
+    )
 
-    def db_guardrail(word: str, mode: str) -> Guardrail:
-        return Guardrail(
-            guardrail_id=gid,
-            guardrail_name="cf-put-sync",
-            litellm_params={
-                "guardrail": "litellm_content_filter",
-                "mode": mode,
-                "default_on": True,
-                "blocked_words": [{"keyword": word, "action": "BLOCK"}],
-            },
+    assert (
+        handler.guardrail_id_to_custom_guardrail["123"].should_run_guardrail(
+            data={}, event_type=GuardrailEventHooks.pre_call
         )
-
-    lists = _all_callback_lists()
-    snapshots = [list(cb_list) for cb_list in lists]
-    try:
-        handler.sync_guardrail_from_db(db_guardrail("foobarblock", "pre_call"))
-        handler.sync_guardrail_from_db(db_guardrail("quxnewblock", "during_call"))
-
-        instance = handler.guardrail_id_to_custom_guardrail[gid]
-        assert isinstance(instance, ContentFilterGuardrail)
-        assert instance._check_blocked_words("hello QUXNEWBLOCK") is not None
-        assert instance._check_blocked_words("hello FOOBARBLOCK") is None
-        assert instance.event_hook == GuardrailEventHooks.during_call
-        assert instance.should_run_guardrail(data={}, event_type=GuardrailEventHooks.during_call) is True
-    finally:
-        for cb_list, snapshot in zip(lists, snapshots):
-            cb_list[:] = snapshot
+        is True
+    )
+    assert handler.guardrail_id_to_custom_guardrail["123"].event_hook is GuardrailEventHooks.pre_call
 
 
 def _make_guardrail(guardrail_id: str, name: str = "g") -> Guardrail:
@@ -508,6 +487,144 @@ def test_repeated_db_sync_does_not_accumulate_runner_instances():
             promote_into_request_lists()
 
         assert distinct_runner_instances() == 1
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+PRESIDIO_SIBLINGS_GID = "55555555-5555-5555-5555-555555555555"
+PRESIDIO_SIBLINGS_NAME = "presidio-siblings"
+
+
+def _presidio_db_guardrail(pii_entities_config: dict[str, str]) -> Guardrail:
+    return Guardrail(
+        guardrail_id=PRESIDIO_SIBLINGS_GID,
+        guardrail_name=PRESIDIO_SIBLINGS_NAME,
+        litellm_params={
+            "guardrail": "presidio",
+            "mode": "pre_call",
+            "default_on": True,
+            "output_parse_pii": True,
+            "presidio_filter_scope": "both",
+            "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+            "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+            "pii_entities_config": pii_entities_config,
+        },
+    )
+
+
+def _presidio_callbacks_in(cb_list: Iterable[object]) -> list[CustomGuardrail]:
+    return [
+        callback
+        for callback in cb_list
+        if isinstance(callback, CustomGuardrail) and getattr(callback, "guardrail_name", None) == PRESIDIO_SIBLINGS_NAME
+    ]
+
+
+def test_presidio_siblings_are_tracked_and_deleted_together():
+    """
+    A presidio guardrail scoped to both stages registers the pre_call primary plus
+    the post_call unmask and mask-output siblings. Deleting the guardrail must remove
+    all three from every callback list, not just the primary.
+    """
+    import litellm
+
+    handler = InMemoryGuardrailHandler()
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler.initialize_guardrail(_presidio_db_guardrail({"EMAIL_ADDRESS": "MASK"}))
+
+        registered = _presidio_callbacks_in(litellm.callbacks)
+        assert len(registered) == 3
+        primary = handler.guardrail_id_to_custom_guardrail[PRESIDIO_SIBLINGS_GID]
+        siblings = handler.guardrail_id_to_sibling_callbacks[PRESIDIO_SIBLINGS_GID]
+        assert primary is registered[0]
+        assert siblings == tuple(registered[1:])
+        assert [sibling.event_hook for sibling in siblings] == [GuardrailEventHooks.post_call] * 2
+
+        for cb_list in lists[1:]:
+            cb_list.extend(registered)
+
+        handler.delete_in_memory_guardrail(PRESIDIO_SIBLINGS_GID)
+
+        for cb_list in lists:
+            assert _presidio_callbacks_in(cb_list) == []
+        assert PRESIDIO_SIBLINGS_GID not in handler.guardrail_id_to_custom_guardrail
+        assert PRESIDIO_SIBLINGS_GID not in handler.guardrail_id_to_sibling_callbacks
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def test_update_in_memory_guardrail_reaches_presidio_siblings_and_keeps_their_stage():
+    import litellm
+
+    handler = InMemoryGuardrailHandler()
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler.initialize_guardrail(_presidio_db_guardrail({"EMAIL_ADDRESS": "MASK", "IP_ADDRESS": "MASK"}))
+        tracked = _presidio_callbacks_in(litellm.callbacks)
+        roles_before = [
+            (callback.apply_to_output, callback.output_parse_pii, callback.event_hook) for callback in tracked
+        ]
+        assert roles_before == [
+            (False, True, [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]),
+            (False, True, GuardrailEventHooks.post_call),
+            (True, False, GuardrailEventHooks.post_call),
+        ]
+
+        updated = Guardrail(
+            guardrail_id=PRESIDIO_SIBLINGS_GID,
+            guardrail_name=PRESIDIO_SIBLINGS_NAME,
+            litellm_params=LitellmParams(
+                guardrail="presidio",
+                mode="pre_call",
+                default_on=True,
+                output_parse_pii=True,
+                presidio_filter_scope="both",
+                presidio_analyzer_api_base="https://fakelink.com/v1/presidio/analyze",
+                presidio_anonymizer_api_base="https://fakelink.com/v1/presidio/anonymize",
+                pii_entities_config={"EMAIL_ADDRESS": "MASK"},
+            ),
+        )
+        handler.update_in_memory_guardrail(guardrail_id=PRESIDIO_SIBLINGS_GID, guardrail=updated)
+
+        assert [callback.pii_entities_config for callback in tracked] == [{"EMAIL_ADDRESS": "MASK"}] * 3
+        assert [
+            (callback.apply_to_output, callback.output_parse_pii, callback.event_hook) for callback in tracked
+        ] == roles_before
+        assert _presidio_callbacks_in(litellm.callbacks) == tracked
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def test_repeated_db_sync_replaces_presidio_siblings_instead_of_leaking_stale_ones():
+    """
+    The callback manager dedupes custom loggers by their scalar attributes, so a
+    leaked post_call sibling blocks the re-initialized sibling from registering and
+    keeps serving the previous entity config. After every DB re-sync, each callback
+    list must hold exactly the three current instances, all on the latest config.
+    """
+    import litellm
+
+    handler = InMemoryGuardrailHandler()
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        entity_configs = [{"EMAIL_ADDRESS": "MASK"}, {"EMAIL_ADDRESS": "MASK", "IP_ADDRESS": "MASK"}]
+        for cycle in range(4):
+            latest = entity_configs[cycle % 2]
+            handler.sync_guardrail_from_db(_presidio_db_guardrail(latest))
+            for cb_list in lists[1:]:
+                cb_list.extend(_presidio_callbacks_in(litellm.callbacks))
+
+            for cb_list in lists:
+                current = _presidio_callbacks_in(cb_list)
+                assert len({id(callback) for callback in current}) == 3
+                assert all(callback.pii_entities_config == latest for callback in current)
     finally:
         for cb_list, snapshot in zip(lists, snapshots):
             cb_list[:] = snapshot
@@ -842,3 +959,50 @@ def test_reinitialize_guardrail_raises_value_error_for_non_value_error_init_fail
         assert restored is not None and restored.guardrail_name == "regex-me"
     finally:
         registry_module.guardrail_initializer_registry.pop("regex_test", None)
+
+
+def test_sync_guardrail_from_db_applies_db_dict_params_to_live_instance():
+    """
+    Regression for PUT /guardrails/{id}: the DB row arrives with litellm_params as
+    a plain jsonb dict, and the in-place update_in_memory_guardrail cast it to
+    LitellmParams without constructing one, so vars() raised and the running proxy
+    kept enforcing the stale config forever. The PUT endpoint now routes through
+    sync_guardrail_from_db, which must rebuild the live instance from the dict:
+    new blocked words compiled in, old ones gone, and the event hook re-derived
+    from mode (the base-class setattr path wrote self.mode while dispatch reads
+    self.event_hook, so only a full re-init applies a mode change).
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+
+    handler = InMemoryGuardrailHandler()
+    gid = "66666666-6666-6666-6666-666666666666"
+
+    def db_guardrail(word: str, mode: str) -> Guardrail:
+        return Guardrail(
+            guardrail_id=gid,
+            guardrail_name="cf-put-sync",
+            litellm_params={
+                "guardrail": "litellm_content_filter",
+                "mode": mode,
+                "default_on": True,
+                "blocked_words": [{"keyword": word, "action": "BLOCK"}],
+            },
+        )
+
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler.sync_guardrail_from_db(db_guardrail("foobarblock", "pre_call"))
+        handler.sync_guardrail_from_db(db_guardrail("quxnewblock", "during_call"))
+
+        instance = handler.guardrail_id_to_custom_guardrail[gid]
+        assert isinstance(instance, ContentFilterGuardrail)
+        assert instance._check_blocked_words("hello QUXNEWBLOCK") is not None
+        assert instance._check_blocked_words("hello FOOBARBLOCK") is None
+        assert instance.event_hook == GuardrailEventHooks.during_call
+        assert instance.should_run_guardrail(data={}, event_type=GuardrailEventHooks.during_call) is True
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
