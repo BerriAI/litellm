@@ -1,8 +1,13 @@
+from collections.abc import Mapping
+
 import pytest
 
 from litellm.router_utils.auto_router_model_naming import (
     carries_complexity_router_settings,
     classify_strategy_router_model,
+    count_heuristic_v2_routers,
+    heuristic_v2_limit_violation,
+    is_heuristic_v2_router,
     strategy_router_dependencies,
     validate_complexity_router_config_placement,
     validate_complexity_router_config_write,
@@ -369,3 +374,55 @@ def test_placement_is_scoped_to_complexity_router_deployments(model, present_fie
     flat param on an s3_vectors vector store, so an unscoped gate would reject a valid deployment.
     Either complexity field names one on its own, which is what the load itself requires."""
     assert carries_complexity_router_settings(model, present_fields) is scoped
+
+
+@pytest.mark.parametrize(
+    "litellm_params,expected",
+    [
+        ({"model": "auto_router/complexity_router", "complexity_router_config": {"classifier_type": "heuristic_v2"}}, True),
+        ({"model": "auto_router/complexity_router-eu", "complexity_router_config": {"classifier_type": "heuristic_v2"}}, True),
+        ({"model": "auto_router/complexity_router", "complexity_router_config": {"classifier_type": "heuristic"}}, False),
+        ({"model": "auto_router/complexity_router", "complexity_router_config": {"tiers": {"SIMPLE": "a"}}}, False),
+        ({"model": "auto_router/complexity_router"}, False),
+        ({"model": "auto_router/quality_router", "complexity_router_config": {"classifier_type": "heuristic_v2"}}, False),
+        ({"model": "openai/gpt-4o", "complexity_router_config": {"classifier_type": "heuristic_v2"}}, False),
+        ({"model": "auto_router/complexity_router", "complexity_router_config": "heuristic_v2"}, False),
+        ({}, False),
+    ],
+)
+def test_is_heuristic_v2_router(litellm_params: Mapping[str, object], expected: bool) -> None:
+    """Only a complexity router whose config selects heuristic_v2 counts toward the license limit."""
+    assert is_heuristic_v2_router(litellm_params) is expected
+
+
+def test_count_heuristic_v2_routers_reads_model_list_rows_and_ignores_malformed_ones() -> None:
+    v2 = {"model": "auto_router/complexity_router", "complexity_router_config": {"classifier_type": "heuristic_v2"}}
+    rows: list[Mapping[str, object]] = [
+        {"model_name": "a", "litellm_params": v2},
+        {"model_name": "b", "litellm_params": {"model": "openai/gpt-4o"}},
+        {"model_name": "c", "litellm_params": v2},
+        {"model_name": "d"},
+        {"model_name": "e", "litellm_params": "not a mapping"},
+    ]
+    assert count_heuristic_v2_routers(rows) == 2
+    assert count_heuristic_v2_routers(()) == 0
+
+
+@pytest.mark.parametrize(
+    "held,limit,violates",
+    [
+        (1, 1, False),
+        (2, 1, True),
+        (0, 1, False),
+        (5, None, False),
+        (3, 3, False),
+        (4, 3, True),
+    ],
+)
+def test_heuristic_v2_limit_violation(held: int, limit: int | None, violates: bool) -> None:
+    violation = heuristic_v2_limit_violation(held=held, limit=limit)
+    assert (violation is not None) is violates
+    if violation is not None:
+        assert f"At most {limit} auto-router" in violation
+        assert f"would make {held}" in violation
+        assert "license" not in violation
