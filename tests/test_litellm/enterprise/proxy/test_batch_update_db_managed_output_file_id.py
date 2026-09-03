@@ -390,7 +390,7 @@ async def test_store_unified_object_id_persists_key_and_tags_on_create():
     """Regression (spend loss): the batch create persists the creating key hash and tags so
     CheckBatchCost can write an attributed spend row instead of a blank one the DB drops."""
     instance, store = _in_memory_managed_files()
-    creator = UserAPIKeyAuth(user_id="alice", team_id="team-alpha", api_key="hash-alice")
+    creator = UserAPIKeyAuth(user_id="alice", team_id="team-alpha", api_key="hash-alice", org_id="org-acme")
 
     await instance.store_unified_object_id(
         unified_object_id="unified-b",
@@ -407,6 +407,7 @@ async def test_store_unified_object_id_persists_key_and_tags_on_create():
     assert row["api_key"] == "hash-alice"
     assert row["created_by"] == "alice"
     assert row["team_id"] == "team-alpha"
+    assert row["org_id"] == "org-acme"
     assert row["request_tags"].data == ["env:prod"]
 
 
@@ -471,6 +472,7 @@ async def test_store_unified_object_id_attribution_columns_are_write_once():
     upsert_data = instance.prisma_client.db.litellm_managedobjecttable.upsert.call_args.kwargs["data"]
     assert "api_key" not in upsert_data["update"]
     assert "request_tags" not in upsert_data["update"]
+    assert "org_id" not in upsert_data["update"]
 
 
 @pytest.mark.asyncio

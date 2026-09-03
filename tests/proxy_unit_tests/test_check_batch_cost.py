@@ -2554,9 +2554,26 @@ class TestBatchCostAttribution:
         assert metadata["user_api_key_alias"] == "prod-key"
 
     @pytest.mark.asyncio
+    async def test_org_id_snapshotted_on_the_row_wins(self):
+        """The org_id column captures the creating key's organization at submission time,
+        like team_id, so a key later moved to another org still bills the original one."""
+        from types import SimpleNamespace
+
+        instance = self._instance(
+            key_row=SimpleNamespace(key_alias="prod-key", org_id="org-moved-to"),
+            team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
+        )
+
+        metadata = await instance._build_creator_attribution_metadata(
+            self._job(org_id="org-at-creation"), "batch-1"
+        )
+
+        assert metadata["user_api_key_org_id"] == "org-at-creation"
+
+    @pytest.mark.asyncio
     async def test_org_id_comes_from_the_creating_key(self):
-        """The spend update writer increments organization spend from user_api_key_org_id,
-        so an org-scoped key's batch cost must carry the key's org id."""
+        """The spend update writer increments organization spend from user_api_key_org_id.
+        A legacy row without the org_id column falls back to the creating key's org."""
         from types import SimpleNamespace
 
         instance = self._instance(

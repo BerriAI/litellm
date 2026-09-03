@@ -112,39 +112,66 @@ class CheckBatchCost:
             verbose_proxy_logger.error(f"CheckBatchCost: could not look up user {user_id} for batch {batch_id}: {e}")
             return {}
 
-    async def _get_key_attribution(self, batch_id: str, api_key: str | None) -> tuple[str | None, str | None]:
-        """Resolve the creating virtual key's (alias, org_id) from its hashed token."""
+    async def _get_key_alias(self, batch_id: str, api_key: str | None) -> str | None:
+        """Resolve the creating virtual key's alias from its hashed token."""
         if not api_key:
-            return None, None
+            return None
         try:
             key_row: prisma_models.LiteLLM_VerificationToken | None = (
                 await self.prisma_client.db.litellm_verificationtoken.find_unique(
                     where={"token": api_key}
                 )
             )
-            if key_row is None:
-                return None, None
-            return getattr(key_row, "key_alias", None), getattr(key_row, "org_id", None)
+            return getattr(key_row, "key_alias", None) if key_row is not None else None
         except Exception as e:
             verbose_proxy_logger.error(f"CheckBatchCost: could not look up key alias for batch {batch_id}: {e}")
-            return None, None
+            return None
 
-    async def _get_team_attribution(self, team_id: str | None) -> tuple[str | None, str | None]:
-        """Resolve a team's (alias, organization_id) from its id."""
+    async def _get_team_alias(self, team_id: str | None) -> str | None:
+        """Resolve a team's alias from its id."""
         if not team_id:
-            return None, None
+            return None
         try:
             team_row: prisma_models.LiteLLM_TeamTable | None = (
                 await self.prisma_client.db.litellm_teamtable.find_unique(
                     where={"team_id": team_id}
                 )
             )
-            if team_row is None:
-                return None, None
-            return getattr(team_row, "team_alias", None), getattr(team_row, "organization_id", None)
+            return getattr(team_row, "team_alias", None) if team_row is not None else None
         except Exception as e:
             verbose_proxy_logger.error(f"CheckBatchCost: could not look up team alias for team {team_id}: {e}")
-            return None, None
+            return None
+
+    async def _get_org_id(self, job: "LiteLLM_ManagedObjectTable", batch_id: str) -> str | None:
+        """Organization to bill the batch against, snapshotted on the row at creation
+        like team_id. Rows created before the org_id column existed carry None, so they
+        fall back to the creating key's org (or its team's) as resolved today."""
+        org_id = getattr(job, "org_id", None)
+        if org_id:
+            return org_id
+        api_key = getattr(job, "api_key", None)
+        team_id = getattr(job, "team_id", None)
+        try:
+            if api_key:
+                key_row: prisma_models.LiteLLM_VerificationToken | None = (
+                    await self.prisma_client.db.litellm_verificationtoken.find_unique(
+                        where={"token": api_key}
+                    )
+                )
+                key_org_id = getattr(key_row, "org_id", None) if key_row is not None else None
+                if key_org_id:
+                    return key_org_id
+            if team_id:
+                team_row: prisma_models.LiteLLM_TeamTable | None = (
+                    await self.prisma_client.db.litellm_teamtable.find_unique(
+                        where={"team_id": team_id}
+                    )
+                )
+                return getattr(team_row, "organization_id", None) if team_row is not None else None
+            return None
+        except Exception as e:
+            verbose_proxy_logger.error(f"CheckBatchCost: could not resolve org for batch {batch_id}: {e}")
+            return None
 
     async def _build_creator_attribution_metadata(
         self, job: "LiteLLM_ManagedObjectTable", batch_id: str
@@ -173,13 +200,13 @@ class CheckBatchCost:
             **(await self._get_user_info(batch_id, job.created_by)),
         }
 
-        key_alias, key_org_id = await self._get_key_attribution(batch_id, api_key)
+        key_alias = await self._get_key_alias(batch_id, api_key)
         if key_alias is not None:
             metadata["user_api_key_alias"] = key_alias
-        team_alias, team_org_id = await self._get_team_attribution(team_id)
+        team_alias = await self._get_team_alias(team_id)
         if team_alias is not None:
             metadata["user_api_key_team_alias"] = team_alias
-        org_id: Final = key_org_id or team_org_id
+        org_id: Final = await self._get_org_id(job, batch_id)
         if org_id is not None:
             metadata["user_api_key_org_id"] = org_id
         if isinstance(request_tags, list) and request_tags:
