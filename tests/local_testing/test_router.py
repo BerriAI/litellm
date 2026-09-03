@@ -1541,7 +1541,7 @@ def test_router_anthropic_key_dynamic():
     os.environ["ANTHROPIC_API_KEY"] = anthropic_api_key
 
 
-def test_router_timeout():
+def test_router_timeout(unroutable_api_base):
     litellm.set_verbose = True
     import logging
 
@@ -1554,6 +1554,7 @@ def test_router_timeout():
             "litellm_params": {
                 "model": "gpt-3.5-turbo",
                 "api_key": "os.environ/OPENAI_API_KEY",
+                "api_base": unroutable_api_base,
             },
         }
     ]

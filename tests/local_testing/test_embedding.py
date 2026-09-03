@@ -266,11 +266,12 @@ def test_openai_azure_embedding_timeouts():
 # test_openai_azure_embedding_timeouts()
 
 
-def test_openai_embedding_timeouts():
+def test_openai_embedding_timeouts(unroutable_api_base):
     try:
         response = embedding(
             model="text-embedding-ada-002",
             input=["good morning from litellm"],
+            api_base=unroutable_api_base,
             timeout=0.00001,
         )
         print(response)
