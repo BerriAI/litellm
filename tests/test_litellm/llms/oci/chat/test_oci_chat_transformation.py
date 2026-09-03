@@ -1902,10 +1902,6 @@ class TestOCIImageUrlTransformation:
         assert "image_url" in str(exc_info.value)
 
 
-# ---------------------------------------------------------------------------
-# OCIStreamWrapper: per-stream identity and the GENERIC `[DONE]` sentinel
-# ---------------------------------------------------------------------------
-
 import itertools
 from unittest.mock import patch
 

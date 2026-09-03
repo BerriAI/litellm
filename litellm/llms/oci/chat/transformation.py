@@ -746,9 +746,7 @@ class OCIStreamWrapper(CustomStreamWrapper):
         self._cohere_text_emitted = False
 
     def _with_stream_identity(self, parsed: ModelResponseStream) -> ModelResponseStream:
-        model_response: Final = self.model_response_creator()
-        model_response.choices = parsed.choices
-        return model_response
+        return self.model_response_creator(chunk={"choices": parsed.choices})
 
     def chunk_creator(self, chunk: Any) -> ModelResponseStream | None:
         if not isinstance(chunk, str):
