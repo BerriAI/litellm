@@ -471,10 +471,20 @@ async def test_get_api_key_metadata_recovers_double_hashed_key_via_reverse_hash(
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
         side_effect=[
             [],  # exact join miss
-            [SimpleNamespace(token=token, key_alias="batch-worker", team_id="team-1")],
+            [
+                SimpleNamespace(
+                    token=token,
+                    key_alias="batch-worker",
+                    team_id="team-1",
+                    user_id="alice",
+                )
+            ],
         ]
     )
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="alice", user_email="alice@example.com")]
+    )
     mock_prisma.db.query_raw = AsyncMock(return_value=[])
 
     result = await get_api_key_metadata(
@@ -484,6 +494,7 @@ async def test_get_api_key_metadata_recovers_double_hashed_key_via_reverse_hash(
 
     assert result[double_hashed]["key_alias"] == "batch-worker"
     assert result[double_hashed]["team_id"] == "team-1"
+    assert result[double_hashed]["user_email"] == "alice@example.com"
     mock_prisma.db.query_raw.assert_not_called()
 
 
