@@ -143,7 +143,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     (updated: Partial<KeyResponse>) => {
       const rotatedToken = updated.token ?? updated.token_id;
       if (!rotatedToken || rotatedToken === selectedKeyId) return;
-      void setSelectedKeyId(rotatedToken);
+      void setSelectedKeyId(rotatedToken, { history: "replace" });
       void refetch();
     },
     [refetch, selectedKeyId, setSelectedKeyId],
