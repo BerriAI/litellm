@@ -8,6 +8,7 @@
 pub mod gil;
 pub mod health;
 pub mod messages;
+pub mod ocr;
 pub mod realtime;
 pub mod responses;
 
@@ -21,6 +22,7 @@ pub fn app(state: AppState) -> Router {
         .merge(health::router())
         .merge(gil::router())
         .merge(messages::router())
+        .merge(ocr::router())
         .merge(realtime::router())
         .merge(responses::router())
         .with_state(state)

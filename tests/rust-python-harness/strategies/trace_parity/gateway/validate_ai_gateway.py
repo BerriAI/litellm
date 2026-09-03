@@ -4,7 +4,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from rust_python_harness.strategies.trace_parity.gateway.profiler import FunctionTraceEvent, profile_gateway
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+from profiler import FunctionTraceEvent, profile_gateway
 
 
 def test_ocr_parity():
