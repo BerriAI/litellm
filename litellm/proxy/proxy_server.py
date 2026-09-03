@@ -1278,8 +1278,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         await ProxyStartupEvent._sync_ui_settings_to_general_settings()
 
     # Start background health checks AFTER models are loaded and index is built
-    if use_background_health_checks:
-        asyncio.create_task(_run_background_health_check())  # start the background health check coroutine.
+    await _reconcile_background_health_check_task()
 
     # Start adaptive-router queue flusher unconditionally — adaptive routers
     # may be added later via `/config/reload`, and the flusher is a no-op when
@@ -2304,6 +2303,7 @@ health_check_concurrency = None
 health_check_details = None
 health_check_results: dict[str, int | list[dict[str, Any]]] = {}
 background_health_check_loop_active = False
+background_health_check_task: asyncio.Task[None] | None = None
 background_health_check_cycle_seq = 0
 queue: Final[list] = []
 litellm_proxy_budget_name: Final = LITELLM_PROXY_BUDGET_NAME
@@ -3920,6 +3920,27 @@ async def _run_background_health_check():
         _write_health_state_to_router_cache(healthy_endpoints, unhealthy_endpoints, _exceptions_by_model_id)
 
         await asyncio.sleep(health_check_interval)
+
+
+async def _reconcile_background_health_check_task() -> None:
+    global background_health_check_task, background_health_check_loop_active  # noqa: PLW0603  # reload reconciliation updates module task state
+
+    if use_background_health_checks:
+        if background_health_check_task is None or background_health_check_task.done():
+            background_health_check_task = asyncio.create_task(_run_background_health_check())
+        return
+
+    if background_health_check_task is not None:
+        if not background_health_check_task.done():
+            background_health_check_task.cancel()
+            try:
+                await background_health_check_task
+            except asyncio.CancelledError:
+                pass
+        elif not background_health_check_task.cancelled():
+            background_health_check_task.exception()
+        background_health_check_task = None
+    background_health_check_loop_active = False
 
 
 class StreamingCallbackError(Exception):
@@ -6691,14 +6712,50 @@ class ProxyConfig:
                 except ValueError:
                     verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
 
-    async def _update_general_settings(self, db_general_settings: Json | None):
+    async def _update_general_settings(self, db_general_settings: Json | None):  # noqa: C901  # DB reload branches combine independent settings
         """
         Pull from DB, read general settings value
         """
         global general_settings, store_model_in_db
+        global use_background_health_checks, use_shared_health_check  # noqa: PLW0603  # DB reload runtime state
+        global health_check_interval, health_check_concurrency, health_check_details  # noqa: PLW0603  # DB reload runtime state
         if db_general_settings is None:
             return
         _general_settings: Final = dict(db_general_settings)
+        health_check_settings: Final = frozenset("background_health_checks use_shared_health_check health_check_interval health_check_concurrency health_check_details enable_health_check_routing health_check_staleness_threshold health_check_ignore_transient_errors".split())  # noqa: E501  # immutable DB setting key list  # fmt: skip
+
+        def _db_setting_is_active(key: str) -> bool:
+            return key in _general_settings and key not in self._yaml_general_settings_keys
+
+        for key in health_check_settings:
+            if key not in _general_settings or key in self._yaml_general_settings_keys:
+                continue
+            general_settings[key] = _general_settings[key]
+
+        if _db_setting_is_active("background_health_checks"):
+            use_background_health_checks = _general_settings["background_health_checks"]
+        if _db_setting_is_active("use_shared_health_check"):
+            use_shared_health_check = _general_settings["use_shared_health_check"]
+        if _db_setting_is_active("health_check_interval"):
+            health_check_interval = _general_settings["health_check_interval"]
+        if _db_setting_is_active("health_check_concurrency"):
+            health_check_concurrency = _general_settings["health_check_concurrency"]
+        if _db_setting_is_active("health_check_details"):
+            health_check_details = _general_settings["health_check_details"]
+
+        if llm_router is not None:
+            if _db_setting_is_active("enable_health_check_routing"):
+                llm_router.enable_health_check_routing = _general_settings["enable_health_check_routing"]
+            if _db_setting_is_active("health_check_staleness_threshold"):
+                llm_router.health_state_cache.staleness_threshold = float(
+                    _general_settings["health_check_staleness_threshold"]
+                )
+            if _db_setting_is_active("health_check_ignore_transient_errors"):
+                llm_router.health_check_ignore_transient_errors = _general_settings[
+                    "health_check_ignore_transient_errors"
+                ]
+        await _reconcile_background_health_check_task()
+
         ## MAX PARALLEL REQUESTS ##
         if "max_parallel_requests" in _general_settings:
             general_settings["max_parallel_requests"] = _general_settings["max_parallel_requests"]
