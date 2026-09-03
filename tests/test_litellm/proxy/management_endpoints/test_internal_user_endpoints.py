@@ -4305,3 +4305,22 @@ async def test_user_update_hashes_and_persists_strong_password(_admin_prisma, mo
     written_data = mock_prisma_client.update_data.call_args.kwargs["data"]
     assert written_data.get("password") is not None
     assert written_data["password"] != strong_password
+
+
+@pytest.mark.asyncio
+async def test_user_update_reports_a_bad_budget_duration_as_a_request_error(_admin_prisma):
+    """/user/update answered 400 with type=auth_error for an unparseable budget_duration on a
+    valid admin key, pointing the caller at its credentials instead of the field it sent."""
+    from litellm.proxy._types import ProxyErrorTypes
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_update(
+            data=UpdateUserRequest(user_id="target-user", budget_duration="not-a-duration"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.type != ProxyErrorTypes.auth_error.value
+    assert "Invalid budget_duration" in exc_info.value.message

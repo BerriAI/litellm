@@ -6,7 +6,9 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-from fastapi import status
+from fastapi import HTTPException, status
+
+from litellm.proxy._types import ProxyException
 
 _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
     {
@@ -46,3 +48,27 @@ def openai_error_param(exc: object) -> str | None:
     serializes as JSON ``null``."""
     carried: Final = attribute_of(exc, "param")
     return carried if isinstance(carried, str) else None
+
+
+def proxy_exception_for(exc: Exception, default_status_code: int) -> ProxyException:
+    """The answer a route's blanket ``except Exception`` owes its caller.
+
+    Such a handler has no idea what failed, so it reads the type off the exception
+    instead of asserting one, and keeps the status each branch already answered with:
+    an ``HTTPException`` carries its own, anything else gets the route's default."""
+    if isinstance(exc, ProxyException):
+        return exc
+    if isinstance(exc, HTTPException):
+        carried_status: Final = error_status_code(exc, default_status_code)
+        return ProxyException(
+            message=str(attribute_of(exc, "detail", exc)),
+            type=openai_error_type(exc, carried_status),
+            param=openai_error_param(exc),
+            code=carried_status,
+        )
+    return ProxyException(
+        message=str(exc),
+        type=openai_error_type(exc, default_status_code),
+        param=openai_error_param(exc),
+        code=default_status_code,
+    )

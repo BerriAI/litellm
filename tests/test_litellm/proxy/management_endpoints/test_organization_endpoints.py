@@ -1063,3 +1063,42 @@ async def test_find_member_if_email_missing_row_raises_documented_400():
             "non-existent user_email in LiteLLM_UserTable. Use 'user_id' instead."
         )
     }
+
+
+@pytest.mark.asyncio
+async def test_organization_member_add_reports_an_unknown_org_as_a_request_error():
+    """/organization/member_add answered 404 with type=auth_error on a valid admin key. The
+    404 the route raised must survive the handler's 500 default, and the type must follow it."""
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LitellmUserRoles,
+        OrganizationMemberAddRequest,
+        OrgMember,
+        ProxyErrorTypes,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        organization_member_add,
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_organizationtable.find_unique = AsyncMock(return_value=None)
+
+    with patch(  # test-quality-ok: the endpoint reads proxy_server.prisma_client itself; no parameter to inject
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await organization_member_add(
+                data=OrganizationMemberAddRequest(
+                    organization_id="no-such-org",
+                    member=OrgMember(role="internal_user", user_id="someone"),
+                ),
+                http_request=MagicMock(spec=Request),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+    assert exc_info.value.code == "404"
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.type != ProxyErrorTypes.auth_error.value

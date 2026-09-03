@@ -13519,3 +13519,31 @@ async def test_team_member_update_skips_invalidation_when_no_budget_fields_sent(
 
     assert await real_cache.async_get_cache(key="team-1_member-1") == "still-fresh-membership"
     assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:member-1:team-1") == 1.5
+
+
+@pytest.mark.asyncio
+async def test_team_info_reports_a_missing_team_as_a_request_error_not_an_auth_error():
+    """/team/info answered 404 with type=auth_error on a valid admin key, so a client
+    branching on the type retried the credentials instead of the team id."""
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+
+    with patch(  # test-quality-ok: the endpoint reads proxy_server.prisma_client itself; no parameter to inject
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await team_endpoints.team_info(
+                http_request=MagicMock(spec=Request),
+                team_id="no-such-team",
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+    assert exc_info.value.code == "404"
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.type != ProxyErrorTypes.auth_error.value
+    assert "Authentication Error" not in exc_info.value.message

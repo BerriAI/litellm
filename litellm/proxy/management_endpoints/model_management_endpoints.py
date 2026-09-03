@@ -58,7 +58,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.common_utils.openai_error_payload import openai_error_param
+from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
@@ -1697,21 +1697,7 @@ async def delete_model(
 
     except Exception as e:
         verbose_proxy_logger.exception("Failed to delete model. Due to error - %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=openai_error_param(e),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=openai_error_param(e),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
 async def delete_team_model_alias(
@@ -1921,21 +1907,7 @@ async def add_new_model(
 
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.add_new_model(): Exception occured - %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=openai_error_param(e),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=openai_error_param(e),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
 #### MODEL MANAGEMENT ####
@@ -2084,21 +2056,7 @@ async def update_model(
             return model_response
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_model(): Exception occured - %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=openai_error_param(e),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=openai_error_param(e),
-            code=status.HTTP_400_BAD_REQUEST,
-        )
+        raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
 @router.post(

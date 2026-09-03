@@ -4654,3 +4654,48 @@ class TestBlockModelResponseSerialization:
         assert body["model_id"] == "m-block-1"
         assert body["blocked"] is blocked
         assert body["litellm_params"] == {"model": "openai/gpt-4o-mini", "api_key": "encrypted-value"}
+
+
+@pytest.mark.asyncio
+async def test_delete_model_reports_an_unknown_model_id_as_a_request_error():
+    """/model/delete answered 400 with type=auth_error for a model id that is not in the db,
+    on a valid admin key, so the type told the client nothing about what it got wrong."""
+    from litellm.proxy._types import ModelInfoDelete, ProxyErrorTypes, ProxyException
+    from litellm.proxy.management_endpoints.model_management_endpoints import delete_model
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=None)
+
+    with patch(  # test-quality-ok: the endpoint reads proxy_server.prisma_client itself; no parameter to inject
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await delete_model(
+                model_info=ModelInfoDelete(id="no-such-model"),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.type != ProxyErrorTypes.auth_error.value
+
+
+def test_a_real_authorization_failure_on_the_model_routes_keeps_its_auth_error_type():
+    """The other half of the fix: /model/new's credential check is a genuine authorization
+    failure, so the handler must hand its ProxyException back untouched rather than relabel it."""
+    from fastapi import status
+
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+    from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
+
+    with pytest.raises(ProxyException) as exc_info:
+        ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=LiteLLM_Params(model="gpt-4o", litellm_credential_name="shared-cred"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="someone", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    wrapped = proxy_exception_for(exc_info.value, default_status_code=status.HTTP_400_BAD_REQUEST)
+
+    assert wrapped is exc_info.value
+    assert wrapped.code == "403"
+    assert wrapped.type == ProxyErrorTypes.auth_error.value

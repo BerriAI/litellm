@@ -1092,12 +1092,17 @@ async def test_health_services_endpoint_rejects_unknown_service():
 @pytest.mark.asyncio
 async def test_health_services_endpoint_rejection_is_openai_shaped():
     """A caller mistake here must serialize as an OpenAI error object: a real
-    `type` string and a JSON null `param`, never the literal string "None"."""
+    `type` string and a JSON null `param`, never the literal string "None".
+
+    The type names what actually went wrong, too. This route answered 400 with
+    `auth_error` on a valid admin key, blaming the caller's credentials for a
+    service name it mistyped."""
     with pytest.raises(ProxyException) as exc_info:
         await health_services_endpoint(service="totally_unknown_service_xyz")
 
     body = json.loads(json.dumps({"error": exc_info.value.to_dict()}))
-    assert body["error"]["type"] == "auth_error"
+    assert body["error"]["type"] == "invalid_request_error"
+    assert body["error"]["code"] == "400"
     assert body["error"]["param"] is None
 
 
