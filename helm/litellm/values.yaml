@@ -10,6 +10,17 @@ imagePullSecrets: []
 ingress:
   enabled: false
   className: ""
+  # Which ingress controller serves this Ingress. Controllers disagree on the
+  # pathTypes they accept, so this picks the pathType of a few built-in paths:
+  #   alb    AWS Load Balancer Controller (default): Exact and Prefix paths plus
+  #          the /*.txt wildcard that routes the UI's RSC payloads.
+  #   nginx  ingress-nginx: its admission webhook rejects a dot in an Exact or
+  #          Prefix path (strict-validate-path-type, on by default from v1.12.0
+  #          until v1.12.6 / v1.13.2 allowed dots again), so /favicon.ico and
+  #          /eu.assemblyai render as ImplementationSpecific, which nginx serves
+  #          as a plain prefix location. /*.txt is dropped: nginx has no
+  #          wildcard pathType, so that rule could never match there.
+  controller: alb
   annotations: {}
   host: ""        # optional; if set, becomes the rule's host
   tls: []

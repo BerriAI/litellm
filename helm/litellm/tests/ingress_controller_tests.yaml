@@ -1,0 +1,129 @@
+suite: test ingress.controller
+templates:
+  - ingress.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: keeps the AWS Load Balancer Controller path types by default
+    set:
+      ingress.enabled: true
+    asserts:
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /favicon.ico
+            pathType: Exact
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-ui
+                port:
+                  number: 3000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /eu.assemblyai
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /*.txt
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-ui
+                port:
+                  number: 3000
+
+  - it: renders no dotted Exact or Prefix path for ingress-nginx, whose admission webhook rejects them
+    set:
+      ingress.enabled: true
+      ingress.controller: nginx
+    asserts:
+      - notMatchRegexRaw:
+          pattern: 'path: /\S*\.\S*\n\s+pathType: (Exact|Prefix)\n'
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /favicon.ico
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-ui
+                port:
+                  number: 3000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /eu.assemblyai
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+
+  - it: drops the /*.txt wildcard for ingress-nginx and keeps every other route as is
+    set:
+      ingress.enabled: true
+      ingress.controller: nginx
+    asserts:
+      - notContains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /*.txt
+          any: true
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /ui
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-ui
+                port:
+                  number: 3000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /test
+            pathType: Exact
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+      - equal:
+          path: spec.rules[0].http.paths[-1]
+          value:
+            path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-backend
+                port:
+                  number: 4001
+
+  - it: rejects an extraPaths entry that repeats a built-in path at the pathType ingress-nginx renders it with
+    set:
+      ingress.enabled: true
+      ingress.controller: nginx
+      ingress.extraPaths:
+        - path: /favicon.ico
+          service: ui
+          pathType: ImplementationSpecific
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.extraPaths[0]: path /favicon.ico with pathType ImplementationSpecific is already routed by this chart, and a duplicate would take it over rather than add to it"
+
+  - it: rejects a controller it has no path types for
+    set:
+      ingress.enabled: true
+      ingress.controller: traefik
+    asserts:
+      - failedTemplate:
+          errorMessage: 'ingress.controller: unknown controller "traefik", expected one of alb, nginx'
