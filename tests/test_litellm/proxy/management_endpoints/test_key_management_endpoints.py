@@ -17506,8 +17506,6 @@ def test_generate_key_request_blank_team_id_is_personal():
 
 
 def test_generate_key_request_blank_organization_and_project_id_are_unset():
-    """Clearing the Organization or Project combobox in Create Key submits "", which
-    must not be looked up as an org/project named "" (Pylon #8102)."""
     from litellm.proxy._types import RegenerateKeyRequest
 
     cleared = GenerateKeyRequest(organization_id="", project_id="")
