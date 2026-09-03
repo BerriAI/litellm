@@ -127,3 +127,79 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'ingress.controller: unknown controller "traefik", expected one of alb, nginx'
+
+  - it: rejects an extraPaths entry that repeats a built-in path once ingress-nginx normalizes its pathType
+    set:
+      ingress.enabled: true
+      ingress.controller: nginx
+      ingress.extraPaths:
+        - path: /favicon.ico
+          service: ui
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.extraPaths[0]: path /favicon.ico with pathType ImplementationSpecific is already routed by this chart, and a duplicate would take it over rather than add to it"
+
+  - it: renders a dotted extraPaths entry as ImplementationSpecific for ingress-nginx
+    set:
+      ingress.enabled: true
+      ingress.controller: nginx
+      ingress.extraPaths:
+        - path: /eu.assemblyai.custom
+          service: gateway
+        - path: /robots.txt
+          service: ui
+          pathType: Exact
+    asserts:
+      - notMatchRegexRaw:
+          pattern: 'path: "?/\S*\.\S*"?\n\s+pathType: (Exact|Prefix)\n'
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /eu.assemblyai.custom
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /robots.txt
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-ui
+                port:
+                  number: 3000
+
+  - it: keeps the requested pathType of a dotted extraPaths entry for the AWS Load Balancer Controller
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /eu.assemblyai.custom
+          service: gateway
+        - path: /robots.txt
+          service: ui
+          pathType: Exact
+    asserts:
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /eu.assemblyai.custom
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /robots.txt
+            pathType: Exact
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-ui
+                port:
+                  number: 3000

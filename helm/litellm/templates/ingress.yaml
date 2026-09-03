@@ -170,10 +170,11 @@ spec:
           {{- if not $target }}
           {{- fail (printf "ingress.extraPaths[%d] (path %s): unknown service %q, expected one of backend, gateway, ui" $idx $extra.path $service) }}
           {{- end }}
-          {{- $pathType := $extra.pathType | default "Prefix" }}
-          {{- if not (has $pathType (list "Prefix" "Exact" "ImplementationSpecific")) }}
-          {{- fail (printf "ingress.extraPaths[%d] (path %s): unknown pathType %q, expected one of Exact, ImplementationSpecific, Prefix" $idx $extra.path $pathType) }}
+          {{- $requestedPathType := $extra.pathType | default "Prefix" }}
+          {{- if not (has $requestedPathType (list "Prefix" "Exact" "ImplementationSpecific")) }}
+          {{- fail (printf "ingress.extraPaths[%d] (path %s): unknown pathType %q, expected one of Exact, ImplementationSpecific, Prefix" $idx $extra.path $requestedPathType) }}
           {{- end }}
+          {{- $pathType := include "litellm.ingress.pathType" (dict "controller" $controller "path" $extra.path "pathType" $requestedPathType) }}
           {{- if eq $extra.path "/" }}
           {{- fail (printf "ingress.extraPaths[%d]: path / is already routed in both directions, Exact to ui and Prefix to backend, so no pathType leaves a request for an entry here to capture" $idx) }}
           {{- end }}
