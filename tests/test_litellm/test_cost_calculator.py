@@ -10,12 +10,14 @@ from pydantic import BaseModel
 import litellm
 from litellm.cost_calculator import (
     BaseTokenUsageProcessor,
-    RealtimeAPITokenUsageProcessor,
     completion_cost,
     cost_per_token,
     handle_realtime_stream_cost_calculation,
+    ocr_cost,
+    RealtimeAPITokenUsageProcessor,
     response_cost_calculator,
 )
+from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUsageInfo
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import (
     CacheCreationTokenDetails,
@@ -4473,3 +4475,100 @@ def test_explicit_pricing_precedes_private_provider_response_model(
     )
 
     assert selected == expected
+
+
+def test_ocr_cost_prices_token_usage_when_pages_are_not_reported(_local_model_cost_map):
+    response = OCRResponse(
+        pages=[OCRPage(index=0, markdown="# OCR text")],
+        model="vertex_ai/deepseek-ai/deepseek-ocr-maas",
+        usage_info=OCRUsageInfo.model_validate({"prompt_tokens": 901, "completion_tokens": 278, "total_tokens": 1179}),
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model="vertex_ai/deepseek-ai/deepseek-ocr-maas",
+        custom_llm_provider="vertex_ai",
+        call_type="ocr",
+    )
+
+    assert cost == pytest.approx(901 * 3e-07 + 278 * 1.2e-06)
+
+
+def test_ocr_cost_does_not_price_tokens_for_page_priced_models(_local_model_cost_map):
+    response = OCRResponse(
+        pages=[OCRPage(index=0, markdown="# OCR text")],
+        model="mistral/mistral-ocr-latest",
+        usage_info=OCRUsageInfo.model_validate({"prompt_tokens": 901, "completion_tokens": 278}),
+    )
+
+    with pytest.raises(ValueError, match="pages_processed is None"):
+        completion_cost(
+            completion_response=response,
+            model="mistral/mistral-ocr-latest",
+            custom_llm_provider="mistral",
+            call_type="ocr",
+        )
+
+
+def test_ocr_cost_prefers_page_pricing_when_pages_are_reported(_local_model_cost_map, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "vertex_ai/page-and-token-ocr",
+        {
+            "mode": "ocr",
+            "litellm_provider": "vertex_ai",
+            "input_cost_per_token": 3e-07,
+            "output_cost_per_token": 1.2e-06,
+            "ocr_cost_per_page": 0.001,
+        },
+    )
+    response = OCRResponse(
+        pages=[OCRPage(index=0, markdown="# OCR text")],
+        model="vertex_ai/page-and-token-ocr",
+        usage_info=OCRUsageInfo.model_validate(
+            {"pages_processed": 2, "prompt_tokens": 901, "completion_tokens": 278}
+        ),
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model="vertex_ai/page-and-token-ocr",
+        custom_llm_provider="vertex_ai",
+        call_type="ocr",
+    )
+
+    assert cost == pytest.approx(2 * 0.001)
+
+
+def test_ocr_cost_splits_token_cost_into_prompt_and_completion(_local_model_cost_map):
+    response = OCRResponse(
+        pages=[OCRPage(index=0, markdown="# OCR text")],
+        model="vertex_ai/deepseek-ai/deepseek-ocr-maas",
+        usage_info=OCRUsageInfo.model_validate({"prompt_tokens": 901, "completion_tokens": 278}),
+    )
+
+    prompt_cost, completion_cost_value = ocr_cost(
+        model="vertex_ai/deepseek-ai/deepseek-ocr-maas",
+        custom_llm_provider="vertex_ai",
+        response=response,
+    )
+
+    assert prompt_cost == pytest.approx(901 * 3e-07)
+    assert completion_cost_value == pytest.approx(278 * 1.2e-06)
+
+
+def test_ocr_cost_stays_zero_when_token_priced_response_lacks_token_counts(_local_model_cost_map):
+    response = OCRResponse(
+        pages=[OCRPage(index=0, markdown="# OCR text")],
+        model="vertex_ai/deepseek-ai/deepseek-ocr-maas",
+        usage_info=OCRUsageInfo(),
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model="vertex_ai/deepseek-ai/deepseek-ocr-maas",
+        custom_llm_provider="vertex_ai",
+        call_type="ocr",
+    )
+
+    assert cost == 0.0
