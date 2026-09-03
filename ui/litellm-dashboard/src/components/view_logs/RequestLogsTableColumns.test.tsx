@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -72,6 +72,47 @@ describe("Cost column", () => {
     expect(screen.getByText("$0.060000")).toBeInTheDocument();
     expect(screen.queryByText("$0.010000")).not.toBeInTheDocument();
     expect(screen.getByText("session total")).toBeInTheDocument();
+  });
+});
+
+describe("Tokens column", () => {
+  it("shows the summed session token usage, not the representative call's tokens, for a multi-round session", () => {
+    renderRows([
+      logEntry({
+        request_id: "req-session-tokens",
+        total_tokens: 10,
+        prompt_tokens: 7,
+        completion_tokens: 3,
+        session_id: "sess-1",
+        session_total_count: 3,
+        session_total_tokens: 60,
+        session_total_prompt_tokens: 42,
+        session_total_completion_tokens: 18,
+      }),
+    ]);
+
+    const tokensCell = screen.getByText("60").closest("td")!;
+    expect(within(tokensCell).getByText("(42+18)")).toBeInTheDocument();
+    expect(within(tokensCell).getByText("session total")).toBeInTheDocument();
+    expect(screen.queryByText("10")).not.toBeInTheDocument();
+    expect(screen.queryByText("(7+3)")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the call's own tokens with no session label when the backend sent no session token sums", () => {
+    renderRows([
+      logEntry({
+        request_id: "req-no-token-aggregate",
+        total_tokens: 10,
+        prompt_tokens: 7,
+        completion_tokens: 3,
+        session_id: "sess-2",
+        session_total_count: 3,
+      }),
+    ]);
+
+    const tokensCell = screen.getByText("10").closest("td")!;
+    expect(within(tokensCell).getByText("(7+3)")).toBeInTheDocument();
+    expect(within(tokensCell).queryByText("session total")).not.toBeInTheDocument();
   });
 });
 
