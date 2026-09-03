@@ -6662,6 +6662,25 @@ def test_get_litellm_user_role_is_deterministic_for_unranked_roles(role_claim):
     assert get_litellm_user_role(role_claim) == LitellmUserRoles.ORG_ADMIN
 
 
+@pytest.mark.parametrize(
+    "role_claim",
+    [
+        ["org_admin", "internal_user"],
+        ["internal_user", "org_admin"],
+    ],
+)
+def test_get_litellm_user_role_prefers_a_ranked_role_over_an_unranked_one(role_claim):
+    """
+    org_admin, team and customer sit outside the privilege ladder, so a claim mixing one of
+    them with a ranked role settles on the ranked role in either order. Same rule the Entra
+    app_roles and role_mappings paths already follow.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.types import get_litellm_user_role
+
+    assert get_litellm_user_role(role_claim) == LitellmUserRoles.INTERNAL_USER
+
+
 def test_get_litellm_user_role_returns_none_for_non_string_claims():
     from litellm.proxy.management_endpoints.types import get_litellm_user_role
 
