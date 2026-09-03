@@ -8,18 +8,20 @@ import pytest
 
 catalog = importlib.import_module("tests.rust-python-harness.catalog")
 cli = importlib.import_module("tests.rust-python-harness.cli")
-ledger_module = importlib.import_module("tests.rust-python-harness.ledger")
+ledger_module = importlib.import_module("tests.rust-python-harness.shared.parity.ledger")
+mapping_validator = importlib.import_module(
+    "tests.rust-python-harness.strategies.unit_tests.mapping_validator"
+)
 models = importlib.import_module("tests.rust-python-harness.models")
 runner = importlib.import_module("tests.rust-python-harness.runner")
 ui = importlib.import_module("tests.rust-python-harness.ui")
-validate_ledger = importlib.import_module("tests.rust-python-harness.validate_ledger")
 
 load_catalog = catalog.load_catalog
 load_ledger = ledger_module.load_ledger
-ledger_path_for = ledger_module.ledger_path_for
-REPO_ROOT = validate_ledger.REPO_ROOT
-audit_ledger = validate_ledger.audit_ledger
-build_function_report = validate_ledger.build_function_report
+ledger_path_for = mapping_validator.ledger_path_for
+REPO_ROOT = mapping_validator.REPO_ROOT
+audit_ledger = mapping_validator.audit_ledger
+build_function_report = mapping_validator.build_function_report
 _pick_values = cli._pick_values
 _coverage_pytest_args = cli._coverage_pytest_args
 _select = cli._select
@@ -276,7 +278,7 @@ def test_should_scope_validate_ledger_to_the_requested_function(
 
 
 def test_should_have_every_python_and_rust_ocr_test_accounted_for_in_the_ledger() -> None:
-    ledger = load_ledger()
+    ledger = load_ledger(ledger_path_for("ocr"))
 
     report = audit_ledger(ledger, repo_root=REPO_ROOT)
 
