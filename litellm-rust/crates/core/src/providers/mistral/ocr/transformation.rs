@@ -130,6 +130,10 @@ impl OcrProviderConfig for MistralOcrConfig {
             model,
             document_annotation,
             usage_info,
+            content: None,
+            tables: None,
+            key_value_pairs: None,
+            provider_native_response: None,
             object: "ocr".to_string(),
         })
     }
@@ -158,7 +162,9 @@ pub fn supported_ocr_params() -> &'static [&'static str] {
 }
 
 pub fn map_ocr_params(non_default_params: &Map<String, Value>) -> Map<String, Value> {
-    MISTRAL_OCR_CONFIG.map_ocr_params(non_default_params)
+    MISTRAL_OCR_CONFIG
+        .map_ocr_params(non_default_params)
+        .expect("default OCR parameter mapping cannot fail")
 }
 
 pub fn transform_ocr_request(
