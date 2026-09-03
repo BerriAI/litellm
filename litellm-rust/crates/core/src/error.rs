@@ -21,6 +21,8 @@ pub enum Error {
     Http { status: u16, body: String },
     #[error("upstream network error: {0}")]
     Network(String),
+    #[error("upstream request timed out: {0}")]
+    Timeout(String),
     #[error("routing error: {0}")]
     Routing(String),
     /// The request is outside the surface this route covers in Rust. Hosts that
@@ -59,6 +61,8 @@ mod tests {
             Error::Unsupported("non-text response content block"),
             Error::InvalidRequest("whatever".to_string()),
             Error::Auth("whatever".to_string()),
+            Error::Network("whatever".to_string()),
+            Error::Timeout("whatever".to_string()),
         ] {
             assert!(matches!(
                 as_response_error(original),

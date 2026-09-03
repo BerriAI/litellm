@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::error::Error;
-use crate::http_utils::truncate_error_body;
+use crate::http_utils::{classify_transport_error, truncate_error_body};
 
 use super::client::http_client;
 use super::types::ProviderAudioTranscriptionRequest;
@@ -22,12 +22,9 @@ pub async fn execute_audio_transcription_provider_call(
     let response = request_builder
         .send()
         .await
-        .map_err(|error| Error::Network(error.to_string()))?;
+        .map_err(classify_transport_error)?;
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|error| Error::Network(error.to_string()))?;
+    let text = response.text().await.map_err(classify_transport_error)?;
     if !status.is_success() {
         return Err(Error::Http {
             status: status.as_u16(),

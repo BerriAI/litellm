@@ -13,7 +13,7 @@ pyo3::create_exception!(
     _native,
     RustUpstreamError,
     pyo3::exceptions::PyException,
-    "The provider call was already issued and failed. Args are (status, message); status is 0 when there was no HTTP response."
+    "The provider call was already issued and failed. Args are (status, message); status is 0 when there was no HTTP response and 408 when the request timed out before one arrived."
 );
 
 pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
@@ -37,6 +37,9 @@ pub(crate) fn fallback_route_error_to_pyerr(err: Error) -> PyErr {
         Error::Http { status, body } => {
             RustUpstreamError::new_err((status, format!("{status}: {body}")))
         }
+        // 408 is the convention Python reads back to classify the failure as a
+        // timeout, mirroring an upstream `408 Request Timeout` response.
+        Error::Timeout(_) => RustUpstreamError::new_err((408u16, err.to_string())),
         other => RustUpstreamError::new_err((0u16, other.to_string())),
     }
 }
@@ -72,6 +75,10 @@ mod tests {
                 (
                     Error::Network("request timed out".to_string()),
                     (0, "upstream network error: request timed out"),
+                ),
+                (
+                    Error::Timeout("request timed out".to_string()),
+                    (408, "upstream request timed out: request timed out"),
                 ),
                 (
                     Error::InvalidResponse("bad JSON".to_string()),

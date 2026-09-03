@@ -351,14 +351,35 @@ class TestFailureClassification:
         bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=_FakeDeclined("streaming")))
         assert bridge.chat_completions(**_call_kwargs(ModelResponse())) is None
 
-    def test_an_upstream_failure_is_surfaced_with_its_status(self):
-        from litellm.exceptions import APIError
+    def test_an_upstream_rate_limit_surfaces_as_litellm_rate_limit_error(self):
+        from litellm.exceptions import RateLimitError
 
         bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=_FakeUpstream(429, "429: rate limited")))
-        with pytest.raises(APIError) as raised:
+        with pytest.raises(RateLimitError) as raised:
             bridge.chat_completions(**_call_kwargs(ModelResponse()))
         assert raised.value.status_code == 429
         assert "rate limited" in str(raised.value)
+        assert isinstance(raised.value.__cause__, _FakeUpstream)
+
+    def test_an_upstream_auth_failure_surfaces_as_litellm_authentication_error(self):
+        from litellm.exceptions import AuthenticationError
+
+        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=_FakeUpstream(401, "401: bad key")))
+        with pytest.raises(AuthenticationError) as raised:
+            bridge.chat_completions(**_call_kwargs(ModelResponse()))
+        assert raised.value.status_code == 401
+        assert isinstance(raised.value.__cause__, _FakeUpstream)
+
+    def test_an_upstream_timeout_surfaces_as_litellm_timeout(self):
+        from litellm.exceptions import Timeout
+
+        bridge.set_rust_chat_completions(
+            chat_completions=_RecordingCall(error=_FakeUpstream(408, "upstream request timed out: 30s"))
+        )
+        with pytest.raises(Timeout) as raised:
+            bridge.chat_completions(**_call_kwargs(ModelResponse()))
+        assert raised.value.status_code == 408
+        assert isinstance(raised.value.__cause__, _FakeUpstream)
 
     def test_a_transport_failure_with_no_response_surfaces_as_a_500(self):
         from litellm.exceptions import APIError
@@ -367,6 +388,7 @@ class TestFailureClassification:
         with pytest.raises(APIError) as raised:
             bridge.chat_completions(**_call_kwargs(ModelResponse()))
         assert raised.value.status_code == 500
+        assert isinstance(raised.value.__cause__, _FakeUpstream)
 
     def test_an_unrecognized_error_is_not_swallowed(self):
         bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=RuntimeError("something else")))
@@ -375,7 +397,7 @@ class TestFailureClassification:
 
     @pytest.mark.asyncio
     async def test_the_async_wrapper_does_not_fall_back_on_an_upstream_failure(self):
-        from litellm.exceptions import APIError
+        from litellm.exceptions import ServiceUnavailableError
 
         bridge.set_rust_chat_completions(achat_completions=_RecordingAsyncCall(error=_FakeUpstream(500, "500: boom")))
         ran = []
@@ -384,7 +406,7 @@ class TestFailureClassification:
             ran.append(True)
             return "python"
 
-        with pytest.raises(APIError):
+        with pytest.raises(ServiceUnavailableError):
             await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
         assert ran == [], "a request the provider already served must not be re-issued"
 

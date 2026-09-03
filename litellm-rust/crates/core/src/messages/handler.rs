@@ -1,6 +1,6 @@
 use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
 use crate::error::{Error, as_response_error};
-use crate::http_utils::classify_send_error;
+use crate::http_utils::classify_transport_error;
 
 use super::client::http_client;
 use super::common_utils::truncate_error_body;
@@ -17,13 +17,13 @@ pub(super) async fn execute_messages_provider_call(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = request_builder.send().await.map_err(classify_send_error)?;
+    let response = request_builder
+        .send()
+        .await
+        .map_err(classify_transport_error)?;
 
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|err| Error::Network(err.to_string()))?;
+    let text = response.text().await.map_err(classify_transport_error)?;
 
     if !status.is_success() {
         return Err(Error::Http {
@@ -60,13 +60,10 @@ pub(super) async fn execute_messages_provider_stream(
     let response = request_builder
         .send()
         .await
-        .map_err(|err| Error::Network(err.to_string()))?;
+        .map_err(classify_transport_error)?;
     let status = response.status();
     if !status.is_success() {
-        let text = response
-            .text()
-            .await
-            .map_err(|err| Error::Network(err.to_string()))?;
+        let text = response.text().await.map_err(classify_transport_error)?;
         return Err(Error::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
@@ -193,7 +190,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn established_request_timeouts_are_network_errors() {
+    async fn established_request_timeouts_are_timeout_errors() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
         let addr = listener.local_addr().expect("has an address");
         let (request_received_tx, request_received_rx) = tokio::sync::oneshot::channel();
@@ -223,6 +220,31 @@ mod tests {
         assert!(received.starts_with("POST / "), "{received}");
         release_server_tx.send(()).expect("releases server");
         server.await.expect("server task completes");
-        assert!(matches!(error, Error::Network(_)));
+        assert!(matches!(error, Error::Timeout(_)));
+    }
+
+    #[tokio::test]
+    async fn stream_request_timeouts_are_timeout_errors() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+        let addr = listener.local_addr().expect("has an address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accepts request");
+            let _ = read_http_request(&mut socket).await;
+            std::future::pending::<()>().await;
+        });
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            execute_messages_provider_stream(request(
+                format!("http://{addr}"),
+                Duration::from_millis(100),
+            )),
+        )
+        .await
+        .expect("client call completes")
+        .expect_err("established stream times out");
+
+        server.abort();
+        assert!(matches!(error, Error::Timeout(_)));
     }
 }

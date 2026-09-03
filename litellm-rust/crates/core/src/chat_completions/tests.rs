@@ -787,4 +787,36 @@ mod round_trip {
             "expected a terminal network failure, got {err:?}"
         );
     }
+
+    #[tokio::test]
+    async fn an_established_request_that_never_responds_times_out() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+        let addr = listener.local_addr().expect("has an address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accepts request");
+            let _ = read_http_request(&mut socket).await;
+            std::future::pending::<()>().await;
+        });
+
+        let api_base = format!("http://{addr}/v1/messages");
+        let mut timed_out_call = call(
+            &api_base,
+            json!([{"role": "user", "content": "hi"}]),
+            json!({"max_tokens": 16}),
+        );
+        timed_out_call.timeout = Some(std::time::Duration::from_millis(100));
+        let err = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            chat_completions(timed_out_call),
+        )
+        .await
+        .expect("client call completes")
+        .expect_err("established request times out");
+
+        server.abort();
+        assert!(
+            matches!(err, Error::Timeout(_)),
+            "expected a timeout failure, got {err:?}"
+        );
+    }
 }

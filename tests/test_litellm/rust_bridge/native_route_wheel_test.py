@@ -275,7 +275,7 @@ def assert_packaged_native_loaded(wheel_root: Path) -> None:
 
 
 async def exercise_packaged_messages(api_base: str) -> None:
-    from litellm.exceptions import APIError
+    from litellm.exceptions import RateLimitError
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.rust_bridge import messages as messages_bridge
     from litellm.types.router import GenericLiteLLMParams
@@ -328,7 +328,7 @@ async def exercise_packaged_messages(api_base: str) -> None:
             request_body=dict(rate_limit_kwargs["body"]),
             timeout=3.0,
         )
-    except APIError as error:
+    except RateLimitError as error:
         if error.status_code != 429 or "native-rate-limit" not in str(error):
             raise AssertionError(f"Messages gate returned the wrong upstream error: {error!r}") from error
     else:

@@ -5,7 +5,10 @@ use serde_json::{Map, Value};
 use crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS;
 use crate::error::{Error, json_type_name};
 
-pub(crate) fn classify_send_error(error: reqwest::Error) -> Error {
+pub(crate) fn classify_transport_error(error: reqwest::Error) -> Error {
+    if error.is_timeout() {
+        return Error::Timeout(error.to_string());
+    }
     Error::Network(error.to_string())
 }
 

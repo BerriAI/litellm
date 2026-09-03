@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::error::{Error, as_response_error};
-use crate::http_utils::{classify_send_error, truncate_error_body};
+use crate::http_utils::{classify_transport_error, truncate_error_body};
 
 use super::client::http_client;
 use super::transformation::ChatCompletionsAuth;
@@ -27,13 +27,13 @@ pub(super) async fn execute_chat_completions_provider_call(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = request_builder.send().await.map_err(classify_send_error)?;
+    let response = request_builder
+        .send()
+        .await
+        .map_err(classify_transport_error)?;
 
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|err| Error::Network(err.to_string()))?;
+    let text = response.text().await.map_err(classify_transport_error)?;
 
     if !status.is_success() {
         return Err(Error::Http {
