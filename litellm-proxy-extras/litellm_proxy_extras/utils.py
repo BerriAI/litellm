@@ -51,7 +51,10 @@ MAX_MIGRATE_DEPLOY_ATTEMPTS = 4
 
 SKIP_INDEX_MIGRATIONS_ENV_VAR = "LITELLM_SKIP_INDEX_MIGRATIONS"
 
-_DROP_INDEX_RE = re.compile(r"DROP\s+INDEX\s", re.IGNORECASE)
+_DROP_INDEX_NAME_RE = re.compile(
+    r'DROP\s+INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+EXISTS\s+)?"([^"]+)"',
+    re.IGNORECASE,
+)
 _CREATE_INDEX_NAME_RE = re.compile(
     r'CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"([^"]+)"',
     re.IGNORECASE,
@@ -61,9 +64,6 @@ _CREATE_INDEX_NAME_RE = re.compile(
 
 @dataclass(frozen=True)
 class _MigrationLedger:
-    """What _prisma_migrations says. A lookup that cannot be made reads as an
-    existing, empty ledger, so every skip still gets recorded."""
-
     exists: bool
     applied: frozenset[str]
 
@@ -167,8 +167,8 @@ def _migration_sql(migrations_dir: str, migration_name: str) -> str:
 
 def is_index_only_migration(migration_sql: str) -> bool:
     statements: Final = _bare_statements(migration_sql)
-    return bool(statements) and all(
-        _CREATE_INDEX_NAME_RE.match(statement) or _DROP_INDEX_RE.match(statement) for statement in statements
+    return any(_CREATE_INDEX_NAME_RE.match(statement) for statement in statements) and all(
+        _CREATE_INDEX_NAME_RE.match(statement) or _DROP_INDEX_NAME_RE.match(statement) for statement in statements
     )
 
 
@@ -181,16 +181,25 @@ def index_names_created_by(migration_sql: str) -> frozenset[str]:
     )
 
 
-def filter_skipped_index_creates(diff_sql: str, index_names: frozenset[str]) -> str:
-    """Drop the CREATE INDEX statements for `index_names` from a `prisma migrate diff`
-    script, so the drift check does not build what a skipped migration was meant to."""
+def _names_skipped_index(statement: str, index_names: frozenset[str]) -> bool:
+    match: Final = _CREATE_INDEX_NAME_RE.match(statement) or _DROP_INDEX_NAME_RE.match(statement)
+    return match is not None and match.group(1) in index_names
+
+
+def index_names_touched_by(diff_sql: str, index_names: frozenset[str]) -> frozenset[str]:
+    return frozenset(
+        match.group(1)
+        for statement in _bare_statements(diff_sql)
+        for match in (_CREATE_INDEX_NAME_RE.match(statement) or _DROP_INDEX_NAME_RE.match(statement),)
+        if match is not None and match.group(1) in index_names
+    )
+
+
+def filter_skipped_index_statements(diff_sql: str, index_names: frozenset[str]) -> str:
     if not index_names:
         return diff_sql
     kept: Final = tuple(
-        statement
-        for statement in _bare_statements(diff_sql)
-        for match in (_CREATE_INDEX_NAME_RE.match(statement),)
-        if match is None or match.group(1) not in index_names
+        statement for statement in _bare_statements(diff_sql) if not _names_skipped_index(statement, index_names)
     )
     return "".join(f"{statement};\n\n" for statement in kept)
 
@@ -632,14 +641,14 @@ class ProxyExtrasDBManager:
                 "rewrite and partitioning artifacts from the drift script"
             )
         skipped_indexes: Final = ProxyExtrasDBManager.skipped_index_names(migrations_dir)
-        removed: Final = index_names_created_by(diff_sql) & skipped_indexes
+        removed: Final = index_names_touched_by(diff_sql, skipped_indexes)
         if removed:
             logger.info(
-                "%s: removed CREATE INDEX for %s from the drift script",
+                "%s: removed the index statements for %s from the drift script",
                 SKIP_INDEX_MIGRATIONS_ENV_VAR,
                 ", ".join(sorted(removed)),
             )
-        return filter_skipped_index_creates(
+        return filter_skipped_index_statements(
             filter_partitioned_spend_logs_diff(diff_sql) if partitioned else diff_sql,
             skipped_indexes,
         )
@@ -672,6 +681,10 @@ class ProxyExtrasDBManager:
             import psycopg
         except ImportError:
             return unknown
+        ledger_table: Final = psycopg.sql.SQL("{}.{}").format(
+            psycopg.sql.Identifier(ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"),
+            psycopg.sql.Identifier("_prisma_migrations"),
+        )
         try:
             with psycopg.connect(
                 ProxyExtrasDBManager._strip_prisma_query_params(database_url),
@@ -680,8 +693,9 @@ class ProxyExtrasDBManager:
             ) as conn:
                 try:
                     rows: Final = conn.execute(
-                        "SELECT migration_name FROM _prisma_migrations "
-                        "WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL"
+                        psycopg.sql.SQL(
+                            "SELECT migration_name FROM {} WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL"
+                        ).format(ledger_table)
                     ).fetchall()
                 except psycopg.errors.UndefinedTable:
                     return _MigrationLedger(exists=False, applied=frozenset())
@@ -691,8 +705,6 @@ class ProxyExtrasDBManager:
 
     @staticmethod
     def _record_skipped_migrations_as_applied(migrations_dir: str) -> None:
-        """A database with no ledger yet is left to the baseline flow, which marks every
-        shipped migration applied itself and never runs the skipped SQL."""
         skipped: Final = ProxyExtrasDBManager.skipped_migrations(migrations_dir)
         if not skipped:
             return
@@ -717,8 +729,12 @@ class ProxyExtrasDBManager:
             try:
                 ProxyExtrasDBManager._resolve_specific_migration(name)
             except subprocess.CalledProcessError as e:
-                if "is already recorded as applied in the database." not in (e.stderr or ""):
-                    raise
+                if "is already recorded as applied in the database." in (e.stderr or ""):
+                    continue
+                raise RuntimeError(
+                    f"{SKIP_INDEX_MIGRATIONS_ENV_VAR}: prisma migrate resolve --applied {name} failed, "
+                    f"so boot stops rather than build its indexes.\n\nDetail: {e.stderr}"
+                ) from e
 
     @staticmethod
     def _warn_skip_ignored_under_db_push(migrations_dir: str) -> None:
@@ -939,10 +955,8 @@ class ProxyExtrasDBManager:
         budget = _MigrateAttemptBudget(attempts_left=MAX_MIGRATE_DEPLOY_ATTEMPTS)
         try:
             while not budget.exhausted:
+                ProxyExtrasDBManager._record_skipped_migrations_as_applied(migrations_dir)
                 try:
-                    ProxyExtrasDBManager._record_skipped_migrations_as_applied(
-                        migrations_dir
-                    )
                     result = prisma_toolchain.run_prisma(
                         [_get_prisma_command(), "migrate", "deploy"],
                         timeout=deploy_timeout,
@@ -1180,10 +1194,8 @@ class ProxyExtrasDBManager:
             try:
                 if use_migrate:
                     logger.info("Running prisma migrate deploy")
+                    ProxyExtrasDBManager._record_skipped_migrations_as_applied(migrations_dir)
                     try:
-                        ProxyExtrasDBManager._record_skipped_migrations_as_applied(
-                            migrations_dir
-                        )
                         # Set migrations directory for Prisma
                         result = prisma_toolchain.run_prisma(
                             [_get_prisma_command(), "migrate", "deploy"],

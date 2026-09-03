@@ -19,7 +19,7 @@ from litellm_proxy_extras.utils import (
     ProxyExtrasDBManager,
     _MigrationLedger,
     filter_partitioned_spend_logs_diff,
-    filter_skipped_index_creates,
+    filter_skipped_index_statements,
     index_names_created_by,
     is_index_only_migration,
 )
@@ -953,6 +953,9 @@ class TestIndexOnlyMigrationDetection:
         )
         assert is_index_only_migration(sql) is True
 
+    def test_a_migration_that_only_drops_indexes_is_not(self):
+        assert is_index_only_migration('DROP INDEX IF EXISTS "LiteLLM_DailyTagSpend_tag_key";\n') is False
+
     def test_a_table_or_column_change_is_not(self):
         assert is_index_only_migration(_MIXED_MIGRATION_SQL) is False
         assert is_index_only_migration(_COLUMN_MIGRATION_SQL) is False
@@ -992,21 +995,32 @@ class TestSkipIndexMigrationsEnv:
         skipped = ProxyExtrasDBManager.skipped_migrations(os.path.dirname(_MIGRATIONS_DIR))
         assert "20260228100000_add_spend_logs_composite_index" in skipped
         assert "20250326162113_baseline" not in skipped
+        assert "20250416151339_drop_tag_uniqueness_requirement" not in skipped
 
 
 class TestSkippedIndexDriftFilter:
     def test_only_the_skipped_index_is_removed(self):
-        filtered = filter_skipped_index_creates(_DRIFT_WITH_SKIPPED_INDEX_SQL, frozenset({_SKIPPED_INDEX_NAME}))
+        filtered = filter_skipped_index_statements(_DRIFT_WITH_SKIPPED_INDEX_SQL, frozenset({_SKIPPED_INDEX_NAME}))
         assert _SKIPPED_INDEX_NAME not in filtered
         assert 'CREATE INDEX "LiteLLM_SpendLogs_session_id_idx"' in filtered
         assert 'ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN     "updated_by" TEXT;' in filtered
 
+    def test_a_drop_of_the_skipped_index_is_removed_too(self):
+        sql = (
+            f'DROP INDEX "{_SKIPPED_INDEX_NAME}";\n\n'
+            f'CREATE INDEX "{_SKIPPED_INDEX_NAME}" ON "LiteLLM_SpendLogs"("api_key", "startTime");\n\n'
+            'CREATE INDEX "LiteLLM_SpendLogs_session_id_idx" ON "LiteLLM_SpendLogs"("session_id");\n'
+        )
+        filtered = filter_skipped_index_statements(sql, frozenset({_SKIPPED_INDEX_NAME}))
+        assert _SKIPPED_INDEX_NAME not in filtered
+        assert 'CREATE INDEX "LiteLLM_SpendLogs_session_id_idx"' in filtered
+
     def test_nothing_to_skip_leaves_the_script_byte_identical(self):
-        assert filter_skipped_index_creates(_DRIFT_WITH_SKIPPED_INDEX_SQL, frozenset()) == _DRIFT_WITH_SKIPPED_INDEX_SQL
+        assert filter_skipped_index_statements(_DRIFT_WITH_SKIPPED_INDEX_SQL, frozenset()) == _DRIFT_WITH_SKIPPED_INDEX_SQL
 
     def test_a_script_that_is_only_the_skipped_index_becomes_empty(self):
         assert (
-            filter_skipped_index_creates(_ONLY_SKIPPED_INDEX_DRIFT_SQL, frozenset({_SKIPPED_INDEX_NAME})).strip() == ""
+            filter_skipped_index_statements(_ONLY_SKIPPED_INDEX_DRIFT_SQL, frozenset({_SKIPPED_INDEX_NAME})).strip() == ""
         )
 
 
@@ -1067,21 +1081,19 @@ class TestResolveAllMigrationsHonorsSkippedIndexes:
     def test_the_log_names_only_the_indexes_actually_removed(self, monkeypatch, tmp_path, caplog):
         with caplog.at_level("INFO", logger="litellm_proxy_extras"):
             self._run(monkeypatch, tmp_path, _DRIFT_WITH_SKIPPED_INDEX_SQL)
-        removed_lines = [r.message for r in caplog.records if "removed CREATE INDEX" in r.message]
+        removed_lines = [r.message for r in caplog.records if "removed the index statements" in r.message]
         assert removed_lines == [
-            f"{SKIP_INDEX_MIGRATIONS_ENV_VAR}: removed CREATE INDEX for {_SKIPPED_INDEX_NAME} from the drift script"
+            f"{SKIP_INDEX_MIGRATIONS_ENV_VAR}: removed the index statements for {_SKIPPED_INDEX_NAME} "
+            "from the drift script"
         ]
 
     def test_a_drift_without_a_guarded_index_logs_no_removal(self, monkeypatch, tmp_path, caplog):
         with caplog.at_level("INFO", logger="litellm_proxy_extras"):
             self._run(monkeypatch, tmp_path, _PARTITIONED_DRIFT_SQL)
-        assert not any("removed CREATE INDEX" in r.message for r in caplog.records)
+        assert not any("removed the index statements" in r.message for r in caplog.records)
 
 
 class _V2SkipHarness:
-    """Drives _setup_database_v2 with scripted `prisma migrate deploy` outcomes and
-    ledger reads, recording resolves and deploys in the order they happen."""
-
     def __init__(self, monkeypatch, tmp_path, outcomes, ledgers):
         import subprocess as subprocess_module
 
@@ -1177,8 +1189,21 @@ class TestV2RecordsSkippedIndexMigrationsBeforeDeploy:
         ]
 
 
+    def test_any_other_resolve_failure_stops_boot_before_deploy(self, monkeypatch, tmp_path):
+        import subprocess as subprocess_module
+
+        _skip_index_migrations(monkeypatch, tmp_path)
+        harness = _V2SkipHarness(monkeypatch, tmp_path, ["ok"], [_ledger()])
+        harness.resolve_error = subprocess_module.CalledProcessError(
+            1, ["prisma", "migrate", "resolve"], stderr="Error: P1001\n\nCan't reach database server\n"
+        )
+        with pytest.raises(RuntimeError, match="migrate resolve --applied"):
+            harness.run()
+        assert harness.events == [("resolve", _INDEX_ONLY_MIGRATION)]
+
+
 class TestV1RecordsSkippedIndexMigrationsBeforeDeploy:
-    def _prisma_commands(self, monkeypatch, tmp_path, env_set):
+    def _arrange(self, monkeypatch, tmp_path, env_set, resolve_error=None):
         import litellm_proxy_extras.utils as utils_module
 
         if env_set:
@@ -1193,9 +1218,15 @@ class TestV1RecordsSkippedIndexMigrationsBeforeDeploy:
 
         def fake_run(cmd, **kwargs):
             commands.append(cmd[1:])
+            if resolve_error is not None and "resolve" in cmd:
+                raise resolve_error
             return _CompletedWithStdout("No pending migrations to apply.")
 
         monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fake_run)
+        return commands
+
+    def _prisma_commands(self, monkeypatch, tmp_path, env_set):
+        commands = self._arrange(monkeypatch, tmp_path, env_set)
         assert ProxyExtrasDBManager._run_migrations(use_migrate=True, use_v2_resolver=False) is True
         return commands
 
@@ -1208,6 +1239,21 @@ class TestV1RecordsSkippedIndexMigrationsBeforeDeploy:
 
     def test_unset_env_only_deploys(self, monkeypatch, tmp_path):
         assert self._prisma_commands(monkeypatch, tmp_path, env_set=False) == [["migrate", "deploy"]]
+
+    def test_any_other_resolve_failure_stops_boot_before_deploy(self, monkeypatch, tmp_path):
+        import subprocess as subprocess_module
+
+        commands = self._arrange(
+            monkeypatch,
+            tmp_path,
+            env_set=True,
+            resolve_error=subprocess_module.CalledProcessError(
+                1, ["prisma", "migrate", "resolve"], stderr="Error: P1001\n\nCan't reach database server\n"
+            ),
+        )
+        with pytest.raises(RuntimeError, match="migrate resolve --applied"):
+            ProxyExtrasDBManager._run_migrations(use_migrate=True, use_v2_resolver=False)
+        assert commands == [["migrate", "resolve", "--applied", _INDEX_ONLY_MIGRATION]]
 
 
 class TestSkipUnderDbPush:
@@ -1224,9 +1270,10 @@ class TestSkipUnderDbPush:
 
 
 class _FakeLedgerConn:
-    def __init__(self, rows, undefined_table):
+    def __init__(self, rows, undefined_table, executed):
         self._rows = rows
         self._undefined_table = undefined_table
+        self._executed = executed
 
     def __enter__(self):
         return self
@@ -1235,6 +1282,7 @@ class _FakeLedgerConn:
         return False
 
     def execute(self, query, params=None):
+        self._executed.append(query.as_string(None))
         if self._undefined_table is not None:
             raise self._undefined_table()
         return self
@@ -1243,8 +1291,11 @@ class _FakeLedgerConn:
         return self._rows
 
 
-def _fake_psycopg(rows=(), undefined_table=False, connect_error=False):
+def _fake_psycopg(rows=(), undefined_table=False, connect_error=False, executed=None):
+    import psycopg.sql
+
     module = types.ModuleType("psycopg")
+    module.sql = psycopg.sql
 
     class UndefinedTable(Exception):
         pass
@@ -1258,7 +1309,7 @@ def _fake_psycopg(rows=(), undefined_table=False, connect_error=False):
     def connect(*args, **kwargs):
         if connect_error:
             raise OperationalError("unreachable")
-        return _FakeLedgerConn(list(rows), UndefinedTable if undefined_table else None)
+        return _FakeLedgerConn(list(rows), UndefinedTable if undefined_table else None, executed if executed is not None else [])
 
     module.errors = types.SimpleNamespace(UndefinedTable=UndefinedTable)
     module.OperationalError = OperationalError
@@ -1276,6 +1327,18 @@ class TestReadMigrationLedger:
     def test_applied_rows_are_read(self, monkeypatch):
         ledger = self._read(monkeypatch, _fake_psycopg(rows=[("a",), ("b",)]))
         assert ledger == _ledger(applied=["a", "b"])
+
+    def test_the_ledger_is_read_from_the_url_schema(self, monkeypatch):
+        executed = []
+        monkeypatch.setitem(sys.modules, "psycopg", _fake_psycopg(rows=[("a",)], executed=executed))
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:5432/db?schema=custom")
+        assert ProxyExtrasDBManager._read_migration_ledger() == _ledger(applied=["a"])
+        assert 'FROM "custom"."_prisma_migrations"' in executed[0]
+
+    def test_the_ledger_defaults_to_the_public_schema(self, monkeypatch):
+        executed = []
+        self._read(monkeypatch, _fake_psycopg(executed=executed))
+        assert 'FROM "public"."_prisma_migrations"' in executed[0]
 
     def test_a_missing_ledger_table_reads_as_absent(self, monkeypatch):
         assert self._read(monkeypatch, _fake_psycopg(undefined_table=True)) == _ledger(exists=False)
