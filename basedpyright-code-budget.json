@@ -1,6 +1,6 @@
 {
   "reportAny": {
-    "limit": 14050
+    "limit": 14046
   },
   "reportArgumentType": {
     "limit": 2215
@@ -108,7 +108,7 @@
     "limit": 38332
   },
   "reportUnknownParameterType": {
-    "limit": 19618
+    "limit": 19617
   },
   "reportUnknownVariableType": {
     "limit": 29861

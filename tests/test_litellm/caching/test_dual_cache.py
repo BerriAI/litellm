@@ -71,7 +71,7 @@ def _assert_sync_batch_used_blocking_client(dual_cache: DualCache, mock_redis: M
     with patch("asyncio.new_event_loop", side_effect=AssertionError("sync path must not create an event loop")):
         result = dual_cache.batch_get_cache(keys=["lit6729_key"])
 
-    assert result == ("redis_value",)
+    assert result == ["redis_value"]
     mock_redis.batch_get_cache.assert_called_once_with(key_list=["lit6729_key"], parent_otel_span=None)
     mock_redis.async_batch_get_cache.assert_not_called()
     mock_redis.init_async_client.assert_not_called()
@@ -107,7 +107,7 @@ def test_dual_cache_batch_get_cache_only_reads_missing_keys_from_redis():
 
     result = dual_cache.batch_get_cache(keys=["hit_key", "miss_key"])
 
-    assert result == ("from_memory", "from_redis")
+    assert result == ["from_memory", "from_redis"]
     mock_redis.batch_get_cache.assert_called_once_with(key_list=["miss_key"], parent_otel_span=None)
 
 
@@ -120,8 +120,8 @@ def test_dual_cache_batch_get_cache_throttles_repeat_redis_reads():
     first = dual_cache.batch_get_cache(keys=["absent_key"])
     second = dual_cache.batch_get_cache(keys=["absent_key"])
 
-    assert first == (None,)
-    assert second == (None,)
+    assert first == [None]
+    assert second == [None]
     mock_redis.batch_get_cache.assert_called_once()
 
 
@@ -150,7 +150,7 @@ def test_dual_cache_batch_get_cache_returns_memory_only_when_redis_read_is_throt
 
     result = dual_cache.batch_get_cache(keys=["throttled_key"])
 
-    assert result == (None,)
+    assert result == [None]
     mock_redis.batch_get_cache.assert_not_called()
 
 
@@ -169,7 +169,7 @@ def test_dual_cache_sync_batch_redis_backfill_injects_default_in_memory_ttl():
     result = dual_cache.batch_get_cache(keys=["batch_backfill_key"])
     after = time.time()
 
-    assert result == ("redis_value",)
+    assert result == ["redis_value"]
     expiry = in_memory_cache.ttl_dict["batch_backfill_key"]
     assert expiry >= before + 60
     assert expiry <= after + 60
@@ -186,7 +186,7 @@ def test_dual_cache_batch_get_cache_forwards_explicit_ttl_to_backfill():
     result = dual_cache.batch_get_cache(keys=["explicit_ttl_key"], ttl=5)
     after = time.time()
 
-    assert result == ("redis_value",)
+    assert result == ["redis_value"]
     expiry = in_memory_cache.ttl_dict["explicit_ttl_key"]
     assert expiry >= before + 5
     assert expiry <= after + 5
