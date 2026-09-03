@@ -3399,6 +3399,138 @@ def test_get_spend_logs_id_prefers_the_response_id_over_the_standard_logging_id(
     )
 
 
+@pytest.mark.asyncio
+async def test_spend_log_request_id_is_the_message_id_a_bridged_streaming_caller_was_streamed():
+    """A streaming /v1/messages call against a non-Anthropic model is served a msg_ id the
+    adapter mints itself, and it is the only request id that call ever shows the caller, so
+    GET /spend/logs?request_id=msg_... has to land on the row."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.anthropic.experimental_pass_through.responses_adapters.streaming_iterator import (
+        AnthropicResponsesStreamWrapper,
+    )
+    from litellm.types.llms.openai import (
+        ResponseAPIUsage,
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+    )
+
+    logging_obj = Logging(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(timezone.utc),
+        litellm_call_id="6825cafe-0000-4000-8000-000000000001",
+        function_id="1234",
+    )
+    logging_obj.optional_params = {}
+
+    completed_response = ResponsesAPIResponse(
+        id="resp_01Lit6825Bridged",
+        object="response",
+        created_at=1767225600,
+        model="gpt-5.6",
+        status="completed",
+        output=[
+            {
+                "id": "msg_bridged_output",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "epsilon", "annotations": []}],
+            }
+        ],
+        usage=ResponseAPIUsage(input_tokens=12, output_tokens=5, total_tokens=17),
+    )
+
+    async def _responses_stream():
+        yield {"type": "response.created"}
+        yield {"type": "response.output_text.delta", "item_id": "msg_bridged_output", "delta": "epsilon"}
+        yield ResponseCompletedEvent(type="response.completed", response=completed_response)
+
+    wrapper = AnthropicResponsesStreamWrapper(
+        responses_stream=_responses_stream(),
+        model="gpt-5.6",
+        litellm_logging_obj=logging_obj,
+    )
+    sse_frames = [frame.decode() async for frame in wrapper.async_anthropic_sse_wrapper()]
+
+    message_start_frames = [f for f in sse_frames if f.startswith("event: message_start\n")]
+    assert len(message_start_frames) == 1
+    streamed_message_id = json.loads(message_start_frames[0].split("data: ", 1)[1])["message"]["id"]
+    assert streamed_message_id.startswith("msg_")
+
+    _, _, logged_response = logging_obj._success_handler_helper_fn(
+        result=ResponseCompletedEvent(type="response.completed", response=completed_response),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert logged_response.id == streamed_message_id
+    payload = get_logging_payload(
+        kwargs={
+            "call_type": "anthropic_messages",
+            "model": "gpt-5.6",
+            "litellm_call_id": "6825cafe-0000-4000-8000-000000000001",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj=logged_response,
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["request_id"] == streamed_message_id
+
+
+@pytest.mark.asyncio
+async def test_spend_log_request_id_is_untouched_when_no_message_id_was_streamed():
+    """Only the bridged streaming adapter mints a msg_ id of its own, so every other
+    /v1/messages call must keep the id its own response carried."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.llms.openai import (
+        ResponseAPIUsage,
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+    )
+
+    logging_obj = Logging(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(timezone.utc),
+        litellm_call_id="6825cafe-0000-4000-8000-000000000002",
+        function_id="1234",
+    )
+    logging_obj.optional_params = {}
+
+    completed_response = ResponsesAPIResponse(
+        id="resp_01Lit6825Unbridged",
+        object="response",
+        created_at=1767225600,
+        model="gpt-5.6",
+        status="completed",
+        output=[
+            {
+                "id": "msg_unbridged_output",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "epsilon", "annotations": []}],
+            }
+        ],
+        usage=ResponseAPIUsage(input_tokens=12, output_tokens=5, total_tokens=17),
+    )
+
+    _, _, logged_response = logging_obj._success_handler_helper_fn(
+        result=ResponseCompletedEvent(type="response.completed", response=completed_response),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert logged_response.id
+    assert not logged_response.id.startswith("msg_")
+
+
 def test_batch_cost_row_does_not_collide_with_the_batch_creation_row():
     """Creating a batch writes a row keyed by the batch's own id, so keying the cost row
     the same way makes the insert a duplicate of it. request_id is the primary key and the
