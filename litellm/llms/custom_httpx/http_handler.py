@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.llms.custom_httpx.proxy_transport import AsyncProxyTransport, ProxyTransport
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -483,6 +484,17 @@ def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> NoReturn
                 pass
     _text: Final = mask_sensitive_info(_safe_get_response_text(e.response))
     raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
+
+
+def _get_outbound_http_proxy() -> str | None:
+    proxy = litellm.outbound_http_proxy
+    if proxy is None:
+        proxy = os.getenv("OUTBOUND_HTTP_PROXY")
+
+    if proxy is not None:
+        verbose_logger.debug("Sending requests through %s", proxy)
+
+    return proxy
 
 
 async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> NoReturn:
@@ -1052,6 +1064,11 @@ class AsyncHTTPHandler:
         - Why force ipv4?
             - Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
+
+        outbound_proxy = _get_outbound_http_proxy()
+        if outbound_proxy is not None:
+            return AsyncHTTPHandler._create_proxy_transport(outbound_proxy)
+
         #########################################################
         # AIOHTTP TRANSPORT is off by default
         #########################################################
@@ -1213,6 +1230,10 @@ class AsyncHTTPHandler:
             return AsyncHTTPTransport(local_address=_IPV4_LOCAL_ADDRESS)
         else:
             return None
+
+    @staticmethod
+    def _create_proxy_transport(proxy: str) -> AsyncHTTPTransport:
+        return AsyncProxyTransport(proxy_url=proxy)
 
     @staticmethod
     def _create_httpx_proxy_mounts(
@@ -1538,6 +1559,11 @@ class HTTPHandler:
 
         Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
+
+        outbound_proxy = _get_outbound_http_proxy()
+        if outbound_proxy is not None:
+            return ProxyTransport(proxy_url=outbound_proxy)
+
         if litellm.force_ipv4:
             return HTTPTransport(local_address=_IPV4_LOCAL_ADDRESS)
         else:

@@ -5,6 +5,7 @@ import os
 import pathlib
 import ssl
 import threading
+from typing import Final
 import weakref
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_ssl_configuration,
 )
+from litellm.llms.custom_httpx.proxy_transport import AsyncProxyTransport, ProxyTransport
 
 
 @pytest.mark.asyncio
@@ -1547,3 +1549,44 @@ def test_sync_force_ipv4_https_proxy_mount_uses_handler_ca_bundle(
         handler.close()
 
     assert response.text == "ok-tls"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config_source", ["attribute", "env_var"])
+async def test_proxy_transports_used_instead_of_default_when_configured(
+    monkeypatch: pytest.MonkeyPatch, config_source: str
+) -> None:
+    proxy_url: Final = "http://proxy.example.com:8080"
+    monkeypatch.setattr(litellm, "outbound_http_proxy", None)
+    monkeypatch.delenv("OUTBOUND_HTTP_PROXY", raising=False)
+
+    default_sync_handler: Final = HTTPHandler()
+    try:
+        assert not isinstance(default_sync_handler.client._transport, ProxyTransport)
+    finally:
+        default_sync_handler.close()
+
+    default_async_handler: Final = AsyncHTTPHandler()
+    try:
+        assert isinstance(default_async_handler.client._transport, LiteLLMAiohttpTransport)
+        assert not isinstance(default_async_handler.client._transport, AsyncProxyTransport)
+    finally:
+        await default_async_handler.close()
+
+    if config_source == "attribute":
+        monkeypatch.setattr(litellm, "outbound_http_proxy", proxy_url)
+    else:
+        monkeypatch.setenv("OUTBOUND_HTTP_PROXY", proxy_url)
+
+    configured_sync_handler: Final = HTTPHandler()
+    try:
+        assert isinstance(configured_sync_handler.client._transport, ProxyTransport)
+    finally:
+        configured_sync_handler.close()
+
+    configured_async_handler: Final = AsyncHTTPHandler()
+    try:
+        assert isinstance(configured_async_handler.client._transport, AsyncProxyTransport)
+        assert not isinstance(configured_async_handler.client._transport, LiteLLMAiohttpTransport)
+    finally:
+        await configured_async_handler.close()

@@ -515,6 +515,9 @@ disable_aiohttp_transport: bool = False  # Set this to true to use httpx instead
 disable_aiohttp_trust_env: bool = False  # When False, aiohttp will respect HTTP(S)_PROXY env vars
 force_ipv4: bool = False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 network_mock: bool = False  # When True, use mock transport — no real network calls
+outbound_http_proxy: Optional[str] = (
+    None  # When set to an URL, use it to proxy all outgoing requests without CONNECT tunnelling.
+)
 
 ####### STOP SEQUENCE LIMIT #######
 disable_stop_sequence_limit: bool = False  # when True, stop sequence limit is disabled
