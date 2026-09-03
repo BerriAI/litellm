@@ -41,7 +41,9 @@ from litellm.litellm_core_utils.get_provider_specific_headers import (
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
 )
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import CredentialItem
 
 
@@ -7719,3 +7721,177 @@ def test_stamped_model_access_groups_survive_the_litellm_metadata_merge():
     }
 
     assert get_litellm_metadata_from_kwargs(kwargs)[MODEL_ACCESS_GROUP_METADATA_KEY] == ["tier-a"]
+
+
+def _request_for(path: str) -> MagicMock:
+    request = MagicMock(spec=Request)
+    request.scope = {"path": path}
+    request.url = MagicMock()
+    request.url.path = path
+    request.url.__str__.return_value = f"http://localhost{path}"
+    request.method = "POST"
+    request.query_params = {}
+    request.headers = {"Content-Type": "application/json"}
+    request.client = MagicMock()
+    request.client.host = "127.0.0.1"
+    return request
+
+
+def _spend_log_session_id(data: dict[str, object]) -> str:
+    """Resolve session_id the way LiteLLM_SpendLogs does: standard_logging_payload.trace_id."""
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_session_id_for_spend_log
+
+    metadata = data["metadata"]
+    assert isinstance(metadata, dict)
+    litellm_params = get_litellm_params(
+        litellm_session_id=str(data["litellm_session_id"]) if "litellm_session_id" in data else None,
+        litellm_trace_id=str(data["litellm_trace_id"]) if "litellm_trace_id" in data else None,
+        metadata=metadata,
+    )
+    trace_id = StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
+        logging_obj=SimpleNamespace(litellm_trace_id="per-call-random-trace-id"),
+        litellm_params=litellm_params,
+    )
+    return _get_session_id_for_spend_log(kwargs={}, standard_logging_payload={"trace_id": trace_id})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_correlation_in_logs", [False, True])
+async def test_missing_session_id_generate_makes_spend_log_and_callback_session_ids_agree(
+    monkeypatch: pytest.MonkeyPatch, request_correlation_in_logs: bool
+):
+    """Without a session header, SpendLogs.session_id and the metadata.session_id that Langfuse logs
+    must be the same generated id, so cross-referencing the two by session_id works. The id is marked
+    as generated so affinity consumers (Fireworks x-session-affinity, router session pins) skip it."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", request_correlation_in_logs)
+    data = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_request_for("/v1/chat/completions"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "generate"},
+    )
+
+    callback_session_id = updated["metadata"]["session_id"]
+    assert isinstance(callback_session_id, str) and len(callback_session_id) == 36
+    assert _spend_log_session_id(updated) == callback_session_id
+    assert updated["metadata"][SESSION_ID_GENERATED_METADATA_KEY] is True
+    assert get_fireworks_session_id(
+        {"litellm_session_id": updated["litellm_session_id"], "metadata": updated["metadata"]}
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_missing_session_id_unset_keeps_legacy_divergence():
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "messages": []},
+        request=_request_for("/v1/chat/completions"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+
+    assert "session_id" not in updated["metadata"]
+    assert "litellm_session_id" not in updated
+    assert _spend_log_session_id(updated) == "per-call-random-trace-id"
+
+
+@pytest.mark.asyncio
+async def test_missing_session_id_generate_reuses_traceparent_trace_id():
+    """A W3C traceparent already decides SpendLogs.session_id, so the callback session id must reuse it."""
+    request = _request_for("/v1/chat/completions")
+    request.headers = {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "messages": []},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "generate"},
+    )
+
+    assert updated["metadata"]["session_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert _spend_log_session_id(updated) == "4bf92f3577b34da6a3ce929d0e0e4736"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["generate", "reject"])
+async def test_missing_session_id_policy_keeps_client_supplied_session_id(policy: str):
+    request = _request_for("/v1/chat/completions")
+    request.headers = {"x-litellm-session-id": "client-session-1"}
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "messages": []},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": policy},
+    )
+
+    assert updated["litellm_session_id"] == "client-session-1"
+    assert updated["metadata"]["session_id"] == "client-session-1"
+    assert _spend_log_session_id(updated) == "client-session-1"
+    assert SESSION_ID_GENERATED_METADATA_KEY not in updated["metadata"]
+    assert (
+        get_fireworks_session_id({"litellm_session_id": "client-session-1", "metadata": updated["metadata"]})
+        == "client-session-1"
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_session_id_reject_accepts_body_metadata_session_id():
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "messages": [], "metadata": {"session_id": "body-session-1"}},
+        request=_request_for("/v1/chat/completions"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "reject"},
+    )
+
+    assert updated["metadata"]["session_id"] == "body-session-1"
+
+
+@pytest.mark.asyncio
+async def test_missing_session_id_reject_returns_400_without_session_id():
+    with pytest.raises(ProxyException) as exc_info:
+        await add_litellm_data_to_request(
+            data={"model": "gpt-4o", "messages": []},
+            request=_request_for("/v1/chat/completions"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={"missing_session_id": "reject"},
+        )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "session_id"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/mcp/", "/mcp/tools", "/key/health"])
+async def test_missing_session_id_policy_skips_non_inference_routes(path: str):
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o"},
+        request=_request_for(path),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "reject"},
+    )
+
+    assert "session_id" not in updated["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_missing_session_id_unknown_value_is_ignored():
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "messages": []},
+        request=_request_for("/v1/chat/completions"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "typo"},
+    )
+
+    assert "session_id" not in updated["metadata"]

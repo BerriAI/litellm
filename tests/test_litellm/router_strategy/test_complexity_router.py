@@ -16,7 +16,7 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.router_strategy.complexity_router.complexity_router import (
     _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
     _CLASSIFICATION_WITH_CONVERSATION,
@@ -4313,6 +4313,26 @@ class TestSessionAffinity:
             complexity_router_config=basic_config,
         )
         request_kwargs = self._request_kwargs("session-1")
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        second = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert first.model == "o1-preview"
+        assert second.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_proxy_generated_session_id_never_pins(self, mock_router_instance, session_affinity_config):
+        """A session id the proxy generated for a request that had none is per request, so
+        it must not create a pin even with session_affinity enabled."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = {"metadata": {"session_id": "generated-1", SESSION_ID_GENERATED_METADATA_KEY: True}}
         first = await router.async_pre_routing_hook(
             model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
         )
@@ -10826,6 +10846,9 @@ class TestModalityRouting:
             ("custom_tiers_walk", "premium-model", "modality_escalation"),
             ("pin_kept_bypasses", "text-cheap", "session_affinity_pin"),
             ("pin_replacement_gated", "vision-big", "modality_escalation"),
+            ("pin_override_escalates", "vision-mid", "modality_pin_override"),
+            ("pin_override_same_tier", "vision-cheap", "modality_pin_override"),
+            ("pin_override_inert_without_modality_routing", "text-cheap", "session_affinity_pin"),
             ("adaptive_pick_rewritten", "vision-mid", "modality_escalation"),
         ],
     )
@@ -10876,7 +10899,7 @@ class TestModalityRouting:
             messages = [
                 {"role": "user", "content": [{"type": "text", "text": "quick lookup: what is this?"}, IMG_PART]}
             ]
-        elif path in ("pin_kept_bypasses", "pin_replacement_gated"):
+        elif path.startswith(("pin_kept", "pin_replacement", "pin_override")):
             cache = AsyncMock()
             cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
             mock_router_instance.cache = cache
@@ -10888,6 +10911,13 @@ class TestModalityRouting:
                 messages = [
                     {"role": "user", "content": [{"type": "text", "text": "LITELLM ESCALATE describe this"}, IMG_PART]}
                 ]
+            elif path == "pin_override_same_tier":
+                config["modality_pin_override"] = True
+                config["tiers"]["SIMPLE"] = ["text-cheap", "vision-cheap"]
+                vision["vision-cheap"] = True
+            elif path == "pin_override_inert_without_modality_routing":
+                config["modality_routing"] = False
+            config["modality_pin_override"] = path.startswith("pin_override")
         elif path == "adaptive_pick_rewritten":
             config["adaptive"] = True
             mock_router_instance.model_list = []
@@ -11054,4 +11084,60 @@ class TestModalityRouting:
         from litellm.router_strategy.complexity_router.complexity_router import _decision_is_pinnable
 
         assert _decision_is_pinnable({"cause": "modality_escalation"}) is False
+        assert _decision_is_pinnable({"cause": "modality_pin_override"}) is False
         assert _decision_is_pinnable({"cause": "heuristic_scorer"}) is True
+
+    @pytest.mark.asyncio
+    async def test_pin_override_serves_the_image_turn_without_repinning(self, mock_router_instance):
+        """The override is for one request: the session keeps the model it was pinned to."""
+        cache = AsyncMock()
+        cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
+        mock_router_instance.cache = cache
+        router = self._router(
+            mock_router_instance,
+            {
+                "tiers": dict(self.BASE_TIERS),
+                "modality_routing": True,
+                "modality_pin_override": True,
+                "session_affinity": True,
+            },
+            dict(self.BASE_VISION),
+        )
+        request_kwargs = {"metadata": {"session_id": "s1"}}
+
+        image_turn = await router.async_pre_routing_hook(
+            model="m", request_kwargs=request_kwargs, messages=self.IMAGE_MESSAGE
+        )
+        assert image_turn.model == "vision-mid"
+        assert image_turn.routing_decision["cause"] == "modality_pin_override"
+        assert "modality_escalated_from:SIMPLE" in image_turn.routing_decision["signals"]
+
+        assert cache.async_set_cache.await_args.kwargs["value"] == {"model": "text-cheap", "tier": "SIMPLE"}
+
+        text_turn = await router.async_pre_routing_hook(
+            model="m", request_kwargs={"metadata": {"session_id": "s1"}}, messages=[{"role": "user", "content": "hi"}]
+        )
+        assert text_turn.model == "text-cheap"
+        assert text_turn.routing_decision["cause"] == "session_affinity_pin"
+
+    @pytest.mark.asyncio
+    async def test_pin_override_with_no_capable_model_rejects_and_keeps_the_pin(self, mock_router_instance):
+        """The clear 400 replaces the provider's, and a rejected turn must not cost the session its pin."""
+        cache = AsyncMock()
+        cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
+        mock_router_instance.cache = cache
+        router = self._router(
+            mock_router_instance,
+            {
+                "tiers": {"SIMPLE": "text-cheap", "COMPLEX": "text-big"},
+                "modality_routing": True,
+                "modality_pin_override": True,
+                "session_affinity": True,
+            },
+            {"text-cheap": False, "text-big": False},
+        )
+        with pytest.raises(litellm.BadRequestError, match="no model"):
+            await router.async_pre_routing_hook(
+                model="m", request_kwargs={"metadata": {"session_id": "s1"}}, messages=self.IMAGE_MESSAGE
+            )
+        assert cache.async_set_cache.await_args.kwargs["value"] == {"model": "text-cheap", "tier": "SIMPLE"}

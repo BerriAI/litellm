@@ -1,6 +1,7 @@
 import {
   ADMIN_STORAGE_PATH,
   ADMIN_VIEWER_STORAGE_PATH,
+  E2E_SEEDED_USER_PASSWORD,
   INTERNAL_USER_STORAGE_PATH,
   INTERNAL_VIEWER_STORAGE_PATH,
   TEAM_ADMIN_STORAGE_PATH,
@@ -23,22 +24,22 @@ export const users: Record<Role, { email: string; password: string; seedApiRole?
   },
   [Role.ProxyAdminViewer]: {
     email: "adminviewer@test.local",
-    password: "test",
+    password: E2E_SEEDED_USER_PASSWORD,
     seedApiRole: "proxy_admin_viewer",
   },
   [Role.InternalUser]: {
     email: "internal@test.local",
-    password: "test",
+    password: E2E_SEEDED_USER_PASSWORD,
     seedApiRole: "internal_user",
   },
   [Role.InternalUserViewer]: {
     email: "viewer@test.local",
-    password: "test",
+    password: E2E_SEEDED_USER_PASSWORD,
     seedApiRole: "internal_user_viewer",
   },
   [Role.TeamAdmin]: {
     email: "teamadmin@test.local",
-    password: "test",
+    password: E2E_SEEDED_USER_PASSWORD,
     seedApiRole: "internal_user",
   },
 };
