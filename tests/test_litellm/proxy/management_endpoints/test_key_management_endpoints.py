@@ -17555,3 +17555,29 @@ def test_key_health_failure_body_is_openai_shaped():
     assert error["type"] == "internal_server_error"
     assert error["param"] is None
     assert error["code"] == "500"
+
+
+@pytest.mark.asyncio
+async def test_update_key_reports_a_bad_budget_duration_as_a_request_error():
+    """/key/update answered 400 with type=auth_error for an unparseable budget_duration on a
+    valid admin key, so the client could not tell a rejected field from a rejected key."""
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyErrorTypes
+    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
+
+    mock_prisma = MagicMock()
+
+    with patch(  # test-quality-ok: the endpoint reads proxy_server.prisma_client itself; no parameter to inject
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await update_key_fn(
+                request=MagicMock(spec=Request),
+                data=UpdateKeyRequest(key="sk-whatever", budget_duration="not-a-duration"),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.type != ProxyErrorTypes.auth_error.value

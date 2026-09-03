@@ -8,6 +8,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
     openai_error_param,
     openai_error_type,
+    proxy_exception_for,
 )
 
 
@@ -115,3 +116,88 @@ def test_a_status_carried_by_an_exception_drives_the_type_it_reports():
     exc = HTTPException(status_code=403, detail="blocked by policy")
 
     assert openai_error_type(exc, error_status_code(exc, 400)) == "permission_error"
+
+
+@pytest.mark.parametrize(
+    "raised_status, expected_type",
+    [
+        (400, "invalid_request_error"),
+        (404, "invalid_request_error"),
+        (403, "permission_error"),
+        (422, "invalid_request_error"),
+        (500, "internal_server_error"),
+    ],
+)
+def test_a_blanket_handler_keeps_the_status_its_route_answered_with(raised_status, expected_type):
+    """The handler wraps whatever the route raised, so the status the caller sees must be the
+    one the route chose, and the type must follow that status rather than the route's default."""
+    wrapped = proxy_exception_for(
+        HTTPException(status_code=raised_status, detail={"message": "boom"}),
+        default_status_code=400,
+    )
+
+    assert (wrapped.code, wrapped.type) == (str(raised_status), expected_type)
+
+
+@pytest.mark.parametrize("default_status_code, expected_type", [(400, "invalid_request_error"), (500, "internal_server_error")])
+def test_an_exception_carrying_no_status_falls_back_to_the_routes_default(default_status_code, expected_type):
+    wrapped = proxy_exception_for(ValueError("boom"), default_status_code=default_status_code)
+
+    assert (wrapped.code, wrapped.type) == (str(default_status_code), expected_type)
+
+
+def test_a_proxy_exception_passes_through_with_the_type_it_already_named():
+    """Re-wrapping one would overwrite a type the raising code chose deliberately, which is
+    what the ``elif isinstance(e, ProxyException): raise e`` branch existed to prevent."""
+    raised = ProxyException(
+        message="Budget has been exceeded",
+        type=ProxyErrorTypes.budget_exceeded.value,
+        param="max_budget",
+        code=400,
+    )
+
+    assert proxy_exception_for(raised, default_status_code=500) is raised
+
+
+def test_a_rejection_is_never_labelled_an_auth_failure():
+    """The bug: every management route's blanket handler asserted auth_error, so a 404 for a
+    team that does not exist told a client its credentials were the problem."""
+    wrapped = proxy_exception_for(
+        HTTPException(status_code=404, detail={"message": "Team not found, passed team id: no-such-team."}),
+        default_status_code=400,
+    )
+
+    assert wrapped.type != ProxyErrorTypes.auth_error.value
+    assert "Authentication Error" not in wrapped.message
+
+
+def test_the_message_is_what_the_route_raised_without_an_invented_prefix():
+    assert proxy_exception_for(ValueError("boom"), default_status_code=400).message == "boom"
+
+
+def test_an_http_exceptions_detail_survives_the_wrapping():
+    wrapped = proxy_exception_for(
+        HTTPException(status_code=400, detail={"error": "Invalid budget_duration 'not-a-duration'."}),
+        default_status_code=400,
+    )
+
+    assert "Invalid budget_duration" in wrapped.message
+
+
+def test_a_carried_type_survives_the_wrapping():
+    """A litellm exception already names its type; deriving one from the status would lose it."""
+
+    class _Carrier(Exception):
+        type = "context_window_exceeded"
+        status_code = 400
+
+    assert proxy_exception_for(_Carrier("boom"), default_status_code=500).type == "context_window_exceeded"
+
+
+@pytest.mark.parametrize("exc", [HTTPException(status_code=404, detail="nope"), ValueError("boom")])
+def test_the_wrapped_error_serializes_as_an_openai_error_object(exc):
+    body = json.loads(json.dumps({"error": proxy_exception_for(exc, default_status_code=400).to_dict()}))
+
+    assert body["error"]["param"] is None
+    assert isinstance(body["error"]["type"], str)
+    assert body["error"]["type"] != "None"

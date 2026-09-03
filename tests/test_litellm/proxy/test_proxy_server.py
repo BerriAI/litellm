@@ -12518,3 +12518,48 @@ def test_assistants_error_body_is_openai_shaped(client_no_auth):
     error = response.json()["error"]
     assert error["type"] == "internal_server_error"
     assert error["param"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_config_reports_an_unsupported_router_setting_as_a_request_error():
+    """/config/update answered 400 with type=auth_error for a router setting it does not
+    support, on a valid admin key, so the type blamed the credentials for a body mistake."""
+    from fastapi import Request
+
+    from litellm.proxy._types import ConfigYAML, ProxyErrorTypes, ProxyException
+    from litellm.proxy.proxy_server import update_config
+
+    body = {"router_settings": {"not_a_router_setting": True}}
+    request = MagicMock(spec=Request)
+    request.json = AsyncMock(return_value=body)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_config(
+            config_info=ConfigYAML(**body),
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.type != ProxyErrorTypes.auth_error.value
+
+
+@pytest.mark.asyncio
+async def test_update_config_reports_a_non_admin_caller_as_a_permission_error():
+    """A real authorization failure keeps an auth-family type, and 403 is `permission_error`
+    in OpenAI's contract, which `auth_error` never was."""
+    from fastapi import Request
+
+    from litellm.proxy._types import ConfigYAML, ProxyException
+    from litellm.proxy.proxy_server import update_config
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_config(
+            config_info=ConfigYAML(),
+            request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_id="viewer-1", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert exc_info.value.code == "403"
+    assert exc_info.value.type == "permission_error"
