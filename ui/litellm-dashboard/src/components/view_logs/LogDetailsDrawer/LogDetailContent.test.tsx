@@ -163,11 +163,13 @@ describe("LogDetailContent", () => {
         />,
       );
 
-      const section = screen.getByText("Batch Results").closest('[data-slot="card"]') as HTMLElement;
-      expect(within(section).getByText("batch_abc123")).toBeInTheDocument();
-      expect(within(section).getByText("2")).toBeInTheDocument();
-      expect(within(section).getByText("1")).toBeInTheDocument();
-      expect(within(section).getByText("gemini-2.5-flash")).toBeInTheDocument();
+      expect(screen.getByText("Batch Results")).toBeInTheDocument();
+      expect(screen.getByText("batch_abc123")).toBeInTheDocument();
+      expect(screen.getByText("Successful Requests")).toBeInTheDocument();
+      expect(screen.getByText("2")).toBeInTheDocument();
+      expect(screen.getByText("Failed Requests")).toBeInTheDocument();
+      expect(screen.getByText("1")).toBeInTheDocument();
+      expect(screen.getByText("gemini-2.5-flash")).toBeInTheDocument();
     });
 
     it("still renders the batch id when a legacy row carries no counts", () => {
