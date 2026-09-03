@@ -1540,3 +1540,13 @@ class TestPhaseParameter:
         assert validated[0]["phase"] == "commentary"
         assert validated[1]["phase"] == "final_answer"
         assert "phase" not in validated[2]
+
+
+@pytest.mark.parametrize("effort", [None, "low"])
+def test_gpt_6_astra_drops_temperature_on_the_responses_path(effort):
+    mapped = OpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params={"temperature": 0, **({"reasoning": {"effort": effort}} if effort else {})},
+        model="gpt-6-astra",
+        drop_params=True,
+    )
+    assert "temperature" not in mapped
