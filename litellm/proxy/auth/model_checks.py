@@ -392,23 +392,17 @@ def _get_wildcard_models(
 
             models_to_remove.add(model)
 
-            if llm_router is not None:
-                model_list = llm_router.get_model_list(model_name=model, team_id=team_id)
-                if model_list:
-                    for router_model in model_list:
-                        wildcard_models = get_known_models_from_wildcard(
+            model_list = llm_router.get_model_list(model_name=model, team_id=team_id) if llm_router else None
+            if model_list:
+                for router_model in model_list:
+                    all_wildcard_models.extend(
+                        get_known_models_from_wildcard(
                             wildcard_model=model,
                             litellm_params=LiteLLM_Params(**router_model["litellm_params"]),
                         )
-                        all_wildcard_models.extend(wildcard_models)
-                else:
-                    wildcard_models = get_known_models_from_wildcard(wildcard_model=model, litellm_params=None)
-                    if wildcard_models:
-                        all_wildcard_models.extend(wildcard_models)
+                    )
             else:
-                wildcard_models = get_known_models_from_wildcard(wildcard_model=model, litellm_params=None)
-                if wildcard_models:
-                    all_wildcard_models.extend(wildcard_models)
+                all_wildcard_models.extend(get_known_models_from_wildcard(wildcard_model=model, litellm_params=None))
 
     for model in models_to_remove:
         unique_models.remove(model)

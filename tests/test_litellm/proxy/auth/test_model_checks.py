@@ -755,12 +755,7 @@ def test_expand_wildcard_invalid_litellm_params_passthrough():
 
 
 def test_get_complete_model_list_excludes_wildcard_routes_by_default():
-    """
-    Regression: wildcard routes like bedrock/* must NOT appear in the model
-    list when return_wildcard_routes=False (the default for /v1/models).
-    Previously, wildcards with a router deployment were never removed from
-    unique_models, leaking them into the response.
-    """
+    """Regression (LIT-4108): a wildcard with a matching router deployment leaked into /v1/models."""
     from litellm import Router
     from litellm.proxy.auth.model_checks import get_complete_model_list
 
@@ -789,13 +784,28 @@ def test_get_complete_model_list_excludes_wildcard_routes_by_default():
 
     assert "bedrock/*" not in result
     assert "gpt-4" in result
+    assert any(m.startswith("bedrock/") for m in result)
+
+
+def test_get_complete_model_list_excludes_wildcard_routes_without_router():
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["bedrock/*", "gpt-4"],
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=False,
+        llm_router=None,
+    )
+
+    assert "bedrock/*" not in result
+    assert "gpt-4" in result
+    assert any(m.startswith("bedrock/") for m in result)
 
 
 def test_get_complete_model_list_includes_wildcard_routes_when_requested():
-    """
-    When return_wildcard_routes=True the wildcard pattern should appear in the
-    result (once), alongside the expanded models.
-    """
     from litellm import Router
     from litellm.proxy.auth.model_checks import get_complete_model_list
 
@@ -818,8 +828,8 @@ def test_get_complete_model_list_includes_wildcard_routes_when_requested():
         llm_router=router,
     )
 
-    assert "bedrock/*" in result
     assert result.count("bedrock/*") == 1
+    assert any(m.startswith("bedrock/") and m != "bedrock/*" for m in result)
 
 
 def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
