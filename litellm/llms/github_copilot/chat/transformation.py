@@ -1,6 +1,6 @@
 import json
 import os
-from typing import TYPE_CHECKING, Any, Final
+from typing import Any, Final
 
 import httpx
 
@@ -16,9 +16,6 @@ from ..common_utils import (
     GetAPIKeyError,
     get_copilot_default_headers,
 )
-
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class GithubCopilotConfig(OpenAIConfig):
@@ -275,7 +272,7 @@ class GithubCopilotConfig(OpenAIConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: "ModelResponse",
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: Any,
         request_data: dict,
         messages: list[AllMessageValues],
         optional_params: dict,
