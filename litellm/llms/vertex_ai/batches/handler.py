@@ -1,5 +1,5 @@
 import json
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Sequence
 from typing import TYPE_CHECKING, Final, Protocol
 
 import httpx
@@ -61,7 +61,7 @@ class _VertexEndpointDeployedModel(TypedDict, total=False):
 
 
 class _VertexEndpointResponse(TypedDict, total=False):
-    deployedModels: ReadOnly[list[_VertexEndpointDeployedModel]]
+    deployedModels: ReadOnly[Sequence[_VertexEndpointDeployedModel]]
 
 
 class _VertexEndpointPayloadView(TypedDict):
@@ -179,7 +179,7 @@ class VertexAIBatchPrediction(VertexLLM):
     def _resolve_fine_tuned_endpoint_model(
         self,
         vertex_batch_request: VertexAIBatchPredictionJob,
-        headers: dict[str, str],
+        headers: dict[str, str],  # mutable-ok: HTTPHandler.get only accepts dict headers
         sync_handler: HTTPHandler,
         api_base: str | None,
         vertex_location: str,
@@ -214,7 +214,7 @@ class VertexAIBatchPrediction(VertexLLM):
             )
 
         payload_view: Final[_VertexEndpointPayloadView] = {"payload": response.json()}
-        deployed_models: Final = payload_view["payload"].get("deployedModels") or []
+        deployed_models: Final = payload_view["payload"].get("deployedModels") or ()
         deployed_model: Final = deployed_models[0].get("model", "") if deployed_models else ""
         if not deployed_model:
             raise VertexAIError(
@@ -224,7 +224,8 @@ class VertexAIBatchPrediction(VertexLLM):
                     "resource to run batch predictions against"
                 ),
             )
-        return {**vertex_batch_request, "model": deployed_model}
+        resolved_request: Final[VertexAIBatchPredictionJob] = {**vertex_batch_request, "model": deployed_model}
+        return resolved_request
 
     async def _async_create_batch(
         self,
