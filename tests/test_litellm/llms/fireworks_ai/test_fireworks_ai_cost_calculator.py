@@ -78,14 +78,14 @@ STANDARD_OUTPUT_COST = 6e-07
 STANDARD_CACHE_READ_COST = 1.5e-08
 
 
-def _register_off_peak_model(off_peak_pricing: dict) -> None:
+def _register_off_peak_model(off_peak_pricing: dict, cache_read_cost: float | None = STANDARD_CACHE_READ_COST) -> None:
     litellm.model_cost[f"fireworks_ai/{OFF_PEAK_MODEL}"] = {
         "litellm_provider": "fireworks_ai",
         "mode": "chat",
         "input_cost_per_token": STANDARD_INPUT_COST,
         "output_cost_per_token": STANDARD_OUTPUT_COST,
-        "cache_read_input_token_cost": STANDARD_CACHE_READ_COST,
         "off_peak_pricing": off_peak_pricing,
+        **({} if cache_read_cost is None else {"cache_read_input_token_cost": cache_read_cost}),
     }
 
 
@@ -127,6 +127,25 @@ def test_off_peak_rates_left_unset_keep_the_standard_rates():
 
     assert math.isclose(prompt_cost, (700 * 1e-08) + (300 * STANDARD_CACHE_READ_COST), rel_tol=1e-10)
     assert math.isclose(completion_cost, 200 * STANDARD_OUTPUT_COST, rel_tol=1e-10)
+
+
+def test_off_peak_window_bills_cached_tokens_at_the_off_peak_input_rate_without_a_cache_read_rate():
+    """Most fireworks_ai price-map entries carry no cache_read_input_token_cost, so cached tokens
+    fall back to the input rate, and inside the window that has to be the off-peak one."""
+    _register_off_peak_model(
+        {"hours_utc": OFF_PEAK_WINDOW, "input_cost_per_token": 1e-08, "output_cost_per_token": 2e-08},
+        cache_read_cost=None,
+    )
+    usage = _usage(prompt_tokens=1000, cached_tokens=300, completion_tokens=200)
+
+    prompt_cost, completion_cost = cost_per_token(model=OFF_PEAK_MODEL, usage=usage, current_time=INSIDE_WINDOW)
+
+    assert math.isclose(prompt_cost, 1000 * 1e-08, rel_tol=1e-10)
+    assert math.isclose(completion_cost, 200 * 2e-08, rel_tol=1e-10)
+
+    peak_prompt_cost, _ = cost_per_token(model=OFF_PEAK_MODEL, usage=usage, current_time=OUTSIDE_WINDOW)
+
+    assert math.isclose(peak_prompt_cost, 1000 * STANDARD_INPUT_COST, rel_tol=1e-10)
 
 
 def test_off_peak_defaults_to_the_current_time():

@@ -2,6 +2,7 @@
 For calculating cost of fireworks ai serverless inference models.
 """
 
+import math
 from datetime import datetime
 from typing import Final
 
@@ -14,6 +15,8 @@ from litellm.constants import (
 from litellm.litellm_core_utils.llm_cost_calc.utils import apply_off_peak_pricing
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
+
+NO_CACHE_READ_RATE: Final = float("nan")
 
 
 # Extract the number of billion parameters from the model name
@@ -78,15 +81,15 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
     model_info: Final = _resolve_model_info(model)
-    standard_input_rate: Final[float] = model_info["input_cost_per_token"] or 0.0
     standard_cache_read_rate: Final = model_info.get("cache_read_input_token_cost")
-    input_rate, output_rate, cache_read_rate = apply_off_peak_pricing(
+    input_rate, output_rate, cache_read_rate_or_unset = apply_off_peak_pricing(
         model_info,
         current_time,
-        standard_input_rate,
+        model_info["input_cost_per_token"] or 0.0,
         model_info["output_cost_per_token"] or 0.0,
-        standard_cache_read_rate if standard_cache_read_rate is not None else standard_input_rate,
+        standard_cache_read_rate if standard_cache_read_rate is not None else NO_CACHE_READ_RATE,
     )
+    cache_read_rate: Final[float] = input_rate if math.isnan(cache_read_rate_or_unset) else cache_read_rate_or_unset
 
     prompt_tokens_details: Final = usage.prompt_tokens_details
     cached_tokens: Final[int] = (
