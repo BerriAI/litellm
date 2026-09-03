@@ -28,6 +28,39 @@ def run_suite(suite: MappingSuite, repo_root: Path, pytest_args: Sequence[str] =
     return _audit_problems(audit_mapping(suite, repo_root))
 
 
+def _run_mapping_case(
+    case: HarnessCase,
+    repo_root: Path,
+    report: HarnessRun,
+    on_update: UpdateCallback,
+    suites: Mapping[SdkFunction, MappingSuite],
+) -> None:
+    result: Final = report.results[case.key]
+    spec: Final = case.spec
+    if not isinstance(spec, SuiteCaseSpec):
+        return
+    nodeid: Final = f"suite:{case.strategy_id}:{case.sdk_function}:{spec.suite}"
+    result.collected.add(nodeid)
+    result.status = RunStatus.RUNNING
+    on_update(report)
+    suite: Final = suites.get(case.sdk_function)
+    if suite is None:
+        result.record(nodeid, RunStatus.ERROR)
+        report.failures.append((nodeid, f"no mapping suite registered for {case.sdk_function}"))
+        return
+    try:
+        audit: Final = audit_mapping(suite, repo_root)
+    except (OSError, ValueError) as error:
+        result.record(nodeid, RunStatus.ERROR)
+        report.failures.append((nodeid, str(error)))
+        return
+    problems: Final = _audit_problems(audit)
+    artifact: Final = ResultArtifact(MAPPING_REPORT_ARTIFACT, "\n".join(mapping_report_lines(audit)))
+    result.record(nodeid, RunStatus.FAILED if problems else RunStatus.PASSED, artifacts=(artifact,))
+    report.failures.extend((nodeid, problem) for problem in problems)
+    on_update(report)
+
+
 def run_mapping_cases(
     cases: Sequence[HarnessCase],
     repo_root: Path,
@@ -39,30 +72,7 @@ def run_mapping_cases(
     del runner_args
     report: Final = HarnessRun.from_cases(cases)
     for case in cases:
-        result: Final = report.results[case.key]
-        spec: Final = case.spec
-        if not isinstance(spec, SuiteCaseSpec):
-            continue
-        nodeid: Final = f"suite:{case.strategy_id}:{case.sdk_function}:{spec.suite}"
-        result.collected.add(nodeid)
-        result.status = RunStatus.RUNNING
-        on_update(report)
-        suite: Final = suites.get(case.sdk_function)
-        if suite is None:
-            result.record(nodeid, RunStatus.ERROR)
-            report.failures.append((nodeid, f"no mapping suite registered for {case.sdk_function}"))
-            continue
-        try:
-            audit: Final = audit_mapping(suite, repo_root)
-        except (OSError, ValueError) as error:
-            result.record(nodeid, RunStatus.ERROR)
-            report.failures.append((nodeid, str(error)))
-            continue
-        problems: Final = _audit_problems(audit)
-        artifact: Final = ResultArtifact(MAPPING_REPORT_ARTIFACT, "\n".join(mapping_report_lines(audit)))
-        result.record(nodeid, RunStatus.FAILED if problems else RunStatus.PASSED, artifacts=(artifact,))
-        report.failures.extend((nodeid, problem) for problem in problems)
-        on_update(report)
+        _run_mapping_case(case, repo_root, report, on_update, suites)
     report.finished_at = monotonic()
     on_update(report)
     failed: Final = any(
