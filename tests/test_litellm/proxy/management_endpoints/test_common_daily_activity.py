@@ -455,6 +455,68 @@ async def test_get_api_key_metadata_regenerated_key_uses_most_recent_deleted_rec
 
 
 @pytest.mark.asyncio
+async def test_get_api_key_metadata_recovers_double_hashed_key_via_reverse_hash():
+    """
+    v1.99 spend logging re-hashed already-hashed api_key values when provenance was
+    missing. Usage joins DailyUserSpend.api_key to VerificationToken.token, so those
+    rows looked like key-hash-... with a null alias. Reverse-hash recovery must map
+    hash(token) back to the key's alias for historical dirty spend.
+    """
+    from litellm.proxy.utils import hash_token
+
+    token = "a" * 64
+    double_hashed = hash_token(token)
+    mock_prisma = MagicMock()
+
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+        side_effect=[
+            [],  # exact join miss
+            [SimpleNamespace(token=token, key_alias="batch-worker", team_id="team-1")],
+        ]
+    )
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+
+    result = await get_api_key_metadata(
+        prisma_client=mock_prisma,
+        api_keys={double_hashed},
+    )
+
+    assert result[double_hashed]["key_alias"] == "batch-worker"
+    assert result[double_hashed]["team_id"] == "team-1"
+    mock_prisma.db.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_api_key_metadata_recovers_double_hashed_key_via_spend_logs():
+    """When the token tables cannot reverse-hash the dirty key, use SpendLogs metadata."""
+    from litellm.proxy.utils import hash_token
+
+    double_hashed = hash_token("b" * 64)
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "api_key": double_hashed,
+                "key_alias": "from-spend-log",
+                "team_id": "team-spend",
+            }
+        ]
+    )
+
+    result = await get_api_key_metadata(
+        prisma_client=mock_prisma,
+        api_keys={double_hashed},
+    )
+
+    assert result[double_hashed]["key_alias"] == "from-spend-log"
+    assert result[double_hashed]["team_id"] == "team-spend"
+    mock_prisma.db.query_raw.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_tag_daily_activity_metadata_totals_not_zero():
     """Test that tag daily activity returns correct metadata totals.
 
