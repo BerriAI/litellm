@@ -36,10 +36,11 @@ import ContextWindowEscalationConfig from "./ContextWindowEscalationConfig";
 import { Restricted, restrictedBy } from "./TierRestrictions";
 import { type TierSetAction, applyTierSetAction, setFallbackTier } from "./tier_set_actions";
 import {
-  REASONING_EFFORT_OPTIONS,
   ReasoningEffort,
   TierModelParamsByTier,
+  classifierEffortOptionsForModels,
   setTierModelReasoningEffort,
+  tierEffortOptionsForModels,
   tierRowLabel,
 } from "./complexity_router_tiers";
 import TierModelEffortRows from "./TierModelEffortRows";
@@ -124,6 +125,7 @@ export const CLASSIFICATION_RUBRIC_KEYS = Object.keys(CLASSIFICATION_RUBRIC_DESC
 export interface ClassifierLLMConfig {
   model: string;
   timeout_ms: number;
+  reasoning_effort?: ReasoningEffort;
   classification_rubric?: ClassificationRubric;
   system_prompt?: string;
 }
@@ -632,14 +634,8 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   const removeTierRow = (id: string) => dispatch({ kind: "remove", id });
   const exitToBuiltInTiers = () => dispatch({ kind: "restore" });
 
-  // An absent list means the proxy does not send the field yet, so every level is offered as before.
-  // An empty list is the group's own answer that its deployments share no level, and is left empty.
-  const effortOptionsByModel: Record<string, string[]> = Object.fromEntries(
-    modelInfo.map((model) => [
-      model.model_group,
-      model.supported_reasoning_efforts ?? (model.supports_reasoning ? [...REASONING_EFFORT_OPTIONS] : []),
-    ]),
-  );
+  const tierEffortOptionsByModel = tierEffortOptionsForModels(modelInfo);
+  const classifierEffortOptionsByModel = classifierEffortOptionsForModels(modelInfo);
 
   // Embedding models can't serve a chat-completion role, so they're excluded here.
   const modelOptions = modelInfo
@@ -746,7 +742,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <TierModelEffortRows
                     tierLabel={label}
                     models={row.models}
-                    effortOptionsByModel={effortOptionsByModel}
+                    effortOptionsByModel={tierEffortOptionsByModel}
                     paramsByModel={row.params}
                     onEffortChange={(model, effort) => handleTierModelEffortChange(row.id, model, effort)}
                   />
@@ -818,6 +814,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 value={value}
                 onChange={onChange}
                 modelOptions={modelOptions}
+                effortOptionsByModel={classifierEffortOptionsByModel}
                 customTechnicalKeywords={customTechnicalKeywords}
                 onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
                 showValidationErrors={showValidationErrors}

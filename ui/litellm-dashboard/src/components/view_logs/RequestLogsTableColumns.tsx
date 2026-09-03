@@ -63,9 +63,11 @@ export const getRequestLogsTableColumns = ({
       const sessionAgentCount = log.session_agent_count ?? (isAgent ? sessionCount : 0);
       const sessionMcpCount = log.mcp_tool_call_count ?? (isMcp ? sessionCount : 0);
 
-      if (isMcp) return <McpBadge />;
-      if (isAgent && sessionCount <= 1) return <AgentBadge />;
-      if (sessionCount <= 1) return <LlmBadge />;
+      if (sessionCount <= 1) {
+        if (isMcp) return <McpBadge />;
+        if (isAgent) return <AgentBadge />;
+        return <LlmBadge />;
+      }
 
       const sessionTypeBadge = (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-info/10 text-info border border-info/20 rounded-full text-[11px] font-medium whitespace-nowrap">
@@ -224,10 +226,13 @@ export const getRequestLogsTableColumns = ({
     cell: ({ row }) => {
       const log = row.original;
       const provider = log.custom_llm_provider;
-      const modelName = log.model ?? "";
+      const sessionModels = log.session_models ?? [];
+      const modelNames = sessionModels.length > 0 ? sessionModels : [log.model ?? ""];
+      const modelLabel = log.session_models_truncated ? `${modelNames.join(", ")}, ...` : modelNames.join(", ");
+      const isSingleModel = modelNames.length === 1;
       return (
         <div className="flex items-center space-x-2">
-          {provider && (
+          {provider && isSingleModel && (
             <img
               src={getLogoUrl(log, provider)}
               alt=""
@@ -237,7 +242,14 @@ export const getRequestLogsTableColumns = ({
               }}
             />
           )}
-          <CellTooltip content={modelName} trigger={<span className="max-w-[15ch] truncate block">{modelName}</span>} />
+          <CellTooltip
+            content={modelLabel}
+            trigger={
+              <span className={isSingleModel ? "max-w-[15ch] truncate block" : "min-w-0 truncate block"}>
+                {modelLabel}
+              </span>
+            }
+          />
         </div>
       );
     },

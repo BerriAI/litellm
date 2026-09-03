@@ -11083,6 +11083,14 @@ async def test_new_team_rejects_reserved_ui_session_team_id():
         mock_prisma.get_data.assert_not_called()
 
 
+@pytest.mark.parametrize("team_id", ["", "   "])
+def test_new_team_request_blank_team_id_is_unset(team_id: str) -> None:
+    from litellm.proxy._types import NewTeamRequest
+
+    assert NewTeamRequest(team_alias="t", team_id=team_id).team_id is None
+    assert NewTeamRequest(team_id="custom").team_id == "custom"
+
+
 # ---------------------------------------------------------------------------
 # PATCH /team/{team_id} — RFC 7386 JSON Merge Patch
 #

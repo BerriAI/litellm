@@ -667,6 +667,44 @@ class TestMCPRequestHandler:
 
         assert result == []
 
+    async def test_db_default_empty_key_scope_keeps_org_substitution(self):
+        """A key whose object_permission row carries only the DB-default empty mcp_servers
+        list (e.g. a vector-stores-only key) places no lower-level MCP restriction: the org
+        list still substitutes with the flag off, while the access result stays scoped so
+        the opt-in allow-all ceiling can still bind"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", org_id="org-1")
+        key_object_permission = self._toolset_only_object_permission([])
+        key_object_permission.mcp_toolsets = None
+        mock_manager = self._mock_manager_with_toolsets({})
+
+        with (
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission
+            ),
+            patch.object(  # test-quality-ok: team resolution has its own tests; pin it empty here
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_team", AsyncMock(return_value=[])
+            ),
+            patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_key_access_group_mcp_server_extras", AsyncMock(return_value=[])
+            ),
+            patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_org",
+                AsyncMock(return_value=["server-x", "server-y"]),
+            ),
+        ):
+            access = await MCPRequestHandler.get_mcp_server_access(user_api_key_auth)
+
+        assert sorted(access.server_ids) == ["server-x", "server-y"]
+        assert access.scope == "scoped"
+
     async def test_team_dangling_toolset_denies_key_own_grants(self):
         """A team toolset that cannot be resolved must deny on the SERVER axis too,
         not silently drop the team ceiling and pass the key's own grants through"""
