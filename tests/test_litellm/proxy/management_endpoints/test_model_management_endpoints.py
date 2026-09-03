@@ -4619,7 +4619,7 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
             ),
         ):
             with pytest.raises(
-                Exception, match="Only proxy admins can modify a deployment configured for Anthropic"
+                Exception, match="Only proxy admins can modify a deployment configured for workload identity"
             ) as exc_info:
                 await patch_model(
                     model_id="m1",
@@ -4632,6 +4632,57 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
                 )
             err = exc_info.value
             assert getattr(err, "param", "") == "anthropic_keycloak_token_url"
+            mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_patch_model_non_admin_cannot_set_openai_wif_field(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            patch_model,
+        )
+
+        non_admin = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER)
+        existing_row = MagicMock()
+        existing_row.litellm_params = {"model": "openai/gpt-4o-mini"}
+        existing_row.model_dump.return_value = {
+            "model_name": "gpt",
+            "litellm_params": existing_row.litellm_params,
+            "model_info": {"id": "m1"},
+        }
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
+
+        with (
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.prisma_client",
+                mock_prisma,
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.llm_router",
+                MagicMock(**{"get_model_ids.return_value": ["m1"]}),
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.store_model_in_db",
+                True,
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.premium_user",
+                True,
+            ),
+        ):
+            with pytest.raises(
+                Exception, match="Only proxy admins can modify a deployment configured for workload identity"
+            ) as exc_info:
+                await patch_model(
+                    model_id="m1",
+                    patch_data=updateDeployment(
+                        litellm_params=updateLiteLLMParams(
+                            openai_identity_token_file="/var/run/secrets/tokens/attacker",
+                        )
+                    ),
+                    user_api_key_dict=non_admin,
+                )
+            assert getattr(exc_info.value, "param", "") == "openai_identity_token_file"
             mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
 
     @pytest.mark.asyncio
@@ -4824,7 +4875,7 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
             ),
         ):
             with pytest.raises(
-                Exception, match="Only proxy admins can modify a deployment configured for Anthropic"
+                Exception, match="Only proxy admins can modify a deployment configured for workload identity"
             ) as exc_info:
                 await update_model(
                     model_params=updateDeployment(
@@ -5101,6 +5152,58 @@ class TestDiscoverProviderModels:
         assert called_params["anthropic_identity_token"] == "oidc/env/TOK"
 
     @pytest.mark.asyncio
+    async def test_discovery_success_via_named_openai_wif_credential(self, monkeypatch):
+        """An OpenAI credential holding the per-deployment identity trio discovers models
+        keyless: only the credential name travels in the request and the hydrated trio
+        reaches the OpenAI discovery path."""
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            discover_provider_models,
+        )
+        from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+            ProviderModelDiscoveryRequest,
+        )
+        from litellm.types.utils import CredentialItem
+
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="openai-wif",
+                    credential_values={
+                        "openai_identity_provider_id": "idp_1",
+                        "openai_service_account_id": "user-1",
+                        "openai_identity_token_file": "/var/run/secrets/tokens/openai",
+                    },
+                    credential_info={"custom_llm_provider": "openai"},
+                )
+            ],
+        )
+        with (
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.prisma_client", _prisma_without_stored_credentials()
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.llms.openai.chat.gpt_transformation.OpenAIGPTConfig.discover_models",
+                return_value=["gpt-4o-mini"],
+            ) as discover_mock,
+        ):
+            result = await discover_provider_models(
+                data=ProviderModelDiscoveryRequest(custom_llm_provider="openai", litellm_credential_name="openai-wif"),
+                user_api_key_dict=self._admin(),
+            )
+        assert result.models == ["gpt-4o-mini"]
+        called_params = (
+            discover_mock.call_args.args[0]
+            if discover_mock.call_args.args
+            else discover_mock.call_args.kwargs["litellm_params"]
+        )
+        assert called_params["openai_identity_provider_id"] == "idp_1"
+        assert called_params["openai_identity_token_file"] == "/var/run/secrets/tokens/openai"
+        assert called_params.get("api_key") is None
+
+    @pytest.mark.asyncio
     async def test_discovery_failure_surfaces_a_sanitized_error_never_a_silent_empty_list(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             discover_provider_models,
@@ -5208,7 +5311,9 @@ class TestWifBoundaryReadsTheResultingDeployment:
             patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: proxy wiring under test
             patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy wiring under test
         ):
-            with pytest.raises(Exception, match="Only proxy admins can modify a deployment configured for Anthropic"):
+            with pytest.raises(
+                Exception, match="Only proxy admins can modify a deployment configured for workload identity"
+            ):
                 await patch_model(
                     model_id="m1",
                     patch_data=updateDeployment(
@@ -5258,7 +5363,9 @@ class TestWifBoundaryReadsTheResultingDeployment:
             patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: proxy wiring under test
             patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy wiring under test
         ):
-            with pytest.raises(Exception, match="Only proxy admins can modify a deployment configured for Anthropic"):
+            with pytest.raises(
+                Exception, match="Only proxy admins can modify a deployment configured for workload identity"
+            ):
                 await patch_model(
                     model_id="m1",
                     patch_data=updateDeployment(
@@ -5306,7 +5413,9 @@ class TestWifBoundaryReadsTheResultingDeployment:
             patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: proxy wiring under test
             patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy wiring under test
         ):
-            with pytest.raises(Exception, match="Only proxy admins can modify a deployment configured for Anthropic"):
+            with pytest.raises(
+                Exception, match="Only proxy admins can modify a deployment configured for workload identity"
+            ):
                 await patch_model(
                     model_id="m1",
                     patch_data=updateDeployment(

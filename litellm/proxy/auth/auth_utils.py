@@ -34,7 +34,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 from litellm.types.router import reject_server_owned_wif_params as _reject_server_owned_wif_params
-from litellm.types.utils import CustomPricingLiteLLMParams, anthropic_wif_litellm_params
+from litellm.types.utils import CustomPricingLiteLLMParams, server_owned_wif_litellm_params
 
 
 def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
@@ -227,7 +227,7 @@ def _allow_model_level_clientside_configurable_parameters(
 # ``extra_body.aws_web_identity_token``) without re-validating, so the
 # banned-key check has to descend into it the same way it descends into
 # ``litellm_embedding_config``.
-_ANTHROPIC_WIF_UNCONDITIONAL_BANNED: Final[tuple[str, ...]] = anthropic_wif_litellm_params
+_SERVER_OWNED_WIF_UNCONDITIONAL_BANNED: Final[tuple[str, ...]] = server_owned_wif_litellm_params
 # The Bedrock Claude Platform route reads a workspace from workspace_id or aws_workspace_id as
 # well, and neither is a federation parameter, so say so rather than leaving that caller stuck.
 

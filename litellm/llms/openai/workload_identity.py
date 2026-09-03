@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, Final
@@ -44,6 +45,7 @@ class OpenAIWorkloadIdentityConfig:
 def resolve_openai_workload_identity_config(
     api_key: str | None,
     api_base: str | None,
+    litellm_params: Mapping[str, object] | None = None,
 ) -> OpenAIWorkloadIdentityConfig | None:
     static_api_key: Final = normalize_nonempty_secret_str(api_key) or normalize_nonempty_secret_str(
         get_secret_str("OPENAI_API_KEY")
@@ -55,10 +57,12 @@ def resolve_openai_workload_identity_config(
     )
     if not _targets_openai_api(effective_api_base):
         return None
-    identity_provider_id: Final = get_secret_str("OPENAI_IDENTITY_PROVIDER_ID")
-    service_account_id: Final = get_secret_str("OPENAI_SERVICE_ACCOUNT_ID")
-    token_file: Final = get_secret_str("OPENAI_IDENTITY_TOKEN_FILE")
-    if not identity_provider_id or not service_account_id or not token_file:
+    identity_provider_id: Final = _config_value(
+        litellm_params, "openai_identity_provider_id", "OPENAI_IDENTITY_PROVIDER_ID"
+    )
+    service_account_id: Final = _config_value(litellm_params, "openai_service_account_id", "OPENAI_SERVICE_ACCOUNT_ID")
+    token_file: Final = _config_value(litellm_params, "openai_identity_token_file", "OPENAI_IDENTITY_TOKEN_FILE")
+    if identity_provider_id is None or service_account_id is None or token_file is None:
         return None
     return OpenAIWorkloadIdentityConfig(
         identity_provider_id=identity_provider_id,
@@ -69,6 +73,13 @@ def resolve_openai_workload_identity_config(
 
 def get_workload_identity_bearer_token(config: OpenAIWorkloadIdentityConfig) -> str:
     return _workload_identity_auth(config).get_token()
+
+
+def _config_value(litellm_params: Mapping[str, object] | None, param_key: str, env_name: str) -> str | None:
+    param_value: Final = litellm_params.get(param_key) if litellm_params is not None else None
+    if isinstance(param_value, str) and param_value:
+        return param_value
+    return normalize_nonempty_secret_str(get_secret_str(env_name))
 
 
 def _targets_openai_api(api_base: str | None) -> bool:

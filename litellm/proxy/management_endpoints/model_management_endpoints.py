@@ -56,7 +56,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     publish_config_change,
 )
 from litellm.proxy.common_utils.credential_hydration import (
-    effective_anthropic_wif_fields,
+    effective_server_owned_wif_fields,
     hydrate_named_credential,
     hydrate_named_credential_authoritative,
 )
@@ -1592,13 +1592,13 @@ class ModelManagementAuthChecks:
         if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             return
         stored: Final = model_params.litellm_params.model_dump(exclude_none=True)
-        wif_fields: Final = await effective_anthropic_wif_fields(stored, incoming_params, prisma_client)
+        wif_fields: Final = await effective_server_owned_wif_fields(stored, incoming_params, prisma_client)
         if wif_fields:
             # ProxyException rather than HTTPException so the offending field stays a structured
             # `param`, which is the contract the narrower gate this replaced already published.
             raise ProxyException(
                 message=(
-                    f"Only proxy admins can modify a deployment configured for Anthropic workload identity "
+                    f"Only proxy admins can modify a deployment configured for workload identity "
                     f"federation ({wif_fields[0]!r})."
                 ),
                 type=ProxyErrorTypes.auth_error.value,

@@ -33,7 +33,7 @@ from litellm.proxy.common_utils.credential_hydration import (
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.credentials_repository import CredentialsRepository
-from litellm.types.router import anthropic_wif_fields_named
+from litellm.types.router import server_owned_wif_fields_named
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
 router: Final = APIRouter()
@@ -67,13 +67,13 @@ def _incoming_wif_fields(credential: CredentialItem) -> tuple[str, ...]:
     names in ``credential_values_to_delete``, since dropping a federation field off the stored
     credential breaks every deployment referencing it just as installing one would redirect them.
     """
-    return anthropic_wif_fields_named(credential.credential_values) + anthropic_wif_fields_named(
+    return server_owned_wif_fields_named(credential.credential_values) + server_owned_wif_fields_named(
         credential.credential_values_to_delete or ()
     )
 
 
 def _stored_wif_fields(stored_credential: CredentialItem) -> tuple[str, ...]:
-    return anthropic_wif_fields_named(stored_credential.credential_values)
+    return server_owned_wif_fields_named(stored_credential.credential_values)
 
 
 def _reject_overlapping_credential_values(credential: CredentialItem) -> None:
@@ -178,7 +178,7 @@ async def create_credential(
                 status_code=400,
                 detail="Credential values are required. Unable to infer credential values from model ID.",
             )
-        _reject_non_admin_wif_fields(anthropic_wif_fields_named(credential.credential_values), user_api_key_dict)
+        _reject_non_admin_wif_fields(server_owned_wif_fields_named(credential.credential_values), user_api_key_dict)
         _reject_non_admin_wif_fields(
             await named_credential_wif_fields(credential.credential_name, prisma_client), user_api_key_dict
         )

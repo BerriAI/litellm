@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 from openai import OpenAI
@@ -206,6 +207,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         aembedding=None,
         max_retries: int | None = None,
         shared_session=None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> EmbeddingResponse:
         """
         - Separate image url from text

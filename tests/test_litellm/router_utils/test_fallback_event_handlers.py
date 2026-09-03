@@ -1090,6 +1090,23 @@ async def test_a_stored_fallback_target_cannot_carry_a_federation_field():
 
 
 @pytest.mark.asyncio
+async def test_a_stored_fallback_target_cannot_carry_an_openai_federation_field():
+    """The OpenAI identity trio is server-owned for the same reason: a stored fallback target
+    naming a token file would pick which workload assertion is exchanged for the bearer."""
+    with pytest.raises(ValueError, match="openai_identity_token_file"):
+        await run_async_fallback(
+            litellm_router=FakeRouter(),
+            fallback_model_group=[
+                {"model": "openai-backup", "openai_identity_token_file": "/var/run/secrets/tokens/other"}
+            ],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("upstream limited request"),
+            max_fallbacks=3,
+            fallback_depth=0,
+        )
+
+
+@pytest.mark.asyncio
 async def test_the_refusal_is_not_swallowed_as_a_fallback_error():
     """Checked before the per-target loop on purpose: inside it, the refusal would be caught as
     that target's failure and the run would quietly continue to the next one."""

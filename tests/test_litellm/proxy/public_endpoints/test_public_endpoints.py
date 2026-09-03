@@ -1196,6 +1196,51 @@ def test_anthropic_provider_fields_expose_credential_variants():
             assert key in field_defs_by_key, f"variant {variant['id']} references undefined field {key}"
 
 
+def test_openai_provider_fields_expose_credential_variants():
+    """The OpenAI provider publishes an API-key variant and a workload-identity-federation
+    variant whose fields are the per-deployment identity trio, api_key not among them, while
+    the legacy credential_fields stays exactly api_base + organization + api_key."""
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    openai = next((p for p in providers if p["provider"] == "OpenAI"), None)
+    assert openai is not None
+
+    legacy_fields_by_key = {f["key"]: f for f in openai["credential_fields"]}
+    assert set(legacy_fields_by_key) == {"api_base", "organization", "api_key"}
+    assert legacy_fields_by_key["api_key"]["required"] is True
+
+    variants_block = openai["credential_variants"]
+    assert variants_block["default_variant"] == "api_key"
+    variants_by_id = {v["id"]: v for v in variants_block["variants"]}
+    assert set(variants_by_id) == {"api_key", "wif_token_file"}
+
+    field_defs_by_key = {f["key"]: f for f in variants_block["field_definitions"]}
+    assert "api_key" in variants_by_id["api_key"]["field_keys"]
+    assert field_defs_by_key["api_key"]["required"] is True
+
+    wif_field_keys = variants_by_id["wif_token_file"]["field_keys"]
+    assert "api_key" not in wif_field_keys
+    for wif_key in (
+        "openai_identity_provider_id",
+        "openai_service_account_id",
+        "openai_identity_token_file",
+    ):
+        assert wif_key in wif_field_keys
+        assert field_defs_by_key[wif_key]["required"] is True
+        assert field_defs_by_key[wif_key]["field_type"] == "text"
+    assert variants_by_id["wif_token_file"]["fixed_values"] == {}
+
+    for variant in variants_block["variants"]:
+        for key in variant["field_keys"]:
+            assert key in field_defs_by_key, f"variant {variant['id']} references undefined field {key}"
+
+
 def test_provider_fields_without_credential_variants_still_parse():
     """A provider with no credential_variants block (the overwhelming majority) must keep
     parsing with the field simply absent, so old dashboards that only read credential_fields
@@ -1208,9 +1253,9 @@ def test_provider_fields_without_credential_variants_still_parse():
     assert response.status_code == 200
     providers = response.json()
 
-    openai = next((p for p in providers if p["provider"] == "OpenAI"), None)
-    assert openai is not None
-    assert openai.get("credential_variants") is None
+    groq = next((p for p in providers if p["provider"] == "Groq"), None)
+    assert groq is not None
+    assert groq.get("credential_variants") is None
 
 
 def test_credential_variants_rejects_optional_field_keys_the_variant_does_not_mount():
