@@ -10,6 +10,7 @@ All /team management endpoints
 """
 
 import asyncio
+import copy
 import json
 import math
 import traceback
@@ -2188,6 +2189,26 @@ async def update_team(
             ]
             if field in updated_kv
         }
+
+        _writes_metadata_backed_field: Final = any(
+            field in updated_kv
+            for field in (
+                *LiteLLM_ManagementEndpoint_MetadataFields,
+                *LiteLLM_ManagementEndpoint_MetadataFields_Premium,
+            )
+        )
+        if isinstance(existing_team_row.metadata, dict):
+            if "metadata" not in updated_kv and (_team_member_fields_in_request or _writes_metadata_backed_field):
+                updated_kv["metadata"] = copy.deepcopy(existing_team_row.metadata)
+            elif isinstance(updated_kv.get("metadata"), dict):
+                updated_kv["metadata"] = {
+                    **updated_kv["metadata"],
+                    **{
+                        key: existing_team_row.metadata[key]
+                        for key in TeamMemberBudgetHandler.SYSTEM_MANAGED_METADATA_KEYS
+                        if key in existing_team_row.metadata
+                    },
+                }
 
         if _team_member_fields_in_request and TeamMemberBudgetHandler.should_create_budget(
             team_member_budget=data.team_member_budget,

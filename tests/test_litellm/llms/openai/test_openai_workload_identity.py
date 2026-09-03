@@ -97,22 +97,30 @@ class TestResolveConfig:
     def test_plaintext_http_api_base_disables(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
         assert resolve_openai_workload_identity_config(api_key=None, api_base="http://api.openai.com/v1") is None
 
-    @pytest.mark.parametrize("regional_host", ("eu.api.openai.com", "us.api.openai.com"))
-    def test_regional_openai_api_base_allows(
-        self, wif_env: OpenAIWorkloadIdentityConfig, regional_host: str
-    ) -> None:
-        assert (
-            resolve_openai_workload_identity_config(api_key=None, api_base=f"https://{regional_host}/v1") == wif_env
-        )
+    @pytest.mark.parametrize(
+        "api_base",
+        (
+            "https://southcentralus.privatelink.api.openai.com/v1",
+            "https://eu.api.openai.com/v1",
+            "https://us.api.openai.com/v1",
+        ),
+    )
+    def test_openai_backed_api_base_allows(self, wif_env: OpenAIWorkloadIdentityConfig, api_base: str) -> None:
+        assert resolve_openai_workload_identity_config(api_key=None, api_base=api_base) == wif_env
 
     @pytest.mark.parametrize(
-        "lookalike_base",
-        ("https://api.openai.com.evil.example/v1", "https://openai.com/v1", "https://euapi.openai.com/v1"),
+        "api_base",
+        (
+            "https://api.openai.com.evil.example/v1",
+            "https://openai.com/v1",
+            "https://euapi.openai.com/v1",
+            "http://southcentralus.privatelink.api.openai.com/v1",
+        ),
     )
-    def test_openai_lookalike_api_base_disables(
-        self, wif_env: OpenAIWorkloadIdentityConfig, lookalike_base: str
+    def test_lookalike_or_plaintext_api_base_disables(
+        self, wif_env: OpenAIWorkloadIdentityConfig, api_base: str
     ) -> None:
-        assert resolve_openai_workload_identity_config(api_key=None, api_base=lookalike_base) is None
+        assert resolve_openai_workload_identity_config(api_key=None, api_base=api_base) is None
 
     def test_foreign_env_base_url_disables(
         self, wif_env: OpenAIWorkloadIdentityConfig, monkeypatch: pytest.MonkeyPatch
@@ -184,6 +192,14 @@ class TestClientConstruction:
     def test_async_client_uses_workload_identity(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
         client: Final = OpenAIChatCompletion()._get_openai_client(is_async=True, api_key=None, api_base=None)
         assert isinstance(client, AsyncOpenAI)
+        assert client.api_key == "workload-identity-auth"
+        assert client._workload_identity_auth is not None
+
+    def test_privatelink_client_uses_workload_identity(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
+        client: Final = OpenAIChatCompletion()._get_openai_client(
+            is_async=False, api_key=None, api_base="https://southcentralus.privatelink.api.openai.com/v1"
+        )
+        assert isinstance(client, OpenAI)
         assert client.api_key == "workload-identity-auth"
         assert client._workload_identity_auth is not None
 
@@ -259,6 +275,16 @@ class TestResponsesValidateEnvironment:
             litellm_params=GenericLiteLLMParams(api_base="https://my-vllm.internal/v1"),
         )
         assert headers["Authorization"] == "Bearer None"
+
+    @respx.mock
+    def test_privatelink_api_base_mints_bearer(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
+        mock_token_exchange()
+        headers: Final = OpenAIResponsesAPIConfig().validate_environment(
+            headers={},
+            model="gpt-4o-mini",
+            litellm_params=GenericLiteLLMParams(api_base="https://southcentralus.privatelink.api.openai.com/v1"),
+        )
+        assert headers["Authorization"] == "Bearer exchanged-bearer-token"
 
     def test_litellm_proxy_subclass_never_mints_wif(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
         headers: Final = LiteLLMProxyResponsesAPIConfig().validate_environment(
