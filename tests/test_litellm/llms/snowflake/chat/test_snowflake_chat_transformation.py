@@ -445,6 +445,42 @@ class TestSnowflakeCortexClaudeFixes:
             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "ZmFrZQ=="}}
         ]
 
+    def test_tool_result_preserves_cache_control(self):
+        """A cache breakpoint the bridge puts on a tool message must survive onto the tool_result."""
+        for tool_content in ("done", [{"type": "text", "text": "done"}]):
+            body = self._transform(
+                [
+                    {"role": "user", "content": "look"},
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_1",
+                        "content": tool_content,
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    },
+                ]
+            )
+            tool_result = body["messages"][1]["content"][0]
+            assert tool_result["cache_control"] == {"type": "ephemeral"}, tool_content
+
+    def test_pdf_data_uri_becomes_a_document_block(self):
+        """A bridged pdf data URI is a document block; forwarding it as an image is malformed."""
+        body = self._transform(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": "data:application/pdf;base64,ZmFrZQ=="}},
+                    ],
+                }
+            ]
+        )
+        assert body["messages"][0]["content"] == [
+            {
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": "ZmFrZQ=="},
+            }
+        ]
+
     def test_multipart_tool_result_preserves_text_and_converts_image(self):
         body = self._transform(
             [

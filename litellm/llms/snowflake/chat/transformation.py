@@ -9,6 +9,7 @@ Ref: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-rest-api
 """
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 
@@ -16,8 +17,10 @@ import httpx
 from typing_extensions import ReadOnly
 
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    convert_to_anthropic_image_obj,
+    anthropic_process_openai_file_message,
     convert_to_anthropic_tool_result,
+    create_anthropic_image_param,
+    select_anthropic_content_block_type_for_file,
 )
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
@@ -101,33 +104,44 @@ def _is_claude_model(model: str) -> bool:
     return any(name.startswith(p) for p in _CLAUDE_MODEL_PREFIXES)
 
 
-def _convert_image_url_to_anthropic(block: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: JSON wire block
+def _convert_image_url_to_anthropic(block: Mapping[str, object]) -> object:
+    """One OpenAI ``image_url`` block in the native shape Cortex accepts.
+
+    Cortex documents base64 sources only, so remote URLs are inlined the way every
+    other base64-only Anthropic dialect (Bedrock invoke, Vertex) inlines them, and
+    pdf/text data URIs become document blocks rather than malformed image blocks.
+    """
     image_url: Final = block.get("image_url")
-    image_url_dict: Final = image_url if isinstance(image_url, dict) else {}  # mutable-ok: JSON input view
-    image_url_value: Final = image_url if isinstance(image_url, str) else image_url_dict.get("url", "")
-    image_format_value: Final = image_url_dict.get("format")
-    image_format: Final = image_format_value if isinstance(image_format_value, str) else None
-    if not isinstance(image_url_value, str) or not image_url_value:
-        return dict(block)  # mutable-ok: JSON wire block
+    url: Final = image_url if isinstance(image_url, str) else _image_url_field(image_url, "url")
+    if not url:
+        return block
 
-    image: Final = convert_to_anthropic_image_obj(openai_image_url=image_url_value, format=image_format)
+    converted: Final = (
+        anthropic_process_openai_file_message({"type": "file", "file": {"file_data": url}})
+        if select_anthropic_content_block_type_for_file(_data_uri_media_type(url)) == "document"
+        else create_anthropic_image_param(
+            image_url if isinstance(image_url, dict) else url,  # mutable-ok: caller's JSON block
+            format=_image_url_field(image_url, "format"),
+            is_bedrock_invoke=True,
+        )
+    )
     cache_control: Final = block.get("cache_control")
-    converted: Final[dict[str, object]] = {  # mutable-ok: JSON wire block
-        "type": "image",
-        "source": {  # mutable-ok: JSON wire source
-            "type": "base64",
-            "media_type": image["media_type"],
-            "data": image["data"],
-        },
-    }
-    return (
-        {**converted, "cache_control": cache_control}
-        if cache_control is not None
-        else converted  # mutable-ok: JSON wire block
-    )  # mutable-ok: JSON wire block
+    if cache_control is None:
+        return converted
+    return {**converted, "cache_control": cache_control}  # mutable-ok: JSON wire block
 
 
-def _convert_image_url_blocks_to_anthropic(content: object) -> object:  # mutable-ok: JSON wire blocks
+def _image_url_field(image_url: object, key: str) -> str | None:
+    value: Final = image_url.get(key) if isinstance(image_url, dict) else None
+    return value if isinstance(value, str) else None
+
+
+def _data_uri_media_type(url: str) -> str:
+    match: Final = re.match(r"data:([^;,]+)", url)
+    return match.group(1) if match else ""
+
+
+def _convert_image_url_blocks_to_anthropic(content: object) -> object:
     if not isinstance(content, list):
         return content
     return [  # mutable-ok: JSON wire blocks
@@ -138,20 +152,29 @@ def _convert_image_url_blocks_to_anthropic(content: object) -> object:  # mutabl
     ]
 
 
-def _convert_tool_result_content_to_anthropic(content: object, tool_call_id: str) -> object:
-    if isinstance(content, str):
-        return content
+def _convert_tool_result_to_anthropic(
+    content: object, tool_call_id: str, cache_control: object
+) -> Mapping[str, object]:
+    """The Anthropic ``tool_result`` block for one OpenAI tool message.
+
+    Delegating to the shared converter keeps image, document and per-block cache
+    breakpoints identical to every other Anthropic dialect; only the plain-string
+    and non-list shapes it does not model are handled here.
+    """
     if not isinstance(content, list):
-        return json.dumps(content)
-    tool_message: Final = ChatCompletionToolMessage(
-        role="tool",
-        tool_call_id=tool_call_id,
-        content=content,
+        plain: Final[dict[str, object]] = {  # mutable-ok: JSON wire block
+            "type": "tool_result",
+            "tool_use_id": tool_call_id,
+            "content": content if isinstance(content, str) else json.dumps(content),
+        }
+        return {**plain, "cache_control": cache_control} if cache_control is not None else plain
+    converted: Final = convert_to_anthropic_tool_result(
+        ChatCompletionToolMessage(role="tool", tool_call_id=tool_call_id, content=content),
+        force_base64=True,
     )
-    tool_result: Final = convert_to_anthropic_tool_result(
-        tool_message, force_base64=True
-    )  # cast-ok: validated tool message
-    return tool_result.get("content", "")
+    if cache_control is None:
+        return converted
+    return {**converted, "cache_control": cache_control}  # mutable-ok: JSON wire block
 
 
 def _clean_input_schema(schema: object) -> object:  # mutable-ok: JSON schema copy
@@ -279,9 +302,11 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             if isinstance(msg, dict):
                 role = msg.get("role", "")
                 content: Any = msg.get("content", "")
+                msg_cache_control: object = msg.get("cache_control")
             else:
                 role = getattr(msg, "role", "")
                 content = getattr(msg, "content", "")
+                msg_cache_control = getattr(msg, "cache_control", None)
 
             if role == "system":
                 if isinstance(content, str) and content:
@@ -333,12 +358,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 tool_call_id = (
                     tool_call_id_value if isinstance(tool_call_id_value, str) else ""
                 )  # rebind-ok: normalized loop value
-                tool_content = _convert_tool_result_content_to_anthropic(content, tool_call_id)
-                tool_result_block = {  # mutable-ok: JSON wire block
-                    "type": "tool_result",
-                    "tool_use_id": tool_call_id,
-                    "content": tool_content,
-                }
+                tool_result_block = _convert_tool_result_to_anthropic(content, tool_call_id, msg_cache_control)
                 if (
                     conversation
                     and conversation[-1]["role"] == "user"
