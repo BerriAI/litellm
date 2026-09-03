@@ -172,6 +172,13 @@ def is_index_only_migration(migration_sql: str) -> bool:
     )
 
 
+def _skip_not_recorded(migration_name: str, detail: str) -> RuntimeError:
+    return RuntimeError(
+        f"{SKIP_INDEX_MIGRATIONS_ENV_VAR}: prisma migrate resolve --applied {migration_name} failed, "
+        f"so boot stops rather than build its indexes.\n\nDetail: {detail}"
+    )
+
+
 def index_names_created_by(migration_sql: str) -> frozenset[str]:
     return frozenset(
         match.group(1)
@@ -731,10 +738,9 @@ class ProxyExtrasDBManager:
             except subprocess.CalledProcessError as e:
                 if "is already recorded as applied in the database." in (e.stderr or ""):
                     continue
-                raise RuntimeError(
-                    f"{SKIP_INDEX_MIGRATIONS_ENV_VAR}: prisma migrate resolve --applied {name} failed, "
-                    f"so boot stops rather than build its indexes.\n\nDetail: {e.stderr}"
-                ) from e
+                raise _skip_not_recorded(name, e.stderr or "") from e
+            except subprocess.TimeoutExpired as e:
+                raise _skip_not_recorded(name, f"timed out after {e.timeout}s") from e
 
     @staticmethod
     def _warn_skip_ignored_under_db_push(migrations_dir: str) -> None:

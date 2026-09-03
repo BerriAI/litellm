@@ -886,7 +886,9 @@ _INDEX_ONLY_MIGRATION_SQL = (
 )
 _OTHER_INDEX_ONLY_MIGRATION = "20260826000000_add_team_alias_index"
 _OTHER_INDEX_NAME = "LiteLLM_TeamTable_team_alias_idx"
-_OTHER_INDEX_ONLY_MIGRATION_SQL = f'CREATE INDEX IF NOT EXISTS "{_OTHER_INDEX_NAME}" ON "LiteLLM_TeamTable"("team_alias");\n'
+_OTHER_INDEX_ONLY_MIGRATION_SQL = (
+    f'CREATE INDEX IF NOT EXISTS "{_OTHER_INDEX_NAME}" ON "LiteLLM_TeamTable"("team_alias");\n'
+)
 _COLUMN_MIGRATION = "20260824000000_add_budget_updated_by"
 _COLUMN_MIGRATION_SQL = '-- AlterTable\nALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN "updated_by" TEXT;\n'
 _MIXED_MIGRATION = "20260825000000_add_widget_table"
@@ -910,6 +912,12 @@ _DRIFT_WITH_HISTORICAL_INDEX_SQL = (
     'ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN     "updated_by" TEXT;\n\n'
     "-- CreateIndex\n"
     f'CREATE INDEX "{_OTHER_INDEX_NAME}" ON "LiteLLM_TeamTable"("team_alias");\n'
+)
+_DRIFT_DROPPING_SKIPPED_INDEX_SQL = (
+    "-- DropIndex\n"
+    f'DROP INDEX "{_SKIPPED_INDEX_NAME}";\n\n'
+    "-- AlterTable\n"
+    'ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN     "updated_by" TEXT;\n'
 )
 
 
@@ -1016,12 +1024,12 @@ class TestSkippedIndexDriftFilter:
         assert 'CREATE INDEX "LiteLLM_SpendLogs_session_id_idx"' in filtered
 
     def test_nothing_to_skip_leaves_the_script_byte_identical(self):
-        assert filter_skipped_index_statements(_DRIFT_WITH_SKIPPED_INDEX_SQL, frozenset()) == _DRIFT_WITH_SKIPPED_INDEX_SQL
+        unfiltered = filter_skipped_index_statements(_DRIFT_WITH_SKIPPED_INDEX_SQL, frozenset())
+        assert unfiltered == _DRIFT_WITH_SKIPPED_INDEX_SQL
 
     def test_a_script_that_is_only_the_skipped_index_becomes_empty(self):
-        assert (
-            filter_skipped_index_statements(_ONLY_SKIPPED_INDEX_DRIFT_SQL, frozenset({_SKIPPED_INDEX_NAME})).strip() == ""
-        )
+        only_skipped = filter_skipped_index_statements(_ONLY_SKIPPED_INDEX_DRIFT_SQL, frozenset({_SKIPPED_INDEX_NAME}))
+        assert only_skipped.strip() == ""
 
 
 class TestResolveAllMigrationsHonorsSkippedIndexes:
@@ -1091,6 +1099,13 @@ class TestResolveAllMigrationsHonorsSkippedIndexes:
         with caplog.at_level("INFO", logger="litellm_proxy_extras"):
             self._run(monkeypatch, tmp_path, _PARTITIONED_DRIFT_SQL)
         assert not any("removed the index statements" in r.message for r in caplog.records)
+
+    def test_the_log_names_a_skipped_index_that_is_only_dropped(self, monkeypatch, tmp_path, caplog):
+        with caplog.at_level("INFO", logger="litellm_proxy_extras"):
+            self._run(monkeypatch, tmp_path, _DRIFT_DROPPING_SKIPPED_INDEX_SQL)
+        assert any(
+            f"removed the index statements for {_SKIPPED_INDEX_NAME} from" in r.message for r in caplog.records
+        )
 
 
 class _V2SkipHarness:
@@ -1179,7 +1194,10 @@ class TestV2RecordsSkippedIndexMigrationsBeforeDeploy:
         harness.resolve_error = subprocess_module.CalledProcessError(
             1,
             ["prisma", "migrate", "resolve"],
-            stderr=f"Error: P3008\n\nThe migration `{_INDEX_ONLY_MIGRATION}` is already recorded as applied in the database.\n",
+            stderr=(
+                f"Error: P3008\n\nThe migration `{_INDEX_ONLY_MIGRATION}` "
+                "is already recorded as applied in the database.\n"
+            ),
         )
         assert harness.run() is True
         assert harness.events == [
@@ -1198,6 +1216,16 @@ class TestV2RecordsSkippedIndexMigrationsBeforeDeploy:
             1, ["prisma", "migrate", "resolve"], stderr="Error: P1001\n\nCan't reach database server\n"
         )
         with pytest.raises(RuntimeError, match="migrate resolve --applied"):
+            harness.run()
+        assert harness.events == [("resolve", _INDEX_ONLY_MIGRATION)]
+
+    def test_a_resolve_timeout_stops_boot_before_deploy(self, monkeypatch, tmp_path):
+        import subprocess as subprocess_module
+
+        _skip_index_migrations(monkeypatch, tmp_path)
+        harness = _V2SkipHarness(monkeypatch, tmp_path, ["ok"], [_ledger()])
+        harness.resolve_error = subprocess_module.TimeoutExpired(["prisma", "migrate", "resolve"], 60)
+        with pytest.raises(RuntimeError, match=r"(?s)migrate resolve --applied .*timed out after 60s"):
             harness.run()
         assert harness.events == [("resolve", _INDEX_ONLY_MIGRATION)]
 
@@ -1255,6 +1283,19 @@ class TestV1RecordsSkippedIndexMigrationsBeforeDeploy:
             ProxyExtrasDBManager._run_migrations(use_migrate=True, use_v2_resolver=False)
         assert commands == [["migrate", "resolve", "--applied", _INDEX_ONLY_MIGRATION]]
 
+    def test_a_resolve_timeout_stops_boot_before_deploy(self, monkeypatch, tmp_path):
+        import subprocess as subprocess_module
+
+        commands = self._arrange(
+            monkeypatch,
+            tmp_path,
+            env_set=True,
+            resolve_error=subprocess_module.TimeoutExpired(["prisma", "migrate", "resolve"], 60),
+        )
+        with pytest.raises(RuntimeError, match=r"(?s)migrate resolve --applied .*timed out after 60s"):
+            ProxyExtrasDBManager._run_migrations(use_migrate=True, use_v2_resolver=False)
+        assert commands == [["migrate", "resolve", "--applied", _INDEX_ONLY_MIGRATION]]
+
 
 class TestSkipUnderDbPush:
     def test_v2_db_push_warns_that_the_skip_has_no_effect(self, monkeypatch, tmp_path, caplog):
@@ -1309,7 +1350,9 @@ def _fake_psycopg(rows=(), undefined_table=False, connect_error=False, executed=
     def connect(*args, **kwargs):
         if connect_error:
             raise OperationalError("unreachable")
-        return _FakeLedgerConn(list(rows), UndefinedTable if undefined_table else None, executed if executed is not None else [])
+        return _FakeLedgerConn(
+            list(rows), UndefinedTable if undefined_table else None, executed if executed is not None else []
+        )
 
     module.errors = types.SimpleNamespace(UndefinedTable=UndefinedTable)
     module.OperationalError = OperationalError
