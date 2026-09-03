@@ -138,6 +138,7 @@ export interface BuildComplexityRouterConfigParams {
   tierModelParams?: TierModelParamsByTier;
   enableContextWindowEscalation?: boolean;
   contextWindowEscalationBuffer?: number;
+  autoSetup?: AutoSetupConfigPayload;
 }
 
 /**
@@ -196,6 +197,33 @@ export interface ComplexityRouterConfigPayload {
   enable_context_window_escalation?: boolean;
   context_window_escalation_buffer?: number;
   tier_model_configs?: Record<string, { model_name: string; litellm_params: TierModelParams }[]>;
+  auto_setup?: AutoSetupConfigPayload;
+}
+
+export type AutoSetupQualityLevel = "economy" | "balanced" | "high" | "max";
+export type AutoSetupObjective = "cost" | "task_completion_speed" | "balanced";
+
+export interface AutoSetupCandidatePayload {
+  model_name: string;
+  benchmark_model_id: string;
+  quality_lower_bound: number;
+  cost_per_completed_task_usd: number;
+}
+
+export interface AutoSetupTierPolicyPayload {
+  selection_mode: "snapshot_ranked" | "runtime_response_latency";
+  candidates: AutoSetupCandidatePayload[];
+  cold_start_model?: string | null;
+  evidence_status: string;
+}
+
+export interface AutoSetupConfigPayload {
+  schema_version: "1";
+  snapshot_id: string;
+  snapshot_sha256: string;
+  quality_level: AutoSetupQualityLevel;
+  optimize_for: AutoSetupObjective;
+  tier_policies: Record<string, AutoSetupTierPolicyPayload>;
 }
 
 export const serializeTierLabels = (tierLabels: ComplexityTierLabels | undefined): ComplexityTierLabels | undefined => {
@@ -456,6 +484,7 @@ export const buildComplexityRouterConfig = ({
   tierModelParams,
   enableContextWindowEscalation,
   contextWindowEscalationBuffer,
+  autoSetup,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
   const serializedTierModelConfigs = customTierSet
     ? serializeTierModelConfigs(
@@ -522,6 +551,7 @@ export const buildComplexityRouterConfig = ({
     ...(contextWindowEscalationBuffer !== undefined && {
       context_window_escalation_buffer: contextWindowEscalationBuffer,
     }),
+    ...(autoSetup && { auto_setup: autoSetup }),
     ...scorerKnobs,
   };
   if (!customTierSet) return payload;

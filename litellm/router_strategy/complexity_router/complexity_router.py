@@ -1322,6 +1322,13 @@ class ComplexityRouter(CustomLogger):
         if tier is not None:
             tier_name: Final = _tier_name(tier)
             decision["tier"] = tier_name
+            if self.config.auto_setup is not None:
+                auto_policy: Final = self.config.auto_setup.tier_policies.get(tier_name)
+                if auto_policy is not None:
+                    decision["auto_setup_snapshot_id"] = self.config.auto_setup.snapshot_id
+                    decision["auto_setup_quality_level"] = self.config.auto_setup.quality_level
+                    decision["auto_setup_optimize_for"] = self.config.auto_setup.optimize_for
+                    decision["auto_setup_selection_mode"] = auto_policy.selection_mode
             if not self.config.has_custom_tiers:
                 label = self.config.tier_label(ComplexityTier(tier_name))
                 if label != tier_name:
@@ -1815,6 +1822,37 @@ class ComplexityRouter(CustomLogger):
             raise ValueError(f"Empty model pool for tier {tier_key}")
         return random.choice(model)
 
+    async def _pick_from_auto_setup_policy(self, tier_key: str, pool: Sequence[str]) -> str | None:
+        setup: Final = self.config.auto_setup
+        if setup is None:
+            return None
+        policy: Final = setup.tier_policies.get(tier_key)
+        if policy is None:
+            return None
+        available: Final = tuple(dict.fromkeys(pool))
+        if not available:
+            raise ValueError(f"No models configured for tier {tier_key}")
+        ranked: Final = tuple(
+            candidate.model_name for candidate in policy.candidates if candidate.model_name in frozenset(available)
+        )
+        if policy.selection_mode == "snapshot_ranked":
+            return ranked[0] if ranked else available[0]
+
+        from .response_latency import select_runtime_response_model
+
+        cold_start: Final = policy.cold_start_model
+        if cold_start is None:
+            raise ValueError(f"Auto setup runtime response-latency policy for {tier_key} has no cold-start model")
+        return await select_runtime_response_model(
+            router_cache=self.litellm_router_instance.cache,
+            router_model_name=self.model_name,
+            tier=tier_key,
+            candidates=policy.candidates,
+            available_models=available,
+            cold_start_model=cold_start,
+            objective=setup.optimize_for,
+        )
+
     def _tier_pools(self) -> dict[str, list[str]]:
         return {tier: (models if isinstance(models, list) else [models]) for tier, models in self.config.tiers.items()}
 
@@ -1826,17 +1864,25 @@ class ComplexityRouter(CustomLogger):
         request_kwargs: dict,
         allowed_models: tuple[str, ...] | None = None,
     ) -> str:
+        tier_key = _tier_name(tier)
         if not self.config.plugins:
-            if allowed_models is not None:
-                return self._pick_from_tier_value(allowed_models, _tier_name(tier))
-            return self.get_model_for_tier(tier)
+            configured = self.config.tiers.get(tier_key)
+            if configured is None:
+                return self.get_model_for_tier(tier)
+            full_pool = (configured,) if isinstance(configured, str) else tuple(configured)
+            pool = (
+                tuple(model for model in full_pool if model in allowed_models)
+                if allowed_models is not None
+                else full_pool
+            )
+            auto_pick: Final = await self._pick_from_auto_setup_policy(tier_key, pool)
+            return auto_pick if auto_pick is not None else self._pick_from_tier_value(pool, tier_key)
 
         from litellm.types.router import RoutingContext
 
-        tier_key: Final = _tier_name(tier)
         metadata_key: Final = get_metadata_variable_name_from_kwargs(request_kwargs)
-        full_pool: Final = tuple(self._tier_pools().get(tier_key, ()))
-        pool: Final = (
+        full_pool = tuple(self._tier_pools().get(tier_key, ()))
+        pool = (
             tuple(model for model in full_pool if model in allowed_models) if allowed_models is not None else full_pool
         )
         if not pool:
@@ -1860,7 +1906,8 @@ class ComplexityRouter(CustomLogger):
             # silently bypassed. Raise instead, matching the Router-level plugin
             # pipeline's own fail-closed behavior for the same situation.
             raise ValueError(f"No candidate models left for tier {tier_key} after routing-plugin filtering")
-        return self._pick_from_tier_value(context.candidate_models, tier_key)
+        auto_pick: Final = await self._pick_from_auto_setup_policy(tier_key, context.candidate_models)
+        return auto_pick if auto_pick is not None else self._pick_from_tier_value(context.candidate_models, tier_key)
 
     def _ensure_adaptive_router(self) -> Any | None:
         if not self.config.adaptive:

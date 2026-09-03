@@ -9,7 +9,11 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
-from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
+from litellm.router_strategy.complexity_router.config import (
+    AutoSetupObjective,
+    AutoSetupQualityLevel,
+    ComplexityRouterConfig,
+)
 from litellm.types.utils import StandardLoggingRoutingDecision
 
 DEFAULT_ROUTING_TEST_ROUTER_NAME: Final[str] = "auto_router_routing_test"
@@ -42,6 +46,17 @@ class ComplexityRouterConfigValidationRequest(BaseModel):
 class ComplexityRouterConfigValidationResponse(BaseModel):
     valid: bool
     error: str | None = None
+
+
+class AutoRouterRecommendationResponse(BaseModel):
+    """An editable complexity-router config generated from the caller's usable model groups."""
+
+    quality_level: AutoSetupQualityLevel
+    optimize_for: AutoSetupObjective
+    snapshot_id: str
+    snapshot_generated_at: str
+    matched_model_groups: tuple[str, ...]
+    complexity_router_config: RequestComplexityRouterConfig
 
 
 class AutoRouterRoutingTestRequest(BaseModel):

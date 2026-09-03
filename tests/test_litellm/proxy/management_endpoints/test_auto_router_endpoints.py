@@ -18,6 +18,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.management_endpoints.auto_router_endpoints import (
+    get_auto_router_recommendation,
     preview_auto_router_routing,
 )
 from litellm.router import Router
@@ -102,6 +103,51 @@ async def _route_body(body: Mapping[str, object], monkeypatch: pytest.MonkeyPatc
 
 async def _route(prompt: str, monkeypatch: pytest.MonkeyPatch, **config_overrides: object):
     return await _route_body({"prompt": prompt}, monkeypatch, **config_overrides)
+
+
+@pytest.mark.asyncio
+async def test_recommendation_uses_caller_groups_and_returns_an_editable_complexity_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.management_endpoints.auto_router_endpoints as endpoint_module
+    import litellm.proxy.utils as proxy_utils
+    from litellm.proxy import proxy_server
+
+    model_list = [
+        {
+            "model_name": "small-group",
+            "litellm_params": {"model": "gpt-5.4-nano", "api_key": "fake"},
+        },
+        {
+            "model_name": "smart-group",
+            "litellm_params": {"model": "gpt-5.6-sol", "api_key": "fake"},
+        },
+        {
+            "model_name": "unavailable-group",
+            "litellm_params": {"model": "gpt-5.5", "api_key": "fake"},
+        },
+    ]
+    monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=model_list))
+    available = AsyncMock(return_value=["small-group", "smart-group"])
+    monkeypatch.setattr(proxy_utils, "get_available_models_for_user", available)
+    authorize = AsyncMock()
+    monkeypatch.setattr(endpoint_module, "_authorize_router_dry_run", authorize)
+
+    response = await get_auto_router_recommendation(
+        user_api_key_dict=ADMIN,
+        quality_level="economy",
+        optimize_for="task_completion_speed",
+    )
+
+    authorize.assert_awaited_once_with(user_api_key_dict=ADMIN, team_id=None)
+    assert set(response.matched_model_groups) <= {"small-group", "smart-group"}
+    assert "unavailable-group" not in response.matched_model_groups
+    assert response.complexity_router_config.classifier_type == "heuristic_v2"
+    assert response.complexity_router_config.auto_setup is not None
+    assert response.complexity_router_config.auto_setup.optimize_for == "task_completion_speed"
+    assert response.complexity_router_config.auto_setup.tier_policies["SIMPLE"].selection_mode == (
+        "runtime_response_latency"
+    )
 
 
 AGENTIC_MESSAGES = [

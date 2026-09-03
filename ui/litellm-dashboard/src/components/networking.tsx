@@ -89,7 +89,11 @@ import type {
   CoordinationRedisTestResponse,
 } from "@/app/(dashboard)/caching/_components/coordination_redis_settings/types";
 import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
-import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity_router_config";
+import type {
+  AutoSetupObjective,
+  AutoSetupQualityLevel,
+  ComplexityRouterConfigPayload,
+} from "./add_model/build_complexity_router_config";
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
 import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
@@ -2415,6 +2419,30 @@ export interface AutoRouterRoutingTestRequest {
   router_name?: string;
   team_id?: string;
 }
+
+export interface AutoRouterRecommendationResponse {
+  quality_level: AutoSetupQualityLevel;
+  optimize_for: AutoSetupObjective;
+  snapshot_id: string;
+  snapshot_generated_at: string;
+  matched_model_groups: string[];
+  complexity_router_config: ComplexityRouterConfigPayload;
+}
+
+export const getAutoRouterRecommendation = async (
+  accessToken: string,
+  qualityLevel: AutoSetupQualityLevel,
+  optimizeFor: AutoSetupObjective,
+  teamId?: string,
+): Promise<AutoRouterRecommendationResponse> =>
+  await apiClient.get<AutoRouterRecommendationResponse>("/auto_router/recommendation", {
+    accessToken,
+    query: {
+      quality_level: qualityLevel,
+      optimize_for: optimizeFor,
+      ...(teamId ? { team_id: teamId } : {}),
+    },
+  });
 
 export interface AutoRouterRoutingTestResult {
   routed_model: string;

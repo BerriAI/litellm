@@ -68,6 +68,47 @@ still resolve to a deployment in `model_list`; this configuration does not creat
             - abc
 ```
 
+### Zero-setup Auto configuration
+
+The dashboard's Add Router flow can generate the four tiers from the model groups the
+current admin or team can actually use. Auto setup asks for two product choices:
+
+- Quality level: Economy, Balanced, High, or Max
+- Optimize for: Cost, Task completion speed, or Balanced
+
+The quality level is a gate, not an optimization weight. For every complexity tier,
+LiteLLM finds the best available model's conservative LiveBench quality score and admits
+only models within the selected maximum regret: 15 percentage points for Economy, 7 for
+Balanced, 3 for High, and 1 for Max. The objective then ranks only those admitted models.
+This means Max still sends trivial work to a smaller model when that model is within one
+point of the best available quality for trivial work.
+
+Cost is benchmark cost per completed task, not input or output token price. It is observed
+request dollars divided by quality-adjusted completed questions in the same complexity
+bucket, with partial benchmark credit counted as a fractional completion.
+
+Task completion speed uses two forms of evidence:
+
+- SIMPLE and MEDIUM tiers learn equal-output response time from this proxy's successful
+  requests: time to first token plus the time to generate the expected number of visible
+  output tokens. Reasoning tokens are excluded. The policy explores every quality-admitted
+  model twice before using a rolling seven-day sample
+- COMPLEX and REASONING tiers use retry-adjusted Terminal-Bench wall-clock time to a
+  successful task. Results are compared only inside the same agent and benchmark cohort
+  and fall back to cost when comparable speed evidence is unavailable
+
+Balanced minimizes the combined log-normalized cost and completion-time scores after the
+same quality gate. The recommendation stores its snapshot ID, objective, admitted models,
+and rank order directly in the router configuration, so the generated result is visible
+and editable. Changing a generated tier's model pool in the dashboard removes that Auto
+selection policy and returns the tier to normal manual pool selection.
+
+These rules apply only when a router is created through Auto setup. Existing routers,
+manual configurations, and LiteLLM's deployment-level latency routing are unchanged. The
+bundled benchmark data is a versioned snapshot: creating or regenerating a router uses the
+snapshot shipped with that LiteLLM version, while an already saved router keeps its stored
+policy.
+
 ### Heuristic v2
 
 Set `classifier_type: heuristic_v2` to classify with the bundled calibrated

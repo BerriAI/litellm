@@ -3,6 +3,7 @@ AUTO ROUTER MANAGEMENT ENDPOINTS
 
 POST /auto_router/test_routing - Route one request through an unsaved complexity-router config
 POST /auto_router/validate_complexity_router_config - Dry-run the complexity-router write gate without saving
+GET /auto_router/recommendation - Build an editable config from the caller's available model groups
 """
 
 from collections.abc import Mapping, Sequence
@@ -10,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby
 from operator import attrgetter
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, Protocol
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
@@ -52,6 +53,7 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterBenchmarkTotals,
     AutoRouterCacheBucket,
     AutoRouterCacheStats,
+    AutoRouterRecommendationResponse,
     AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
     ComplexityRouterConfigValidationRequest,
@@ -332,6 +334,117 @@ async def validate_complexity_router_config(
 
     error: Final = validate_complexity_router_config_write(data.complexity_router_config)
     return ComplexityRouterConfigValidationResponse(valid=error is None, error=error)
+
+
+def _available_model_refs(
+    llm_router: "Router", model_names: Sequence[str], team_id: str | None
+) -> Mapping[str, tuple[str, ...]]:
+    refs: Final[dict[str, tuple[str, ...]]] = {}
+    for model_name in model_names:
+        deployments = llm_router.get_model_list(model_name=model_name, team_id=team_id) or ()
+        resolved: list[str] = [model_name]
+        for raw_deployment in deployments:
+            deployment = cast(Mapping[str, object], raw_deployment)
+            litellm_params = deployment.get("litellm_params")
+            model_info = deployment.get("model_info")
+            if isinstance(litellm_params, Mapping):
+                typed_params = cast(Mapping[str, object], litellm_params)
+                resolved.extend(
+                    value
+                    for key in ("model", "base_model")
+                    if isinstance(value := typed_params.get(key), str) and value
+                )
+            if isinstance(model_info, Mapping):
+                base_model = cast(Mapping[str, object], model_info).get("base_model")
+                if isinstance(base_model, str) and base_model:
+                    resolved.append(base_model)
+        refs[model_name] = tuple(dict.fromkeys(resolved))
+    return MappingProxyType(refs)
+
+
+@router.get(
+    "/auto_router/recommendation",
+    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+    response_model=AutoRouterRecommendationResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_auto_router_recommendation(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    quality_level: Annotated[
+        Literal["economy", "balanced", "high", "max"],
+        Query(description="How close every admitted model must be to the best available quality score"),
+    ] = "balanced",
+    optimize_for: Annotated[
+        Literal["cost", "task_completion_speed", "balanced"],
+        Query(description="What to minimize after the selected quality gate is applied"),
+    ] = "balanced",
+    team_id: Annotated[str | None, Query(description="Team whose model access the recommendation must use")] = None,
+) -> AutoRouterRecommendationResponse:
+    """Build an editable four-tier router from only the model groups this caller can use."""
+
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+        user_model,
+    )
+    from litellm.proxy.utils import get_available_models_for_user
+    from litellm.router_strategy.complexity_router.auto_setup import (
+        build_auto_setup_config,
+        load_auto_router_snapshot,
+    )
+
+    await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=team_id)
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.no_llm_router.value},  # mutable-ok: HTTPException detail is JSON-shaped
+        )
+    available_models: Final = await get_available_models_for_user(
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+        general_settings=general_settings,
+        user_model=user_model,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        team_id=team_id,
+        user_api_key_cache=user_api_key_cache,
+    )
+    snapshot: Final = load_auto_router_snapshot()
+    try:
+        config: Final = build_auto_setup_config(
+            snapshot=snapshot,
+            available_model_refs=_available_model_refs(llm_router, available_models, team_id),
+            quality_level=quality_level,
+            optimize_for=optimize_for,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Could not build an Auto setup: {exc}"
+            },  # mutable-ok: HTTPException detail is JSON-shaped
+        ) from exc
+    matched: Final = tuple(
+        dict.fromkeys(
+            model
+            for tier_models in config.tiers.values()
+            for model in ((tier_models,) if isinstance(tier_models, str) else tier_models)
+        )
+    )
+    return AutoRouterRecommendationResponse(
+        quality_level=quality_level,
+        optimize_for=optimize_for,
+        snapshot_id=snapshot.snapshot_id,
+        snapshot_generated_at=snapshot.generated_at,
+        matched_model_groups=matched,
+        complexity_router_config=RequestComplexityRouterConfig.model_validate(
+            config.model_dump(mode="json", exclude_none=True)
+        ),
+    )
 
 
 @router.post(

@@ -2938,6 +2938,10 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     savings_baseline_model: str
     savings_baseline_deployment_id: str
     tier_litellm_params: Mapping[str, object]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    auto_setup_snapshot_id: str
+    auto_setup_quality_level: Literal["economy", "balanced", "high", "max"]
+    auto_setup_optimize_for: Literal["cost", "task_completion_speed", "balanced"]
+    auto_setup_selection_mode: Literal["snapshot_ranked", "runtime_response_latency"]
 
 
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
