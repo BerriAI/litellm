@@ -5,70 +5,90 @@ import {
   fusionConfigError,
   fusionModelPayload,
   parseFusionConfig,
-  presetFailureMode,
+  presetInvocation,
 } from "./fusionModelConfig";
 
 const validValue = (overrides: Partial<FusionFormValue> = {}): FusionFormValue => ({
   model_name: "fusion/coding",
   team_id: "",
-  panel_models: ["claude", "gpt"],
-  aggregator_model: "claude",
-  min_successful_panelists: 2,
+  outer_model: "outer",
+  panel_models: ["panel-a", "panel-b"],
+  analyst_model: "analyst",
+  invocation: "auto",
   panel_timeout_seconds: 120,
   max_candidate_chars: 12000,
-  on_quorum_failure: "fail",
+  max_completion_tokens: 16000,
+  temperature: 0,
+  reasoning_effort: "none",
+  search_tool_name: "",
+  max_tool_calls: 4,
   ...overrides,
 });
 
 describe("Fusion model configuration", () => {
-  it("maps the two user presets to explicit runtime behavior", () => {
-    expect(presetFailureMode("quality")).toBe("fail");
-    expect(presetFailureMode("resilient")).toBe("aggregator_only");
+  it("maps the simple presets to invocation behavior", () => {
+    expect(presetInvocation("auto")).toBe("auto");
+    expect(presetInvocation("always")).toBe("required");
   });
 
-  it("builds the model/new payload without harness or cross-turn state", () => {
+  it("builds the virtual model payload", () => {
     expect(fusionModelPayload(validValue(), false)).toEqual({
       model_name: "fusion/coding",
       litellm_params: {
         model: "fusion_router",
         fusion_router_config: {
-          panel_models: ["claude", "gpt"],
-          aggregator_model: "claude",
-          min_successful_panelists: 2,
+          outer_model: "outer",
+          panel_models: ["panel-a", "panel-b"],
+          analyst_model: "analyst",
+          invocation: "auto",
           panel_timeout_seconds: 120,
           max_candidate_chars: 12000,
-          on_quorum_failure: "fail",
+          max_completion_tokens: 16000,
+          temperature: 0,
+          reasoning_effort: "none",
+          max_tool_calls: 4,
         },
       },
       model_info: {},
     });
   });
 
-  it("includes team scope only when the caller is required to choose one", () => {
+  it("omits an analyst to mean same as outer and validates the panel", () => {
+    expect(
+      fusionModelPayload(validValue({ analyst_model: "" }), false).litellm_params.fusion_router_config,
+    ).not.toHaveProperty("analyst_model");
+    expect(fusionConfigError(validValue({ panel_models: [] }), false)).toMatch(/at least one/);
+    expect(
+      fusionConfigError(validValue({ panel_models: Array.from({ length: 9 }, (_, i) => `p-${i}`) }), false),
+    ).toMatch(/at most eight/);
+  });
+
+  it("includes team scope only when required", () => {
     expect(fusionModelPayload(validValue({ team_id: "team-1" }), true).model_info).toEqual({ team_id: "team-1" });
     expect(fusionConfigError(validValue(), true)).toBe("Select a team to continue.");
   });
 
-  it("rejects undersized panels and impossible quorums", () => {
-    expect(fusionConfigError(validValue({ panel_models: ["one"] }), false)).toMatch(/at least two/);
-    expect(fusionConfigError(validValue({ min_successful_panelists: 3 }), false)).toMatch(/panel size/);
-  });
-
-  it("parses stored configs defensively and supplies stable defaults", () => {
+  it("parses stored configs defensively", () => {
+    const storedConfig = {
+      outer_model: "outer",
+      panel_models: ["a", "a", "b", 4],
+      invocation: "required",
+      reasoning_effort: "low",
+    };
     const expectedConfig = {
-      panel_models: ["a", "b"],
-      aggregator_model: "judge",
-      min_successful_panelists: 2,
+      outer_model: "outer",
+      panel_models: ["a", "a", "b"],
+      analyst_model: "",
+      invocation: "required",
       panel_timeout_seconds: 120,
       max_candidate_chars: 12000,
-      on_quorum_failure: "aggregator_only",
+      max_completion_tokens: 16000,
+      temperature: 0,
+      reasoning_effort: "low",
+      search_tool_name: "",
+      max_tool_calls: 4,
     };
-    expect(
-      parseFusionConfig({
-        panel_models: ["a", "a", "b", 4],
-        aggregator_model: "judge",
-        on_quorum_failure: "aggregator_only",
-      }),
-    ).toEqual(expectedConfig);
+
+    expect(parseFusionConfig(storedConfig)).toEqual(expectedConfig);
   });
 });

@@ -12,6 +12,11 @@ from fastapi import HTTPException, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import (
+    FUSION_BUDGET_ACCUMULATED_CALL_IDS_KEY,
+    FUSION_BUDGET_ACCUMULATED_COST_KEY,
+    FUSION_BUDGET_CONTINUATION_STARTED_KEY,
+)
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
@@ -324,7 +329,10 @@ async def reconcile_budget_reservation(
 async def release_budget_reservation(budget_reservation: dict | None) -> None:
     await reconcile_budget_reservation(
         budget_reservation=budget_reservation,
-        actual_cost=0.0,
+        # A Fusion request may have completed hidden provider calls before a
+        # later panel/continuation failure. Preserve that known billed floor
+        # instead of refunding the whole logical request to zero.
+        actual_cost=(budget_reservation or {}).get(FUSION_BUDGET_ACCUMULATED_COST_KEY, 0.0),
     )
 
 
@@ -352,7 +360,21 @@ async def release_budget_reservation_on_cancel(
     """
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return
-    incurred_cost: Final = float(budget_reservation.get("input_cost") or 0.0)
+    accumulated_cost: Final = float(budget_reservation.get(FUSION_BUDGET_ACCUMULATED_COST_KEY) or 0.0)
+    # Before the initial outer call finishes, its input is the only known
+    # provider charge. After it finishes, its actual cost is already in the
+    # accumulator. Add another input floor only once the final continuation
+    # has been dispatched; otherwise cancellation during the panel would count
+    # the initial input twice.
+    hidden_call_finished = bool(budget_reservation.get(FUSION_BUDGET_ACCUMULATED_CALL_IDS_KEY)) or (
+        accumulated_cost > 0.0
+    )
+    add_in_flight_input = not hidden_call_finished or (
+        budget_reservation.get(FUSION_BUDGET_CONTINUATION_STARTED_KEY) is True
+    )
+    incurred_cost: Final = accumulated_cost + (
+        float(budget_reservation.get("input_cost") or 0.0) if add_in_flight_input else 0.0
+    )
     try:
         await asyncio.shield(
             reconcile_budget_reservation(budget_reservation=budget_reservation, actual_cost=incurred_cost)
@@ -1050,37 +1072,90 @@ def _estimate_request_model_max_cost(
             input_tokens=input_tokens,
         )
 
+    initial_outer_estimate: Final = _estimate_request_max_cost_for_model(
+        request_body=request_body,
+        route=route,
+        model=fusion_router.config.outer_model,
+        llm_router=llm_router,
+        input_tokens=input_tokens,
+    )
+    internal_call_multiplier: Final = (
+        fusion_router.config.max_tool_calls + 1 if fusion_router.config.search_tool_name is not None else 1
+    )
+    internal_request_body: Final = {
+        **request_body,
+        # Panel and analyst output is controlled by the Fusion config, not by
+        # the caller's cap on the outward response.
+        "max_completion_tokens": fusion_router.config.max_completion_tokens,
+    }
+    query_token_ceiling: Final = (4 * fusion_router.config.max_candidate_chars) + 1024
+    search_context_token_ceiling: Final = (
+        4 * fusion_router.config.max_candidate_chars * fusion_router.config.max_tool_calls
+        if fusion_router.config.search_tool_name is not None
+        else 0
+    )
+    panel_input_token_ceiling: Final = query_token_ceiling + search_context_token_ceiling
     panel_estimates: Final = tuple(
-        _estimate_request_max_cost_for_model(
-            request_body=request_body,
-            route=route,
-            model=panel_model,
-            llm_router=llm_router,
+        (
+            estimate * internal_call_multiplier
+            if (
+                estimate := _estimate_request_max_cost_for_model(
+                    request_body=internal_request_body,
+                    route=route,
+                    model=panel_model,
+                    llm_router=llm_router,
+                    input_tokens=panel_input_token_ceiling,
+                )
+            )
+            is not None
+            else None
         )
         for panel_model in fusion_router.config.panel_models
     )
-    original_aggregator_tokens: Final = _count_input_tokens(
+    original_outer_tokens: Final = _count_input_tokens(
         request_body=request_body,
-        model=fusion_router.config.aggregator_model,
+        model=fusion_router.config.outer_model,
     )
     # Four tokens per bounded character plus fixed protocol headroom safely covers
-    # candidate serialization without materializing a synthetic prompt at admission.
+    # query/candidate serialization without materializing synthetic prompts at admission.
     candidate_token_ceiling: Final = (
         4 * fusion_router.config.max_candidate_chars * len(fusion_router.config.panel_models)
     ) + 1024
-    aggregator_input_tokens: Final = (
-        original_aggregator_tokens + candidate_token_ceiling if original_aggregator_tokens is not None else None
+    analyst_input_tokens: Final = candidate_token_ceiling + query_token_ceiling + search_context_token_ceiling
+    final_outer_input_tokens: Final = (
+        original_outer_tokens
+        + candidate_token_ceiling
+        + query_token_ceiling
+        + fusion_router.config.max_completion_tokens
+        if original_outer_tokens is not None
+        else None
     )
-    aggregator_estimate: Final = _estimate_request_max_cost_for_model(
+    analyst_estimate = _estimate_request_max_cost_for_model(
+        request_body=internal_request_body,
+        route=route,
+        model=fusion_router.config.resolved_analyst_model,
+        llm_router=llm_router,
+        input_tokens=analyst_input_tokens,
+    )
+    if analyst_estimate is not None:
+        analyst_estimate *= internal_call_multiplier
+    final_outer_estimate: Final = _estimate_request_max_cost_for_model(
         request_body=request_body,
         route=route,
-        model=fusion_router.config.aggregator_model,
+        model=fusion_router.config.outer_model,
         llm_router=llm_router,
-        input_tokens=aggregator_input_tokens,
+        input_tokens=final_outer_input_tokens,
     )
-    child_estimates: Final = (*panel_estimates, aggregator_estimate)
-    known_estimates: Final = tuple(estimate for estimate in child_estimates if estimate is not None)
-    return sum(known_estimates) if known_estimates else None
+    # Reserve the worst case: the initial outer call, every panel call, the
+    # analyst, and the outer-model continuation. If Fusion is skipped,
+    # normal reconciliation releases the unused panel/analyst headroom.
+    child_estimates: Final = (initial_outer_estimate, *panel_estimates, analyst_estimate, final_outer_estimate)
+    if any(estimate is None for estimate in child_estimates):
+        # Additive orchestration cannot safely reserve a partial total. This
+        # matches the normal unknown-price behavior instead of presenting an
+        # under-estimate as a valid worst case.
+        return None
+    return sum(cast("tuple[float, ...]", child_estimates))
 
 
 def estimate_request_input_cost(
@@ -1135,35 +1210,18 @@ def _estimate_request_model_input_cost(
             input_tokens=input_tokens,
         )
 
-    panel_estimates: Final = tuple(
-        _estimate_request_input_cost_for_model(
-            request_body=request_body,
-            route=route,
-            model=panel_model,
-            llm_router=llm_router,
-        )
-        for panel_model in fusion_router.config.panel_models
-    )
-    original_aggregator_tokens: Final = _count_input_tokens(
-        request_body=request_body,
-        model=fusion_router.config.aggregator_model,
-    )
-    candidate_token_ceiling: Final = (
-        4 * fusion_router.config.max_candidate_chars * len(fusion_router.config.panel_models)
-    ) + 1024
-    aggregator_input_tokens: Final = (
-        original_aggregator_tokens + candidate_token_ceiling if original_aggregator_tokens is not None else None
-    )
-    aggregator_estimate: Final = _estimate_request_input_cost_for_model(
+    # Only the initial outer input is known at admission. Successful hidden
+    # calls add their actual cost to the reservation as they finish, and the
+    # cancellation path adds another input floor only when the continuation is
+    # known to have started. Charging every possible child here would bill
+    # skipped deliberation as though it ran.
+    return _estimate_request_input_cost_for_model(
         request_body=request_body,
         route=route,
-        model=fusion_router.config.aggregator_model,
+        model=fusion_router.config.outer_model,
         llm_router=llm_router,
-        input_tokens=aggregator_input_tokens,
+        input_tokens=input_tokens,
     )
-    child_estimates: Final = (*panel_estimates, aggregator_estimate)
-    known_estimates: Final = tuple(estimate for estimate in child_estimates if estimate is not None)
-    return sum(known_estimates) if known_estimates else None
 
 
 def _estimate_request_input_cost_for_model(

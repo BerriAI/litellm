@@ -1,13 +1,19 @@
-export type FusionFailureMode = "fail" | "aggregator_only";
-export type FusionPreset = "quality" | "resilient";
+export type FusionInvocation = "auto" | "required";
+export type FusionPreset = "auto" | "always";
+export type FusionReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export interface FusionRouterConfigValue {
+  outer_model: string;
   panel_models: string[];
-  aggregator_model: string;
-  min_successful_panelists: number;
+  analyst_model: string;
+  invocation: FusionInvocation;
   panel_timeout_seconds: number;
   max_candidate_chars: number;
-  on_quorum_failure: FusionFailureMode;
+  max_completion_tokens: number;
+  temperature: number;
+  reasoning_effort: FusionReasoningEffort;
+  search_tool_name: string;
+  max_tool_calls: number;
 }
 
 export interface FusionFormValue extends FusionRouterConfigValue {
@@ -16,16 +22,20 @@ export interface FusionFormValue extends FusionRouterConfigValue {
 }
 
 export const DEFAULT_FUSION_CONFIG: FusionRouterConfigValue = {
+  outer_model: "",
   panel_models: [],
-  aggregator_model: "",
-  min_successful_panelists: 2,
+  analyst_model: "",
+  invocation: "auto",
   panel_timeout_seconds: 120,
   max_candidate_chars: 12000,
-  on_quorum_failure: "fail",
+  max_completion_tokens: 16000,
+  temperature: 0,
+  reasoning_effort: "none",
+  search_tool_name: "",
+  max_tool_calls: 4,
 };
 
-export const presetFailureMode = (preset: FusionPreset): FusionFailureMode =>
-  preset === "quality" ? "fail" : "aggregator_only";
+export const presetInvocation = (preset: FusionPreset): FusionInvocation => (preset === "always" ? "required" : "auto");
 
 const asRecord = (value: unknown): Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
@@ -33,39 +43,55 @@ const asRecord = (value: unknown): Record<string, unknown> =>
 const numberOr = (value: unknown, fallback: number): number =>
   typeof value === "number" && Number.isFinite(value) ? value : fallback;
 
+const REASONING_EFFORTS = new Set<FusionReasoningEffort>(["none", "minimal", "low", "medium", "high", "xhigh"]);
+
 export const parseFusionConfig = (value: unknown): FusionRouterConfigValue => {
   const config = asRecord(value);
   const panelModels = Array.isArray(config.panel_models)
     ? config.panel_models.filter((model): model is string => typeof model === "string" && model.length > 0)
     : [];
+  const reasoningEffort =
+    typeof config.reasoning_effort === "string" &&
+    REASONING_EFFORTS.has(config.reasoning_effort as FusionReasoningEffort)
+      ? (config.reasoning_effort as FusionReasoningEffort)
+      : "none";
   return {
-    panel_models: Array.from(new Set(panelModels)),
-    aggregator_model: typeof config.aggregator_model === "string" ? config.aggregator_model : "",
-    min_successful_panelists: numberOr(config.min_successful_panelists, 2),
+    outer_model: typeof config.outer_model === "string" ? config.outer_model : "",
+    panel_models: panelModels,
+    analyst_model: typeof config.analyst_model === "string" ? config.analyst_model : "",
+    invocation: config.invocation === "required" ? "required" : "auto",
     panel_timeout_seconds: numberOr(config.panel_timeout_seconds, 120),
     max_candidate_chars: numberOr(config.max_candidate_chars, 12000),
-    on_quorum_failure: config.on_quorum_failure === "aggregator_only" ? "aggregator_only" : "fail",
+    max_completion_tokens: numberOr(config.max_completion_tokens, 16000),
+    temperature: numberOr(config.temperature, 0),
+    reasoning_effort: reasoningEffort,
+    search_tool_name: typeof config.search_tool_name === "string" ? config.search_tool_name : "",
+    max_tool_calls: numberOr(config.max_tool_calls, 4),
   };
 };
 
 export const fusionConfigError = (value: FusionFormValue, requiresTeamScope: boolean): string | null => {
   if (!value.model_name.trim()) return "Fusion model name is required.";
   if (requiresTeamScope && !value.team_id) return "Select a team to continue.";
-  if (!value.aggregator_model) return "Select an aggregator model.";
-  if (value.panel_models.length < 2) return "Select at least two panel models.";
-  if (value.panel_models.length > 6) return "A Fusion panel can contain at most six models.";
-  if (
-    !Number.isInteger(value.min_successful_panelists) ||
-    value.min_successful_panelists < 1 ||
-    value.min_successful_panelists > value.panel_models.length
-  ) {
-    return "Successful panelists must be between 1 and the panel size.";
-  }
+  if (!value.outer_model) return "Select the outer model.";
+  if (value.panel_models.length < 1) return "Select at least one panel model.";
+  if (value.panel_models.length > 8) return "A Fusion panel can contain at most eight models.";
   if (value.panel_timeout_seconds <= 0 || value.panel_timeout_seconds > 600) {
     return "Panel timeout must be between 1 and 600 seconds.";
   }
   if (value.max_candidate_chars < 1000 || value.max_candidate_chars > 50000) {
     return "Candidate limit must be between 1,000 and 50,000 characters.";
+  }
+  if (
+    !Number.isInteger(value.max_completion_tokens) ||
+    value.max_completion_tokens < 1 ||
+    value.max_completion_tokens > 128000
+  ) {
+    return "Internal output tokens must be between 1 and 128,000.";
+  }
+  if (value.temperature < 0 || value.temperature > 2) return "Panel temperature must be between 0 and 2.";
+  if (!Number.isInteger(value.max_tool_calls) || value.max_tool_calls < 1 || value.max_tool_calls > 16) {
+    return "Tool calls must be between 1 and 16.";
   }
   return null;
 };
@@ -75,12 +101,17 @@ export const fusionModelPayload = (value: FusionFormValue, requiresTeamScope: bo
   litellm_params: {
     model: "fusion_router",
     fusion_router_config: {
+      outer_model: value.outer_model,
       panel_models: value.panel_models,
-      aggregator_model: value.aggregator_model,
-      min_successful_panelists: value.min_successful_panelists,
+      ...(value.analyst_model ? { analyst_model: value.analyst_model } : {}),
+      invocation: value.invocation,
       panel_timeout_seconds: value.panel_timeout_seconds,
       max_candidate_chars: value.max_candidate_chars,
-      on_quorum_failure: value.on_quorum_failure,
+      max_completion_tokens: value.max_completion_tokens,
+      temperature: value.temperature,
+      reasoning_effort: value.reasoning_effort,
+      ...(value.search_tool_name ? { search_tool_name: value.search_tool_name } : {}),
+      max_tool_calls: value.max_tool_calls,
     },
   },
   model_info: requiresTeamScope ? { team_id: value.team_id } : {},

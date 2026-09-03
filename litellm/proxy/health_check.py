@@ -343,26 +343,15 @@ def _strategy_router_dependency_error(
         if not isinstance(raw_config, Mapping):
             return "Fusion model has no fusion_router_config"
         try:
-            config: Final = FusionRouterConfig.model_validate(raw_config)
+            FusionRouterConfig.model_validate(raw_config)
         except ValidationError:
             return "Fusion model has an invalid fusion_router_config"
         dependencies: Final = fusion_router_dependencies(params)
-        aggregator: Final = next(dependency for dependency in dependencies if dependency.role == "aggregator")
-        aggregator_failure: Final = _dependency_failure(aggregator, router, unhealthy_ids)
-        if aggregator_failure is not None:
-            return aggregator_failure
-        if config.on_quorum_failure == "aggregator_only":
-            return None
-        panel_dependencies: Final = tuple(dependency for dependency in dependencies if dependency.role == "panel")
-        usable_panel_count: Final = sum(
-            _dependency_failure(dependency, router, unhealthy_ids) is None for dependency in panel_dependencies
-        )
-        if usable_panel_count < config.min_successful_panelists:
-            return (
-                f"panel quorum cannot be met: {usable_panel_count} of "
-                f"{config.min_successful_panelists} required panel models are healthy"
-            )
-        return None
+        # The outer model is the only hard dependency. Panel failures become a
+        # typed Fusion tool error that the outer model can recover from, and an
+        # analyst failure degrades to raw panel responses.
+        outer: Final = next(dependency for dependency in dependencies if dependency.role == "outer")
+        return _dependency_failure(outer, router, unhealthy_ids)
     return next(
         (
             failure

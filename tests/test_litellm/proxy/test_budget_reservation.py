@@ -10,7 +10,11 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
+from litellm.constants import (
+    FUSION_BUDGET_ACCUMULATED_COST_KEY,
+    FUSION_BUDGET_CONTINUATION_STARTED_KEY,
+    STREAM_SSE_KEEPALIVE_PING_BYTES,
+)
 from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
     AgenticAnthropicStreamingIterator,
 )
@@ -1049,7 +1053,7 @@ async def test_should_reserve_tiered_pricing_cost(spend_counter_state):
     await release_budget_reservation(reservation)
 
 
-def test_fusion_reservation_sums_panels_and_candidate_inflated_aggregator() -> None:
+def test_fusion_reservation_covers_initial_outer_panel_analyst_and_continuation() -> None:
     router = Router(
         model_list=[
             {
@@ -1061,16 +1065,21 @@ def test_fusion_reservation_sums_panels_and_candidate_inflated_aggregator() -> N
                 "litellm_params": {"model": "openai/panel-b", "api_key": "fake"},
             },
             {
-                "model_name": "aggregator",
-                "litellm_params": {"model": "openai/aggregator", "api_key": "fake"},
+                "model_name": "analyst",
+                "litellm_params": {"model": "openai/analyst", "api_key": "fake"},
+            },
+            {
+                "model_name": "outer",
+                "litellm_params": {"model": "openai/outer", "api_key": "fake"},
             },
             {
                 "model_name": "fusion/test",
                 "litellm_params": {
                     "model": "fusion_router",
                     "fusion_router_config": {
+                        "outer_model": "outer",
                         "panel_models": ["panel-a", "panel-b"],
-                        "aggregator_model": "aggregator",
+                        "analyst_model": "analyst",
                         "max_candidate_chars": 1000,
                     },
                 },
@@ -1083,11 +1092,18 @@ def test_fusion_reservation_sums_panels_and_candidate_inflated_aggregator() -> N
         "max_tokens": 10,
     }
 
-    def child_estimate(*, model: str, input_tokens: int | None = None, **_: object) -> float:
-        if model == "aggregator":
+    def child_estimate(
+        *, model: str, request_body: dict, input_tokens: int | None = None, **_: object
+    ) -> float:
+        if model == "analyst":
             assert input_tokens is not None
             assert input_tokens >= 9000
+            assert request_body["max_completion_tokens"] == 16000
             return 3.0
+        if model == "outer":
+            assert request_body["max_tokens"] == 10
+            return 4.0
+        assert request_body["max_completion_tokens"] == 16000
         return {"panel-a": 1.0, "panel-b": 2.0}[model]
 
     with patch(  # test-quality-ok: isolates child pricing so this test measures Fusion aggregation, not registry prices
@@ -1100,10 +1116,10 @@ def test_fusion_reservation_sums_panels_and_candidate_inflated_aggregator() -> N
             llm_router=router,
         )
 
-    assert estimated == pytest.approx(6.0)
+    assert estimated == pytest.approx(14.0)
 
 
-def test_fusion_cancel_floor_sums_child_input_costs() -> None:
+def test_fusion_cancel_floor_only_charges_the_guaranteed_initial_outer_input() -> None:
     router = Router(
         model_list=[
             {
@@ -1115,16 +1131,21 @@ def test_fusion_cancel_floor_sums_child_input_costs() -> None:
                 "litellm_params": {"model": "openai/panel-b", "api_key": "fake"},
             },
             {
-                "model_name": "aggregator",
-                "litellm_params": {"model": "openai/aggregator", "api_key": "fake"},
+                "model_name": "analyst",
+                "litellm_params": {"model": "openai/analyst", "api_key": "fake"},
+            },
+            {
+                "model_name": "outer",
+                "litellm_params": {"model": "openai/outer", "api_key": "fake"},
             },
             {
                 "model_name": "fusion/test",
                 "litellm_params": {
                     "model": "fusion_router",
                     "fusion_router_config": {
+                        "outer_model": "outer",
                         "panel_models": ["panel-a", "panel-b"],
-                        "aggregator_model": "aggregator",
+                        "analyst_model": "analyst",
                         "max_candidate_chars": 1000,
                     },
                 },
@@ -1138,11 +1159,7 @@ def test_fusion_cancel_floor_sums_child_input_costs() -> None:
     }
 
     def child_input_estimate(*, model: str, input_tokens: int | None = None, **_: object) -> float:
-        if model == "aggregator":
-            assert input_tokens is not None
-            assert input_tokens >= 9000
-            return 3.0
-        return {"panel-a": 1.0, "panel-b": 2.0}[model]
+        return {"panel-a": 1.0, "panel-b": 2.0, "analyst": 3.0, "outer": 4.0}[model]
 
     with patch(  # test-quality-ok: isolates child pricing so this test measures Fusion aggregation, not registry prices
         "litellm.proxy.spend_tracking.budget_reservation._estimate_request_input_cost_for_model",
@@ -1154,7 +1171,87 @@ def test_fusion_cancel_floor_sums_child_input_costs() -> None:
             llm_router=router,
         )
 
-    assert estimated == pytest.approx(6.0)
+    assert estimated == pytest.approx(4.0)
+
+
+def test_fusion_reservation_does_not_return_a_partial_additive_estimate() -> None:
+    router = Router(
+        model_list=[
+            {"model_name": "panel", "litellm_params": {"model": "openai/panel", "api_key": "fake"}},
+            {"model_name": "outer", "litellm_params": {"model": "openai/outer", "api_key": "fake"}},
+            {
+                "model_name": "fusion/test",
+                "litellm_params": {
+                    "model": "fusion_router",
+                    "fusion_router_config": {"outer_model": "outer", "panel_models": ["panel"]},
+                },
+            },
+        ]
+    )
+
+    def child_estimate(*, model: str, **_: object) -> float | None:
+        return None if model == "panel" else 1.0
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._estimate_request_max_cost_for_model",
+        side_effect=child_estimate,
+    ):
+        estimated = estimate_request_max_cost(
+            request_body={"model": "fusion/test", "messages": [{"role": "user", "content": "hello"}]},
+            route="/chat/completions",
+            llm_router=router,
+        )
+
+    assert estimated is None
+
+
+def test_fusion_reservation_expands_private_search_loops_and_context() -> None:
+    router = Router(
+        model_list=[
+            {"model_name": "panel", "litellm_params": {"model": "openai/panel", "api_key": "fake"}},
+            {"model_name": "analyst", "litellm_params": {"model": "openai/analyst", "api_key": "fake"}},
+            {"model_name": "outer", "litellm_params": {"model": "openai/outer", "api_key": "fake"}},
+            {
+                "model_name": "fusion/test",
+                "litellm_params": {
+                    "model": "fusion_router",
+                    "fusion_router_config": {
+                        "outer_model": "outer",
+                        "panel_models": ["panel"],
+                        "analyst_model": "analyst",
+                        "search_tool_name": "web-search",
+                        "max_tool_calls": 2,
+                        "max_candidate_chars": 1000,
+                    },
+                },
+            },
+        ]
+    )
+    observed: list[tuple[str, int | None]] = []
+
+    def child_estimate(*, model: str, input_tokens: int | None = None, **_: object) -> float:
+        observed.append((model, input_tokens))
+        return 1.0
+
+    with patch(  # test-quality-ok: isolates pricing to verify multiplicity and conservative context ceilings
+        "litellm.proxy.spend_tracking.budget_reservation._estimate_request_max_cost_for_model",
+        side_effect=child_estimate,
+    ):
+        estimated = estimate_request_max_cost(
+            request_body={
+                "model": "fusion/test",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 10,
+            },
+            route="/chat/completions",
+            llm_router=router,
+        )
+
+    assert estimated == pytest.approx(8.0)
+    assert ("panel", 13024) in observed
+    assert ("analyst", 18048) in observed
+    final_outer_tokens = [tokens for model, tokens in observed if model == "outer"][-1]
+    assert final_outer_tokens is not None and final_outer_tokens >= 26048
 
 
 def test_tiered_reservation_is_all_or_nothing_with_output_tier_from_input_length():
@@ -2802,6 +2899,30 @@ async def test_release_budget_reservation_on_cancel_swallows_release_errors():
     ):
         # must return without raising
         await release_budget_reservation_on_cancel(reservation)
+
+
+@pytest.mark.asyncio
+async def test_fusion_release_and_cancel_keep_already_billed_hidden_costs():
+    reservation = {
+        "reserved_cost": 3.0,
+        "entries": [],
+        "finalized": False,
+        "input_cost": 0.5,
+        FUSION_BUDGET_ACCUMULATED_COST_KEY: 0.3,
+    }
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        new=AsyncMock(),
+    ) as reconcile:
+        await release_budget_reservation(reservation)
+        assert reconcile.await_args.kwargs["actual_cost"] == pytest.approx(0.3)
+
+        await release_budget_reservation_on_cancel(reservation)
+        assert reconcile.await_args.kwargs["actual_cost"] == pytest.approx(0.3)
+
+        reservation[FUSION_BUDGET_CONTINUATION_STARTED_KEY] = True
+        await release_budget_reservation_on_cancel(reservation)
+        assert reconcile.await_args.kwargs["actual_cost"] == pytest.approx(0.8)
 
 
 @pytest.mark.asyncio

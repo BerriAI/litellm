@@ -2538,7 +2538,7 @@ class Router:
             if fusion_router is not None:
                 if fusion_depth:
                     raise litellm.BadRequestError(
-                        message="Fusion models cannot use another Fusion model as a panel or aggregator",
+                        message="Fusion models cannot use another Fusion model as an outer, panel, or analyst model",
                         model=model,
                         llm_provider="",
                     )
@@ -9460,7 +9460,12 @@ class Router:
             model_name=deployment.model_name,
             raw_config=raw_config,
             completion=self.acompletion,
+            search=self._fusion_asearch,
         )
+
+    async def _fusion_asearch(self, *, model: str, query: str, **kwargs: object) -> object:
+        """Late-bound Search API bridge; Fusion routers are registered before endpoint factories run."""
+        return await self.asearch(model=model, query=query, **kwargs)
 
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
         """

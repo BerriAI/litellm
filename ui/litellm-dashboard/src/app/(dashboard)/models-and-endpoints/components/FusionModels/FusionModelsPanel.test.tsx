@@ -20,7 +20,7 @@ vi.mock("@/components/networking", () => ({
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useFusionRouters: () => useFusionRouters(),
   useInvalidateFusionRouters: () => invalidate,
-  usePlainModelGroups: () => new Set(["panel-a", "panel-b", "aggregator"]),
+  usePlainModelGroups: () => new Set(["panel-a", "panel-b", "outer", "analyst"]),
 }));
 
 vi.mock("@/components/shared/MultiSelect", () => ({
@@ -29,6 +29,10 @@ vi.mock("@/components/shared/MultiSelect", () => ({
       Choose panel models
     </button>
   ),
+}));
+
+vi.mock("@/components/search_tools/SearchToolSelector", () => ({
+  default: () => <div data-testid="search-tool-selector" />,
 }));
 
 vi.mock("@/components/common_components/team_dropdown", () => ({
@@ -49,12 +53,16 @@ const existingDeployment = {
   litellm_params: {
     model: "fusion_router",
     fusion_router_config: {
+      outer_model: "outer",
       panel_models: ["panel-a", "panel-b"],
-      aggregator_model: "aggregator",
-      min_successful_panelists: 2,
+      analyst_model: "analyst",
+      invocation: "required",
       panel_timeout_seconds: 120,
       max_candidate_chars: 12000,
-      on_quorum_failure: "aggregator_only",
+      max_completion_tokens: 16000,
+      temperature: 0,
+      reasoning_effort: "none",
+      max_tool_calls: 4,
     },
   },
   model_info: { id: "fusion-id", db_model: true },
@@ -80,15 +88,15 @@ describe("FusionModelsPanel", () => {
     modelPatchUpdateCall.mockResolvedValue({});
   });
 
-  it("creates a quality-first Fusion model with an ordinary model/new payload", async () => {
+  it("creates an auto Fusion model with an ordinary model/new payload", async () => {
     const user = userEvent.setup();
     renderPanel();
 
     await user.click(screen.getByRole("button", { name: "Add Fusion Model" }));
     await user.type(screen.getByLabelText("Model name"), "fusion/coding");
     await user.click(screen.getByRole("button", { name: "Choose panel models" }));
-    await user.click(screen.getByLabelText("Aggregator model"));
-    await user.click(screen.getByRole("option", { name: "aggregator" }));
+    await user.click(screen.getByLabelText("Outer model"));
+    await user.click(screen.getByRole("option", { name: "outer" }));
     await user.click(screen.getByRole("button", { name: "Create Fusion Model" }));
 
     await waitFor(() => expect(modelCreateCall).toHaveBeenCalledTimes(1));
@@ -97,33 +105,36 @@ describe("FusionModelsPanel", () => {
       litellm_params: {
         model: "fusion_router",
         fusion_router_config: {
+          outer_model: "outer",
           panel_models: ["panel-a", "panel-b"],
-          aggregator_model: "aggregator",
-          min_successful_panelists: 2,
+          invocation: "auto",
           panel_timeout_seconds: 120,
           max_candidate_chars: 12000,
-          on_quorum_failure: "fail",
+          max_completion_tokens: 16000,
+          temperature: 0,
+          reasoning_effort: "none",
+          max_tool_calls: 4,
         },
       },
       model_info: {},
     });
   });
 
-  it("shows readable, full-width behavior presets", async () => {
+  it("shows readable, full-width deliberation presets", async () => {
     const user = userEvent.setup();
     renderPanel();
 
     await user.click(screen.getByRole("button", { name: "Add Fusion Model" }));
     const behaviorSelector = screen.getByLabelText("Behavior");
-    expect(behaviorSelector).toHaveTextContent("Quality First");
+    expect(behaviorSelector).toHaveTextContent("Auto");
     expect(behaviorSelector).toHaveClass("w-full");
 
     await user.click(behaviorSelector);
-    expect(screen.getByRole("option", { name: /Quality First/ })).toBeVisible();
-    expect(screen.getByRole("option", { name: /High Availability/ })).toBeVisible();
+    expect(screen.getByRole("option", { name: /^Auto/ })).toBeVisible();
+    expect(screen.getByRole("option", { name: /Always deliberate/ })).toBeVisible();
 
-    await user.click(screen.getByRole("option", { name: /High Availability/ }));
-    expect(behaviorSelector).toHaveTextContent("High Availability");
+    await user.click(screen.getByRole("option", { name: /Always deliberate/ }));
+    expect(behaviorSelector).toHaveTextContent("Always deliberate");
   });
 
   it("requires and sends a team for team-admin creation", async () => {
@@ -132,8 +143,8 @@ describe("FusionModelsPanel", () => {
     await user.click(screen.getByRole("button", { name: "Add Fusion Model" }));
     await user.type(screen.getByLabelText("Model name"), "fusion/team");
     await user.click(screen.getByRole("button", { name: "Choose panel models" }));
-    await user.click(screen.getByLabelText("Aggregator model"));
-    await user.click(screen.getByRole("option", { name: "aggregator" }));
+    await user.click(screen.getByLabelText("Outer model"));
+    await user.click(screen.getByRole("option", { name: "outer" }));
     await user.click(screen.getByRole("button", { name: "Create Fusion Model" }));
     expect(await screen.findByText("Select a team to continue.")).toBeInTheDocument();
     expect(modelCreateCall).not.toHaveBeenCalled();
@@ -149,7 +160,7 @@ describe("FusionModelsPanel", () => {
     const user = userEvent.setup();
     renderPanel();
 
-    expect(screen.getByText("High Availability")).toBeInTheDocument();
+    expect(screen.getByText("Always")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Configure fusion/existing" }));
     expect(screen.getByLabelText("Model name")).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
@@ -160,7 +171,7 @@ describe("FusionModelsPanel", () => {
       {
         litellm_params: expect.objectContaining({
           model: "fusion_router",
-          fusion_router_config: expect.objectContaining({ on_quorum_failure: "aggregator_only" }),
+          fusion_router_config: expect.objectContaining({ outer_model: "outer", invocation: "required" }),
         }),
       },
       "fusion-id",

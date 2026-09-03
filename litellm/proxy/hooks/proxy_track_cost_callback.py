@@ -6,7 +6,13 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED
+from litellm.constants import (
+    BACKGROUND_INTERACTION_COST_POLLING_ENABLED,
+    FUSION_BUDGET_ACCUMULATED_CALL_IDS_KEY,
+    FUSION_BUDGET_ACCUMULATED_COST_KEY,
+    FUSION_BUDGET_ACTIVE_KEY,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
@@ -67,6 +73,83 @@ _CAPTURED_IDENTITY_CALL_TYPES: Final[frozenset[str]] = frozenset(
     )
 )
 
+_FUSION_TOOL_NAME: Final = "litellm_fusion"
+_FUSION_ALWAYS_DEFERRED_ORIGINS: Final[frozenset[str]] = frozenset(
+    {"fusion_panel", "fusion_analyst", "fusion_research"}
+)
+
+
+def _mapping_or_attribute(value: object, key: str) -> object:
+    if isinstance(value, dict):
+        return value.get(key)
+    return getattr(value, key, None)
+
+
+def _response_invoked_fusion(response: object) -> bool:
+    choices = _mapping_or_attribute(response, "choices")
+    if not isinstance(choices, Sequence) or isinstance(choices, (str, bytes)) or not choices:
+        return False
+    message = _mapping_or_attribute(choices[0], "message")
+    tool_calls = _mapping_or_attribute(message, "tool_calls")
+    if not isinstance(tool_calls, Sequence) or isinstance(tool_calls, (str, bytes)):
+        return False
+    return any(
+        _mapping_or_attribute(_mapping_or_attribute(tool_call, "function"), "name") == _FUSION_TOOL_NAME
+        for tool_call in tool_calls
+    )
+
+
+def _should_defer_fusion_budget_reconciliation(
+    metadata: dict,
+    completion_response: object,
+    kwargs: dict,
+) -> bool:
+    origin = metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
+    if origin in _FUSION_ALWAYS_DEFERRED_ORIGINS:
+        return True
+    if origin != "fusion_initial":
+        return False
+    complete_stream = kwargs.get("complete_streaming_response")
+    return _response_invoked_fusion(completion_response) or _response_invoked_fusion(complete_stream)
+
+
+def _accumulate_fusion_cost(
+    budget_reservation: dict,
+    response_cost: float,
+    kwargs: dict,
+) -> None:
+    """Add one hidden call exactly once before its asynchronous DB write."""
+    call_id = kwargs.get("litellm_call_id") or kwargs.get("id")
+    seen_call_ids = budget_reservation.setdefault(FUSION_BUDGET_ACCUMULATED_CALL_IDS_KEY, [])
+    if isinstance(seen_call_ids, list) and call_id is not None:
+        normalized_call_id = str(call_id)
+        if normalized_call_id in seen_call_ids:
+            return
+        seen_call_ids.append(normalized_call_id)
+    budget_reservation[FUSION_BUDGET_ACCUMULATED_COST_KEY] = float(
+        budget_reservation.get(FUSION_BUDGET_ACCUMULATED_COST_KEY) or 0.0
+    ) + max(response_cost, 0.0)
+
+
+def _failure_should_leave_fusion_reservation_open(request_data: dict) -> bool:
+    buckets: tuple[object, ...] = (
+        request_data.get("metadata"),
+        request_data.get("litellm_metadata"),
+        (request_data.get("litellm_params") or {}).get("metadata")
+        if isinstance(request_data.get("litellm_params"), dict)
+        else None,
+        (request_data.get("litellm_params") or {}).get("litellm_metadata")
+        if isinstance(request_data.get("litellm_params"), dict)
+        else None,
+    )
+    return any(
+        isinstance(bucket, dict)
+        and bucket.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) in _FUSION_ALWAYS_DEFERRED_ORIGINS
+        and isinstance(bucket.get("user_api_key_budget_reservation"), dict)
+        and bucket["user_api_key_budget_reservation"].get(FUSION_BUDGET_ACTIVE_KEY) is True
+        for bucket in buckets
+    )
+
 
 class _ProxyDBLogger(CustomLogger):
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -80,7 +163,8 @@ class _ProxyDBLogger(CustomLogger):
         traceback_str: str | None = None,
     ):
         try:
-            await _release_budget_reservation(budget_reservation=user_api_key_dict.budget_reservation)
+            if not _failure_should_leave_fusion_reservation_open(request_data):
+                await _release_budget_reservation(budget_reservation=user_api_key_dict.budget_reservation)
         except Exception:
             verbose_proxy_logger.exception("Failed to release budget reservation during failure handling")
             try:
@@ -266,12 +350,31 @@ class _ProxyDBLogger(CustomLogger):
                 served_model_id=sl_object.get("model_id") if sl_object is not None else None,
                 router=get_llm_router(),
             )
+            if response_cost is not None and kwargs.get("cache_hit", False) is True:
+                response_cost = 0.0
+                verbose_proxy_logger.debug("Cache Hit: response_cost %s, for user_id %s", response_cost, user_id)
+            defer_fusion_reconciliation: Final = (
+                budget_reservation is not None
+                and budget_reservation.get(FUSION_BUDGET_ACTIVE_KEY) is True
+                and _should_defer_fusion_budget_reconciliation(metadata, completion_response, kwargs)
+            )
 
             if response_cost is not None:
+                if defer_fusion_reconciliation and budget_reservation is not None:
+                    _accumulate_fusion_cost(
+                        budget_reservation=budget_reservation,
+                        response_cost=float(response_cost),
+                        kwargs=kwargs,
+                    )
+                budget_counter_response_cost: Final = (
+                    float(response_cost)
+                    + float(budget_reservation.get(FUSION_BUDGET_ACCUMULATED_COST_KEY) or 0.0)
+                    if budget_reservation is not None
+                    and budget_reservation.get(FUSION_BUDGET_ACTIVE_KEY) is True
+                    and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == "fusion_continuation"
+                    else float(response_cost)
+                )
                 user_api_key: Final = metadata.get("user_api_key", None)
-                if kwargs.get("cache_hit", False) is True:
-                    response_cost = 0.0
-                    verbose_proxy_logger.debug("Cache Hit: response_cost %s, for user_id %s", response_cost, user_id)
 
                 verbose_proxy_logger.debug(
                     "user_api_key %s, user_id %s, team_id %s, end_user_id %s",
@@ -303,6 +406,8 @@ class _ProxyDBLogger(CustomLogger):
                         end_time=end_time,
                         response_cost=response_cost,
                         budget_reservation=budget_reservation,
+                        budget_counter_response_cost=budget_counter_response_cost,
+                        defer_budget_counter_update=defer_fusion_reconciliation,
                         request_tags=tags,
                         model_access_groups=model_access_groups,
                     )
@@ -328,7 +433,7 @@ class _ProxyDBLogger(CustomLogger):
                         response_cost=response_cost,
                         max_budget=end_user_max_budget,
                     )
-                elif budget_reservation is not None:
+                elif budget_reservation is not None and not defer_fusion_reconciliation:
                     await _release_budget_reservation(budget_reservation=budget_reservation)
             else:
                 if _is_unbilled_interaction_response(completion_response):
@@ -340,13 +445,15 @@ class _ProxyDBLogger(CustomLogger):
                             "the budget reservation stays open until the poll task logs the final usage"
                         )
                         return
-                    await _release_budget_reservation(budget_reservation=budget_reservation)
-                    verbose_proxy_logger.debug(
-                        "Released the budget reservation for an interaction create with no usage "
-                        "that no poll task will settle"
-                    )
+                    if not defer_fusion_reconciliation:
+                        await _release_budget_reservation(budget_reservation=budget_reservation)
+                        verbose_proxy_logger.debug(
+                            "Released the budget reservation for an interaction create with no usage "
+                            "that no poll task will settle"
+                        )
                     return
-                await _release_budget_reservation(budget_reservation=budget_reservation)
+                if not defer_fusion_reconciliation:
+                    await _release_budget_reservation(budget_reservation=budget_reservation)
                 # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
                 # Use .get() for "stream" to avoid KeyError on health checks.
                 # WS session wrappers (_aresponses_websocket, _arealtime) also reach here with
@@ -580,6 +687,8 @@ async def _update_database_and_spend_counters(
     end_time: Any,
     response_cost: float,
     budget_reservation: dict | None,
+    budget_counter_response_cost: float | None = None,
+    defer_budget_counter_update: bool = False,
     request_tags: list[str] | None = None,
     model_access_groups: Sequence[str] | None = None,
 ) -> None:
@@ -610,12 +719,17 @@ async def _update_database_and_spend_counters(
                     )
         raise
 
+    if defer_budget_counter_update:
+        return
+
     try:
         await increment_spend_counters(
             token=user_api_key,
             team_id=team_id,
             user_id=user_id,
-            response_cost=response_cost,
+            response_cost=(
+                budget_counter_response_cost if budget_counter_response_cost is not None else response_cost
+            ),
             org_id=org_id,
             budget_reservation=budget_reservation,
             end_user_id=end_user_id,

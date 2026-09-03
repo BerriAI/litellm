@@ -4022,7 +4022,7 @@ class TestStrategyRouterWriteValidation:
         violation = _strategy_router_write_violation(
             incoming_params=LiteLLM_Params(
                 model="fusion_router",
-                fusion_router_config={"panel_models": ["one"], "aggregator_model": "aggregator"},
+                fusion_router_config={"outer_model": "outer", "panel_models": []},
             ),
             existing_params=None,
         )
@@ -4037,15 +4037,15 @@ class TestStrategyRouterWriteValidation:
 
         stored = LiteLLM_Params(
             model="fusion_router",
-            fusion_router_config={"panel_models": ["panel-a", "panel-b"], "aggregator_model": "aggregator"},
+            fusion_router_config={"outer_model": "outer", "panel_models": ["panel-a", "panel-b"]},
         )
         assert (
             _strategy_router_write_violation(
                 incoming_params=updateLiteLLMParams(
                     fusion_router_config={
+                        "outer_model": "outer",
                         "panel_models": ["panel-a", "panel-b", "panel-c"],
-                        "aggregator_model": "aggregator",
-                        "min_successful_panelists": 3,
+                        "invocation": "required",
                     }
                 ),
                 existing_params=stored,
@@ -4061,14 +4061,14 @@ class TestStrategyRouterWriteValidation:
 
         stored = LiteLLM_Params(
             model="fusion_router",
-            fusion_router_config={"panel_models": ["panel-a", "panel-b"], "aggregator_model": "aggregator"},
+            fusion_router_config={"outer_model": "outer", "panel_models": ["panel-a", "panel-b"]},
         )
         violation = _strategy_router_write_violation(
             incoming_params=updateLiteLLMParams(fusion_router_config={}),
             existing_params=stored,
         )
         assert violation is not None
-        assert "panel_models" in violation
+        assert "outer_model" in violation
 
     def test_fusion_config_on_regular_model_is_rejected(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
@@ -4078,7 +4078,7 @@ class TestStrategyRouterWriteValidation:
         violation = _strategy_router_write_violation(
             incoming_params=LiteLLM_Params(
                 model="openai/gpt-4o",
-                fusion_router_config={"panel_models": ["panel-a", "panel-b"], "aggregator_model": "aggregator"},
+                fusion_router_config={"outer_model": "outer", "panel_models": ["panel-a", "panel-b"]},
             ),
             existing_params=None,
         )

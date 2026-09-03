@@ -12,6 +12,7 @@ import {
 import TeamDropdown from "@/components/common_components/team_dropdown";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { type Model, type Team, modelCreateCall, modelDeleteCall, modelPatchUpdateCall } from "@/components/networking";
+import SearchToolSelector from "@/components/search_tools/SearchToolSelector";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -27,7 +28,7 @@ import {
   fusionConfigError,
   fusionModelPayload,
   parseFusionConfig,
-  presetFailureMode,
+  presetInvocation,
 } from "./fusionModelConfig";
 
 interface FusionModelsPanelProps {
@@ -71,13 +72,16 @@ function FusionModelDialog({
   const [modelName, setModelName] = useState(deployment?.model_name ?? "");
   const [teamID, setTeamID] = useState("");
   const [panelModels, setPanelModels] = useState(initialConfig.panel_models);
-  const [aggregatorModel, setAggregatorModel] = useState(initialConfig.aggregator_model);
-  const [minSuccessful, setMinSuccessful] = useState(initialConfig.min_successful_panelists);
+  const [outerModel, setOuterModel] = useState(initialConfig.outer_model);
+  const [analystModel, setAnalystModel] = useState(initialConfig.analyst_model);
   const [timeoutSeconds, setTimeoutSeconds] = useState(initialConfig.panel_timeout_seconds);
   const [maxCandidateChars, setMaxCandidateChars] = useState(initialConfig.max_candidate_chars);
-  const [preset, setPreset] = useState<FusionPreset>(
-    initialConfig.on_quorum_failure === "aggregator_only" ? "resilient" : "quality",
-  );
+  const [maxCompletionTokens, setMaxCompletionTokens] = useState(initialConfig.max_completion_tokens);
+  const [temperature, setTemperature] = useState(initialConfig.temperature);
+  const [reasoningEffort, setReasoningEffort] = useState(initialConfig.reasoning_effort);
+  const [searchToolName, setSearchToolName] = useState(initialConfig.search_tool_name);
+  const [maxToolCalls, setMaxToolCalls] = useState(initialConfig.max_tool_calls);
+  const [preset, setPreset] = useState<FusionPreset>(initialConfig.invocation === "required" ? "always" : "auto");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -85,14 +89,11 @@ function FusionModelDialog({
   const modelOptions = availableModels.map((model) => ({ label: model, value: model }));
 
   const handlePanelsChanged = (models: string[]) => {
-    const limited = models.slice(0, 6);
-    setPanelModels(limited);
-    setMinSuccessful((current) => Math.min(Math.max(1, current), Math.max(1, limited.length)));
+    setPanelModels(models.slice(0, 8));
   };
 
   const applyPreset = (nextPreset: FusionPreset) => {
     setPreset(nextPreset);
-    setMinSuccessful(Math.min(2, Math.max(1, panelModels.length)));
   };
 
   const handleSubmit = async (event: FormEvent) => {
@@ -100,12 +101,17 @@ function FusionModelDialog({
     const value: FusionFormValue = {
       model_name: modelName,
       team_id: teamID,
+      outer_model: outerModel,
       panel_models: panelModels,
-      aggregator_model: aggregatorModel,
-      min_successful_panelists: minSuccessful,
+      analyst_model: analystModel,
+      invocation: presetInvocation(preset),
       panel_timeout_seconds: timeoutSeconds,
       max_candidate_chars: maxCandidateChars,
-      on_quorum_failure: presetFailureMode(preset),
+      max_completion_tokens: maxCompletionTokens,
+      temperature,
+      reasoning_effort: reasoningEffort,
+      search_tool_name: searchToolName,
+      max_tool_calls: maxToolCalls,
     };
     const validationError = fusionConfigError(value, requiresTeamScope);
     if (validationError) {
@@ -139,8 +145,8 @@ function FusionModelDialog({
         <DialogHeader>
           <DialogTitle>{editing ? "Configure Fusion Model" : "Add Fusion Model"}</DialogTitle>
           <DialogDescription>
-            Every request runs the panel in parallel, then the aggregator returns one normal model response or tool
-            call.
+            The outer model can privately ask a panel to deliberate, then uses their analysis to return the final
+            response or tool call.
           </DialogDescription>
         </DialogHeader>
         <form className="space-y-5" onSubmit={handleSubmit}>
@@ -168,28 +174,26 @@ function FusionModelDialog({
             <Select
               value={preset}
               onValueChange={(value) => {
-                if (value === "quality" || value === "resilient") applyPreset(value);
+                if (value === "auto" || value === "always") applyPreset(value);
               }}
             >
               <SelectTrigger id="fusion-preset" className="h-11 w-full px-3">
-                <span className="flex-1 text-left font-medium">
-                  {preset === "quality" ? "Quality First" : "High Availability"}
-                </span>
+                <span className="flex-1 text-left font-medium">{preset === "auto" ? "Auto" : "Always deliberate"}</span>
               </SelectTrigger>
-              <SelectContent align="start">
-                <SelectItem value="quality" label="Quality First" className="items-start py-3">
-                  <div className="min-w-0 whitespace-normal pr-2">
-                    <div className="font-medium">Quality First</div>
+              <SelectContent align="start" className="w-[var(--radix-select-trigger-width)] min-w-[28rem]">
+                <SelectItem value="auto" label="Auto" className="items-start py-3">
+                  <div className="min-w-0 whitespace-normal pr-4">
+                    <div className="font-medium">Auto</div>
                     <div className="mt-1 text-sm leading-5 text-muted-foreground">
-                      Fail the request when the panel quorum is missed.
+                      Let the outer model deliberate only when another perspective would help.
                     </div>
                   </div>
                 </SelectItem>
-                <SelectItem value="resilient" label="High Availability" className="items-start py-3">
-                  <div className="min-w-0 whitespace-normal pr-2">
-                    <div className="font-medium">High Availability</div>
+                <SelectItem value="always" label="Always deliberate" className="items-start py-3">
+                  <div className="min-w-0 whitespace-normal pr-4">
+                    <div className="font-medium">Always deliberate</div>
                     <div className="mt-1 text-sm leading-5 text-muted-foreground">
-                      Let the aggregator answer alone when the panel quorum is missed.
+                      Force one panel deliberation on every request. Useful for evaluation and high-stakes workloads.
                     </div>
                   </div>
                 </SelectItem>
@@ -203,19 +207,19 @@ function FusionModelDialog({
               options={modelOptions}
               value={panelModels}
               onValueChange={handlePanelsChanged}
-              placeholder="Select 2–6 independent models"
-              emptyText="Add regular model deployments before creating a Fusion model."
+              placeholder="Select 1–8 independent models"
+              emptyText="Add a regular model deployment before creating a Fusion model."
             />
             <p className="text-xs text-muted-foreground">
-              Panel models see the full request and function schemas, but their tool proposals never execute.
+              Panel models receive a self-contained deliberation question. They never receive or execute client tools.
             </p>
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="fusion-aggregator">Aggregator model</Label>
-            <Select value={aggregatorModel} onValueChange={(value) => setAggregatorModel(value ?? "")}>
-              <SelectTrigger id="fusion-aggregator" className="w-full">
-                <SelectValue placeholder="Select the model that produces the final response" />
+            <Label htmlFor="fusion-outer">Outer model</Label>
+            <Select value={outerModel} onValueChange={(value) => setOuterModel(value ?? "")}>
+              <SelectTrigger id="fusion-outer" className="w-full">
+                <SelectValue placeholder="Select the model that talks to the client" />
               </SelectTrigger>
               <SelectContent>
                 {availableModels.map((model) => (
@@ -226,7 +230,31 @@ function FusionModelDialog({
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              This model synthesizes the panel instead of choosing a winner. Only its response reaches the client.
+              This model decides when to deliberate and is the only model that can return answers or client tool calls.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="fusion-analyst">Analyst model</Label>
+            <Select
+              value={analystModel || "same-as-outer"}
+              onValueChange={(value) => setAnalystModel(value === "same-as-outer" ? "" : value ?? "")}
+            >
+              <SelectTrigger id="fusion-analyst" className="w-full">
+                <SelectValue placeholder="Use the outer model" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="same-as-outer">Same as outer model</SelectItem>
+                {availableModels.map((model) => (
+                  <SelectItem key={model} value={model}>
+                    {model}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              The analyst compares the panel&apos;s consensus, disagreements, gaps, and unique insights. It never writes
+              the final answer.
             </p>
           </div>
 
@@ -240,18 +268,7 @@ function FusionModelDialog({
               <span className="text-xs text-muted-foreground">{advancedOpen ? "Hide" : "Show"}</span>
             </button>
             {advancedOpen && (
-              <div className="grid gap-4 border-t p-4 sm:grid-cols-3">
-                <div className="space-y-2">
-                  <Label htmlFor="fusion-quorum">Successful panelists</Label>
-                  <Input
-                    id="fusion-quorum"
-                    type="number"
-                    min={1}
-                    max={Math.max(1, panelModels.length)}
-                    value={minSuccessful}
-                    onChange={(event) => setMinSuccessful(Number(event.target.value))}
-                  />
-                </div>
+              <div className="grid gap-4 border-t p-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="fusion-timeout">Panel timeout (seconds)</Label>
                   <Input
@@ -275,6 +292,75 @@ function FusionModelDialog({
                     onChange={(event) => setMaxCandidateChars(Number(event.target.value))}
                   />
                 </div>
+                <div className="space-y-2">
+                  <Label htmlFor="fusion-output-tokens">Internal output tokens</Label>
+                  <Input
+                    id="fusion-output-tokens"
+                    type="number"
+                    min={1}
+                    max={128000}
+                    value={maxCompletionTokens}
+                    onChange={(event) => setMaxCompletionTokens(Number(event.target.value))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="fusion-temperature">Panel temperature</Label>
+                  <Input
+                    id="fusion-temperature"
+                    type="number"
+                    min={0}
+                    max={2}
+                    step={0.1}
+                    value={temperature}
+                    onChange={(event) => setTemperature(Number(event.target.value))}
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="fusion-reasoning">Internal reasoning effort</Label>
+                  <Select
+                    value={reasoningEffort}
+                    onValueChange={(value) => setReasoningEffort(value as typeof reasoningEffort)}
+                  >
+                    <SelectTrigger id="fusion-reasoning" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(["none", "minimal", "low", "medium", "high", "xhigh"] as const).map((effort) => (
+                        <SelectItem key={effort} value={effort}>
+                          {effort}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Unsupported reasoning parameters are dropped for that provider.
+                  </p>
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label>Web research</Label>
+                  <SearchToolSelector
+                    accessToken={accessToken}
+                    value={searchToolName ? [searchToolName] : []}
+                    onChange={(tools) => setSearchToolName(tools.at(-1) ?? "")}
+                    placeholder="Select one Search Tool (optional)"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    When selected, panel and analyst models can search through this server-side LiteLLM Search Tool.
+                  </p>
+                </div>
+                {searchToolName && (
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label htmlFor="fusion-tool-calls">Tool calls per internal model</Label>
+                    <Input
+                      id="fusion-tool-calls"
+                      type="number"
+                      min={1}
+                      max={16}
+                      value={maxToolCalls}
+                      onChange={(event) => setMaxToolCalls(Number(event.target.value))}
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -341,8 +427,8 @@ export function FusionModelsPanel({
         <div>
           <h2 className="text-base font-semibold text-foreground">Fusion models</h2>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Run several models independently on every model turn, then have one aggregator synthesize the final answer
-            or tool call. Your agent, coding harness, and tool loop stay unchanged.
+            Give one model a private deliberation tool backed by an independent panel and analyst. The outer model still
+            behaves like a normal model, so your agent, coding harness, and tool loop stay unchanged.
           </p>
         </div>
         {canCreate && (
@@ -357,9 +443,10 @@ export function FusionModelsPanel({
           <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
             <tr>
               <th className="px-4 py-3 font-medium">Name</th>
+              <th className="px-4 py-3 font-medium">Outer model</th>
               <th className="px-4 py-3 font-medium">Panel</th>
-              <th className="px-4 py-3 font-medium">Aggregator</th>
-              <th className="px-4 py-3 font-medium">Policy</th>
+              <th className="px-4 py-3 font-medium">Analyst</th>
+              <th className="px-4 py-3 font-medium">Deliberation</th>
               <th className="w-24 px-4 py-3 font-medium">Actions</th>
             </tr>
           </thead>
@@ -370,12 +457,11 @@ export function FusionModelsPanel({
               return (
                 <tr key={deployment.model_info?.id ?? deployment.model_name}>
                   <td className="px-4 py-3 font-medium">{deployment.model_name}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{config.outer_model}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{config.panel_models.join(", ")}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{config.analyst_model || "Same as outer"}</td>
                   <td className="px-4 py-3 text-muted-foreground">
-                    {config.panel_models.join(", ")} ({config.min_successful_panelists} required)
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">{config.aggregator_model}</td>
-                  <td className="px-4 py-3 text-muted-foreground">
-                    {config.on_quorum_failure === "fail" ? "Quality First" : "High Availability"}
+                    {config.invocation === "required" ? "Always" : "Auto"}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1">
@@ -404,16 +490,16 @@ export function FusionModelsPanel({
             })}
             {!isLoading && rows.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-10 text-center text-muted-foreground">
+                <td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">
                   {canCreate
-                    ? "No Fusion models yet. Create one after adding at least two regular model groups."
+                    ? "No Fusion models yet. Create one after adding at least one regular model group."
                     : "No Fusion models are available."}
                 </td>
               </tr>
             )}
             {isLoading && (
               <tr>
-                <td colSpan={5} className="px-4 py-10 text-center text-muted-foreground">
+                <td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">
                   Loading Fusion models…
                 </td>
               </tr>
