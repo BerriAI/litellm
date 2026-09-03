@@ -8198,6 +8198,79 @@ class TestPreemptive401ModeAware:
         await self._run(delegate, self.LITELLM_KEY_HEADERS, has_stored_token=False)
 
 
+def _make_obo_server(alias: str) -> MCPServer:
+    return MCPServer(
+        server_id=f"id-{alias}",
+        name=alias,
+        alias=alias,
+        server_name=alias,
+        url=f"https://{alias}.test/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2_token_exchange,
+        token_exchange_endpoint="https://idp.test/token",
+        client_id="cid",
+        client_secret="csecret",
+        mcp_info={"server_name": alias},
+    )
+
+
+class TestOboPreflightScopedToAllowedServers:
+    """The connect-time OBO exchange is an outbound IdP call whose result is cached, so it must
+    only run for a server the caller's key resolves to through the allowed set, not for any
+    server the requested path happens to name."""
+
+    SUBJECT_HEADERS = {"Authorization": "Bearer upstream-subject-token"}
+
+    async def _run(self, requested: MCPServer, allowed: list[MCPServer], user_api_key_auth: UserAPIKeyAuth | None):
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        allowed_lookup = AsyncMock(return_value=allowed)
+        preflight = AsyncMock()
+        with (
+            patch.object(  # test-quality-ok: route handler reads the module-level manager, no injection seam
+                server_module.global_mcp_server_manager, "get_mcp_server_by_name", return_value=requested
+            ),
+            patch.object(  # test-quality-ok: the exchanger is the observable; a real one would call an IdP
+                server_module.global_mcp_server_manager, "preflight_token_exchange", preflight
+            ),
+            patch.object(  # test-quality-ok: allowed-set resolution needs the DB; the test controls its answer
+                server_module, "_get_allowed_mcp_servers", allowed_lookup
+            ),
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope={"type": "http", "method": "POST", "path": f"/mcp/{requested.alias}", "headers": []},
+                mcp_servers=[requested.alias],
+                oauth2_headers=self.SUBJECT_HEADERS,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=user_api_key_auth,
+                client_ip="10.0.0.7",
+            )
+        return allowed_lookup, preflight
+
+    @pytest.mark.asyncio
+    async def test_unentitled_key_never_reaches_the_exchanger(self):
+        requested = _make_obo_server("obo_tools")
+        key = UserAPIKeyAuth(api_key="sk-plain-only")
+
+        allowed_lookup, preflight = await self._run(
+            requested, allowed=[_make_obo_server("plain_tools")], user_api_key_auth=key
+        )
+
+        preflight.assert_not_awaited()
+        allowed_lookup.assert_awaited_once_with(
+            user_api_key_auth=key, mcp_servers=[requested.alias], client_ip="10.0.0.7"
+        )
+
+    @pytest.mark.asyncio
+    async def test_entitled_key_still_exchanges_at_connect(self):
+        requested = _make_obo_server("obo_tools")
+        key = UserAPIKeyAuth(api_key="sk-obo")
+
+        _, preflight = await self._run(requested, allowed=[requested], user_api_key_auth=key)
+
+        preflight.assert_awaited_once_with(server=requested, oauth2_headers=self.SUBJECT_HEADERS, user_api_key_auth=key)
+
+
 @pytest.mark.asyncio
 async def test_post_mcp_call_guardrails_return_the_rewritten_result():
     """The result a post_mcp_call guardrail rewrote must be what the caller sends back."""
