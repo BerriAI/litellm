@@ -549,6 +549,50 @@ describe("EditAutoRouterModal deployment affinity", () => {
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedConfig().deployment_affinity).toBe(false);
   });
+
+  // modality_pin_override is a managed key, so the modal rewrites it from form state on save. A
+  // hydration gap would silently turn a stored override off on the next untouched save.
+  it("shows a stored modality_pin_override=true as on and preserves it through an untouched save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, modality_routing: true, modality_pin_override: true });
+
+    await user.click(await screen.findByText("Advanced: Modality Routing"));
+    expect(await screen.findByRole("switch", { name: "Override session pin for image requests" })).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().modality_pin_override).toBe(true);
+  });
+
+  it("persists turning the modality pin override on", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, modality_routing: true });
+
+    await user.click(await screen.findByText("Advanced: Modality Routing"));
+    await user.click(await screen.findByRole("switch", { name: "Override session pin for image requests" }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().modality_pin_override).toBe(true);
+  });
+
+  it("writes modality_pin_override=false for a stored config that never carried the key", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig(STORED_CONFIG);
+
+    await user.click(await screen.findByText("Advanced: Modality Routing"));
+    expect(await screen.findByRole("switch", { name: "Override session pin for image requests" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().modality_pin_override).toBe(false);
+  });
 });
 
 describe("EditAutoRouterModal custom classifier prompt and fallback", () => {

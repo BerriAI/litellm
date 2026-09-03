@@ -1,9 +1,14 @@
+from unittest.mock import Mock
 
-
+import httpx
 import pytest
 
 import litellm
-from litellm.llms.xai.chat.transformation import XAIChatConfig
+from litellm.llms.xai.chat.transformation import (
+    XAIChatCompletionStreamingHandler,
+    XAIChatConfig,
+)
+from litellm.llms.xai.cost_calculator import cost_per_token
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     ModelResponse,
@@ -195,3 +200,113 @@ class TestXAIChatWebSearchBilling:
         )
 
         assert with_search - without_search == pytest.approx(3 * 5.0 / 1000.0)
+
+
+class TestXAIReportedCost:
+    """xAI reports what it charged; the transformation moves it to where litellm bills from.
+
+    ``cost`` is the field litellm already carries a provider stated cost in, so restating
+    ``cost_in_usd_ticks`` there is what lets ``llms/xai/cost_calculator.py`` bill the
+    reported figure. At 10^10 ticks to the dollar, 37756000 ticks is $0.0037756.
+    """
+
+    @staticmethod
+    def _transformed_usage(usage: dict) -> Usage:
+        raw_response = httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-xai",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "grok-4-latest",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "hi"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": usage,
+            },
+        )
+
+        response = XAIChatConfig().transform_response(
+            model="grok-4-latest",
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=Mock(),
+            request_data={},
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+        return response.usage
+
+    def test_reported_cost_reaches_the_cost_calculator(self):
+        usage = self._transformed_usage(
+            {
+                "prompt_tokens": 100,
+                "completion_tokens": 200,
+                "total_tokens": 300,
+                "cost_in_usd_ticks": 37756000,
+            }
+        )
+
+        assert usage.cost == 0.0037756
+        assert cost_per_token(model="grok-4-latest", usage=usage) == (0.0, 0.0037756)
+
+    def test_usage_without_a_reported_cost_is_left_alone(self):
+        usage = self._transformed_usage(
+            {"prompt_tokens": 100, "completion_tokens": 200, "total_tokens": 300}
+        )
+
+        assert getattr(usage, "cost", None) is None
+
+    def test_negative_reported_cost_is_not_carried(self):
+        """A caller who can set api_base must not be able to report negative spend."""
+        usage = self._transformed_usage(
+            {
+                "prompt_tokens": 100,
+                "completion_tokens": 200,
+                "total_tokens": 300,
+                "cost_in_usd_ticks": -37756000,
+            }
+        )
+
+        assert getattr(usage, "cost", None) is None
+
+    def test_streamed_reported_cost_survives_chunk_aggregation(self):
+        """Streamed spend only matches if the conversion happens on the chunk.
+
+        Chunk aggregation rebuilds usage from the fields it models plus ``cost``, so a
+        chunk still carrying only ``cost_in_usd_ticks`` loses the reported amount.
+        """
+        handler = XAIChatCompletionStreamingHandler(
+            streaming_response=iter([]), sync_stream=True
+        )
+
+        parsed = handler.chunk_parser(
+            {
+                "id": "chatcmpl-xai",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": "grok-4-latest",
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 200,
+                    "total_tokens": 300,
+                    "cost_in_usd_ticks": 37756000,
+                },
+            }
+        )
+
+        assert parsed.usage.cost == 0.0037756
+
+        assembled = litellm.stream_chunk_builder(chunks=[parsed])
+        assert assembled.usage.cost == 0.0037756
+        assert cost_per_token(model="grok-4-latest", usage=assembled.usage) == (
+            0.0,
+            0.0037756,
+        )

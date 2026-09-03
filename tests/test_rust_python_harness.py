@@ -8,14 +8,24 @@ import pytest
 
 catalog = importlib.import_module("tests.rust-python-harness.catalog")
 cli = importlib.import_module("tests.rust-python-harness.cli")
+ledger_module = importlib.import_module("tests.rust-python-harness.shared.parity.ledger")
+mapping_validator = importlib.import_module(
+    "tests.rust-python-harness.strategies.unit_tests.mapping_validator"
+)
 models = importlib.import_module("tests.rust-python-harness.models")
 runner = importlib.import_module("tests.rust-python-harness.runner")
 ui = importlib.import_module("tests.rust-python-harness.ui")
 
 load_catalog = catalog.load_catalog
+load_ledger = ledger_module.load_ledger
+ledger_path_for = mapping_validator.ledger_path_for
+REPO_ROOT = mapping_validator.REPO_ROOT
+audit_ledger = mapping_validator.audit_ledger
+build_function_report = mapping_validator.build_function_report
 _pick_values = cli._pick_values
 _coverage_pytest_args = cli._coverage_pytest_args
 _select = cli._select
+_validate_ledger = cli._validate_ledger
 CaseResult = models.CaseResult
 Coverage = models.Coverage
 HarnessCase = models.HarnessCase
@@ -56,13 +66,14 @@ def _manifest() -> dict[str, object]:
     }
 
 
-def test_should_load_the_three_harness_strategies_in_order() -> None:
+def test_should_load_the_four_harness_strategies_in_order() -> None:
     strategies = load_catalog()
 
     assert [strategy.id for strategy in strategies] == [
         "e2e_fuzz_tests",
         "unit_tests_rust",
         "validate_sub_methods",
+        "existing_e2e_test_sdk",
     ]
     assert all(
         tuple(case.sdk_function for case in strategy.cases) == SDK_FUNCTIONS
@@ -94,6 +105,8 @@ def test_should_reject_a_manifest_missing_an_sdk_function(tmp_path: Path) -> Non
             True,
         ),
         ("tests/test_parity.py::test_one", "tests/test_parity.py::test_two", False),
+        ("tests/ocr_tests/", "tests/ocr_tests/test_ocr_mistral.py::test_one", True),
+        ("tests/ocr_tests/", "tests/other_tests/test_ocr_mistral.py::test_one", False),
     ],
 )
 def test_should_match_pytest_file_and_node_selectors(
@@ -111,6 +124,13 @@ def test_should_only_return_selectors_whose_files_exist(tmp_path: Path) -> None:
     )
 
     assert runnable_selectors((case,), tmp_path) == ("tests/test_parity.py",)
+
+
+def test_should_treat_an_existing_folder_selector_as_runnable(tmp_path: Path) -> None:
+    (tmp_path / "tests" / "ocr_tests").mkdir(parents=True)
+    case = _case(selectors=("tests/ocr_tests/",))
+
+    assert runnable_selectors((case,), tmp_path) == ("tests/ocr_tests/",)
 
 
 def test_should_mark_planned_and_not_applicable_cases_without_running() -> None:
@@ -229,8 +249,53 @@ def test_should_report_confidence_for_each_sdk_section() -> None:
     }
 
     assert scores["responses"].verified_strategies == 1
-    assert scores["responses"].required_strategies == 3
-    assert scores["responses"].percentage == 33
+    assert scores["responses"].required_strategies == 4
+    assert scores["responses"].percentage == 25
     assert scores["responses"].level.value == "MEDIUM"
     assert scores["count_tokens"].percentage == 0
     assert scores["count_tokens"].level.value == "LOW"
+
+
+
+def test_should_report_no_ledger_for_a_function_without_one() -> None:
+    report = build_function_report("messages", repo_root=REPO_ROOT)
+
+    assert report.has_ledger is False
+    assert report.is_clean is True
+
+
+def test_should_report_ocr_ledger_stats_and_a_clean_audit() -> None:
+    ledger = load_ledger(ledger_path_for("ocr"))
+
+    report = build_function_report("ocr", repo_root=REPO_ROOT)
+
+    assert report.has_ledger is True
+    assert report.ledger.mapped_count == ledger.mapped_count
+    assert report.ledger.total_count == ledger.total_count
+    assert report.is_clean is True
+
+
+def test_should_scope_validate_ledger_to_the_requested_function(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = _validate_ledger({"messages"})
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "messages" in captured.out
+    assert "no ledger yet" in captured.out
+    assert "ocr" not in captured.out
+
+
+def test_should_have_every_python_and_rust_ocr_test_accounted_for_in_the_ledger() -> None:
+    ledger = load_ledger(ledger_path_for("ocr"))
+
+    report = audit_ledger(ledger, repo_root=REPO_ROOT)
+
+    assert report.is_clean, (
+        "\nOCR test-parity ledger is out of sync with the live test files.\n"
+        f"Ledger references a Python test that no longer exists: {list(report.missing_python_tests)}\n"
+        f"Python test exists but is not tracked in the ledger: {list(report.stale_python_tests)}\n"
+        f"Ledger references a Rust test that no longer exists: {list(report.missing_rust_tests)}\n"
+        f"Rust test exists but is not tracked in the ledger: {list(report.stale_rust_tests)}\n"
+    )

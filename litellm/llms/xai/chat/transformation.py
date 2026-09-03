@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Iterator, Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
@@ -11,7 +12,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
     strip_name_from_messages,
 )
-from litellm.llms.xai.common_utils import XAIModelInfo
+from litellm.llms.xai.common_utils import XAIModelInfo, xai_reported_cost_in_usd
 from litellm.llms.xai.cost_calculator import (
     apply_server_side_tool_usage_details_to_usage,
 )
@@ -28,6 +29,13 @@ from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
+
+
+def _usage_restated_from_xai_ticks(usage: Usage | None) -> Usage | None:
+    reported_cost: Final = xai_reported_cost_in_usd(getattr(usage, "cost_in_usd_ticks", None))
+    if usage is None or reported_cost is None:
+        return None
+    return usage.model_copy(update=MappingProxyType({"cost": reported_cost}))
 
 
 class XAIChatConfig(OpenAIGPTConfig):
@@ -283,6 +291,9 @@ class XAIChatConfig(OpenAIGPTConfig):
 
         self._fold_reasoning_tokens_into_completion(response)
         self._normalize_openai_compatible_usage_totals(getattr(response, "usage", None))
+        restated_usage: Final = _usage_restated_from_xai_ticks(getattr(response, "usage", None))
+        if restated_usage is not None:
+            response.usage = restated_usage
         return response
 
     @staticmethod
@@ -411,4 +422,8 @@ class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
             XAIChatConfig._fold_reasoning_tokens_into_completion(chunk["usage"])
             XAIChatConfig._normalize_openai_compatible_usage_totals(chunk["usage"])
 
-        return super().chunk_parser(chunk)
+        parsed_chunk: Final = super().chunk_parser(chunk)
+        restated_usage: Final = _usage_restated_from_xai_ticks(getattr(parsed_chunk, "usage", None))
+        if restated_usage is not None:
+            parsed_chunk.usage = restated_usage
+        return parsed_chunk
