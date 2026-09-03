@@ -7358,6 +7358,71 @@ def test_get_configured_token_limits_coerces_numeric_strings():
     assert router.get_configured_token_limits("quoted-limits-model") == (32000, 8000)
 
 
+def test_get_configured_mode_reads_deployment_model_info():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chat-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"mode": "chat"},
+            }
+        ]
+    )
+
+    assert router.get_configured_mode("chat-model") == "chat"
+
+
+def test_get_configured_mode_returns_none_for_unset_or_unknown():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "no-mode-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+            }
+        ]
+    )
+
+    assert router.get_configured_mode("no-mode-model") is None
+    assert router.get_configured_mode("not-a-real-model") is None
+
+
+def test_get_configured_mode_skips_wildcard_pattern_matching():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+                "model_info": {"mode": "chat"},
+            }
+        ]
+    )
+
+    with patch.object(
+        router.pattern_router, "route", side_effect=AssertionError("pattern route called")
+    ):
+        assert (
+            router.get_configured_mode("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
+            is None
+        )
+
+
+def test_get_configured_mode_treats_malformed_values_as_absent():
+    malformed = ["", "   ", 12345, ["chat"], {"mode": "chat"}, True]
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": f"bad-mode-{i}",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"mode": bad},
+            }
+            for i, bad in enumerate(malformed)
+        ]
+    )
+
+    for i in range(len(malformed)):
+        assert router.get_configured_mode(f"bad-mode-{i}") is None
+
+
 def test_get_configured_display_name_reads_deployment_model_info():
     router = litellm.Router(
         model_list=[
