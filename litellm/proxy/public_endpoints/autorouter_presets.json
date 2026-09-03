@@ -12,7 +12,7 @@
       "tier_model_configs": {
         "REASONING": [{ "model_name": "claude-opus-5", "litellm_params": { "reasoning_effort": "high" } }]
       },
-      "classifier_type": "heuristic",
+      "classifier_type": "heuristic_v2",
       "escalation_keywords": ["LITELLM ESCALATE"],
       "classification_mode": "every_request",
       "session_affinity": false,

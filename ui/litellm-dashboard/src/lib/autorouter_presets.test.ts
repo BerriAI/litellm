@@ -210,6 +210,7 @@ describe("autorouter_presets", () => {
 
   it("pins the 1M context preset to Luna, Terra, and Opus at high thinking", () => {
     const preset = getPresetByKey("1m_context")!;
+    expect(preset.complexity_router_config.classifier_type).toBe("heuristic_v2");
     expect(preset.complexity_router_config.tiers).toEqual({
       SIMPLE: ["gpt-5.6-luna"],
       MEDIUM: ["gpt-5.6-terra"],

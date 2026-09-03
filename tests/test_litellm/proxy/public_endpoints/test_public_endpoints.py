@@ -1104,6 +1104,7 @@ def test_get_autorouter_presets_local_mode_serves_bundled_catalog(
     assert response.status_code == 200
     payload = response.json()
     assert "anthropic_family" in payload
+    assert payload["1m_context"]["complexity_router_config"]["classifier_type"] == "heuristic_v2"
     assert payload["1m_context"]["complexity_router_config"]["tiers"] == {
         "SIMPLE": ["gpt-5.6-luna"],
         "MEDIUM": ["gpt-5.6-terra"],
