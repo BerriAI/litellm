@@ -101,6 +101,20 @@ def get_azure_ad_token_provider(
         # DefaultAzureCredential doesn't require explicit environment variables
         # It automatically discovers credentials from the environment (managed identity, CLI, etc.)
         credential = DefaultAzureCredential()
+    elif cred == AzureCredentialType.DeploymentIdentityCredential:
+        # The two False values are load bearing: they beat AZURE_TOKEN_CREDENTIALS, which would
+        # otherwise empty the chain and make DefaultAzureCredential raise
+        credential = DefaultAzureCredential(
+            exclude_environment_credential=True,
+            exclude_shared_token_cache_credential=True,
+            exclude_visual_studio_code_credential=True,
+            exclude_cli_credential=True,
+            exclude_developer_cli_credential=True,
+            exclude_powershell_credential=True,
+            exclude_broker_credential=True,
+            exclude_workload_identity_credential=False,
+            exclude_managed_identity_credential=False,
+        )
     else:
         cred_cls: Final = getattr(identity, cred)
         credential = cred_cls()

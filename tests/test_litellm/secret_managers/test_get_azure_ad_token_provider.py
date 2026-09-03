@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 # Adds the grandparent directory to sys.path to allow importing project modules
 
 import pytest
+from azure.core.exceptions import ClientAuthenticationError
 
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
@@ -14,6 +15,103 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
 from litellm.types.secret_managers.get_azure_ad_token_provider import (
     AzureCredentialType,
 )
+
+
+class TestDeploymentIdentityCredential:
+    @staticmethod
+    def _chain_for(credential_type):
+        built = []
+
+        def record(credential, scope):
+            built.append(credential)
+            return lambda: "token"
+
+        with patch("azure.identity.get_bearer_token_provider", side_effect=record):
+            get_azure_ad_token_provider(
+                azure_scope="https://storage.azure.com/.default",
+                azure_credential=credential_type,
+            )
+        assert len(built) == 1
+        with built[0] as chain:
+            return {type(link).__name__ for link in chain.credentials}
+
+    @patch.dict(
+        os.environ,
+        {
+            "AZURE_CLIENT_ID": "workload-identity-client-id",
+            "AZURE_TENANT_ID": "workload-identity-tenant-id",
+            "AZURE_FEDERATED_TOKEN_FILE": "/var/run/secrets/azure/tokens/azure-identity-token",
+        },
+        clear=True,
+    )
+    def test_deployment_identity_reaches_workload_and_managed_identity_only(self):
+        assert self._chain_for(AzureCredentialType.DeploymentIdentityCredential) == {
+            "WorkloadIdentityCredential",
+            "ManagedIdentityCredential",
+        }
+
+    @patch.dict(
+        os.environ,
+        {
+            "AZURE_CLIENT_ID": "workload-identity-client-id",
+            "AZURE_TENANT_ID": "workload-identity-tenant-id",
+            "AZURE_FEDERATED_TOKEN_FILE": "/var/run/secrets/azure/tokens/azure-identity-token",
+            "AZURE_TOKEN_CREDENTIALS": "dev",
+        },
+        clear=True,
+    )
+    def test_deployment_identity_survives_a_developer_only_token_credentials_setting(self):
+        """AZURE_TOKEN_CREDENTIALS=dev asks the SDK for developer credentials only, which is every
+        credential this chain drops, so the deployment's own identity has to win over it"""
+        assert self._chain_for(AzureCredentialType.DeploymentIdentityCredential) == {
+            "WorkloadIdentityCredential",
+            "ManagedIdentityCredential",
+        }
+
+    @patch.dict(
+        os.environ,
+        {
+            "AZURE_CLIENT_ID": "azure-openai-client-id",
+            "AZURE_CLIENT_SECRET": "azure-openai-client-secret",
+            "AZURE_TENANT_ID": "azure-openai-tenant-id",
+        },
+        clear=True,
+    )
+    def test_default_azure_credential_keeps_its_full_chain(self):
+        """Azure OpenAI callers pass DefaultAzureCredential and must be unaffected by the
+        narrowing that the storage callback asks for"""
+        full_chain = self._chain_for(AzureCredentialType.DefaultAzureCredential)
+
+        assert "EnvironmentCredential" in full_chain
+        assert "AzureCliCredential" in full_chain
+        assert "EnvironmentCredential" not in self._chain_for(
+            AzureCredentialType.DeploymentIdentityCredential
+        )
+
+    @patch.dict(
+        os.environ,
+        {
+            "AZURE_CLIENT_ID": "azure-openai-client-id",
+            "AZURE_CLIENT_SECRET": "azure-openai-client-secret",
+            "AZURE_TENANT_ID": "azure-openai-tenant-id",
+        },
+        clear=True,
+    )
+    def test_deployment_identity_refuses_to_mint_a_token_for_a_configured_service_principal(self):
+        """A host carrying only an Azure OpenAI client secret must get no token at all, and the
+        refusal must name the identities that were actually tried"""
+        provider = get_azure_ad_token_provider(
+            azure_scope="https://storage.azure.com/.default",
+            azure_credential=AzureCredentialType.DeploymentIdentityCredential,
+        )
+
+        with pytest.raises(ClientAuthenticationError) as refusal:
+            provider()
+
+        assert "WorkloadIdentityCredential" in str(refusal.value)
+        assert "ManagedIdentityCredential" in str(refusal.value)
+        assert "EnvironmentCredential" not in str(refusal.value)
+        assert "AzureCliCredential" not in str(refusal.value)
 
 
 class TestGetAzureAdTokenProvider:
