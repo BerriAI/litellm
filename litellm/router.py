@@ -24,7 +24,7 @@ from collections import defaultdict
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator, Mapping, Sequence
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, SupportsInt, TypeAlias, TypeVar, Union, cast
 
 import anyio
 import httpx
@@ -11507,6 +11507,13 @@ class Router:
             if model_id is not None:
                 self.cache.delete_cache(self.max_parallel_requests_cache_key(model_id))
 
+    def _set_default_max_parallel_requests(self, value: SupportsInt | str | None) -> None:
+        limit: Final = None if value is None else int(value)
+        if limit == self.default_max_parallel_requests:
+            return
+        self.default_max_parallel_requests = limit
+        self._clear_max_parallel_requests_clients()
+
     def update_settings(self, **kwargs):
         """
         Update the router settings.
@@ -11529,8 +11536,7 @@ class Router:
                     if kwargs[var] is not None:
                         setattr(self, var, int(kwargs[var]))
                 elif var == "default_max_parallel_requests":
-                    self.default_max_parallel_requests = None if kwargs[var] is None else int(kwargs[var])
-                    self._clear_max_parallel_requests_clients()
+                    self._set_default_max_parallel_requests(kwargs[var])
                 elif var == "routing_groups":
                     self._routing_groups_input = kwargs[var]
                     rebuild_routing_groups = True

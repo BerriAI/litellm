@@ -27,6 +27,7 @@ reloading, every value snapped back to ``defaultRetry = num_retries``
 This file pins both halves of the fix.
 """
 
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import Final
@@ -557,6 +558,28 @@ def test_update_settings_rebuilds_max_parallel_request_clients():
 
     router.update_settings(default_max_parallel_requests=5)
     assert router._get_client(deployment=deployment, kwargs={}, client_type="max_parallel_requests")._value == 5
+
+
+def test_update_settings_keeps_the_semaphore_when_the_limit_is_unchanged():
+    """`/config/update` is replayed onto the live router on a timer, so an
+    unchanged default_max_parallel_requests reaches update_settings every few
+    seconds. Rebuilding the semaphore there would hand new arrivals a fresh one
+    at full capacity while in-flight requests still hold permits on the old
+    object, so the deployment briefly serves past its own limit."""
+    router = _build_router()
+    deployment = router.model_list[0]
+
+    router.update_settings(default_max_parallel_requests=2)
+    semaphore = router._get_client(deployment=deployment, kwargs={}, client_type="max_parallel_requests")
+    assert semaphore.locked() is False
+    asyncio.run(semaphore.acquire())
+    asyncio.run(semaphore.acquire())
+    assert semaphore.locked() is True
+
+    router.update_settings(default_max_parallel_requests=2)
+
+    assert router._get_client(deployment=deployment, kwargs={}, client_type="max_parallel_requests") is semaphore
+    assert semaphore.locked() is True
 
 
 def test_max_parallel_requests_cache_key_addresses_the_cached_semaphore():
