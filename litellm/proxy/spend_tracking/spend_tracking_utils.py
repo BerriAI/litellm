@@ -578,6 +578,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             ),
             session_id=_get_session_id_for_spend_log(
                 kwargs=kwargs,
+                metadata=metadata,  # pyright: ignore[reportArgumentType]  # legacy metadata helper returns an untyped mapping
                 standard_logging_payload=standard_logging_payload,
             ),
             request_duration_ms=_get_request_duration_ms(start_time, end_time),
@@ -603,26 +604,20 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
 
 
 def _get_session_id_for_spend_log(
-    kwargs: dict,
+    kwargs: Mapping[str, object],
+    metadata: Mapping[str, object],
     standard_logging_payload: StandardLoggingPayload | None,
-) -> str:
-    """
-    Get the session id for the spend log.
-
-    This ensures each spend log is associated with a unique session id.
-
-    """
-    from litellm._uuid import uuid
-
-    if standard_logging_payload is not None and standard_logging_payload.get("trace_id") is not None:
-        return str(standard_logging_payload.get("trace_id"))
-
-    # Users can dynamically set the trace_id for each request by passing `litellm_trace_id` in kwargs
-    if kwargs.get("litellm_trace_id") is not None:
-        return str(kwargs.get("litellm_trace_id"))
-
-    # Ensure we always have a session id, if none is provided
-    return str(uuid.uuid4())
+) -> str | None:
+    """Only a client-established session id is recorded; the same key the Langfuse integration reads."""
+    sl_session_id: Final = standard_logging_payload.get("session_id") if standard_logging_payload is not None else None
+    litellm_params: Final = kwargs.get("litellm_params")
+    candidates: Final[tuple[object, ...]] = (
+        sl_session_id,
+        kwargs.get("litellm_session_id"),
+        litellm_params.get("litellm_session_id") if isinstance(litellm_params, Mapping) else None,
+        metadata.get("session_id"),
+    )
+    return next((str(c) for c in candidates if c), None)
 
 
 def _get_request_duration_ms(start_time: datetime, end_time: datetime) -> int | None:

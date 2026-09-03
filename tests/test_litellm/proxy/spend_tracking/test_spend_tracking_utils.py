@@ -74,6 +74,76 @@ def test_get_logging_payload_maps_openai_cached_tokens_to_cache_read_input_token
     assert additional_usage_values["prompt_tokens_details"]["cached_tokens"] == 123
 
 
+def test_session_id_is_none_without_client_session():
+    standard_logging_payload: Final = cast(
+        StandardLoggingPayload,
+        {"trace_id": "trace-abc", "metadata": {}, "model_map_information": None, "request_tags": []},
+    )
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_trace_id": "trace-abc",
+            "standard_logging_object": standard_logging_payload,
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["session_id"] is None
+
+
+def test_session_id_from_metadata_session_id():
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"metadata": {"session_id": "sess-1"}},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["session_id"] == "sess-1"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_session_id"),
+    [
+        ({"litellm_params": {"litellm_session_id": "sess-2"}}, "sess-2"),
+        ({"litellm_session_id": "sess-3"}, "sess-3"),
+    ],
+)
+def test_session_id_from_litellm_session_id_param(kwargs, expected_session_id):
+    payload: Final = get_logging_payload(
+        kwargs={"model": "gpt-4o-mini", **kwargs},
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["session_id"] == expected_session_id
+
+
+def test_session_id_prefers_standard_logging_payload_session_id():
+    standard_logging_payload: Final = cast(
+        StandardLoggingPayload,
+        {"session_id": "sess-sl", "metadata": {}, "model_map_information": None, "request_tags": []},
+    )
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"metadata": {"session_id": "sess-meta"}},
+            "standard_logging_object": standard_logging_payload,
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["session_id"] == "sess-sl"
+
+
 def test_get_logging_payload_preserves_anthropic_cache_read_input_tokens():
     additional_usage_values = _get_additional_usage_values_for_usage(
         litellm.Usage(
