@@ -913,3 +913,62 @@ class TestUnmanagedResponseIdEscapeHatches:
         )
 
         assert result["response_id"] == _FABRICATED_UNMANAGED_ID
+
+
+class TestClientSuppliedRetainedIdCannotBypassAuthorization:
+    """The retained-id key travels in the request body, so it is re-authorized, never trusted."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call_type", sorted(_ADDRESSED_ID_FIELD_BY_CALL_TYPE))
+    async def test_forged_retained_id_is_still_authorized(self, mock_cache, salt_key_env, call_type):
+        field = _ADDRESSED_ID_FIELD_BY_CALL_TYPE[call_type]
+        data = {
+            field: _FABRICATED_UNMANAGED_ID,
+            "_litellm_addressed_response_id": _FABRICATED_UNMANAGED_ID,
+        }
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _hook().async_pre_call_hook(
+                user_api_key_dict=_auth(),
+                cache=mock_cache,
+                data=data,
+                call_type=call_type,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert data[field] == _FABRICATED_UNMANAGED_ID
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("forged", [{"nested": "value"}, ["list"], 42, "", None])
+    async def test_non_string_retained_id_falls_back_to_the_addressed_field(self, mock_cache, salt_key_env, forged):
+        data = {"response_id": _FABRICATED_UNMANAGED_ID, "_litellm_addressed_response_id": forged}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _hook().async_pre_call_hook(
+                user_api_key_dict=_auth(),
+                cache=mock_cache,
+                data=data,
+                call_type="aget_responses",
+            )
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_stranger_forging_their_own_id_never_reaches_someone_elses_response(
+        self, mock_cache, salt_key_env
+    ):
+        hook = _hook()
+        stranger = _auth(user_id="stranger-user", team_id="stranger-team")
+        stranger_id = _issue_managed_id(hook, stranger, provider_response_id="resp_strangerownprovideridcccccccc")
+        victim_provider_id = "resp_victimprovideriddddddddddddddddddddd"
+        data = {"response_id": victim_provider_id, "_litellm_addressed_response_id": stranger_id}
+
+        result = await hook.async_pre_call_hook(
+            user_api_key_dict=stranger,
+            cache=mock_cache,
+            data=data,
+            call_type="aget_responses",
+        )
+
+        assert result["response_id"] == "resp_strangerownprovideridcccccccc"
+        assert result["response_id"] != victim_provider_id
