@@ -58,6 +58,24 @@ def _filter_logs_by_date_range(logs, where):
     return filtered
 
 
+_SEARCH_CLAUSE_RE = re.compile(
+    r'\(request_id = \$(\d+) OR \("startTime" >= \(\$(\d+)::timestamptz AT TIME ZONE \'UTC\'\) '
+    r'AND "startTime" <= \(\$(\d+)::timestamptz AT TIME ZONE \'UTC\'\) '
+    r'AND \(api_key = \$\1 OR team_id = \$\1 OR "user" = \$\1 OR end_user = \$\1 '
+    r"OR session_id = \$\1 OR model_id = \$\1\)\)\)"
+)
+
+
+def _matches_spend_log_search(log, search):
+    """Mirror the search clause: request_id across all time, the other id columns inside the window."""
+    if log.get("request_id") == search["value"]:
+        return True
+    if not _filter_logs_by_date_range([log], {"startTime": {"gte": search["gte"], "lte": search["lte"]}}):
+        return False
+    columns = ("api_key", "team_id", "user", "end_user", "session_id", "model_id")
+    return any(log.get(col) == search["value"] for col in columns)
+
+
 def _reconstruct_ui_where_from_sql(sql_query, params):
     """
     Rebuild the Prisma-style ``where`` dict the filter_fns below expect from the
@@ -77,6 +95,16 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
     def _iso(value):
         return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
+    search_clause = _SEARCH_CLAUSE_RE.search(clause.group(1))
+    if search_clause:
+        raw_index, start_index, end_index = (int(g) for g in search_clause.groups())
+        where["search"] = {
+            "value": params[raw_index - 1],
+            "gte": _iso(params[start_index - 1]),
+            "lte": _iso(params[end_index - 1]),
+        }
+    remaining = clause.group(1) if search_clause is None else clause.group(1).replace(search_clause.group(0), "")
+
     eq_cols = {
         "team_id": "team_id",
         '"user"': "user",
@@ -89,7 +117,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
     }
     date_bounds: dict = {}
     metadata_conds: list = []
-    for cond in (c.strip() for c in clause.group(1).split(" AND ")):
+    for cond in (c.strip() for c in remaining.split(" AND ")):
         gte = re.search(r'"startTime" >= \(\$(\d+)', cond)
         lte = re.search(r'"startTime" <= \(\$(\d+)', cond)
         alias = re.search(r"user_api_key_alias' LIKE \$(\d+)", cond)
@@ -2348,6 +2376,208 @@ async def test_ui_view_spend_logs_request_id_owner_scoped_by_id_only(
         assert captured["where"]["request_id"] == "req-old"
         assert "user" not in captured["where"]
         assert "OR" not in captured["where"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_build_spend_log_search_condition_windows_every_branch_except_request_id():
+    """LIT-4741: request_id matches across all time; the six other id columns only inside the window,
+    all comparing the pasted value verbatim."""
+    start = datetime.datetime(2026, 8, 1, tzinfo=timezone.utc)
+    end = datetime.datetime(2026, 8, 2, tzinfo=timezone.utc)
+
+    condition = spend_management_endpoints._build_spend_log_search_condition(
+        search="key-hash-7", start_date=start, end_date=end, next_param_index=3
+    )
+
+    assert condition.sql == (
+        "(request_id = $3 OR (\"startTime\" >= ($4::timestamptz AT TIME ZONE 'UTC') "
+        "AND \"startTime\" <= ($5::timestamptz AT TIME ZONE 'UTC') "
+        'AND (api_key = $3 OR team_id = $3 OR "user" = $3 OR end_user = $3 OR session_id = $3 OR model_id = $3)))'
+    )
+    assert condition.params == ("key-hash-7", start, end)
+
+
+def _search_fixture_logs(today):
+    recent = (today - datetime.timedelta(days=1)).isoformat()
+    old = (today - datetime.timedelta(days=90)).isoformat()
+    base = {
+        "api_key": "hashed-other",
+        "user": "user-x",
+        "team_id": "team-x",
+        "end_user": "cust-x",
+        "session_id": "sess-x",
+        "model_id": "mdl-x",
+        "spend": 0.01,
+        "model": "gpt-4",
+    }
+    return [
+        {**base, "request_id": "req-session", "session_id": "sess-42", "startTime": recent},
+        {**base, "request_id": "req-session-old", "session_id": "sess-42", "startTime": old},
+        {**base, "request_id": "req-key", "api_key": "hashed-7", "startTime": recent},
+        {**base, "request_id": "req-team", "team_id": "team-7", "startTime": recent},
+        {**base, "request_id": "req-user", "user": "user-7", "startTime": recent},
+        {**base, "request_id": "req-end-user", "end_user": "cust-7", "startTime": recent},
+        {**base, "request_id": "req-model", "model_id": "mdl-7", "startTime": recent},
+    ]
+
+
+def _search_filter_fn(logs, captured):
+    def filter_fn(where):
+        captured["where"] = where
+        rows = _filter_logs_by_date_range(logs, where)
+        if "user" in where:
+            rows = [row for row in rows if row["user"] == where["user"]]
+        if "search" in where:
+            rows = [row for row in rows if _matches_spend_log_search(row, where["search"])]
+        return rows
+
+    return filter_fn
+
+
+def _five_day_window(today):
+    return {
+        "start_date": (today - datetime.timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S"),
+        "end_date": today.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "search,expected_request_ids",
+    [
+        ("req-session-old", {"req-session-old"}),
+        ("sess-42", {"req-session"}),
+        ("hashed-7", {"req-key"}),
+        ("team-7", {"req-team"}),
+        ("user-7", {"req-user"}),
+        ("cust-7", {"req-end-user"}),
+        ("mdl-7", {"req-model"}),
+        ("no-such-id", set()),
+    ],
+)
+async def test_ui_view_spend_logs_search_matches_any_id(client, monkeypatch, search, expected_request_ids):
+    """LIT-4741: one box matches any id column. A request_id is found across all time (the 5-day
+    window excludes the 90-day-old row), every other column only inside the window, and a raw
+    sk- key is hashed before it is compared with api_key. The window is not applied globally."""
+    today = datetime.datetime.now(timezone.utc)
+    logs = _search_fixture_logs(today)
+    captured = {}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(logs, _search_filter_fn(logs, captured)),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={"search": search, **_five_day_window(today)},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert {row["request_id"] for row in data["data"]} == expected_request_ids
+        assert data["total"] == len(expected_request_ids)
+        assert "startTime" not in captured["where"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_v2_search_keeps_global_window(client, monkeypatch):
+    """The public route keeps the caller's window on the whole query, so a search only finds rows
+    inside it even by request_id; the windowless request_id branch is a dashboard-only relaxation."""
+    today = datetime.datetime.now(timezone.utc)
+    logs = _search_fixture_logs(today)
+    captured = {}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(logs, _search_filter_fn(logs, captured)),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    try:
+        response = client.get(
+            "/spend/logs/v2",
+            params={"search": "req-session-old", **_five_day_window(today)},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["data"] == []
+        assert data["total"] == 0
+        assert "startTime" in captured["where"]
+        assert captured["where"]["search"]["value"] == "req-session-old"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"search": "req-old"},
+        {"search": "req-old", "request_id": "req-old"},
+    ],
+)
+async def test_ui_view_spend_logs_search_requires_dates(client, monkeypatch, params):
+    """A search needs the window for its non-request_id branches, so it stays required even
+    alongside a request_id, which on its own may drop the window."""
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma([], lambda where: []),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    try:
+        response = client.get("/spend/logs/ui", params=params, headers={"Authorization": "Bearer sk-test"})
+        assert response.status_code == 400
+        assert "date" in response.text.lower()
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "search,expected_request_ids",
+    [("sess-9", {"req-own"}), ("req-foreign", set())],
+)
+async def test_ui_view_spend_logs_search_keeps_non_admin_scope(client, monkeypatch, search, expected_request_ids):
+    """A search is scoped like any other listing: an internal user only sees their own rows even
+    when the id is on someone else's row, and the request_id ownership shortcut is not used."""
+    yesterday = (datetime.datetime.now(timezone.utc) - datetime.timedelta(days=1)).isoformat()
+    base = {"api_key": "hashed-key", "team_id": None, "spend": 0.01, "startTime": yesterday, "model": "gpt-4"}
+    logs = [
+        {**base, "request_id": "req-own", "user": "internal_user_1", "session_id": "sess-9"},
+        {**base, "request_id": "req-own-other", "user": "internal_user_1", "session_id": "sess-other"},
+        {**base, "request_id": "req-foreign", "user": "internal_user_2", "session_id": "sess-9"},
+    ]
+    captured = {}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(logs, _search_filter_fn(logs, captured)),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
+        AsyncMock(return_value=[]),
+    )
+    ownership_check = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._assert_user_can_view_request_id",
+        ownership_check,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal_user_1"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={"search": search, "start_date": start_date, "end_date": end_date},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        assert {row["request_id"] for row in response.json()["data"]} == expected_request_ids
+        assert captured["where"]["user"] == "internal_user_1"
+        ownership_check.assert_not_awaited()
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -6349,5 +6579,48 @@ async def test_ui_view_spend_logs_group_by_session_offset_for_non_starttime_sort
         assert "HAVING" not in " ".join(emitted_sql)
         assert f"DISTINCT ON ({SESSION_GROUP_KEY_SQL})" in emitted_sql[1]
         assert "OFFSET" in emitted_sql[1]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_search_returns_flat_rows_when_grouping_by_session(client, monkeypatch):
+    """The dashboard lists sessions by default; a search for an id lists every matching row instead,
+    so both calls of a session show up rather than one representative, and no session cursor is returned."""
+    rows = [_session_representative_row("req-1", "sess-1"), _session_representative_row("req-2", "sess-1")]
+
+    async def mock_query_raw(sql_query, *params):
+        if "mcp_tool_call_count" in sql_query:
+            return []
+        grouped = "DISTINCT ON" in sql_query or "GROUP BY" in sql_query
+        visible = rows[:1] if grouped else rows
+        if "COUNT(*)" in sql_query:
+            return [{"total_count": len(visible)}]
+        return visible
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "search": "sess-1",
+                "group_by_session": "true",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert [row["request_id"] for row in data["data"]] == ["req-1", "req-2"]
+        assert data["total"] == 2
+        assert "next_session_cursor" not in data
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
