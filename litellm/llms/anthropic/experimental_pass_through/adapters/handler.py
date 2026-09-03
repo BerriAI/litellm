@@ -87,6 +87,29 @@ def _extract_proxy_litellm_metadata(
     return litellm_metadata, user_api_key_auth
 
 
+def _client_facing_model(
+    model: str,
+    proxy_litellm_metadata: "Mapping[str, object] | None",
+) -> str:
+    """Return the model name to expose in translated Anthropic responses.
+
+    When the call arrives through the router/proxy, ``model`` is the
+    post-routing deployment identifier (e.g. ``hosted_vllm/my-internal-name``)
+    and the name the client actually requested travels in
+    ``litellm_metadata["model_group"]`` (stamped by the router). Prefer it so
+    the streaming ``message_start`` event reports the same model the
+    non-streaming path returns after the proxy's response-model restamp
+    (``_override_openai_response_model`` — which cannot reach the streaming
+    path because SSE bytes are serialized before it runs). SDK callers that
+    bypass the proxy carry no such metadata and keep the current behavior.
+    """
+    if isinstance(proxy_litellm_metadata, Mapping):
+        model_group: Final = proxy_litellm_metadata.get("model_group")
+        if isinstance(model_group, str) and model_group:
+            return model_group
+    return model
+
+
 async def _prepare_context_managed_request(
     *,
     model: str,
@@ -617,7 +640,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
-                model=local_model_name(model, kwargs.get("custom_llm_provider")),
+                model=_client_facing_model(
+                    local_model_name(model, kwargs.get("custom_llm_provider")),
+                    proxy_litellm_metadata,
+                ),
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=True,
@@ -707,6 +733,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # there is no work is pure overhead.
         if context_management is None and not _messages_have_compaction_block(messages):
             polyfill_result: PolyfillResult | None = None
+            proxy_litellm_metadata, _ = _extract_proxy_litellm_metadata(kwargs)
         else:
             proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
             polyfill_result = run_async_function(
@@ -751,7 +778,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                 completion_response,
-                model=local_model_name(model, kwargs.get("custom_llm_provider")),
+                model=_client_facing_model(
+                    local_model_name(model, kwargs.get("custom_llm_provider")),
+                    proxy_litellm_metadata,
+                ),
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=False,
