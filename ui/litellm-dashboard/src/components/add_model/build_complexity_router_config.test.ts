@@ -782,28 +782,17 @@ describe("getClassifierReasoningEffortError", () => {
     classifier_llm_config: { model: "classifier", timeout_ms: 3000, reasoning_effort: "low" },
   };
 
-  it("accepts an explicitly supported effort", () => {
-    expect(
-      getClassifierReasoningEffortError(classifier, [
-        { model_group: "classifier", supported_reasoning_efforts: ["low", "medium"] },
-      ]),
-    ).toBeNull();
-  });
-
-  it("blocks an explicitly unsupported effort", () => {
-    expect(
-      getClassifierReasoningEffortError(classifier, [
-        { model_group: "classifier", supported_reasoning_efforts: ["medium", "high"] },
-      ]),
-    ).toContain("low reasoning effort is not supported");
-  });
-
-  it.each([[null], [undefined]])("fails open when capability levels are %o", (supportedReasoningEfforts) => {
-    expect(
-      getClassifierReasoningEffortError(classifier, [
-        { model_group: "classifier", supported_reasoning_efforts: supportedReasoningEfforts },
-      ]),
-    ).toBeNull();
+  it.each([
+    [["low", "medium"], null],
+    [["medium", "high"], "low reasoning effort is not supported"],
+    [null, null],
+    [undefined, null],
+  ])("validates capability levels %o", (supportedReasoningEfforts, expectedError) => {
+    const error = getClassifierReasoningEffortError(classifier, [
+      { model_group: "classifier", supported_reasoning_efforts: supportedReasoningEfforts },
+    ]);
+    if (expectedError) expect(error).toContain(expectedError);
+    else expect(error).toBeNull();
   });
 });
 

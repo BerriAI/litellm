@@ -11866,7 +11866,7 @@ class TestRequestReasoningEffortOverride:
     def test_drop_effort_from_nested_carrier_preserves_other_nested_values(self):
         params: dict[str, object] = {"output_config": {"effort": "high", "format": "json"}}
 
-        litellm.Router._drop_effort_from_nested_carrier(params, "output_config")
+        litellm.Router._pop_effort_from_nested_carrier(params, "output_config")
 
         assert params == {"output_config": {"format": "json"}}
 
@@ -11919,9 +11919,10 @@ class TestRequestReasoningEffortOverride:
             "output_config": {"effort": "high"},
         }
 
-        assert litellm.Router._deployment_params_with_request_reasoning_override(
-            deployment_params, request_kwargs
-        ) == deployment_params
+        assert (
+            litellm.Router._deployment_params_with_request_reasoning_override(deployment_params, request_kwargs)
+            == deployment_params
+        )
 
     @pytest.mark.asyncio
     async def test_280_concurrent_overrides_never_mutate_or_leak_through_shared_deployment_params(self):
@@ -11951,12 +11952,17 @@ class TestRequestReasoningEffortOverride:
         assert deployment_params["output_config"] == {"effort": "high", "format": "json"}
         assert deployment_params["extra_body"] == {"reasoning_effort": "high", "tenant": "shared"}
 
-    def test_classifier_call_drops_effort_for_an_unsupported_fallback_and_updates_observability(self):
+    @pytest.mark.parametrize(
+        ("metadata", "should_drop"),
+        [({"internal_call_origin": "autorouter_classifier"}, True), ({}, False)],
+        ids=["classifier", "ordinary-request"],
+    )
+    def test_only_classifier_calls_drop_effort_for_an_unsupported_fallback(self, metadata, should_drop):
         router = litellm.Router(model_list=[])
         body: dict[str, object] = {"model": "classifier", "reasoning_effort": "low"}
         kwargs: dict[str, object] = {
             "reasoning_effort": "low",
-            "metadata": {"internal_call_origin": "autorouter_classifier"},
+            "metadata": metadata,
             "proxy_server_request": {"body": body},
         }
         deployment: DeploymentTypedDict = {
@@ -11966,20 +11972,8 @@ class TestRequestReasoningEffortOverride:
 
         router._drop_unsupported_classifier_reasoning_effort(deployment, "fallback", kwargs)
 
-        assert "reasoning_effort" not in kwargs
-        assert "reasoning_effort" not in body
-
-    def test_non_classifier_call_keeps_unsupported_effort_so_the_caller_gets_the_normal_validation_error(self):
-        router = litellm.Router(model_list=[])
-        kwargs: dict[str, object] = {"reasoning_effort": "low", "metadata": {}}
-        deployment: DeploymentTypedDict = {
-            "model_name": "fallback",
-            "litellm_params": {"model": "openai/gpt-4o-mini"},
-        }
-
-        router._drop_unsupported_classifier_reasoning_effort(deployment, "fallback", kwargs)
-
-        assert kwargs["reasoning_effort"] == "low"
+        assert ("reasoning_effort" not in kwargs) is should_drop
+        assert ("reasoning_effort" not in body) is should_drop
 
 
 class TestPreRoutingTierDrivesFallbacks:

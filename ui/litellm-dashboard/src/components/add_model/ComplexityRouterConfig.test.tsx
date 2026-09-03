@@ -1149,67 +1149,42 @@ describe("ComplexityRouterConfig classifier reasoning effort", () => {
     });
   });
 
-  it("keeps the effort when the already-selected classifier model is clicked again", async () => {
-    const onChange = renderClassifier({
-      ...llmValue,
-      classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
-    });
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("combobox", { name: "Classifier Model" }));
-    await user.click(await screen.findByRole("option", { name: "gpt-4" }));
-    expect(onChange).not.toHaveBeenCalled();
-  });
+  it.each(["click", "enter"] as const)(
+    "keeps the effort when the selected model is confirmed by %s",
+    async (action) => {
+      const onChange = renderClassifier({
+        ...llmValue,
+        classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
+      });
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("combobox", { name: "Classifier Model" }));
+      if (action === "click") await user.click(await screen.findByRole("option", { name: "gpt-4" }));
+      else await user.keyboard("{Enter}");
+      expect(onChange).not.toHaveBeenCalled();
+    },
+  );
 
-  it("keeps the effort when the already-selected classifier model is confirmed with Enter", async () => {
-    const onChange = renderClassifier({
-      ...llmValue,
-      classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
-    });
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("combobox", { name: "Classifier Model" }));
-    await user.keyboard("{Enter}");
-    expect(onChange).not.toHaveBeenCalled();
-  });
-
-  it("keeps a stored unsupported effort visible and labels it before save", () => {
+  it.each([
+    ["gpt-4", "max", "max (unsupported)", /not supported by every deployment/],
+    ["claude-3-opus", "low", "low (unverified)", /cannot be verified/],
+  ])("keeps a saved exceptional value visible for %s", (model, effort, label, warning) => {
     renderClassifier({
       ...llmValue,
-      classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "max" },
+      classifier_llm_config: { model, timeout_ms: 3000, reasoning_effort: effort },
     });
-    expect(screen.getByRole("combobox", { name: "Reasoning effort for classifier model gpt-4" })).toHaveTextContent(
-      "max (unsupported)",
+    expect(screen.getByRole("combobox", { name: `Reasoning effort for classifier model ${model}` })).toHaveTextContent(
+      label,
     );
-    expect(screen.getByText(/not supported by every deployment/)).toBeInTheDocument();
+    expect(screen.getByText(warning)).toBeInTheDocument();
   });
 
-  it("does not invent options for unknown capability metadata but keeps a saved value clearable", () => {
+  it.each(["claude-3-opus", "gpt-3.5-turbo"])("hides the effort control when %s has no advertised options", (model) => {
     renderClassifier({
       ...llmValue,
-      classifier_llm_config: { model: "claude-3-opus", timeout_ms: 3000, reasoning_effort: "low" },
+      classifier_llm_config: { model, timeout_ms: 3000 },
     });
     expect(
-      screen.getByRole("combobox", { name: "Reasoning effort for classifier model claude-3-opus" }),
-    ).toHaveTextContent("low (unverified)");
-    expect(screen.getByText(/cannot be verified/)).toBeInTheDocument();
-  });
-
-  it("hides the classifier effort control when capability metadata is unknown and no value is saved", () => {
-    renderClassifier({
-      ...llmValue,
-      classifier_llm_config: { model: "claude-3-opus", timeout_ms: 3000 },
-    });
-    expect(
-      screen.queryByRole("combobox", { name: "Reasoning effort for classifier model claude-3-opus" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("hides the control for a classifier model without reasoning support", () => {
-    renderClassifier({
-      ...llmValue,
-      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
-    });
-    expect(
-      screen.queryByRole("combobox", { name: "Reasoning effort for classifier model gpt-3.5-turbo" }),
+      screen.queryByRole("combobox", { name: `Reasoning effort for classifier model ${model}` }),
     ).not.toBeInTheDocument();
   });
 });

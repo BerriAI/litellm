@@ -2159,22 +2159,6 @@ class Router:
             raise e
 
     @staticmethod
-    def _drop_effort_from_nested_carrier(  # mutable-ok: sanitizes a fresh deployment-params copy in place
-        params: dict[str, object],  # mutable-ok: sanitizes a fresh deployment-params copy in place
-        carrier: str,
-    ) -> None:
-        nested: Final = params.get(carrier)
-        if not isinstance(nested, Mapping):
-            return
-        sanitized: Final = {  # mutable-ok: replacement stays local to this request
-            key: value for key, value in nested.items() if key != "effort"
-        }
-        if sanitized:
-            params[carrier] = sanitized  # rebind-ok: intentional mutation of the request-local copy
-        else:
-            params.pop(carrier, None)
-
-    @staticmethod
     def _deployment_params_with_request_reasoning_override(
         deployment_params: Mapping[str, object], request_kwargs: Mapping[str, object]
     ) -> dict[str, object]:  # mutable-ok: litellm's request pipeline consumes a mutable kwargs mapping
@@ -2190,8 +2174,8 @@ class Router:
             return sanitized
 
         sanitized.pop("thinking", None)
-        Router._drop_effort_from_nested_carrier(sanitized, "output_config")
-        Router._drop_effort_from_nested_carrier(sanitized, "reasoning")
+        Router._pop_effort_from_nested_carrier(sanitized, "output_config")
+        Router._pop_effort_from_nested_carrier(sanitized, "reasoning")
 
         extra_body: Final = sanitized.get("extra_body")
         if isinstance(extra_body, Mapping):
@@ -2200,8 +2184,8 @@ class Router:
             )
             sanitized_extra_body.pop("reasoning_effort", None)
             sanitized_extra_body.pop("thinking", None)
-            Router._drop_effort_from_nested_carrier(sanitized_extra_body, "output_config")
-            Router._drop_effort_from_nested_carrier(sanitized_extra_body, "reasoning")
+            Router._pop_effort_from_nested_carrier(sanitized_extra_body, "output_config")
+            Router._pop_effort_from_nested_carrier(sanitized_extra_body, "reasoning")
             if sanitized_extra_body:
                 sanitized["extra_body"] = sanitized_extra_body
             else:
@@ -10487,8 +10471,10 @@ class Router:
                 if model_info.get("rpm", None) is not None and _deployment_rpm is None:
                     _deployment_rpm = model_info.get("rpm")
 
-            deployment_reasoning_efforts = resolve_supported_reasoning_efforts(  # rebind-ok: recalculated per deployment
-                model_info, deployment_is_mapped=deployment_is_mapped
+            deployment_reasoning_efforts = (
+                resolve_supported_reasoning_efforts(  # rebind-ok: recalculated per deployment
+                    model_info, deployment_is_mapped=deployment_is_mapped
+                )
             )
             if deployment_reasoning_efforts is None:
                 reasoning_efforts_unknown = True
@@ -12365,10 +12351,12 @@ class Router:
     @staticmethod
     def _pop_effort_from_nested_carrier(request_kwargs: dict[str, object], carrier: str) -> None:
         nested: Final = request_kwargs.get(carrier)
-        if not isinstance(nested, dict):
+        if not isinstance(nested, Mapping):
             return
-        nested.pop("effort", None)
-        if not nested:
+        sanitized: Final = {key: value for key, value in nested.items() if key != "effort"}
+        if sanitized:
+            request_kwargs[carrier] = sanitized
+        else:
             request_kwargs.pop(carrier, None)
 
     @staticmethod
