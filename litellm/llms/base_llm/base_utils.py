@@ -5,7 +5,6 @@ Utility functions for base LLM classes.
 import copy
 import json
 from abc import ABC, abstractmethod
-from functools import reduce
 from typing import Any, Final, TypeAlias
 
 from openai.lib import _parsing, _pydantic
@@ -262,18 +261,15 @@ def _is_billing_metadata(message: ChatCompletionSystemMessage) -> bool:
 
 
 def _fold_into_previous_system(
-    acc: tuple[AllMessageValues, ...], message: AllMessageValues
-) -> tuple[AllMessageValues, ...]:
-    if not acc or message["role"] != "system":
-        return (*acc, message)
-    previous: Final = acc[-1]
-    if previous["role"] != "system":
-        return (*acc, message)
+    previous: AllMessageValues, message: AllMessageValues
+) -> ChatCompletionSystemMessage | None:
+    if previous["role"] != "system" or message["role"] != "system":
+        return None
     if _is_billing_metadata(previous) or _is_billing_metadata(message):
         # Anthropic-family transformations strip billing metadata by matching the
         # block's prefix; merging would hide the marker or the neighbor behind it.
-        return (*acc, message)
-    return (*acc[:-1], _merged_system_messages(previous, message))
+        return None
+    return _merged_system_messages(previous, message)
 
 
 def map_developer_role_to_system_role(
@@ -283,6 +279,14 @@ def map_developer_role_to_system_role(
     Translate `developer` role to `system` role for non-OpenAI providers, merging
     the consecutive system messages this creates for backends that allow only one.
     """
-    empty: Final[tuple[AllMessageValues, ...]] = ()
-    merged: Final = reduce(_fold_into_previous_system, map(_as_system_message, messages), empty)
-    return list(merged)  # mutable-ok: callers expect the list the pre-merge implementation returned
+    # A single linear pass that folds into the last element in place: an
+    # immutable accumulator would copy the prefix on every step, which is O(n^2)
+    # in the number of messages and request size is not bounded by default.
+    merged: Final[list[AllMessageValues]] = []  # mutable-ok: linear-time accumulator
+    for message in map(_as_system_message, messages):
+        folded = _fold_into_previous_system(merged[-1], message) if merged else None
+        if folded is None:
+            merged.append(message)
+        else:
+            merged[-1] = folded
+    return merged
