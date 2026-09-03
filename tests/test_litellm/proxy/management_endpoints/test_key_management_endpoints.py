@@ -17535,3 +17535,23 @@ def test_key_generation_check_blank_team_id_uses_personal_permissions(monkeypatc
         )
         is True
     )
+
+
+def test_key_health_failure_body_is_openai_shaped():
+    """A /key/health failure must answer with an OpenAI error object whose `param`
+    is JSON null, never the literal string "None"."""
+    import litellm.proxy.proxy_server as ps
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="hashed-key", metadata={"logging": ["not-a-callback-object"]}
+    )
+    try:
+        response = client.post("/key/health", headers={"Authorization": "Bearer sk-test"})
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 500
+    error = response.json()["error"]
+    assert error["type"] == "internal_server_error"
+    assert error["param"] is None
+    assert error["code"] == "500"
