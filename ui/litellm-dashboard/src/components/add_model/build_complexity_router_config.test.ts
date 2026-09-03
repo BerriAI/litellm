@@ -817,6 +817,39 @@ describe("heuristic_first", () => {
   });
 });
 
+describe("hybrid", () => {
+  const hybridParams: BuildComplexityRouterConfigParams = {
+    ...baseParams,
+    classifierType: "hybrid",
+    hybridBoundaryMargin: 0.03,
+    classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    classifierFallback: "default_model",
+  };
+
+  it("emits hybrid_boundary_margin, zero included since exactly-on-a-boundary is a real setting", () => {
+    expect(buildComplexityRouterConfig(hybridParams).hybrid_boundary_margin).toBe(0.03);
+    expect(buildComplexityRouterConfig({ ...hybridParams, hybridBoundaryMargin: 0 }).hybrid_boundary_margin).toBe(0);
+  });
+
+  it("keeps every classifier key the operator set, since hybrid still calls the classifier", () => {
+    const config = buildComplexityRouterConfig(hybridParams);
+    expect(config.classifier_type).toBe("hybrid");
+    expect(config.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
+    expect(config.classifier_fallback).toBe("default_model");
+  });
+
+  it("omits hybrid_boundary_margin on every other classifier type, which the backend rejects it on", () => {
+    for (const classifierType of ["heuristic", "llm", "heuristic_first"] as const) {
+      const config = buildComplexityRouterConfig({
+        ...hybridParams,
+        classifierType,
+        ...(classifierType === "heuristic_first" && { heuristicFirstMaxTier: "SIMPLE" }),
+      });
+      expect(config.hybrid_boundary_margin).toBeUndefined();
+    }
+  });
+});
+
 describe("classification_mode", () => {
   it("emits user_turn", () => {
     const config = buildComplexityRouterConfig({ ...baseParams, classificationMode: "user_turn" });
@@ -924,10 +957,12 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
       dimensionWeights: { length: 1 },
       reasoningOverrideMinScore: 0.5,
       heuristicFirstMaxTier: "SIMPLE",
+      hybridBoundaryMargin: 0.03,
       customTechnicalKeywords: ["kubernetes"],
     };
     const emittingType = key === "heuristic_first_max_tier" ? "heuristic_first" : "llm";
-    expect(buildComplexityRouterConfig({ ...baseParams, ...loaded, classifierType: emittingType })).toHaveProperty(key);
+    const typeForKey = key === "hybrid_boundary_margin" ? "hybrid" : emittingType;
+    expect(buildComplexityRouterConfig({ ...baseParams, ...loaded, classifierType: typeForKey })).toHaveProperty(key);
     expect(build(loaded)).not.toHaveProperty(key);
   });
 
