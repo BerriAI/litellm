@@ -9,7 +9,9 @@ import json
 import os
 import tempfile
 from typing import Final
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
 from base_ocr_unit_tests import BaseOCRTest
 
@@ -143,7 +145,9 @@ def test_vertex_ai_ocr_routing():
     ), "DeepSeek variant should route to VertexAIDeepSeekOCRConfig"
 
 
-@pytest.mark.parametrize("model", ("deepseek-ocr-maas", "deepseek-ai/deepseek-ocr-maas"))
+@pytest.mark.parametrize(
+    "model", ("deepseek-ocr-maas", "deepseek-ai/deepseek-ocr-maas")
+)
 def test_deepseek_request_uses_single_provider_namespace(model: str) -> None:
     from litellm.llms.vertex_ai.ocr.deepseek_transformation import (
         VertexAIDeepSeekOCRConfig,
@@ -157,3 +161,68 @@ def test_deepseek_request_uses_single_provider_namespace(model: str) -> None:
     )
 
     assert request.data["model"] == "deepseek-ai/deepseek-ocr-maas"
+
+
+def test_vertex_mistral_url_uses_project_location_and_model() -> None:
+    """Vertex Mistral OCR URL is built from project, location, and model in the Mistral publisher path."""
+    from litellm.llms.vertex_ai.ocr.transformation import VertexAIOCRConfig
+
+    url: Final = VertexAIOCRConfig().get_complete_url(
+        api_base=None,
+        model="mistral-ocr-maas",
+        optional_params={},
+        litellm_params={"vertex_project": "proj-1", "vertex_location": "europe-west4"},
+    )
+
+    assert url == (
+        "https://europe-west4-aiplatform.googleapis.com/v1/projects/proj-1"
+        "/locations/europe-west4/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
+    )
+
+
+def test_vertex_mistral_reuses_mistral_body_transform() -> None:
+    """Vertex Mistral OCR delegates request-body construction to MistralOCRConfig unchanged."""
+    from litellm.llms.vertex_ai.ocr.transformation import VertexAIOCRConfig
+
+    request: Final = VertexAIOCRConfig().transform_ocr_request(
+        model="mistral-ocr-maas",
+        document={"type": "image_url", "image_url": "data:image/png;base64,abc"},
+        optional_params={},
+        headers={},
+    )
+
+    assert request.data["model"] == "mistral-ocr-maas"
+    assert request.data["document"]["image_url"] == "data:image/png;base64,abc"
+
+
+def test_vertex_deepseek_response_wraps_markdown_content() -> None:
+    """Vertex DeepSeek OCR wraps a plain-markdown chat completion into a single-page OCR response."""
+    from litellm.llms.vertex_ai.ocr.deepseek_transformation import (
+        VertexAIDeepSeekOCRConfig,
+    )
+
+    raw_response: Final = httpx.Response(
+        status_code=200,
+        json={
+            "choices": [{"message": {"content": "# OCR text"}}],
+            "usage": {"prompt_tokens": 1},
+        },
+    )
+
+    response = VertexAIDeepSeekOCRConfig().transform_ocr_response(
+        model="deepseek-ocr-maas",
+        raw_response=raw_response,
+        logging_obj=MagicMock(),
+    )
+
+    assert [page.model_dump() for page in response.pages] == [
+        {
+            "index": 0,
+            "markdown": "# OCR text",
+            "images": None,
+            "dimensions": None,
+        }
+    ]
+    assert response.model == "deepseek-ocr-maas"
+    assert response.usage_info is not None
+    assert response.usage_info.model_dump()["prompt_tokens"] == 1

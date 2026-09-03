@@ -9,7 +9,8 @@
     "tests/test_litellm/llms/mistral/ocr/test_mistral_ocr_cost.py",
     "tests/test_litellm/ocr/test_ocr_native_format.py",
     "tests/test_litellm/llms/ocr/guardrail_translation/test_ocr_guardrail_handler.py",
-    "tests/test_litellm/proxy/ocr_endpoints/test_endpoints.py"
+    "tests/test_litellm/proxy/ocr_endpoints/test_endpoints.py",
+    "tests/ocr_tests/test_ocr_vertex_ai.py"
   ],
   "rust_scope": [
     "litellm-rust/crates/ai-gateway/src/ocr/common_utils.rs",
@@ -927,6 +928,56 @@
       "python_test": "test_explicit_false_overrides_process_enable",
       "status": "unmapped",
       "reason": "bridge-plumbing: asserts the explicit-per-request rust:False override wins over the Python process flag, no Rust-owned behavior runs"
+    },
+    {
+      "python_file": "tests/ocr_tests/test_ocr_vertex_ai.py",
+      "python_test": "test_vertex_ai_ocr_routing",
+      "status": "unmapped",
+      "reason": "model-name based routing dispatch (mistral vs deepseek config selection) is Python-only; the closest Rust behavior (is_deepseek_model) has no dedicated unit test at this layer"
+    },
+    {
+      "python_file": "tests/ocr_tests/test_ocr_vertex_ai.py",
+      "python_test": "test_deepseek_request_uses_single_provider_namespace",
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/core/src/providers/vertex_ai/ocr/transformation.rs",
+      "rust_test": "vertex_deepseek_request_uses_ocr_endpoint_shape",
+      "justification": "both assert an unprefixed deepseek model name is normalized to the deepseek-ai/ provider namespace in the built request body"
+    },
+    {
+      "python_file": "tests/ocr_tests/test_ocr_vertex_ai.py",
+      "python_test": "test_vertex_mistral_url_uses_project_location_and_model",
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/core/src/providers/vertex_ai/ocr/transformation.rs",
+      "rust_test": "vertex_mistral_url_uses_project_location_and_model",
+      "justification": "both assert the Vertex Mistral OCR URL is built from project, location, and model in the mistralai publisher rawPredict path"
+    },
+    {
+      "python_file": "tests/ocr_tests/test_ocr_vertex_ai.py",
+      "python_test": "test_vertex_mistral_reuses_mistral_body_transform",
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/core/src/providers/vertex_ai/ocr/transformation.rs",
+      "rust_test": "vertex_mistral_reuses_mistral_body_transform",
+      "justification": "both assert Vertex Mistral OCR delegates request-body construction to the Mistral transform unchanged for an already-data-URI document"
+    },
+    {
+      "python_file": "tests/ocr_tests/test_ocr_vertex_ai.py",
+      "python_test": "test_vertex_deepseek_response_wraps_markdown_content",
+      "status": "mapped",
+      "rust_file": "litellm-rust/crates/core/src/providers/vertex_ai/ocr/transformation.rs",
+      "rust_test": "vertex_deepseek_response_wraps_markdown_content",
+      "justification": "both assert a plain-markdown DeepSeek chat completion is wrapped into a single page (index 0) with the response usage carried through"
+    },
+    {
+      "python_file": "tests/ocr_tests/test_ocr_vertex_ai.py",
+      "python_test": "TestVertexAIDeepSeekOCR::test_basic_ocr_with_url",
+      "status": "unmapped",
+      "reason": "no-op override that skips the inherited live-API base test (DeepSeek OCR does not support PDF URLs); no behavior runs"
+    },
+    {
+      "python_file": "tests/ocr_tests/test_ocr_vertex_ai.py",
+      "python_test": "TestVertexAIDeepSeekOCR::test_ocr_response_structure",
+      "status": "unmapped",
+      "reason": "no-op override that skips the inherited live-API base test (DeepSeek OCR does not support PDF URLs); no behavior runs"
     }
   ],
   "rust_only_tests": [
@@ -1029,26 +1080,6 @@
       "rust_file": "litellm-rust/crates/core/src/providers/azure_ai/ocr/transformation.rs",
       "rust_test": "document_intelligence_request_uses_base64_source_for_data_uri",
       "reason": "no Python test asserts on the base64Source request body shape"
-    },
-    {
-      "rust_file": "litellm-rust/crates/core/src/providers/vertex_ai/ocr/transformation.rs",
-      "rust_test": "vertex_mistral_url_uses_project_location_and_model",
-      "reason": "vertex OCR support has no Python unit test coverage yet"
-    },
-    {
-      "rust_file": "litellm-rust/crates/core/src/providers/vertex_ai/ocr/transformation.rs",
-      "rust_test": "vertex_mistral_reuses_mistral_body_transform",
-      "reason": "vertex OCR support has no Python unit test coverage yet"
-    },
-    {
-      "rust_file": "litellm-rust/crates/core/src/providers/vertex_ai/ocr/transformation.rs",
-      "rust_test": "vertex_deepseek_request_uses_ocr_endpoint_shape",
-      "reason": "vertex OCR support has no Python unit test coverage yet"
-    },
-    {
-      "rust_file": "litellm-rust/crates/core/src/providers/vertex_ai/ocr/transformation.rs",
-      "rust_test": "vertex_deepseek_response_wraps_markdown_content",
-      "reason": "vertex OCR support has no Python unit test coverage yet"
     },
     {
       "rust_file": "litellm-rust/crates/core/src/providers/mistral/ocr/transformation.rs",
