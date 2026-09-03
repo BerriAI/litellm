@@ -84,17 +84,15 @@ async def test_anthropic_basic_completion_with_headers():
                             print("Waiting 10 seconds before retry...")
                             await asyncio.sleep(10)
 
-            # Spend data might be unavailable (auth error, slow DB write, etc.)
-            if (
-                spend_data is None
-                or not isinstance(spend_data, list)
-                or len(spend_data) == 0
-                or not isinstance(spend_data[0], dict)
-                or "request_id" not in spend_data[0]
-            ):
-                print(f"Spend data not available or is error response: {spend_data}")
-                print("Skipping spend assertions (DB write may be slow in CI)")
+            if not isinstance(spend_data, list):
+                print(f"Spend endpoint answered with an error response: {spend_data}")
+                print("Skipping spend assertions (spend logs unreachable in CI)")
                 return
+
+            assert spend_data, (
+                f"GET /spend/logs?request_id={anthropic_message_id} found no row for the id "
+                "the caller received"
+            )
 
             log_entry = spend_data[0]
 
@@ -255,17 +253,15 @@ async def test_anthropic_streaming_with_headers():
                             print("Waiting 10 seconds before retry...")
                             await asyncio.sleep(10)
 
-            # Spend data might be unavailable (auth error, slow DB write, etc.)
-            if (
-                spend_data is None
-                or not isinstance(spend_data, list)
-                or len(spend_data) == 0
-                or not isinstance(spend_data[0], dict)
-                or "request_id" not in spend_data[0]
-            ):
-                print(f"Spend data not available or is error response: {spend_data}")
-                print("Skipping spend assertions (DB write may be slow in CI)")
+            if not isinstance(spend_data, list):
+                print(f"Spend endpoint answered with an error response: {spend_data}")
+                print("Skipping spend assertions (spend logs unreachable in CI)")
                 return
+
+            assert spend_data, (
+                f"GET /spend/logs?request_id={anthropic_message_id} found no row for the id "
+                "the caller received"
+            )
 
             log_entry = spend_data[0]
 

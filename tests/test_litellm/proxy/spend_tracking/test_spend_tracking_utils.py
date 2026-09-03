@@ -4186,3 +4186,46 @@ def test_spend_log_request_id_for_chat_completions_is_untouched():
         )
         == "chatcmpl-EJvWIw3DAhuKYuwp3jJI4Pnhp2vjv"
     )
+
+
+def test_spend_log_request_id_is_the_response_id_a_bridged_messages_caller_received():
+    """
+    /v1/messages against a non-Anthropic model answers with the Responses id the caller then
+    looks their row up by, so the row must not fall back to a fresh chatcmpl- uuid.
+    """
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+    logging_obj = _anthropic_messages_logging_obj(stream=False)
+    bridged_response = ResponsesAPIResponse(
+        id="resp_01Lit6806Bridged",
+        object="response",
+        created_at=1767225600,
+        model="gpt-5.6",
+        status="completed",
+        output=[
+            {
+                "id": "msg_bridged_output",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "delta", "annotations": []}],
+            }
+        ],
+        usage=ResponseAPIUsage(input_tokens=13, output_tokens=5, total_tokens=18),
+    )
+
+    logged_response = logging_obj._handle_anthropic_messages_response_logging(result=bridged_response)
+
+    assert logged_response.id == "resp_01Lit6806Bridged"
+    assert (
+        _spend_log_request_id(
+            response_obj=logged_response,
+            kwargs={
+                "call_type": "anthropic_messages",
+                "model": "gpt-5.6",
+                "litellm_call_id": "6806cafe-0000-4000-8000-000000000003",
+                "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            },
+        )
+        == "resp_01Lit6806Bridged"
+    )
