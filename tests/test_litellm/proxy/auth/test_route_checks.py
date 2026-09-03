@@ -3653,9 +3653,15 @@ def test_team_callback_routes_reach_their_handler_for_non_admins(route, role):
             "/v1beta/models/gemini-2.5-flash:countTokens",
             False,
         ),
+        # a %0A in the value reaches the handler through the path converter, so
+        # the gate has to see it too or DISABLE_ADMIN_ENDPOINTS is bypassable
+        ("/v1/mcp/server/{path:path}", "/v1/mcp/server/abc\ndef", True),
+        ("/team/{team_id:path}/callback", "/team/ten\nant/callback", True),
+        ("/v1beta/models/{model_name:path}:generateContent", "/v1beta/models/gem\nini:generateContent", True),
         # an ordinary placeholder stays one segment
         ("/team/{team_id}/members/me", "/team/abc/members/me", True),
         ("/team/{team_id}/members/me", "/team/tenant/abc/members/me", False),
+        ("/team/{team_id}/members/me", "/team/ab\nc/members/me", True),
     ],
 )
 def test_path_placeholder_matches_what_the_router_accepts(pattern, route, matches):
