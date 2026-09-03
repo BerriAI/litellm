@@ -30,7 +30,6 @@ impl OcrResponseData {
             "content": self.content,
             "tables": self.tables,
             "keyValuePairs": self.key_value_pairs,
-            "provider_native_response": self.provider_native_response,
             "object": self.object,
         })
     }
