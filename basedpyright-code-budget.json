@@ -57,7 +57,7 @@
     "limit": 5601
   },
   "reportMissingTypeArgument": {
-    "limit": 15288
+    "limit": 15287
   },
   "reportMissingTypeStubs": {
     "limit": 40
@@ -105,10 +105,10 @@
     "limit": 109
   },
   "reportUnknownMemberType": {
-    "limit": 38328
+    "limit": 38323
   },
   "reportUnknownParameterType": {
-    "limit": 19623
+    "limit": 19624
   },
   "reportUnknownVariableType": {
     "limit": 29861
@@ -117,13 +117,13 @@
     "limit": 111
   },
   "reportUnnecessaryComparison": {
-    "limit": 686
+    "limit": 687
   },
   "reportUnnecessaryContains": {
     "limit": 4
   },
   "reportUnnecessaryIsInstance": {
-    "limit": 823
+    "limit": 819
   },
   "reportUntypedBaseClass": {
     "limit": 0
