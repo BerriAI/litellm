@@ -5166,7 +5166,9 @@ class Router:
         source_iterator: Final = response
 
         model_group: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
-        if not self._has_any_configured_fallback(model_group, initial_kwargs):
+        if fallbacks_disabled_for_request(initial_kwargs) or not self._has_any_configured_fallback(
+            model_group, initial_kwargs
+        ):
             # Nothing to fall back to, so buffering lifecycle frames to protect a mid-stream
             # fallback attempt would only add latency for no benefit: forward the source
             # iterator live, exactly as it would stream without this wrapper.
@@ -8174,10 +8176,12 @@ class Router:
         fallbacks: Final = kwargs.get("fallbacks", self.fallbacks)
         if _check_non_standard_fallback_format(fallbacks=fallbacks):
             return True
-        if self.enable_weighted_failover:
-            return True
         team_id: Final = (kwargs.get("metadata", {}) or {}).get("user_api_key_team_id")
         all_deployments: Final = self.get_model_list(model_name=model_group, team_id=team_id) or []
+        if self.enable_weighted_failover:
+            strategy, _ = self._get_routing_context(model_group, kwargs)  # pyright: ignore[reportArgumentType]  # Mapping is read-only, safe for dict param
+            if strategy == "simple-shuffle" and len(all_deployments) > 1:
+                return True
         order_values: Final = {
             litellm.utils._get_deployment_order(d)
             for d in all_deployments
