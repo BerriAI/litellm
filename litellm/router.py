@@ -8164,9 +8164,26 @@ class Router:
         every model group unconditionally rather than being keyed by one at all - self._get_fallback_model_group_for_lookup_groups
         checks neither, so using it here would report "nothing to fall back to" for a request
         that a real error would in fact retry.
+
+        Two more retry paths in the same dispatcher fire without any of `fallbacks` /
+        `context_window_fallbacks` / `content_policy_fallbacks` configured at all: order-based
+        fallback (deployments in the model group at more than one `order` level) and weighted
+        intra-group failover (`enable_weighted_failover`), both of which pick a different
+        deployment for the retry, not the one that already streamed lifecycle frames live.
         """
         fallbacks: Final = kwargs.get("fallbacks", self.fallbacks)
         if _check_non_standard_fallback_format(fallbacks=fallbacks):
+            return True
+        if self.enable_weighted_failover:
+            return True
+        team_id: Final = (kwargs.get("metadata", {}) or {}).get("user_api_key_team_id")
+        all_deployments: Final = self.get_model_list(model_name=model_group, team_id=team_id) or []
+        order_values: Final = {
+            litellm.utils._get_deployment_order(d)
+            for d in all_deployments
+            if litellm.utils._get_deployment_order(d) is not None
+        }
+        if len(order_values) > 1:
             return True
         lookup_groups: Final = fallback_lookup_groups(kwargs, model_group)
         candidate_fallback_lists: Final = (
