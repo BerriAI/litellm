@@ -3338,6 +3338,9 @@ def get_optional_params_image_gen(
             continue
         passed_params[k] = v
 
+    provider_supported_params: Final[tuple[str, ...]] = (
+        tuple(provider_config.get_supported_openai_params(model=model or "")) if provider_config is not None else ()
+    )
     default_params: Final = {
         "n": None,
         "quality": None,
@@ -3348,6 +3351,7 @@ def get_optional_params_image_gen(
         "imageConfig": None,
         "tools": None,
         "web_search_options": None,
+        **{k: None for k in provider_supported_params},
     }
 
     non_default_params: Final = _get_non_default_params(
@@ -3407,10 +3411,9 @@ def get_optional_params_image_gen(
         if size is not None:
             optional_params["aspectRatio"] = _map_openai_size_to_vertex_ai_aspect_ratio(size)
 
-    openai_params: list[str] = list(default_params.keys())
-    if provider_config is not None:
-        supported_params = provider_config.get_supported_openai_params(model=model or "")
-        openai_params = list(supported_params)
+    openai_params: Final[list[str]] = (
+        list(provider_supported_params) if provider_config is not None else list(default_params.keys())
+    )
 
     optional_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
