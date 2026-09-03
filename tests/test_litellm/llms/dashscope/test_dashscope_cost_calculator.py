@@ -526,3 +526,106 @@ class TestDashscopeCostCalculator:
 
         assert prompt_cost == 0.0
         assert math.isclose(completion_cost, 500 * 1.6e-06, rel_tol=1e-10)
+
+    def test_dashscope_cached_tokens_count_toward_tier_selection(self):
+        """
+        Cached tokens are part of the request's input size. A request whose plain input
+        alone would sit in the first tier moves up when the cached tokens push the total
+        past the boundary.
+        """
+        model_info = litellm.get_model_info("dashscope/qwen3-coder-plus")
+        tier_1 = model_info["tiered_pricing"][0]
+        tier_2 = model_info["tiered_pricing"][1]
+
+        usage = Usage(
+            prompt_tokens=40000,  # 30k cached + 10k new; plain input alone is under 32k
+            completion_tokens=100,
+            total_tokens=40100,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=30000),
+        )
+
+        prompt_cost, _ = dashscope_cost_per_token(model="qwen3-coder-plus", usage=usage)
+
+        expected_prompt_cost = (10000 * tier_2["input_cost_per_token"]) + (
+            30000 * tier_2["cache_read_input_token_cost"]
+        )
+        first_tier_cost = (10000 * tier_1["input_cost_per_token"]) + (
+            30000 * tier_1["cache_read_input_token_cost"]
+        )
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert prompt_cost > first_tier_cost
+
+    def test_dashscope_input_above_first_tier_bills_whole_request_at_that_tier(self):
+        """
+        Regression for the graduated-slicing bug: Model Studio selects one tier from the
+        request's total input tokens and bills every token in the request at that tier,
+        instead of charging the first 256k input tokens at the tier 1 rate.
+        """
+        # Tiering for qwen-flash: Tier 1: [0, 256k], Tier 2: [256k, 1M]
+        usage = Usage(prompt_tokens=300000, completion_tokens=2000)
+        prompt_cost, completion_cost = dashscope_cost_per_token(
+            model="qwen-flash", usage=usage
+        )
+
+        model_info = litellm.get_model_info("dashscope/qwen-flash")
+        tier_1 = model_info["tiered_pricing"][0]
+        tier_2 = model_info["tiered_pricing"][1]
+
+        expected_prompt_cost = 300000 * tier_2["input_cost_per_token"]
+        expected_completion_cost = 2000 * tier_2["output_cost_per_token"]
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+        graduated_prompt_cost = (256000 * tier_1["input_cost_per_token"]) + (
+            44000 * tier_2["input_cost_per_token"]
+        )
+        assert prompt_cost > graduated_prompt_cost
+
+    def test_dashscope_output_tokens_do_not_select_their_own_tier(self):
+        """
+        The tier is chosen by input size only. A small-input request with a large
+        completion is billed at the input's tier, not at a tier the completion count
+        would have landed in on its own.
+        """
+        usage = Usage(prompt_tokens=1000, completion_tokens=300000)
+        _, completion_cost = dashscope_cost_per_token(model="qwen-flash", usage=usage)
+
+        model_info = litellm.get_model_info("dashscope/qwen-flash")
+        tier_1 = model_info["tiered_pricing"][0]
+
+        assert math.isclose(
+            completion_cost, 300000 * tier_1["output_cost_per_token"], rel_tol=1e-10
+        )
+
+    def test_dashscope_tier_boundary_is_inclusive_of_range_end(self):
+        """
+        A request of exactly the tier's range end stays in that tier; one token more
+        moves the whole request up to the next tier.
+        """
+        model_info = litellm.get_model_info("dashscope/qwen-flash")
+        tier_1 = model_info["tiered_pricing"][0]
+        tier_2 = model_info["tiered_pricing"][1]
+
+        at_boundary = Usage(prompt_tokens=256000, completion_tokens=100)
+        prompt_cost, completion_cost = dashscope_cost_per_token(
+            model="qwen-flash", usage=at_boundary
+        )
+        assert math.isclose(
+            prompt_cost, 256000 * tier_1["input_cost_per_token"], rel_tol=1e-10
+        )
+        assert math.isclose(
+            completion_cost, 100 * tier_1["output_cost_per_token"], rel_tol=1e-10
+        )
+
+        past_boundary = Usage(prompt_tokens=256001, completion_tokens=100)
+        prompt_cost, completion_cost = dashscope_cost_per_token(
+            model="qwen-flash", usage=past_boundary
+        )
+        assert math.isclose(
+            prompt_cost, 256001 * tier_2["input_cost_per_token"], rel_tol=1e-10
+        )
+        assert math.isclose(
+            completion_cost, 100 * tier_2["output_cost_per_token"], rel_tol=1e-10
+        )
