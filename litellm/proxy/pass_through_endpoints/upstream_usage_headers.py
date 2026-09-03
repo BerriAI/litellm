@@ -36,6 +36,15 @@ class UpstreamReportedUsage:
     response_cost: float | None
     total_tokens: int | None
 
+    @property
+    def billable_response_cost(self) -> float:
+        """The reported cost, with an unusable or missing value billed as 0.
+
+        A target that speaks this contract owns the cost for the request, so a
+        header we could not parse means zero, never someone else's estimate.
+        """
+        return self.response_cost if self.response_cost is not None else 0.0
+
 
 def _parse_response_cost(raw_value: str | None) -> float | None:
     if raw_value is None:
@@ -127,6 +136,14 @@ def apply_upstream_reported_usage(
     return reported
 
 
+def get_upstream_reported_usage(logging_obj: LiteLLMLoggingObj) -> UpstreamReportedUsage | None:
+    """The totals the upstream reported on this request's response, if any."""
+    reported: Final = logging_obj.model_call_details.get(UPSTREAM_REPORTED_USAGE_KEY)
+    if isinstance(reported, UpstreamReportedUsage):
+        return reported
+    return None
+
+
 def has_upstream_reported_usage(logging_obj: LiteLLMLoggingObj) -> bool:
     """Whether the upstream spoke this contract on the request's response.
 
@@ -134,4 +151,4 @@ def has_upstream_reported_usage(logging_obj: LiteLLMLoggingObj) -> bool:
     own totals owns the cost for the request, and a header we could not parse
     means zero, never a fallback to someone else's estimate.
     """
-    return isinstance(logging_obj.model_call_details.get(UPSTREAM_REPORTED_USAGE_KEY), UpstreamReportedUsage)
+    return get_upstream_reported_usage(logging_obj) is not None
