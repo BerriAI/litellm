@@ -10037,6 +10037,16 @@
         ],
         "source": "https://ai.azure.com/catalog/models/mistral-document-ai-2512"
     },
+    "azure_ai/mistral-ocr-4-0": {
+        "litellm_provider": "azure_ai",
+        "ocr_cost_per_page": 0.004,
+        "annotation_cost_per_page": 0.005,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/mistral/"
+    },
     "azure_ai/doc-intelligence/prebuilt-read": {
         "litellm_provider": "azure_ai",
         "ocr_cost_per_page": 0.0015,
