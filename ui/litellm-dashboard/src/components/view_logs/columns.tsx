@@ -42,6 +42,9 @@ export type LogEntry = {
   request_duration_ms?: number;
   session_total_count?: number;
   session_total_spend?: number;
+  session_total_tokens?: number;
+  session_total_prompt_tokens?: number;
+  session_total_completion_tokens?: number;
   session_cache_hit_count?: number;
   mcp_tool_call_count?: number;
   mcp_tool_call_spend?: number;
