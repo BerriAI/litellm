@@ -176,12 +176,16 @@ describe("PerUserUsage", () => {
       await screen.findByText("user-1");
       await user.click(screen.getByTestId("pagination-next"));
       await screen.findByText("user-51");
+      const callsBeforeTagChange = mockPerUserAnalyticsCall.mock.calls.length;
 
       rerender(<PerUserUsage {...defaultProps} selectedTags={["curl/8.0"]} />);
 
       await waitFor(() => {
         expect(lastCall()).toEqual(["test-token", 1, 50, ["curl/8.0"]]);
       });
+      expect(mockPerUserAnalyticsCall.mock.calls.slice(callsBeforeTagChange)).toEqual([
+        ["test-token", 1, 50, ["curl/8.0"]],
+      ]);
       expect(await screen.findByText("user-1")).toBeInTheDocument();
       expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-50 of 120");
     });
