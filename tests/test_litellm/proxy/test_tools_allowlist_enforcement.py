@@ -279,11 +279,14 @@ class TestCheckToolsAllowlist:
     @pytest.mark.asyncio
     async def test_builtin_web_search_allowed_when_listed(self):
         token = _token(metadata={"allowed_tools": ["web_search"]})
-        await check_tools_allowlist(
-            request_body={"web_search_options": {}},
-            valid_token=token,
-            team_object=None,
-            route="/v1/chat/completions",
+        assert (
+            await check_tools_allowlist(
+                request_body={"web_search_options": {}},
+                valid_token=token,
+                team_object=None,
+                route="/v1/chat/completions",
+            )
+            is None
         )
 
     @pytest.mark.asyncio

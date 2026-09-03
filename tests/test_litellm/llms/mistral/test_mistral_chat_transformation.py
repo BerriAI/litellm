@@ -422,7 +422,6 @@ class TestMistralSeedParam:
         import litellm
 
         monkeypatch.setenv("MISTRAL_API_KEY", "fake-mistral-api-key-12345")
-        litellm.disable_aiohttp_transport = True
 
         chat_route = respx_mock.post("https://api.mistral.ai/v1/chat/completions").respond(
             json={

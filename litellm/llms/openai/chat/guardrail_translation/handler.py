@@ -234,9 +234,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         for fn in data.get("functions") or []:
             if isinstance(fn, dict) and fn.get("name"):
                 names.append(str(fn["name"]))
-        web_search_options = data.get("web_search_options")
+        web_search_options: Final = data.get("web_search_options")
         if web_search_options is not None:
-            premium = isinstance(web_search_options, dict) and web_search_options.get("premium") is True
+            premium: Final = isinstance(web_search_options, dict) and web_search_options.get("premium") is True
             names.append("web_search_premium" if premium else "web_search")
         return names
 

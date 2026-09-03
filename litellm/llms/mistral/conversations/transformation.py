@@ -12,7 +12,9 @@ annotations for the web sources.
 Docs - https://docs.mistral.ai/agents/connectors/websearch/
 """
 
-from typing import Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import Final
 
 import httpx
 
@@ -20,10 +22,16 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.mistral.chat.transformation import MistralConfig
 from litellm.llms.mistral.common_utils import OBJ_LIST, STR_OBJ_DICT, WEB_SEARCH_TOOL_TYPES
 from litellm.types.llms.mistral import (
+    MistralConnectorTool,
     MistralConversationContentChunk,
+    MistralConversationInput,
     MistralConversationOutput,
+    MistralConversationsRequest,
     MistralConversationsResponse,
     MistralConversationUsage,
+    MistralFunctionCallEntry,
+    MistralFunctionResultEntry,
+    MistralMessageEntry,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -38,7 +46,7 @@ from litellm.types.utils import (
     Usage,
 )
 
-_COMPLETION_ARG_KEYS: tuple[str, ...] = (
+_COMPLETION_ARG_KEYS: Final[tuple[str, ...]] = (
     "temperature",
     "top_p",
     "max_tokens",
@@ -46,13 +54,14 @@ _COMPLETION_ARG_KEYS: tuple[str, ...] = (
     "response_format",
     "random_seed",
 )
+_EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _block_text(block: object) -> str:
     if not isinstance(block, dict):
         return ""
-    typed = STR_OBJ_DICT.validate_python(block)
-    text = typed.get("text")
+    typed: Final = STR_OBJ_DICT.validate_python(block)
+    text: Final = typed.get("text")
     if typed.get("type") == "text" and isinstance(text, str):
         return text
     return ""
@@ -66,21 +75,29 @@ def _content_to_str(content: object) -> str:
     return "" if content is None else str(content)
 
 
-def _function_call_entry(call: Mapping[str, object]) -> Mapping[str, object]:
-    fn = STR_OBJ_DICT.validate_python(call["function"]) if isinstance(call.get("function"), dict) else {}
-    return {
+def _function_call_entry(call: Mapping[str, object]) -> MistralFunctionCallEntry:
+    raw_fn: Final = call.get("function")
+    fn: Final = STR_OBJ_DICT.validate_python(raw_fn) if isinstance(raw_fn, dict) else _EMPTY
+    entry: Final[MistralFunctionCallEntry] = {
         "type": "function.call",
         "tool_call_id": str(call.get("id") or ""),
         "name": str(fn.get("name") or ""),
         "arguments": str(fn.get("arguments") or ""),
     }
+    return entry
+
+
+def _url_citation(chunk: MistralConversationContentChunk) -> ChatCompletionAnnotationURLCitation:
+    if chunk.title:
+        titled: Final[ChatCompletionAnnotationURLCitation] = {"url": chunk.url or "", "title": chunk.title}
+        return titled
+    untitled: Final[ChatCompletionAnnotationURLCitation] = {"url": chunk.url or ""}
+    return untitled
 
 
 def _to_annotation(chunk: MistralConversationContentChunk) -> ChatCompletionAnnotation:
-    url_citation: ChatCompletionAnnotationURLCitation = (
-        {"url": chunk.url or "", "title": chunk.title} if chunk.title else {"url": chunk.url or ""}
-    )
-    return {"type": "url_citation", "url_citation": url_citation}
+    annotation: Final[ChatCompletionAnnotation] = {"type": "url_citation", "url_citation": _url_citation(chunk)}
+    return annotation
 
 
 class MistralConversationsConfig(MistralConfig):
@@ -110,36 +127,38 @@ class MistralConversationsConfig(MistralConfig):
         litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
-        base = (api_base or "https://api.mistral.ai/v1").rstrip("/")
+        base: Final = (api_base or "https://api.mistral.ai/v1").rstrip("/")
         return f"{base}/conversations"
 
     @staticmethod
-    def _build_tools(optional_params: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
-        raw_tools = optional_params.get("tools")
-        candidate_tools = OBJ_LIST.validate_python(raw_tools) if isinstance(raw_tools, list) else []
-        dict_tools = [STR_OBJ_DICT.validate_python(tool) for tool in candidate_tools if isinstance(tool, dict)]
+    def _build_tools(optional_params: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+        raw_tools: Final = optional_params.get("tools")
+        candidate_tools: Final = OBJ_LIST.validate_python(raw_tools) if isinstance(raw_tools, list) else ()
+        dict_tools: Final = tuple(
+            STR_OBJ_DICT.validate_python(tool) for tool in candidate_tools if isinstance(tool, dict)
+        )
 
-        passthrough = tuple(tool for tool in dict_tools if tool.get("type") == "function")
-        web_search_options = optional_params.get("web_search_options")
-        wants_web_search = web_search_options is not None or any(
+        passthrough: Final = tuple(tool for tool in dict_tools if tool.get("type") == "function")
+        web_search_options: Final = optional_params.get("web_search_options")
+        wants_web_search: Final = web_search_options is not None or any(
             tool.get("type") in WEB_SEARCH_TOOL_TYPES for tool in dict_tools
         )
-        premium = any(tool.get("type") == "web_search_premium" for tool in dict_tools) or (
+        premium: Final = any(tool.get("type") == "web_search_premium" for tool in dict_tools) or (
             isinstance(web_search_options, dict)
             and STR_OBJ_DICT.validate_python(web_search_options).get("premium") is True
         )
 
-        web_search_tool: tuple[Mapping[str, object], ...] = (
-            ({"type": "web_search_premium" if premium else "web_search"},) if wants_web_search else ()
-        )
-        return list(web_search_tool + passthrough)
+        connector: Final[MistralConnectorTool] = {"type": "web_search_premium" if premium else "web_search"}
+        return (connector, *passthrough) if wants_web_search else passthrough
 
     @staticmethod
     def _build_completion_args(optional_params: Mapping[str, object]) -> Mapping[str, object]:
-        return {key: optional_params[key] for key in _COMPLETION_ARG_KEYS if optional_params.get(key) is not None}
+        return {  # mutable-ok: JSON request body
+            key: optional_params[key] for key in _COMPLETION_ARG_KEYS if optional_params.get(key) is not None
+        }
 
     @staticmethod
-    def _input_entries_for_message(message: AllMessageValues) -> tuple[Mapping[str, object], ...]:
+    def _input_entries_for_message(message: AllMessageValues) -> tuple[MistralConversationInput, ...]:
         """Map one OpenAI message to its Conversations ``inputs`` entries.
 
         A ``tool`` message becomes a ``function.result`` entry; an assistant
@@ -148,26 +167,23 @@ class MistralConversationsConfig(MistralConfig):
         entry. Preserving this history keeps a web-search turn mid-conversation
         from silently dropping prior tool calls the way a role+content flatten would.
         """
-        typed = STR_OBJ_DICT.validate_python(message)
-        role = str(typed.get("role") or "")
+        typed: Final = STR_OBJ_DICT.validate_python(message)
+        role: Final = str(typed.get("role") or "")
         if role == "tool":
-            return (
-                {
-                    "type": "function.result",
-                    "tool_call_id": str(typed.get("tool_call_id") or ""),
-                    "result": _content_to_str(typed.get("content")),
-                },
-            )
-        raw_calls = typed.get("tool_calls") if role == "assistant" else None
-        calls = OBJ_LIST.validate_python(raw_calls) if isinstance(raw_calls, list) else ()
-        content = _content_to_str(typed.get("content"))
-        message_entry: tuple[Mapping[str, object], ...] = (
-            ({"role": role, "content": content},) if content or not calls else ()
-        )
-        call_entries = tuple(
+            result_entry: Final[MistralFunctionResultEntry] = {
+                "type": "function.result",
+                "tool_call_id": str(typed.get("tool_call_id") or ""),
+                "result": _content_to_str(typed.get("content")),
+            }
+            return (result_entry,)
+        raw_calls: Final = typed.get("tool_calls") if role == "assistant" else None
+        calls: Final = OBJ_LIST.validate_python(raw_calls) if isinstance(raw_calls, list) else ()
+        content: Final = _content_to_str(typed.get("content"))
+        message_entry: Final[MistralMessageEntry] = {"role": role, "content": content}
+        call_entries: Final = tuple(
             _function_call_entry(STR_OBJ_DICT.validate_python(call)) for call in calls if isinstance(call, dict)
         )
-        return message_entry + call_entries
+        return (message_entry, *call_entries) if content or not calls else call_entries
 
     def transform_request(
         self,
@@ -177,42 +193,47 @@ class MistralConversationsConfig(MistralConfig):
         litellm_params: Mapping[str, object],
         headers: Mapping[str, str],
     ) -> dict[str, object]:  # mutable-ok: BaseConfig contract; the HTTP handler mutates the returned request body
-        params = STR_OBJ_DICT.validate_python(optional_params)
-        instructions = "\n\n".join(
+        params: Final = STR_OBJ_DICT.validate_python(optional_params)
+        instructions: Final = "\n\n".join(
             _content_to_str(message.get("content"))
             for message in messages
             if message.get("role") == "system" and _content_to_str(message.get("content"))
         )
-        inputs = [
+        inputs: Final = tuple(
             entry
             for message in messages
             if str(message.get("role")) != "system"
             for entry in self._input_entries_for_message(message)
-        ]
-        completion_args = self._build_completion_args(params)
-        return {
+        )
+        completion_args: Final = self._build_completion_args(params)
+        body: Final[MistralConversationsRequest] = {
             "model": model,
             "inputs": inputs,
             "tools": self._build_tools(params),
             "store": False,
-            **({"instructions": instructions} if instructions else {}),
-            **({"completion_args": completion_args} if completion_args else {}),
         }
+        instructions_entry: Final = (("instructions", instructions),) if instructions else ()
+        completion_args_entry: Final = (("completion_args", completion_args),) if completion_args else ()
+        return dict(  # mutable-ok: BaseConfig contract; the HTTP handler mutates the returned request body
+            (*body.items(), *instructions_entry, *completion_args_entry)
+        )
 
     @staticmethod
     def _extract_message(
         outputs: Sequence[MistralConversationOutput],
     ) -> tuple[str, tuple[ChatCompletionAnnotation, ...]]:
-        message_output = next((output for output in outputs if output.type == "message.output"), None)
+        message_output: Final = next((output for output in outputs if output.type == "message.output"), None)
         if message_output is None:
             return "", ()
-        content = message_output.content
+        content: Final = message_output.content
         if isinstance(content, str):
             return content, ()
         if not isinstance(content, tuple):
             return "", ()
-        text = "".join(chunk.text for chunk in content if chunk.type == "text" and chunk.text)
-        annotations = tuple(_to_annotation(chunk) for chunk in content if chunk.type == "tool_reference" and chunk.url)
+        text: Final = "".join(chunk.text for chunk in content if chunk.type == "text" and chunk.text)
+        annotations: Final = tuple(
+            _to_annotation(chunk) for chunk in content if chunk.type == "tool_reference" and chunk.url
+        )
         return text, annotations
 
     @staticmethod
@@ -228,12 +249,12 @@ class MistralConversationsConfig(MistralConfig):
         unnamed execution is treated as a standard web search and other named
         connectors are excluded.
         """
-        connectors = usage.connectors if usage else None
+        connectors: Final = usage.connectors if usage else None
         if connectors:
             return int(connectors.get("web_search", 0) or 0), int(connectors.get("web_search_premium", 0) or 0)
-        executions = [output for output in outputs if output.type == "tool.execution"]
-        premium = sum(1 for output in executions if output.name == "web_search_premium")
-        standard = sum(1 for output in executions if output.name in ("web_search", None))
+        executions: Final = tuple(output for output in outputs if output.type == "tool.execution")
+        premium: Final = sum(1 for output in executions if output.name == "web_search_premium")
+        standard: Final = sum(1 for output in executions if output.name in ("web_search", None))
         return standard, premium
 
     @staticmethod
@@ -242,12 +263,12 @@ class MistralConversationsConfig(MistralConfig):
         web_search_requests: int,
         web_search_premium_requests: int,
     ) -> Usage:
-        prompt_tokens = usage.prompt_tokens if usage and usage.prompt_tokens is not None else 0
-        completion_tokens = usage.completion_tokens if usage and usage.completion_tokens is not None else 0
-        total_tokens = (
+        prompt_tokens: Final = usage.prompt_tokens if usage and usage.prompt_tokens is not None else 0
+        completion_tokens: Final = usage.completion_tokens if usage and usage.completion_tokens is not None else 0
+        total_tokens: Final = (
             usage.total_tokens if usage and usage.total_tokens is not None else prompt_tokens + completion_tokens
         )
-        details = (
+        details: Final = (
             PromptTokensDetailsWrapper(
                 web_search_requests=web_search_requests,
                 web_search_premium_requests=web_search_premium_requests or None,
@@ -267,9 +288,9 @@ class MistralConversationsConfig(MistralConfig):
         """The Conversations API returns no finish/stop reason, so infer truncation
         from the token budget: ``length`` when the completion filled the requested
         ``max_tokens``, otherwise ``stop``."""
-        args = STR_OBJ_DICT.validate_python(request_data.get("completion_args") or {})
-        max_tokens = args.get("max_tokens")
-        completion_tokens = usage.completion_tokens if usage else None
+        args: Final = STR_OBJ_DICT.validate_python(request_data.get("completion_args") or _EMPTY)
+        max_tokens: Final = args.get("max_tokens")
+        completion_tokens: Final = usage.completion_tokens if usage else None
         if isinstance(max_tokens, int) and isinstance(completion_tokens, int) and completion_tokens >= max_tokens:
             return "length"
         return "stop"
@@ -291,19 +312,21 @@ class MistralConversationsConfig(MistralConfig):
         logging_obj.post_call(original_response=raw_response.text)
         logging_obj.model_call_details["response_headers"] = raw_response.headers
 
-        parsed = MistralConversationsResponse.model_validate(raw_response.json())
+        parsed: Final = MistralConversationsResponse.model_validate(raw_response.json())
         text, annotations = self._extract_message(parsed.outputs)
         standard_searches, premium_searches = self._count_web_searches(parsed.usage, parsed.outputs)
 
-        message = Message(
+        message: Final = Message(
             role="assistant",
             content=text or None,
-            annotations=annotations or None,
+            annotations=list(annotations) or None,  # mutable-ok: Message contract takes a list
         )
         return ModelResponse(
             id=parsed.conversation_id or model_response.id,
             created=model_response.created,
             model=model,
-            choices=[Choices(index=0, message=message, finish_reason=self._finish_reason(request_data, parsed.usage))],
+            choices=[  # mutable-ok: ModelResponse contract takes a list
+                Choices(index=0, message=message, finish_reason=self._finish_reason(request_data, parsed.usage))
+            ],
             usage=self._build_usage(parsed.usage, standard_searches + premium_searches, premium_searches),
         )

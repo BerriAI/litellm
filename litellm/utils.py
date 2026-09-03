@@ -8749,17 +8749,19 @@ class ProviderConfigManager:
         model: str | None,
         provider: LlmProviders,
     ) -> BaseLLMModelInfo | None:
-        plain_model_info = {
-            LlmProviders.FIREWORKS_AI: litellm.FireworksAIConfig,
-            LlmProviders.OPENAI: litellm.OpenAIGPTConfig,
-            LlmProviders.GEMINI: litellm.GeminiModelInfo,
-            LlmProviders.LITELLM_PROXY: litellm.LiteLLMProxyChatConfig,
-            LlmProviders.TOPAZ: litellm.TopazModelInfo,
-            LlmProviders.ANTHROPIC: litellm.AnthropicModelInfo,
-            LlmProviders.XAI: litellm.XAIModelInfo,
-            LlmProviders.LEMONADE: litellm.LemonadeChatConfig,
-            LlmProviders.CLARIFAI: litellm.ClarifaiConfig,
-        }
+        plain_model_info: Final = MappingProxyType(
+            {
+                LlmProviders.FIREWORKS_AI: litellm.FireworksAIConfig,
+                LlmProviders.OPENAI: litellm.OpenAIGPTConfig,
+                LlmProviders.GEMINI: litellm.GeminiModelInfo,
+                LlmProviders.LITELLM_PROXY: litellm.LiteLLMProxyChatConfig,
+                LlmProviders.TOPAZ: litellm.TopazModelInfo,
+                LlmProviders.ANTHROPIC: litellm.AnthropicModelInfo,
+                LlmProviders.XAI: litellm.XAIModelInfo,
+                LlmProviders.LEMONADE: litellm.LemonadeChatConfig,
+                LlmProviders.CLARIFAI: litellm.ClarifaiConfig,
+            }
+        )
         if provider in plain_model_info:
             return plain_model_info[provider]()
         if LlmProviders.VERTEX_AI == provider:

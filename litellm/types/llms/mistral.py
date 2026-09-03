@@ -1,8 +1,8 @@
 from collections.abc import Mapping
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 
 class FunctionCall(TypedDict):
@@ -24,6 +24,40 @@ class MistralTextBlock(TypedDict):
 class MistralThinkingBlock(TypedDict):
     type: Literal["thinking"]
     thinking: list[MistralTextBlock]
+
+
+class MistralConnectorTool(TypedDict):
+    type: ReadOnly[Literal["web_search", "web_search_premium"]]
+
+
+class MistralMessageEntry(TypedDict):
+    role: ReadOnly[str]
+    content: ReadOnly[str]
+
+
+class MistralFunctionCallEntry(TypedDict):
+    type: ReadOnly[Literal["function.call"]]
+    tool_call_id: ReadOnly[str]
+    name: ReadOnly[str]
+    arguments: ReadOnly[str]
+
+
+class MistralFunctionResultEntry(TypedDict):
+    type: ReadOnly[Literal["function.result"]]
+    tool_call_id: ReadOnly[str]
+    result: ReadOnly[str]
+
+
+MistralConversationInput: TypeAlias = MistralMessageEntry | MistralFunctionCallEntry | MistralFunctionResultEntry
+
+
+class MistralConversationsRequest(TypedDict):
+    model: ReadOnly[str]
+    inputs: ReadOnly[tuple[MistralConversationInput, ...]]
+    tools: ReadOnly[tuple[Mapping[str, object], ...]]
+    store: ReadOnly[Literal[False]]
+    instructions: NotRequired[ReadOnly[str]]
+    completion_args: NotRequired[ReadOnly[Mapping[str, object]]]
 
 
 class MistralConversationContentChunk(BaseModel):

@@ -71,7 +71,6 @@ class TestMistralModelInfo:
         assert headers["Content-Type"] == "application/json"
 
     def test_get_models_returns_prefixed_ids(self, respx_mock):
-        litellm.disable_aiohttp_transport = True
         respx_mock.get("https://api.mistral.ai/v1/models").respond(
             json={"data": [{"id": "mistral-medium-latest"}, {"id": "mistral-large-latest"}]}
         )
@@ -86,7 +85,6 @@ class TestMistralModelInfo:
             MistralModelInfo().get_models()
 
     def test_get_models_raises_on_http_error(self, respx_mock):
-        litellm.disable_aiohttp_transport = True
         respx_mock.get("https://api.mistral.ai/v1/models").respond(status_code=500, text="boom")
         with pytest.raises(Exception, match="Status code: 500"):
             MistralModelInfo().get_models()

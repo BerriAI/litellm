@@ -3,6 +3,7 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.mistral.conversations.transformation import (
     MistralConversationsConfig,
 )
@@ -24,6 +25,15 @@ def _logging_obj():
         litellm_call_id="123",
         function_id="abc",
     )
+
+
+async def _httpx_async_handler() -> AsyncHTTPHandler:
+    """An async handler on a plain httpx client, so respx intercepts the request
+    instead of the default aiohttp transport."""
+    handler = AsyncHTTPHandler()
+    await handler.close()
+    handler.client = httpx.AsyncClient()
+    return handler
 
 
 def _raw(json_body: dict) -> httpx.Response:
@@ -84,9 +94,9 @@ def test_transform_request_maps_to_conversations_shape():
         headers={},
     )
     assert body["model"] == "mistral-medium-latest"
-    assert body["inputs"] == [{"role": "user", "content": "Who won the last Euro?"}]
+    assert list(body["inputs"]) == [{"role": "user", "content": "Who won the last Euro?"}]
     assert body["instructions"] == "Be terse"
-    assert body["tools"] == [{"type": "web_search"}]
+    assert list(body["tools"]) == [{"type": "web_search"}]
     assert body["completion_args"] == {"temperature": 0.3, "max_tokens": 100}
     assert body["store"] is False
     assert "web_search_options" not in body
@@ -107,7 +117,7 @@ def test_transform_request_premium_and_function_passthrough():
         litellm_params={},
         headers={},
     )
-    assert body["tools"] == [
+    assert list(body["tools"]) == [
         {"type": "web_search_premium"},
         {"type": "function", "function": {"name": "f"}},
     ]
@@ -137,7 +147,7 @@ def test_transform_request_preserves_tool_call_history():
         litellm_params={},
         headers={},
     )
-    assert body["inputs"] == [
+    assert list(body["inputs"]) == [
         {"role": "user", "content": "weather in Paris?"},
         {"type": "function.call", "tool_call_id": "call_1", "name": "get_weather", "arguments": '{"city":"Paris"}'},
         {"type": "function.result", "tool_call_id": "call_1", "result": "sunny"},
@@ -160,7 +170,7 @@ def test_transform_request_drops_other_builtin_connectors():
         litellm_params={},
         headers={},
     )
-    assert body["tools"] == [
+    assert list(body["tools"]) == [
         {"type": "web_search"},
         {"type": "function", "function": {"name": "f"}},
     ]
@@ -236,7 +246,7 @@ def test_transform_request_flattens_content_part_lists():
         headers={},
     )
     assert body["instructions"] == "Be brief."
-    assert body["inputs"] == [{"role": "user", "content": "What is the weather?"}]
+    assert list(body["inputs"]) == [{"role": "user", "content": "What is the weather?"}]
 
 
 def test_transform_request_assistant_null_content_with_tool_calls():
@@ -260,7 +270,7 @@ def test_transform_request_assistant_null_content_with_tool_calls():
         litellm_params={},
         headers={},
     )
-    assert body["inputs"] == [
+    assert list(body["inputs"]) == [
         {"role": "user", "content": "weather?"},
         {"type": "function.call", "tool_call_id": "call_1", "name": "get_weather", "arguments": "{}"},
         {"type": "function.result", "tool_call_id": "call_1", "result": "18C"},
@@ -423,8 +433,6 @@ def test_transform_response_null_message_content_is_graceful():
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_routes_web_search_to_conversations(sync_mode, web_search_kwargs, respx_mock):
-    litellm.disable_aiohttp_transport = True
-
     conversations_route = respx_mock.post("https://api.mistral.ai/v1/conversations").respond(
         json=CONVERSATIONS_RESPONSE
     )
@@ -438,7 +446,7 @@ async def test_completion_routes_web_search_to_conversations(sync_mode, web_sear
     if sync_mode:
         response = litellm.completion(**kwargs)
     else:
-        response = await litellm.acompletion(**kwargs)
+        response = await litellm.acompletion(**kwargs, client=await _httpx_async_handler())
 
     assert conversations_route.called
     assert not chat_route.called
@@ -448,8 +456,8 @@ async def test_completion_routes_web_search_to_conversations(sync_mode, web_sear
     import json
 
     body = json.loads(sent.content)
-    assert body["tools"] == [{"type": "web_search"}]
-    assert body["inputs"] == [{"role": "user", "content": "Who won the last Euro?"}]
+    assert list(body["tools"]) == [{"type": "web_search"}]
+    assert list(body["inputs"]) == [{"role": "user", "content": "Who won the last Euro?"}]
     assert "messages" not in body
 
     assert response.choices[0].message.content == "Spain won Euro 2024."
@@ -464,8 +472,6 @@ async def test_extra_body_cannot_override_sanitized_tools(respx_mock):
     carrying enforced limits like max_tokens (VERIA finding: a client could
     otherwise replace the proxy's max_tokens cap or inject an unscanned
     system prompt)."""
-    litellm.disable_aiohttp_transport = True
-
     conversations_route = respx_mock.post("https://api.mistral.ai/v1/conversations").respond(
         json=CONVERSATIONS_RESPONSE
     )
@@ -503,8 +509,6 @@ async def test_completion_seed_lands_in_completion_args(respx_mock):
     """Regression: seed must survive the real pipeline (param mapping, the
     handler's extra_body pop, transform_request) and land in completion_args,
     never at the top level of the Conversations body."""
-    litellm.disable_aiohttp_transport = True
-
     conversations_route = respx_mock.post("https://api.mistral.ai/v1/conversations").respond(
         json=CONVERSATIONS_RESPONSE
     )
@@ -525,8 +529,6 @@ async def test_completion_seed_lands_in_completion_args(respx_mock):
 
 @pytest.mark.asyncio
 async def test_completion_without_web_search_uses_chat_completions(respx_mock):
-    litellm.disable_aiohttp_transport = True
-
     chat_route = respx_mock.post("https://api.mistral.ai/v1/chat/completions").respond(
         json={
             "id": "x",
@@ -552,8 +554,6 @@ async def test_completion_without_web_search_uses_chat_completions(respx_mock):
 
 @pytest.mark.asyncio
 async def test_completion_web_search_streaming_fakes_stream(respx_mock):
-    litellm.disable_aiohttp_transport = True
-
     respx_mock.post("https://api.mistral.ai/v1/conversations").respond(json=CONVERSATIONS_RESPONSE)
 
     stream = litellm.completion(

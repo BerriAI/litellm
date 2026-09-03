@@ -150,7 +150,7 @@ class MistralConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        direct_passthrough = frozenset(
+        direct_passthrough: Final = frozenset(
             {"temperature", "top_p", "stop", "response_format", "parallel_tool_calls", "web_search_options"}
         )
         for param, value in non_default_params.items():
