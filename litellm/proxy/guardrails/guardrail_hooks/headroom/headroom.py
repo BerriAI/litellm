@@ -728,6 +728,10 @@ class HeadroomGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Headroom: %s header set; skipping compression", BYPASS_HEADER)
             return inputs
 
+        if request_data.get("background"):
+            verbose_proxy_logger.debug("Headroom: background request; skipping compression")
+            return inputs
+
         structured_messages: Final = inputs.get("structured_messages")
         if not _is_object_list(structured_messages) or not structured_messages:
             return inputs
@@ -831,7 +835,7 @@ class HeadroomGuardrail(CustomGuardrail):
         effective: Final = base_result if base_result is not None else kwargs
         if call_type not in _STREAM_CONVERTIBLE_CALL_TYPES:
             return base_result
-        if not effective.get("stream"):
+        if not effective.get("stream") or effective.get("background"):
             return base_result
         if not has_headroom_retrieve_tool(effective.get("tools")):
             return base_result
