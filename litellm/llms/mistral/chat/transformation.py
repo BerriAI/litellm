@@ -453,22 +453,24 @@ class MistralConfig(OpenAIGPTConfig):
 
     @staticmethod
     def _multi_completion_content_blocks(turn: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
-        content = turn.get("content")
+        content: Final = turn.get("content")
         if isinstance(content, str):
-            return ({"type": "text", "text": content},)
+            return ({"type": "text", "text": content},)  # mutable-ok: API message payload
         if isinstance(content, list):
             return tuple(block for block in content if isinstance(block, dict))
         return ()
 
     @staticmethod
     def _flatten_multi_completion_choice(choice: Mapping[str, object]) -> Mapping[str, object]:
-        raw_turns = choice.get("messages")
-        turns = tuple(turn for turn in raw_turns if isinstance(turn, dict)) if isinstance(raw_turns, list) else ()
-        answered_ids = frozenset(
+        raw_turns: Final = choice.get("messages")
+        turns: Final = (
+            tuple(turn for turn in raw_turns if isinstance(turn, dict)) if isinstance(raw_turns, list) else ()
+        )
+        answered_ids: Final = frozenset(
             turn.get("tool_call_id") for turn in turns if turn.get("role") == "tool" and turn.get("tool_call_id")
         )
-        assistant_turns = tuple(turn for turn in turns if turn.get("role") == "assistant")
-        tool_calls = [
+        assistant_turns: Final = tuple(turn for turn in turns if turn.get("role") == "assistant")
+        tool_calls: Final = [  # mutable-ok: API message payload
             tool_call
             for turn in assistant_turns
             for raw_tool_calls in (turn.get("tool_calls"),)
@@ -476,28 +478,35 @@ class MistralConfig(OpenAIGPTConfig):
             for tool_call in raw_tool_calls
             if isinstance(tool_call, dict) and tool_call.get("id") not in answered_ids
         ]
-        blocks = tuple(
+        blocks: Final = tuple(
             block for turn in assistant_turns for block in MistralConfig._multi_completion_content_blocks(turn)
         )
-        text_parts = [
+        text_parts: Final = tuple(
             text
             for block in blocks
             if block.get("type") == "text" and isinstance(text := block.get("text"), str) and text
-        ]
-        image_urls = tuple(
+        )
+        image_urls: Final = tuple(
             url for block in blocks if block.get("type") == "image_url" and (url := block.get("image_url"))
         )
-        images = [
-            {"type": "image_url", "image_url": url if isinstance(url, dict) else {"url": url}, "index": index}
+        images: Final = [  # mutable-ok: API message payload
+            {  # mutable-ok: API message payload
+                "type": "image_url",
+                "image_url": url if isinstance(url, dict) else {"url": url},  # mutable-ok: API message payload
+                "index": index,
+            }
             for index, url in enumerate(image_urls)
         ]
-        message = {
+        message: Final = {  # mutable-ok: API message payload
             "role": "assistant",
             "content": "\n".join(text_parts) if text_parts else None,
-            **({"tool_calls": tool_calls} if tool_calls else {}),
-            **({"images": images} if images else {}),
+            **({"tool_calls": tool_calls} if tool_calls else {}),  # mutable-ok: API message payload
+            **({"images": images} if images else {}),  # mutable-ok: API message payload
         }
-        return {**{key: value for key, value in choice.items() if key != "messages"}, "message": message}
+        return {  # mutable-ok: API message payload
+            **{key: value for key, value in choice.items() if key != "messages"},  # mutable-ok: API message payload
+            "message": message,
+        }
 
     @staticmethod
     def _handle_multi_completion_response(response_data: Mapping[str, object]) -> Mapping[str, object]:
@@ -509,13 +518,13 @@ class MistralConfig(OpenAIGPTConfig):
         ``message.images``, and only tool calls left unanswered by a tool turn surfaced as
         ``tool_calls`` (server-executed calls already have their results inlined).
         """
-        choices = response_data.get("choices")
+        choices: Final = response_data.get("choices")
         if not isinstance(choices, list) or not any(MistralConfig._is_multi_completion_choice(c) for c in choices):
             return response_data
-        return {
+        return {  # mutable-ok: API message payload
             **response_data,
             "object": "chat.completion",
-            "choices": [
+            "choices": [  # mutable-ok: API message payload
                 MistralConfig._flatten_multi_completion_choice(choice)
                 if MistralConfig._is_multi_completion_choice(choice)
                 else choice
@@ -645,7 +654,7 @@ class MistralConfig(OpenAIGPTConfig):
         response_data = raw_response.json()
         response_data = self._handle_empty_content_response(response_data)
         response_data = self._handle_content_list_to_str_conversion(response_data)
-        response_data = {**self._handle_multi_completion_response(response_data)}
+        response_data = {**self._handle_multi_completion_response(response_data)}  # mutable-ok: API message payload
 
         final_response_obj: Final = cast(
             ModelResponse,
