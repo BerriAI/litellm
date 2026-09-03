@@ -115,10 +115,19 @@ class DailySpendRecord(Protocol):
 
 
 class _KeyMetadataDict(TypedDict, total=False):
-    key_alias: str | None
-    team_id: str | None
+    key_alias: ReadOnly[str | None]
+    team_id: ReadOnly[str | None]
     user_id: ReadOnly[str | None]
     user_email: ReadOnly[str | None]
+
+
+def _key_metadata(api_key_metadata: Mapping[str, _KeyMetadataDict], api_key: str) -> KeyMetadata:
+    meta: Final = api_key_metadata.get(api_key, {})
+    return KeyMetadata(
+        key_alias=meta.get("key_alias"),
+        team_id=meta.get("team_id"),
+        user_email=meta.get("user_email"),
+    )
 
 
 _WhereValue = str | dict[str, object]
@@ -289,10 +298,7 @@ def update_breakdown_metrics(
             if record.api_key not in breakdown.models[model_key].api_key_breakdown:
                 breakdown.models[model_key].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
                     metrics=SpendMetrics(),
-                    metadata=KeyMetadata(
-                        key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                        team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-                    ),
+                    metadata=_key_metadata(api_key_metadata, record.api_key),
                 )
             breakdown.models[model_key].api_key_breakdown[record.api_key].metrics = update_metrics(
                 breakdown.models[model_key].api_key_breakdown[record.api_key].metrics,
@@ -316,10 +322,7 @@ def update_breakdown_metrics(
             if record.api_key not in breakdown.model_groups[model_group_key].api_key_breakdown:
                 breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
                     metrics=SpendMetrics(),
-                    metadata=KeyMetadata(
-                        key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                        team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-                    ),
+                    metadata=_key_metadata(api_key_metadata, record.api_key),
                 )
             breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key].metrics = update_metrics(
                 breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key].metrics,
@@ -341,10 +344,7 @@ def update_breakdown_metrics(
             breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[record.api_key] = (
                 KeyMetricWithMetadata(
                     metrics=SpendMetrics(),
-                    metadata=KeyMetadata(
-                        key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                        team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-                    ),
+                    metadata=_key_metadata(api_key_metadata, record.api_key),
                 )
             )
 
@@ -369,10 +369,7 @@ def update_breakdown_metrics(
         if record.api_key not in breakdown.providers[provider].api_key_breakdown:
             breakdown.providers[provider].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
                 metrics=SpendMetrics(),
-                metadata=KeyMetadata(
-                    key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                    team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-                ),
+                metadata=_key_metadata(api_key_metadata, record.api_key),
             )
         breakdown.providers[provider].api_key_breakdown[record.api_key].metrics = update_metrics(
             breakdown.providers[provider].api_key_breakdown[record.api_key].metrics,
@@ -394,10 +391,7 @@ def update_breakdown_metrics(
         if record.api_key not in breakdown.endpoints[record.endpoint].api_key_breakdown:
             breakdown.endpoints[record.endpoint].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
                 metrics=SpendMetrics(),
-                metadata=KeyMetadata(
-                    key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                    team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-                ),
+                metadata=_key_metadata(api_key_metadata, record.api_key),
             )
         breakdown.endpoints[record.endpoint].api_key_breakdown[record.api_key].metrics = update_metrics(
             breakdown.endpoints[record.endpoint].api_key_breakdown[record.api_key].metrics,
@@ -409,10 +403,7 @@ def update_breakdown_metrics(
         if record.api_key not in breakdown.api_keys:
             breakdown.api_keys[record.api_key] = KeyMetricWithMetadata(
                 metrics=SpendMetrics(),
-                metadata=KeyMetadata(
-                    key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                    team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-                ),  # Add any api_key-specific metadata here
+                metadata=_key_metadata(api_key_metadata, record.api_key),
             )
         breakdown.api_keys[record.api_key].metrics = update_metrics(breakdown.api_keys[record.api_key].metrics, record)
 
@@ -432,10 +423,7 @@ def update_breakdown_metrics(
             if record.api_key not in breakdown.entities[entity_value].api_key_breakdown:
                 breakdown.entities[entity_value].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
                     metrics=SpendMetrics(),
-                    metadata=KeyMetadata(
-                        key_alias=api_key_metadata.get(record.api_key, {}).get("key_alias", None),
-                        team_id=api_key_metadata.get(record.api_key, {}).get("team_id", None),
-                    ),
+                    metadata=_key_metadata(api_key_metadata, record.api_key),
                 )
             breakdown.entities[entity_value].api_key_breakdown[record.api_key].metrics = update_metrics(
                 breakdown.entities[entity_value].api_key_breakdown[record.api_key].metrics,
@@ -967,15 +955,6 @@ def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
         api_requests=record.api_requests or 0,
         successful_requests=record.successful_requests or 0,
         failed_requests=record.failed_requests or 0,
-    )
-
-
-def _key_metadata(api_key_metadata: Mapping[str, _KeyMetadataDict], api_key: str) -> KeyMetadata:
-    meta: Final = api_key_metadata.get(api_key, {})
-    return KeyMetadata(
-        key_alias=meta.get("key_alias"),
-        team_id=meta.get("team_id"),
-        user_email=meta.get("user_email"),
     )
 
 
