@@ -1,5 +1,5 @@
 import httpx
-from openai import OpenAI, BadRequestError, APIStatusError
+from openai import OpenAI, BadRequestError, NotFoundError, APIStatusError
 import pytest
 
 
@@ -105,10 +105,9 @@ def test_streaming_response():
     assert len(collected_chunks) > 0
 
 
-def test_bad_request_error():
+def test_model_not_found_error():
     client = get_test_client()
-    with pytest.raises(BadRequestError):
-        # Trigger error with invalid model name
+    with pytest.raises(NotFoundError):
         client.responses.create(model="non-existent-model", input="This should fail")
 
 

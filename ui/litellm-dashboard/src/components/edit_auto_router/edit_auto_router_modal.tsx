@@ -89,6 +89,7 @@ export interface StoredComplexityRouterConfig {
   plan_mode_min_tier?: unknown;
   classification_prompt?: unknown;
   heuristic_first_max_tier?: unknown;
+  hybrid_boundary_margin?: unknown;
   tier_labels?: unknown;
   classifier_type?: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
@@ -103,6 +104,7 @@ export interface StoredComplexityRouterConfig {
   reasoning_override_min_score?: unknown;
   session_affinity?: unknown;
   modality_routing?: unknown;
+  modality_pin_override?: unknown;
   deployment_affinity?: unknown;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
@@ -167,6 +169,8 @@ export const hydrateComplexityRouterConfig = (
       typeof parsedConfig.heuristic_first_max_tier === "string" && parsedConfig.heuristic_first_max_tier.trim() !== ""
         ? parsedConfig.heuristic_first_max_tier
         : undefined,
+    hybrid_boundary_margin:
+      typeof parsedConfig.hybrid_boundary_margin === "number" ? parsedConfig.hybrid_boundary_margin : undefined,
     classification_mode:
       parsedConfig.classification_mode === "user_turn" || parsedConfig.classification_mode === "every_request"
         ? parsedConfig.classification_mode
@@ -178,6 +182,8 @@ export const hydrateComplexityRouterConfig = (
     session_affinity:
       typeof parsedConfig.session_affinity === "boolean" ? parsedConfig.session_affinity : DEFAULT_SESSION_AFFINITY,
     modality_routing: typeof parsedConfig.modality_routing === "boolean" ? parsedConfig.modality_routing : false,
+    modality_pin_override:
+      typeof parsedConfig.modality_pin_override === "boolean" ? parsedConfig.modality_pin_override : false,
     deployment_affinity:
       typeof parsedConfig.deployment_affinity === "boolean"
         ? parsedConfig.deployment_affinity
@@ -214,9 +220,11 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classifier_fallback",
   "classification_prompt",
   "heuristic_first_max_tier",
+  "hybrid_boundary_margin",
   "classification_mode",
   "session_affinity",
   "modality_routing",
+  "modality_pin_override",
   "deployment_affinity",
   "adaptive",
   "adaptive_weights",
@@ -303,6 +311,7 @@ export const buildUpdatedComplexityRouterConfig = (
     planModeMinTier: value.plan_mode_min_tier,
     classificationPrompt: value.classification_prompt,
     heuristicFirstMaxTier: value.heuristic_first_max_tier,
+    hybridBoundaryMargin: value.hybrid_boundary_margin,
     classificationMode: value.classification_mode,
     tierLabels: value.tier_labels,
     classifierType: value.classifier_type,
@@ -313,6 +322,7 @@ export const buildUpdatedComplexityRouterConfig = (
     classifierFallback: value.classifier_fallback,
     sessionAffinity: value.session_affinity ?? DEFAULT_SESSION_AFFINITY,
     modalityRouting: value.modality_routing ?? false,
+    modalityPinOverride: value.modality_pin_override ?? false,
     deploymentAffinity: value.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
     customTechnicalKeywords: customTechnicalKeywords ?? [],
     keywordTierRules: keywordMatching?.keywordTierRules ?? [],
