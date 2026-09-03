@@ -785,6 +785,59 @@ def test_create_follow_up_input_preserves_reasoning_when_stateless():
     }
 
 
+def _response_with_interleaved_reasoning_and_tool_calls() -> Any:
+    """A first-turn response that reasons before each of two function calls."""
+    return ResponsesAPIResponse(
+        id="resp_first",
+        created_at=1234567890,
+        model="gpt-5",
+        object="response",
+        status="completed",
+        output=[
+            {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "blob-1"},
+            {"type": "function_call", "id": "fc_1", "call_id": "call-1", "name": "foo", "arguments": "{}"},
+            {"type": "reasoning", "id": "rs_2", "summary": [], "encrypted_content": "blob-2"},
+            {"type": "function_call", "id": "fc_2", "call_id": "call-2", "name": "bar", "arguments": "{}"},
+        ],
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+    )
+
+
+def test_create_follow_up_input_keeps_each_reasoning_item_before_its_function_call():
+    """
+    Regression test (LIT-5427): the provider pairs a replayed reasoning item with the
+    item that follows it, so the replay has to keep the response's output order instead
+    of grouping every reasoning item ahead of every function call.
+    """
+    follow_up = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+        response=_response_with_interleaved_reasoning_and_tool_calls(),
+        tool_results=[
+            {"tool_call_id": "call-1", "name": "foo", "result": "one"},
+            {"tool_call_id": "call-2", "name": "bar", "result": "two"},
+        ],
+        original_input="hi",
+        preserve_reasoning=True,
+    )
+
+    assert [cast(dict[str, Any], item)["type"] for item in follow_up] == [
+        "message",
+        "reasoning",
+        "function_call",
+        "reasoning",
+        "function_call",
+        "function_call_output",
+        "function_call_output",
+    ]
+    assert [cast(dict[str, Any], item).get("id") or cast(dict[str, Any], item).get("call_id") for item in follow_up[1:5]] == [
+        "rs_1",
+        "call-1",
+        "rs_2",
+        "call-2",
+    ]
+
+
 def test_create_follow_up_input_omits_reasoning_when_stateful():
     """With store=true the provider still holds the reasoning item, so don't resend it."""
     follow_up = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
@@ -810,17 +863,25 @@ def test_is_persistence_disabled(call_params: dict[str, Any], expected: bool):
 
 
 @pytest.mark.parametrize(
-    "store, expected_previous_response_id",
-    [(False, None), (True, "resp_first")],
+    "store, caller_previous_response_id, expected_previous_response_id",
+    [
+        (False, None, None),
+        (False, "resp_caller", "resp_caller"),
+        (True, None, "resp_first"),
+        (True, "resp_caller", "resp_first"),
+    ],
 )
 @pytest.mark.asyncio
 async def test_mcp_follow_up_call_is_stateless_when_store_is_false(
-    monkeypatch: pytest.MonkeyPatch, store: bool, expected_previous_response_id: str | None
+    monkeypatch: pytest.MonkeyPatch,
+    store: bool,
+    caller_previous_response_id: str | None,
+    expected_previous_response_id: str | None,
 ):
     """
-    Regression test (LIT-5427): linking the MCP follow-up call with
-    previous_response_id fails for zero data retention callers, because store=false
-    means the first response was never persisted.
+    Regression test (LIT-5427): linking the MCP follow-up call to the first response's id
+    fails for zero data retention callers, because store=false means it was never persisted.
+    The caller's own previous_response_id was valid for the first call, so it stays.
     """
     captured_calls: list[dict[str, Any]] = []
     first_response = _response_with_reasoning_and_tool_call()
@@ -857,6 +918,7 @@ async def test_mcp_follow_up_call_is_stateless_when_store_is_false(
         model="gpt-5",
         tools=[{"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"}],
         store=store,
+        previous_response_id=caller_previous_response_id,
     )
 
     assert len(captured_calls) == 2

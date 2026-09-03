@@ -265,11 +265,11 @@ def _reasoning_item(encrypted_content: str):
 
 
 @pytest.mark.asyncio
-async def test_streaming_follow_up_is_stateless_when_store_is_false(monkeypatch):
+async def test_streaming_follow_up_replays_reasoning_when_store_is_false(monkeypatch):
     """
     Regression test (LIT-5427): with store=false the provider persisted nothing, so the
-    streaming follow-up must drop previous_response_id and replay the reasoning item
-    (carrying reasoning.encrypted_content) instead of pointing at a response id.
+    streaming follow-up must replay the reasoning item (carrying reasoning.encrypted_content).
+    The caller's own previous_response_id was valid for the first call and stays on the follow-up.
     """
     _mock_mcp_environment(monkeypatch)
 
@@ -300,7 +300,7 @@ async def test_streaming_follow_up_is_stateless_when_store_is_false(monkeypatch)
 
     assert aresponses_mock.call_count == 1
     follow_up_kwargs = aresponses_mock.call_args_list[0].kwargs
-    assert "previous_response_id" not in follow_up_kwargs
+    assert follow_up_kwargs["previous_response_id"] == "resp_prev"
     assert _reasoning_item("gAAAAA-opaque-blob") in follow_up_kwargs["input"]
 
 
