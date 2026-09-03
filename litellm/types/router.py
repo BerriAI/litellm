@@ -6,7 +6,18 @@ import datetime
 import enum
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, Generic, Literal, TypeAlias, TypeVar, get_type_hints
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,  # noqa: TID251  # legacy router payloads include provider-specific values with no closed union
+    ClassVar,
+    Final,
+    Generic,
+    Literal,
+    TypeAlias,
+    TypeVar,
+    get_type_hints,
+)
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validator, model_validator

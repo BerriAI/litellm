@@ -4,7 +4,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final, Literal, Protocol, TypeAlias, cast
+from typing import Final, Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
@@ -16,7 +16,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.router_utils.auto_router_model_naming import StrategyRouterDependency
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
 from litellm.types.utils import (
     FUSION_ANALYST_CALL_ORIGIN,
     FUSION_CONTINUATION_CALL_ORIGIN,
@@ -35,6 +35,7 @@ FUSION_TOOL_NAME: Final = "litellm_fusion"
 FUSION_PROTOCOL_VERSION: Final = "fusion-tool-v1"
 _OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _OBJECT_MAPPINGS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_ASSISTANT_MESSAGE_ADAPTER: Final = TypeAdapter(ChatCompletionAssistantMessage)
 _BUDGET_RESERVATION_METADATA_KEY: Final = "user_api_key_budget_reservation"
 _RESPONSES_ONLY_REQUEST_KEYS: Final = frozenset(
     {
@@ -603,8 +604,7 @@ def _continuation_messages(
     tool_call: ChatCompletionMessageToolCall,
     payload: Mapping[str, object],
 ) -> list[AllMessageValues]:
-    assistant_message = cast(
-        AllMessageValues,
+    assistant_message = _ASSISTANT_MESSAGE_ADAPTER.validate_python(
         {
             "role": "assistant",
             "content": None,
@@ -689,7 +689,8 @@ class FusionReplayStream(CustomStreamWrapper):
         # Deliberately do not call CustomStreamWrapper.__init__. The source
         # wrapper already normalized and logged these chunks while Fusion
         # buffered them to determine whether its private tool was invoked.
-        self.model: str = cast(str, getattr(source, "model", ""))
+        source_model = getattr(source, "model", "")
+        self.model = source_model if isinstance(source_model, str) else ""
         self.custom_llm_provider = source.custom_llm_provider
         self.logging_obj = source.logging_obj
         self._hidden_params = dict(getattr(source, "_hidden_params", {}))
@@ -795,8 +796,7 @@ class FusionRouter:
             # provider's prose and identifiers are not needed for continuation;
             # only bounded, normalized search calls and their results are retained.
             current_messages.append(
-                cast(
-                    AllMessageValues,
+                _ASSISTANT_MESSAGE_ADAPTER.validate_python(
                     {
                         "role": "assistant",
                         "tool_calls": [call.model_dump(exclude_none=True) for call in bounded_calls],
@@ -835,8 +835,7 @@ class FusionRouter:
 
         chunks: list[ModelResponseStream] = []
         try:
-            async for chunk in response:
-                chunks.append(chunk.model_copy(deep=True))
+            chunks.extend([chunk.model_copy(deep=True) async for chunk in response])
         except BaseException:
             if hasattr(response, "aclose"):
                 await response.aclose()

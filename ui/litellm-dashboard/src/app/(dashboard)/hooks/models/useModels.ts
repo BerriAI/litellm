@@ -228,18 +228,20 @@ export const useAutoRouters = (): UseQueryResult<AutoRouterDeployment[], Error> 
 
 export const useFusionRouters = (): UseQueryResult<AutoRouterDeployment[], Error> => {
   const { accessToken, userId, userRole } = useAuthorized();
-  return useQuery<AutoRouterDeployment[], Error, AutoRouterDeployment[]>({
+  const options = {
     queryKey: autoRouterListKey(userId, userRole),
     queryFn: async () => await fetchAllModelDeployments(accessToken!, userId!, userRole!),
     enabled: Boolean(accessToken && userId && userRole),
     select: selectFusionRouterDeployments,
-  });
+  };
+  return useQuery<AutoRouterDeployment[], Error, AutoRouterDeployment[]>(options);
 };
 
 export const useInvalidateFusionRouters = (): (() => Promise<void>) => {
   const queryClient = useQueryClient();
   return async () => {
-    await queryClient.invalidateQueries({ queryKey: modelKeys.lists() });
+    const filters = { queryKey: modelKeys.lists() };
+    await queryClient.invalidateQueries(filters);
   };
 };
 
