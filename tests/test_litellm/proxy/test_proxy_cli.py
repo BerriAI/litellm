@@ -137,6 +137,53 @@ class TestProxyInitializationHelpers:
             )
             assert args["timeout_worker_healthcheck"] == 15
 
+    def test_run_uvicorn_server_propagates_multi_worker_startup_failure(self):
+        class _FakeSocket:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        class _FakeConfig:
+            instances = []
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.socket = _FakeSocket()
+                self.__class__.instances.append(self)
+
+            def bind_socket(self):
+                return self.socket
+
+        class _FakeMultiprocess:
+            instances = []
+
+            def __init__(self, config, sockets):
+                self.processes = [SimpleNamespace(exitcode=3)]
+                self.ran = False
+                self.__class__.instances.append(self)
+
+            def run(self):
+                self.ran = True
+
+        with (
+            patch("uvicorn.Config", _FakeConfig),
+            patch("uvicorn.Server", return_value=MagicMock()),
+            patch("uvicorn.supervisors.Multiprocess", _FakeMultiprocess),
+            patch("uvicorn.config.STARTUP_FAILURE", 3, create=True),
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                ProxyInitializationHelpers._run_uvicorn_server(
+                    uvicorn_args={"app": "litellm.proxy.proxy_server:app"},
+                    num_workers=2,
+                    reload=False,
+                )
+
+        assert exc_info.value.code == 3
+        assert _FakeMultiprocess.instances[0].ran is True
+        assert _FakeConfig.instances[0].socket.closed is True
+
     def test_installed_uvicorn_supports_worker_flags(self):
         params = inspect.signature(uvicorn.Config.__init__).parameters
         assert "timeout_worker_healthcheck" in params
@@ -1668,7 +1715,9 @@ class TestQueryEngineReaperWiring:
                     )
                 },
             ),
-            patch("uvicorn.run") as mock_uvicorn_run,
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._run_uvicorn_server"
+            ) as mock_run_uvicorn,
             patch(
                 "litellm.proxy.proxy_cli.start_query_engine_reaper"
             ) as mock_start_reaper,
@@ -1682,7 +1731,7 @@ class TestQueryEngineReaperWiring:
                 "port": 8000,
             }
             result = runner.invoke(run_server, args)
-        return result, mock_uvicorn_run, mock_start_reaper
+        return result, mock_run_uvicorn, mock_start_reaper
 
     def test_multi_worker_uvicorn_starts_reaper(self):
         result, mock_uvicorn_run, mock_start_reaper = self._invoke_run_server(

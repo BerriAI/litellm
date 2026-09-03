@@ -283,6 +283,42 @@ class ProxyInitializationHelpers:
         return uvicorn_args
 
     @staticmethod
+    def _run_uvicorn_server(
+        uvicorn_args: dict,
+        num_workers: int,
+        reload: bool,
+    ) -> None:
+        """Run Uvicorn and preserve startup failures from multi-process workers."""
+        import inspect
+
+        import uvicorn
+
+        if num_workers <= 1 or reload:
+            uvicorn.run(**uvicorn_args, workers=num_workers)
+            return
+
+        from uvicorn.supervisors import Multiprocess
+
+        config = uvicorn.Config(**uvicorn_args, workers=num_workers)
+        server = uvicorn.Server(config=config)
+        server_socket = config.bind_socket()
+        try:
+            if "target" in inspect.signature(Multiprocess).parameters:
+                supervisor = Multiprocess(config=config, target=server.run, sockets=[server_socket])
+            else:
+                supervisor = Multiprocess(config=config, sockets=[server_socket])
+            supervisor.run()
+
+            startup_failure_code: Final = getattr(uvicorn.config, "STARTUP_FAILURE", 3)
+            worker_exit_codes: Final = tuple(
+                process.exitcode for process in supervisor.processes if process.exitcode is not None
+            )
+            if startup_failure_code in worker_exit_codes:
+                raise SystemExit(startup_failure_code)
+        finally:
+            server_socket.close()
+
+    @staticmethod
     def _apply_uvicorn_max_requests_jitter(
         uvicorn_args: dict,
         max_requests_before_restart: int | None,
@@ -1073,7 +1109,7 @@ def run_server(
                 ) from e
         else:
             try:
-                import uvicorn
+                importlib.import_module("uvicorn")
             except Exception:
                 raise ImportError("uvicorn, gunicorn needs to be imported. Run - `pip install 'litellm[proxy]'`")
 
@@ -1413,9 +1449,10 @@ def run_server(
 
             if num_workers > 1:
                 start_query_engine_reaper()
-            uvicorn.run(
-                **uvicorn_args,
-                workers=num_workers,
+            ProxyInitializationHelpers._run_uvicorn_server(
+                uvicorn_args=uvicorn_args,
+                num_workers=num_workers,
+                reload=reload,
             )
         elif run_gunicorn is True:
             ProxyInitializationHelpers._run_gunicorn_server(

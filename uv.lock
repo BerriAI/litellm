@@ -4573,7 +4573,7 @@ requires-dist = [
     { name = "starlette", marker = "extra == 'proxy'", specifier = ">=1.0.1,<2.0" },
     { name = "tiktoken", specifier = ">=0.8.0,<1.0" },
     { name = "tokenizers", specifier = ">=0.21.0,<1.0" },
-    { name = "uvicorn", marker = "extra == 'proxy'", specifier = ">=0.33.0,<1.0" },
+    { name = "uvicorn", marker = "extra == 'proxy'", specifier = ">=0.51.0,<1.0" },
     { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.21.0,<1.0" },
     { name = "websockets", marker = "extra == 'proxy'", specifier = ">=15.0.1,<16.0" },
 ]
