@@ -1500,6 +1500,6 @@ class RealTimeStreaming:
                     pass
 
 
-def client_sent_openai_beta_realtime_header(websocket: Any) -> bool:
+def client_sent_openai_beta_realtime_header(websocket: _ScopedWebSocket) -> bool:
     """True when the client WebSocket includes ``OpenAI-Beta: realtime=v1``."""
     return RealTimeStreaming._detect_beta_header(websocket)

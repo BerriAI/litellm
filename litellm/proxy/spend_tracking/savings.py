@@ -481,6 +481,20 @@ def _numeric_savings(value: object) -> float | None:
     return float(value)
 
 
+def classifier_cost_from_decision(routing_decision: Mapping[str, object] | None) -> float | None:
+    """The LLM-classifier cost a routing decision recorded, or ``None`` when it holds none.
+
+    ``None`` covers the decision-less request, the heuristic short-circuit that never
+    called a classifier, the unpriced classifier model, and a malformed value alike:
+    in every one of those cases there is no dollar figure to move, so callers treat
+    ``None`` as zero rather than as an error. The one owner of that reading, shared by
+    the savings netting, the session rollup and the response header, so the three can
+    never disagree about what counts as a classifier charge.
+    """
+    decision: Final = routing_decision if isinstance(routing_decision, Mapping) else {}
+    return _numeric_savings(decision.get("classifier_cost"))
+
+
 def autorouter_savings_for_request(
     model: str | None,
     custom_llm_provider: str | None,
@@ -490,7 +504,8 @@ def autorouter_savings_for_request(
     llm_router: "Callable[[], Router | None] | None" = None,
     cost_breakdown: Mapping[str, object] | None = None,
 ) -> float | None:
-    """Auto-router savings for one request, or ``None`` when the driver is off.
+    """Auto-router savings for one request, net of the classifier call that routed it,
+    or ``None`` when the driver is off.
 
     ``None`` and ``0.0`` are different facts: ``None`` means this request cannot carry a
     figure at all (no routing decision, no baseline, unusable usage), while ``0.0`` is a
@@ -498,6 +513,11 @@ def autorouter_savings_for_request(
     Never raises: pricing failures inside degrade to zero, and the driver-off cases
     return ``None``, so this is safe on the logging path where a raise would fail the
     request's logging.
+
+    The classifier deduction lives here, at the figure's one computation owner, rather
+    than in any reader: the stamped ``autorouter_savings`` is then already net, so the
+    session rollup, the daily tables and every logging consumer agree without each
+    re-deriving the deduction, and the recorded-figure-wins path cannot deduct twice.
     """
     usage: Final = _usage_from_spend_log(usage_object)
     if usage is None or not model:
@@ -510,7 +530,7 @@ def autorouter_savings_for_request(
     if not decision or not baseline_model:
         return None
     router_instance: Final = llm_router() if llm_router else None
-    return compute_autorouter_savings(
+    gross: Final = compute_autorouter_savings(
         baseline_model=baseline_model,
         selected_model=model,
         selected_provider=custom_llm_provider,
@@ -522,6 +542,8 @@ def autorouter_savings_for_request(
         baseline_info=_effective_model_info(router_instance, baseline_id, baseline_model or ""),
         cost_breakdown=cost_breakdown,
     )
+    classifier_cost: Final = classifier_cost_from_decision(decision)
+    return gross if classifier_cost is None else gross - classifier_cost
 
 
 def autorouter_savings_for_logging_payload(

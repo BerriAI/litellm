@@ -7,7 +7,7 @@ GET - /audit/{id} - Get audit log by id
 GET - /audit - Get all audit logs
 """
 
-from typing import TYPE_CHECKING, Final, Optional
+from typing import TYPE_CHECKING, Final
 
 #### AUDIT LOGGING ####
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -58,33 +58,33 @@ async def get_audit_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
     # Filter parameters
-    changed_by: Optional[str] = Query(
+    changed_by: str | None = Query(
         None, description="Filter by user or system that performed the action"
     ),
-    changed_by_api_key: Optional[str] = Query(
+    changed_by_api_key: str | None = Query(
         None, description="Filter by API key hash that performed the action"
     ),
-    action: Optional[str] = Query(
+    action: str | None = Query(
         None, description="Filter by action type (create, update, delete)"
     ),
-    table_name: Optional[str] = Query(
+    table_name: str | None = Query(
         None, description="Filter by table name that was modified"
     ),
-    object_id: Optional[str] = Query(
+    object_id: str | None = Query(
         None, description="Filter by ID of the object that was modified"
     ),
-    start_date: Optional[str] = Query(None, description="Filter logs after this date"),
-    end_date: Optional[str] = Query(None, description="Filter logs before this date"),
-    object_team_id: Optional[str] = Query(
+    start_date: str | None = Query(None, description="Filter logs after this date"),
+    end_date: str | None = Query(None, description="Filter logs before this date"),
+    object_team_id: str | None = Query(
         None,
         description="Filter by team_id present in before_value or updated_values JSON (PostgreSQL only)",
     ),
-    object_key_hash: Optional[str] = Query(
+    object_key_hash: str | None = Query(
         None,
         description="Filter by token (key hash) present in before_value or updated_values JSON (PostgreSQL only)",
     ),
     # Sorting parameters
-    sort_by: Optional[str] = Query(
+    sort_by: str | None = Query(
         None,
         description="Column to sort by (e.g. 'updated_at', 'action', 'table_name')",
     ),

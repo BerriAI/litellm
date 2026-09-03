@@ -75,6 +75,68 @@ describe("Cost column", () => {
   });
 });
 
+describe("Type column", () => {
+  it("shows the conversation badge and composition even when an MCP call represents the conversation", async () => {
+    const user = userEvent.setup();
+    const mcpRepresentative = {
+      request_id: "req-mcp-rep",
+      call_type: "call_mcp_tool",
+      session_id: "sess-edge",
+      session_total_count: 3,
+      session_llm_count: 2,
+      mcp_tool_call_count: 1,
+      session_agent_count: 0,
+    };
+    renderRows([logEntry(mcpRepresentative)]);
+
+    expect(screen.queryByText("MCP")).not.toBeInTheDocument();
+    await user.hover(screen.getByText("3"));
+    expect(await screen.findByText("2 LLM • 1 MCP")).toBeInTheDocument();
+  });
+
+  it("keeps the plain MCP badge for a single MCP call", () => {
+    renderRows([logEntry({ request_id: "req-mcp-solo", call_type: "call_mcp_tool", session_total_count: 1 })]);
+
+    expect(screen.getByText("MCP")).toBeInTheDocument();
+  });
+});
+
+describe("Model column", () => {
+  it("lists every model used across a conversation, not only the representative call's model", () => {
+    const conversationCall: Partial<LogEntry> = {
+      request_id: "req-session",
+      model: "gpt-5.6",
+      session_id: "sess-1",
+      session_total_count: 3,
+      session_models: ["claude-sonnet-5", "gpt-5.6"],
+    };
+    renderRows([logEntry(conversationCall)]);
+
+    expect(screen.getByText("claude-sonnet-5, gpt-5.6")).toBeInTheDocument();
+    expect(screen.queryByText("gpt-5.6")).not.toBeInTheDocument();
+  });
+
+  it("marks a conversation whose model list was capped by the server", () => {
+    const cappedCall = {
+      request_id: "req-capped",
+      model: "gpt-5.6",
+      session_id: "sess-2",
+      session_total_count: 30,
+      session_models: ["claude-sonnet-5", "gpt-5.6"],
+      session_models_truncated: true,
+    };
+    renderRows([logEntry(cappedCall)]);
+
+    expect(screen.getByText("claude-sonnet-5, gpt-5.6, ...")).toBeInTheDocument();
+  });
+
+  it("keeps a single call's own model", () => {
+    renderRows([logEntry({ request_id: "req-single", model: "gpt-5.6" })]);
+
+    expect(screen.getByText("gpt-5.6")).toBeInTheDocument();
+  });
+});
+
 describe("row action cells", () => {
   it("reports the key hash through the injected dependency rather than a row field", async () => {
     const user = userEvent.setup();
@@ -85,13 +147,19 @@ describe("row action cells", () => {
     expect(deps.onKeyHashClick).toHaveBeenCalledWith("sk-hash-9");
   });
 
-  it("reports the session id from the session cell", async () => {
+  it("reports the clicked row from the session cell, so two rows sharing a session id stay distinguishable", async () => {
     const user = userEvent.setup();
     const deps = { onKeyHashClick: vi.fn(), onSessionClick: vi.fn() };
-    renderRows([logEntry({ request_id: "req-sess", session_id: "sess-42" })], deps);
+    renderRows(
+      [
+        logEntry({ request_id: "req-key-a", session_id: "sess-42", api_key: "key-a" }),
+        logEntry({ request_id: "req-key-b", session_id: "sess-42", api_key: "key-b" }),
+      ],
+      deps,
+    );
 
-    await user.click(screen.getByText("sess-42"));
-    expect(deps.onSessionClick).toHaveBeenCalledWith("sess-42");
+    await user.click(screen.getAllByText("sess-42")[1]);
+    expect(deps.onSessionClick).toHaveBeenCalledWith(expect.objectContaining({ request_id: "req-key-b" }));
   });
 });
 

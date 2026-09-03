@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { PaginatedSearchSelect } from "./PaginatedSearchSelect";
 import type { SearchSelectOption } from "./SearchSelect";
+import { chooseSelectOption } from "../../../tests/test-utils";
 
 const OPTIONS: SearchSelectOption[] = [
   { label: "alias-alpha", value: "alias-alpha" },
@@ -63,8 +64,7 @@ describe("PaginatedSearchSelect", () => {
     }
     render(<Controlled />);
 
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("alias-beta"));
+    await chooseSelectOption(user, screen.getByRole("combobox"), "alias-beta");
 
     expect(screen.getByRole("combobox")).toHaveValue("alias-beta");
     await new Promise((resolve) => setTimeout(resolve, 400));
@@ -136,8 +136,7 @@ describe("PaginatedSearchSelect", () => {
     const onValueChange = vi.fn();
     renderSelect({ onValueChange });
 
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("alias-beta"));
+    await chooseSelectOption(user, screen.getByRole("combobox"), "alias-beta");
 
     expect(onValueChange).toHaveBeenCalledWith("alias-beta");
   });
@@ -255,8 +254,7 @@ describe("PaginatedSearchSelect", () => {
     }
     render(<Refetching />);
 
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("Beta Team"));
+    await chooseSelectOption(user, screen.getByRole("combobox"), "Beta Team");
     await user.click(screen.getByRole("button", { name: "refetch" }));
 
     expect(screen.getByRole("combobox")).toHaveValue("Beta Team");
@@ -360,5 +358,33 @@ describe("PaginatedSearchSelect", () => {
     renderSelect({ isFetchingNextPage: true });
     await user.click(screen.getByRole("combobox"));
     expect(await screen.findByTestId("paginated-search-select-loading-more")).toBeInTheDocument();
+  });
+
+  it("queries the trimmed label when a character is deleted from the end of the selection", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+    renderSelect({ onSearchChange, value: "alias-alpha" });
+
+    const input = screen.getByRole("combobox") as HTMLInputElement;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    await user.keyboard("{Backspace}");
+
+    expect(input).toHaveValue("alias-alph");
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith("alias-alph"));
+  });
+
+  it("queries what is left when a character is deleted from inside the selection", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+    renderSelect({ onSearchChange, value: "alias-alpha" });
+
+    const input = screen.getByRole("combobox") as HTMLInputElement;
+    input.focus();
+    input.setSelectionRange(6, 6);
+    await user.keyboard("{Backspace}");
+
+    expect(input).toHaveValue("aliasalpha");
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith("aliasalpha"));
   });
 });

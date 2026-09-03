@@ -138,34 +138,40 @@ describe("RequestLogsPanel", () => {
     respondWith([]);
   });
 
-  describe("session-grouped listing", () => {
-    const sessionRows = [
-      logEntry({ request_id: "req-llm", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
-    ];
-
-    it("requests server-side session grouping on the default startTime sort", async () => {
-      respondWith(sessionRows);
+  describe("server-grouped session pagination (#38060)", () => {
+    it("requests session-grouped pages of 10 rows by default without a cursor", async () => {
       renderPanel();
 
-      await waitFor(() => expect(row("req-llm")).not.toBeNull());
-      const call = lastCall();
-      expect(call?.params?.group_by_session).toBe(true);
-      expect(call?.params?.session_cursor).toBeUndefined();
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCall()?.params?.group_by_session).toBe(true);
+      expect(lastCall()?.params?.session_cursor).toBeUndefined();
+      expect(lastCall()?.page_size).toBe(10);
     });
 
-    it("renders the server's representative rows without re-collapsing them", async () => {
+    it("renders every row the server returns without client-side collapsing", async () => {
       respondWith([
-        logEntry({ request_id: "req-a", session_id: "sess-1", session_total_count: 3 }),
-        logEntry({ request_id: "req-b", session_id: "sess-2", session_total_count: 5 }),
+        logEntry({ request_id: "req-a", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-b", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
+        logEntry({ request_id: "req-c", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
       ]);
       renderPanel();
 
       await waitFor(() => expect(row("req-a")).not.toBeNull());
       expect(row("req-b")).not.toBeNull();
+      expect(row("req-c")).not.toBeNull();
     });
 
-    it("shows the session's call count on the representative row", async () => {
-      respondWith(sessionRows);
+    it("shows the session's call count on the server-picked representative row", async () => {
+      respondWith([
+        logEntry({
+          request_id: "req-llm",
+          call_type: "acompletion",
+          session_id: "sess-1",
+          session_total_count: 3,
+          session_llm_count: 2,
+          mcp_tool_call_count: 1,
+        }),
+      ]);
       renderPanel();
 
       await waitFor(() => expect(row("req-llm")).not.toBeNull());
@@ -180,7 +186,7 @@ describe("RequestLogsPanel", () => {
         page: 1,
         page_size: 50,
         total_pages: 2,
-        next_session_cursor: "2026-07-07 09:50:13|sess-1",
+        next_session_cursor: "2026-07-07 09:50:13|key-1|sess-1",
         has_more: true,
       });
       renderPanel();
@@ -190,7 +196,7 @@ describe("RequestLogsPanel", () => {
 
       await waitFor(() => {
         const call = lastCall();
-        expect(call?.params?.session_cursor).toBe("2026-07-07 09:50:13|sess-1");
+        expect(call?.params?.session_cursor).toBe("2026-07-07 09:50:13|key-1|sess-1");
         expect(call?.page).toBe(2);
       });
     });
@@ -203,7 +209,7 @@ describe("RequestLogsPanel", () => {
         page: 1,
         page_size: 50,
         total_pages: 2,
-        next_session_cursor: "2026-07-07 09:50:13|sess-1",
+        next_session_cursor: "2026-07-07 09:50:13|key-1|sess-1",
         has_more: true,
       });
       renderPanel();
@@ -229,7 +235,7 @@ describe("RequestLogsPanel", () => {
         page: 1,
         page_size: 50,
         total_pages: 3,
-        next_session_cursor: "2026-07-07 09:50:13|sess-1",
+        next_session_cursor: "2026-07-07 09:50:13|key-1|sess-1",
         has_more: true,
       };
       vi.mocked(uiSpendLogsCall)
@@ -255,7 +261,7 @@ describe("RequestLogsPanel", () => {
         page: 1,
         page_size: 50,
         total_pages: 3,
-        next_session_cursor: "2026-07-07 09:50:13|sess-1",
+        next_session_cursor: "2026-07-07 09:50:13|key-1|sess-1",
         has_more: true,
       };
       vi.mocked(uiSpendLogsCall)
@@ -272,7 +278,7 @@ describe("RequestLogsPanel", () => {
       await waitFor(() => {
         const call = lastCall();
         expect(call?.page).toBe(2);
-        expect(call?.params?.session_cursor).toBe("2026-07-07 09:50:13|sess-1");
+        expect(call?.params?.session_cursor).toBe("2026-07-07 09:50:13|key-1|sess-1");
       });
     });
 
@@ -285,7 +291,7 @@ describe("RequestLogsPanel", () => {
         page: 1,
         page_size: 50,
         total_pages: 2,
-        next_session_cursor: "2026-07-07 09:50:13|sess-1",
+        next_session_cursor: "2026-07-07 09:50:13|key-1|sess-1",
         has_more: true,
       });
       renderPanel();
@@ -429,6 +435,7 @@ describe("RequestLogsPanel", () => {
       if (!byIdCall) throw new Error("expected a by-id uiSpendLogsCall");
       expect(byIdCall.page).toBe(1);
       expect(byIdCall.page_size).toBe(1);
+      expect(byIdCall.params?.group_by_session).toBeUndefined();
     });
 
     it("closing the drawer removes ?log_id= from the URL and closes the drawer", async () => {

@@ -399,7 +399,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     async def _process_mcp_tools_without_openai_transform(
-        user_api_key_auth: Any,
+        user_api_key_auth: "UserAPIKeyAuth | None",
         mcp_tools_with_litellm_proxy: Sequence[Mapping[str, object]],
         litellm_trace_id: str | None = None,
         mcp_auth_header: str | None = None,
@@ -636,7 +636,7 @@ class LiteLLM_Proxy_MCP_Handler:
     async def _execute_tool_calls(
         tool_server_map: dict[str, str],
         tool_calls: Sequence[object],
-        user_api_key_auth: Any,
+        user_api_key_auth: "UserAPIKeyAuth | None",
         mcp_auth_header: str | None = None,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
         oauth2_headers: dict[str, str] | None = None,

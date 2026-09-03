@@ -2865,7 +2865,7 @@ class TestSpendLogsPayload:
                     "model": "gpt-4o",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "attempted_fallbacks": null, "original_model_group": null, "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "usage_object": {"completion_tokens": 20, "prompt_tokens": 10, "total_tokens": 30, "completion_tokens_details": null, "prompt_tokens_details": null}, "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"key": "gpt-4o", "max_tokens": 16384, "max_input_tokens": 128000, "max_output_tokens": 16384, "input_cost_per_token": 2.5e-06, "cache_creation_input_token_cost": null, "cache_read_input_token_cost": 1.25e-06, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": 1.25e-06, "output_cost_per_token_batches": 5e-06, "output_cost_per_token": 1e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_reasoning_token": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "openai", "mode": "chat", "supports_system_messages": true, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": false, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": false, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": true, "supports_reasoning": false, "search_context_cost_per_query": {"search_context_size_low": 0.03, "search_context_size_medium": 0.035, "search_context_size_high": 0.05}, "tpm": null, "rpm": null, "supported_openai_params": ["frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "modalities", "prediction", "n", "presence_penalty", "seed", "stop", "stream", "stream_options", "temperature", "top_p", "tools", "tool_choice", "function_call", "functions", "max_retries", "extra_headers", "parallel_tool_calls", "audio", "response_format", "user"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
+                    "metadata": '{"applied_guardrails": [], "attempted_fallbacks": null, "original_model_group": null, "batch_models": null, "batch_successful_requests": null, "batch_failed_requests": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "router_metadata": null, "usage_object": {"completion_tokens": 20, "prompt_tokens": 10, "total_tokens": 30, "completion_tokens_details": null, "prompt_tokens_details": null}, "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"key": "gpt-4o", "max_tokens": 16384, "max_input_tokens": 128000, "max_output_tokens": 16384, "input_cost_per_token": 2.5e-06, "cache_creation_input_token_cost": null, "cache_read_input_token_cost": 1.25e-06, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": 1.25e-06, "output_cost_per_token_batches": 5e-06, "output_cost_per_token": 1e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_reasoning_token": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "openai", "mode": "chat", "supports_system_messages": true, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": false, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": false, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": true, "supports_reasoning": false, "search_context_cost_per_query": {"search_context_size_low": 0.03, "search_context_size_medium": 0.035, "search_context_size_high": 0.05}, "tpm": null, "rpm": null, "supported_openai_params": ["frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "modalities", "prediction", "n", "presence_penalty", "seed", "stop", "stream", "stream_options", "temperature", "top_p", "tools", "tool_choice", "function_call", "functions", "max_retries", "extra_headers", "parallel_tool_calls", "audio", "response_format", "user"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.00022500000000000002,
                     "total_tokens": 30,
@@ -2961,7 +2961,7 @@ class TestSpendLogsPayload:
                     "model": "claude-4-sonnet-20250514",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "attempted_fallbacks": null, "original_model_group": null, "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-4-sonnet-20250514", "model_map_value": {"key": "claude-4-sonnet-20250514", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "metadata": '{"applied_guardrails": [], "attempted_fallbacks": null, "original_model_group": null, "batch_models": null, "batch_successful_requests": null, "batch_failed_requests": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "router_metadata": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-4-sonnet-20250514", "model_map_value": {"key": "claude-4-sonnet-20250514", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.01383,
                     "total_tokens": 2598,
@@ -3055,7 +3055,7 @@ class TestSpendLogsPayload:
                     "model": "claude-4-sonnet-20250514",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "attempted_fallbacks": 0, "original_model_group": "my-anthropic-model-group", "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-4-sonnet-20250514", "model_map_value": {"key": "claude-4-sonnet-20250514", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "metadata": '{"applied_guardrails": [], "attempted_fallbacks": 0, "original_model_group": "my-anthropic-model-group", "batch_models": null, "batch_successful_requests": null, "batch_failed_requests": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "router_metadata": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-4-sonnet-20250514", "model_map_value": {"key": "claude-4-sonnet-20250514", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.01383,
                     "total_tokens": 2598,
@@ -3959,18 +3959,19 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
     ]
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
-        return_value=[
-            {"session_id": session_id, "_count": {"session_id": 2}},
-        ]
-    )
+    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock()
     mock_prisma.db.query_raw = AsyncMock(
         return_value=[
             {
                 "session_id": session_id,
+                "api_key": api_key,
+                "session_total_count": 2,
                 "session_total_spend": 15.0,
                 "mcp_tool_call_count": 1,
                 "mcp_tool_call_spend": 10.0,
+                "session_llm_count": 1,
+                "session_agent_count": 0,
+                "session_models": ["claude-haiku-4-5", "gpt-5.4-nano"],
             }
         ]
     )
@@ -3995,6 +3996,9 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
     assert rows[0]["mcp_tool_call_spend"] == 10.0
     assert rows[1]["mcp_tool_call_count"] == 1
     assert rows[1]["mcp_tool_call_spend"] == 10.0
+    assert rows[0]["session_llm_count"] == 1
+    assert rows[0]["session_agent_count"] == 0
+    assert rows[0]["session_models"] == ["claude-haiku-4-5", "gpt-5.4-nano"]
 
     # Every row in the session carries the full session spend, not just its own
     assert rows[0]["session_total_spend"] == 15.0
@@ -4002,13 +4006,175 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
 
     # Row without a session_id defaults to 1
     assert rows[2]["session_total_count"] == 1
+    assert "session_models" not in rows[2]
 
-    # group_by should have been called with the session_id
-    mock_prisma.db.litellm_spendlogs.group_by.assert_called_once_with(
-        by=["session_id"],
-        where={"session_id": {"in": [session_id]}},
-        count={"session_id": True},
+    # The count is folded into the single aggregate query; no separate group_by call.
+    mock_prisma.db.litellm_spendlogs.group_by.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_caps_session_models():
+    """The per-session model list is bounded server-side and flags when it was cut."""
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _SESSION_MODELS_LIMIT,
+        _build_ui_spend_logs_response,
     )
+
+    session_id = "sess-many-models"
+    api_key = "hashed-key-xyz"
+    over_limit_models = [f"model-{i:02d}" for i in range(_SESSION_MODELS_LIMIT + 1)]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "api_key": api_key,
+                "session_total_count": len(over_limit_models),
+                "session_total_spend": 1.0,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+                "session_llm_count": len(over_limit_models),
+                "session_agent_count": 0,
+                "session_models": over_limit_models,
+            }
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=[{"request_id": "req-1", "session_id": session_id, "call_type": "completion", "api_key": api_key}],
+        total_records=1,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    row = result["data"][0]
+    assert row["session_models"] == over_limit_models[:_SESSION_MODELS_LIMIT]
+    assert row["session_models_truncated"] is True
+
+    sql, *params = mock_prisma.db.query_raw.await_args.args
+    assert "LIMIT $4" in sql
+    assert params[3] == _SESSION_MODELS_LIMIT + 1
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_key_split_session_gets_per_key_aggregates():
+    """
+    Two keys reusing one session id are separate rows under grouped pagination,
+    and each row must carry ITS key's totals, never the combined session's:
+    the aggregate query and its lookup are keyed by (session_id, api_key).
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    session_id = "sess-shared"
+    dict_rows = [
+        {"request_id": "req-a", "session_id": session_id, "call_type": "completion", "api_key": "key-a"},
+        {"request_id": "req-b", "session_id": session_id, "call_type": "completion", "api_key": "key-b"},
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "api_key": "key-a",
+                "session_total_count": 2,
+                "session_total_spend": 0.2,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+                "session_cache_hit_count": 1,
+                "session_llm_count": 2,
+                "session_agent_count": 0,
+            },
+            {
+                "session_id": session_id,
+                "api_key": "key-b",
+                "session_total_count": 1,
+                "session_total_spend": 0.7,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+                "session_cache_hit_count": 0,
+                "session_llm_count": 1,
+                "session_agent_count": 0,
+            },
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=2,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    rows = result["data"]
+    assert [(r["session_total_count"], r["session_total_spend"]) for r in rows] == [(2, 0.2), (1, 0.7)]
+    assert [r["session_cache_hit_count"] for r in rows] == [1, 0]
+    assert [r["session_llm_count"] for r in rows] == [2, 1]
+
+    aggregate_sql = mock_prisma.db.query_raw.mock_calls[0][1][0]
+    assert "GROUP BY session_id, api_key" in aggregate_sql
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_empty_api_key_keeps_session_aggregates():
+    """
+    The spend-log schema defaults api_key to an empty string, which is a real
+    group value and not a missing one: a multi-call session logged under an
+    empty key must keep its count and spend instead of degrading to a plain
+    single-call row.
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    session_id = "sess-keyless"
+    dict_rows = [
+        {"request_id": "req-1", "session_id": session_id, "call_type": "completion", "api_key": ""},
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "api_key": "",
+                "session_total_count": 3,
+                "session_total_spend": 0.09,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+                "session_cache_hit_count": 0,
+                "session_llm_count": 3,
+                "session_agent_count": 0,
+            }
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=1,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    row = result["data"][0]
+    assert row["session_total_count"] == 3
+    assert row["session_total_spend"] == 0.09
+
+    # The empty key must reach the aggregate's authorized-keys filter too.
+    _, call_args, _ = mock_prisma.db.query_raw.mock_calls[0]
+    assert call_args[2] == [""]
 
 
 @pytest.mark.asyncio
@@ -4033,14 +4199,13 @@ async def test_build_ui_spend_logs_response_sums_multi_round_session_spend():
     ]
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
-        return_value=[{"session_id": session_id, "_count": {"session_id": 3}}]
-    )
     # The raw aggregate query returns the full session spend (0.01 + 0.02 + 0.03).
     mock_prisma.db.query_raw = AsyncMock(
         return_value=[
             {
                 "session_id": session_id,
+                "api_key": api_key,
+                "session_total_count": 3,
                 "session_total_spend": 0.06,
                 "mcp_tool_call_count": 0,
                 "mcp_tool_call_spend": 0.0,
@@ -4089,13 +4254,12 @@ async def test_build_ui_spend_logs_response_session_cache_hit_count():
     ]
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
-        return_value=[{"session_id": session_id, "_count": {"session_id": 2}}]
-    )
     mock_prisma.db.query_raw = AsyncMock(
         return_value=[
             {
                 "session_id": session_id,
+                "api_key": api_key,
+                "session_total_count": 2,
                 "session_total_spend": 0.05,
                 "mcp_tool_call_count": 0,
                 "mcp_tool_call_spend": 0.0,
@@ -5876,20 +6040,26 @@ def test_parse_session_cursor():
 
     assert _parse_session_cursor(None) is None
     assert _parse_session_cursor("no-delimiter") is None
-    assert _parse_session_cursor("|missing-ts") is None
-    assert _parse_session_cursor("2026-08-29 10:00:00|") is None
-    assert _parse_session_cursor("2026-08-29 10:00:00|sess-1") == (
+    assert _parse_session_cursor("2026-08-29 10:00:00|sess-1") is None
+    assert _parse_session_cursor("|hashed-key|sess-1") is None
+    assert _parse_session_cursor("2026-08-29 10:00:00|hashed-key|") is None
+    assert _parse_session_cursor("2026-08-29 10:00:00|hashed-key|sess-1") == (
         "2026-08-29 10:00:00",
         "sess-1",
+        "hashed-key",
     )
-    assert _parse_session_cursor("2026-08-29 10:00:00.123|sess|with|pipes") == (
+    assert _parse_session_cursor("2026-08-29 10:00:00.123|hashed-key|sess|with|pipes") == (
         "2026-08-29 10:00:00.123",
         "sess|with|pipes",
+        "hashed-key",
     )
+
+
+SESSION_GROUP_KEY_SQL = "COALESCE(NULLIF(session_id, ''), request_id), api_key"
 
 
 def _session_grouped_mock_prisma(session_page_rows, session_total, representative_rows):
-    """Mock prisma dispatching the three raw queries the grouped path emits."""
+    """Mock prisma dispatching the raw queries the keyset grouped path emits."""
 
     async def mock_query_raw(sql_query, *params):
         if "COUNT(*) AS total_count" in sql_query:
@@ -5897,18 +6067,25 @@ def _session_grouped_mock_prisma(session_page_rows, session_total, representativ
         if "DISTINCT ON" in sql_query:
             return representative_rows
         if "COALESCE(SUM(spend)" in sql_query:
-            return []
+            return [
+                {
+                    "session_id": "sess-1",
+                    "api_key": "hashed-key",
+                    "session_total_count": 3,
+                    "session_total_spend": 0.03,
+                    "mcp_tool_call_count": 0,
+                    "mcp_tool_call_spend": 0.0,
+                    "session_cache_hit_count": 0,
+                    "session_llm_count": 3,
+                    "session_agent_count": 0,
+                    "session_models": ["gpt-4o"],
+                }
+            ]
         return session_page_rows
 
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
     mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
-    mock_prisma.db.litellm_spendlogs = MagicMock()
-    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
-        return_value=[
-            {"session_id": "sess-1", "_count": {"session_id": 3}},
-        ]
-    )
     return mock_prisma
 
 
@@ -5926,21 +6103,24 @@ def _session_representative_row(request_id, session_id):
         "model": "gpt-4o",
         "metadata": {},
         "session_id": session_id,
-        "session_key": session_id or request_id,
     }
+
+
+def _session_page_row(session_key, last_activity):
+    return {"session_key": session_key, "api_key": "hashed-key", "last_activity": last_activity}
 
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatch):
-    """One row per session, session-count total, and a keyset cursor for the next page."""
+    """One row per (session, api_key), session-count total, and a keyset cursor for the next page."""
     page_rows = [
-        {"session_key": "sess-1", "last_activity": "2026-08-29 10:00:00"},
-        {"session_key": "req-solo", "last_activity": "2026-08-29 09:00:00"},
-        {"session_key": "sess-extra", "last_activity": "2026-08-29 08:00:00"},
+        _session_page_row("sess-1", "2026-08-29 10:00:00"),
+        _session_page_row("req-solo", "2026-08-29 09:00:00"),
+        _session_page_row("sess-extra", "2026-08-29 08:00:00"),
     ]
     reps = [
-        _session_representative_row("req-1", "sess-1"),
         _session_representative_row("req-solo", None),
+        _session_representative_row("req-1", "sess-1"),
     ]
     mock_prisma = _session_grouped_mock_prisma(page_rows, 3, reps)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
@@ -5967,15 +6147,31 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
         data = response.json()
         assert data["total"] == 3
         assert data["has_more"] is True
-        assert data["next_session_cursor"] == "2026-08-29 09:00:00|req-solo"
+        assert data["next_session_cursor"] == "2026-08-29 09:00:00|hashed-key|req-solo"
         request_ids = [row["request_id"] for row in data["data"]]
-        assert request_ids == ["req-1", "req-solo"]
+        assert request_ids == ["req-1", "req-solo"], "representatives must follow the page order"
         assert data["data"][0]["session_total_count"] == 3
+        assert data["data"][1]["session_total_count"] == 1
 
-        page_query_sql = mock_prisma.db.query_raw.await_args_list[0].args[0]
-        assert 'GROUP BY COALESCE(session_id, request_id)' in page_query_sql
+        emitted = [call.args for call in mock_prisma.db.query_raw.await_args_list]
+        page_query_sql = emitted[0][0]
+        assert f"GROUP BY {SESSION_GROUP_KEY_SQL}" in page_query_sql
         assert "OFFSET" not in page_query_sql
         assert "HAVING" not in page_query_sql
+        assert emitted[0][-1] == 3, "page query fetches page_size + 1 sessions to detect has_more"
+
+        count_sql = emitted[1][0]
+        assert f"GROUP BY {SESSION_GROUP_KEY_SQL}" in count_sql
+        assert "LIMIT" in count_sql and "FROM (" in count_sql, "the grouped count must stay bounded"
+
+        rep_call = emitted[2]
+        assert f"DISTINCT ON ({SESSION_GROUP_KEY_SQL})" in rep_call[0]
+        assert (
+            f"ORDER BY {SESSION_GROUP_KEY_SQL}, call_type IN ('call_mcp_tool', 'list_mcp_tools'), \"startTime\" DESC"
+            in rep_call[0]
+        ), "the session representative must prefer the newest non-MCP call"
+        assert rep_call[-2] == ["sess-1", "req-solo"]
+        assert rep_call[-1] == ["hashed-key", "hashed-key"]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -5983,9 +6179,7 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypatch):
     """A session_cursor becomes a HAVING keyset predicate instead of an OFFSET."""
-    page_rows = [
-        {"session_key": "sess-2", "last_activity": "2026-08-29 07:00:00"},
-    ]
+    page_rows = [_session_page_row("sess-2", "2026-08-29 07:00:00")]
     reps = [_session_representative_row("req-2", "sess-2")]
     mock_prisma = _session_grouped_mock_prisma(page_rows, 3, reps)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
@@ -6004,7 +6198,7 @@ async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypat
                 "start_date": start_date,
                 "end_date": end_date,
                 "group_by_session": "true",
-                "session_cursor": "2026-08-29 09:00:00|req-solo",
+                "session_cursor": "2026-08-29 09:00:00|hashed-key|req-solo",
                 "page_size": 2,
             },
             headers={"Authorization": "Bearer sk-test"},
@@ -6017,18 +6211,23 @@ async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypat
 
         page_query_call = mock_prisma.db.query_raw.await_args_list[0]
         page_query_sql = page_query_call.args[0]
-        assert 'HAVING (MAX("startTime"), COALESCE(session_id, request_id)) <' in page_query_sql
-        assert "2026-08-29 09:00:00" in page_query_call.args
-        assert "req-solo" in page_query_call.args
+        assert f'HAVING (MAX("startTime"), {SESSION_GROUP_KEY_SQL}) <' in page_query_sql
+        assert "OFFSET" not in page_query_sql
+        cursor_index = page_query_call.args.index("2026-08-29 09:00:00")
+        assert page_query_call.args[cursor_index : cursor_index + 3] == (
+            "2026-08-29 09:00:00",
+            "req-solo",
+            "hashed-key",
+        ), "cursor params must line up with (MAX(startTime), session key, api_key)"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
-async def test_ui_view_spend_logs_group_by_session_ignored_for_non_starttime_sort(
+async def test_ui_view_spend_logs_group_by_session_offset_for_non_starttime_sort(
     client, monkeypatch
 ):
-    """Sorting by another column falls back to the flat per-request listing."""
+    """Sorting by another column keeps session grouping but pages with OFFSET, without a keyset cursor."""
     mock_prisma = _session_grouped_mock_prisma([], 0, [])
 
     async def mock_query_raw(sql_query, *params):
@@ -6053,6 +6252,7 @@ async def test_ui_view_spend_logs_group_by_session_ignored_for_non_starttime_sor
                 "start_date": start_date,
                 "end_date": end_date,
                 "group_by_session": "true",
+                "session_cursor": "2026-08-29 09:00:00|hashed-key|req-solo",
                 "sort_by": "spend",
             },
             headers={"Authorization": "Bearer sk-test"},
@@ -6060,9 +6260,9 @@ async def test_ui_view_spend_logs_group_by_session_ignored_for_non_starttime_sor
         assert response.status_code == 200, response.text
         data = response.json()
         assert "next_session_cursor" not in data
-        emitted_sql = " ".join(
-            call.args[0] for call in mock_prisma.db.query_raw.await_args_list
-        )
-        assert "GROUP BY COALESCE(session_id, request_id)" not in emitted_sql
+        emitted_sql = [call.args[0] for call in mock_prisma.db.query_raw.await_args_list]
+        assert "HAVING" not in " ".join(emitted_sql)
+        assert f"DISTINCT ON ({SESSION_GROUP_KEY_SQL})" in emitted_sql[1]
+        assert "OFFSET" in emitted_sql[1]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)

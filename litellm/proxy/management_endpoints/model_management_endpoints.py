@@ -54,7 +54,10 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
@@ -64,6 +67,10 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
     update_team as _legacy_update_team,
+)
+from litellm.proxy.management_helpers.access_group_model_sync import (
+    sync_access_groups_for_deleted_model,
+    sync_access_groups_for_renamed_model,
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.spend_tracking.ptu_feature_flag import (
@@ -543,7 +550,7 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
     merged_model_name: Final = updated_patch.model_name or db_model.model_name
     merged_litellm_params: Final = db_model.litellm_params.model_dump(exclude_none=True)
-    merged_model_info: Final = db_model.model_info.model_dump(exclude_none=True)
+    merged_model_info: Final[dict[str, object]] = db_model.model_info.model_dump(exclude_none=True)
 
     # update litellm params
     if updated_patch.litellm_params:
@@ -701,11 +708,18 @@ async def patch_model(
                 param="blocked",
             )
 
+        ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=patch_data.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+            existing_litellm_params=db_model.litellm_params,
+        )
+
         _raise_on_strategy_router_write_violation(
             incoming_params=patch_data.litellm_params,
             existing_params=db_model.litellm_params,
         )
 
+        requested_model_name: Final = patch_data.model_name
         # Handle team model updates with proper alias management
         update_data: Final = await _update_team_model_in_db(
             db_model=db_model,
@@ -730,6 +744,20 @@ async def patch_model(
                 type=ProxyErrorTypes.not_found_error,
                 code=status.HTTP_404_NOT_FOUND,
                 param=None,
+            )
+
+        stored_model_name: Final = update_data.get("model_name")
+        if (
+            stored_model_name is not None
+            and stored_model_name == requested_model_name
+            and stored_model_name != db_model.model_name
+        ):
+            await sync_access_groups_for_renamed_model(
+                prisma_client=prisma_client,
+                model_id=model_id,
+                old_name=db_model.model_name,
+                new_name=stored_model_name,
+                llm_router=llm_router,
             )
 
         # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
@@ -1465,6 +1493,32 @@ class ModelManagementAuthChecks:
         return True
 
     @staticmethod
+    def can_user_attach_credential(
+        litellm_params: GenericLiteLLMParams | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        existing_litellm_params: GenericLiteLLMParams | None = None,
+    ) -> Literal[True]:
+        if litellm_params is None or litellm_params.litellm_credential_name is None:
+            return True
+        if existing_litellm_params is not None and existing_litellm_params.litellm_credential_name is not None:
+            existing_credential_name: Final = decrypt_value_helper(
+                value=existing_litellm_params.litellm_credential_name,
+                key="litellm_credential_name",
+                exception_type="debug",
+                return_original_value=True,
+            )
+            if litellm_params.litellm_credential_name == existing_credential_name:
+                return True
+        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+            return True
+        raise ProxyException(
+            message=f"Only a proxy admin can attach a stored credential (litellm_credential_name) to a model. Your role={user_api_key_dict.user_role}.",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param="litellm_credential_name",
+        )
+
+    @staticmethod
     async def allow_team_model_action(
         model_params: Deployment | updateDeployment,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1638,6 +1692,12 @@ async def delete_model(
                     proxy_logging_obj=proxy_logging_obj,
                     llm_router=llm_router,
                 )
+            await sync_access_groups_for_deleted_model(
+                prisma_client=prisma_client,
+                model_id=model_info.id,
+                model_name=model_params.model_name,
+                llm_router=llm_router,
+            )
 
             ## CREATE AUDIT LOG ##
             asyncio.create_task(
@@ -1784,6 +1844,11 @@ async def add_new_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+        )
+
+        ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=model_params.litellm_params,
+            user_api_key_dict=user_api_key_dict,
         )
 
         _raise_on_strategy_router_write_violation(
@@ -1958,6 +2023,12 @@ async def update_model(
             premium_user=premium_user,
         )
 
+        ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=model_params.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+            existing_litellm_params=deployment.litellm_params,
+        )
+
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
             existing_params=deployment.litellm_params,
@@ -1981,25 +2052,36 @@ async def update_model(
                 model_params.litellm_params[k] = encrypted_value
 
             ### MERGE WITH EXISTING DATA ###
-            merged_dictionary: Final = {}
-            _mp: Final = model_params.litellm_params.dict()
+            _mp: Final[dict[str, object]] = model_params.litellm_params.dict()
+            merged_dictionary: Final = {
+                key: _existing_litellm_params_dict[key] if value is None else value
+                for key, value in _mp.items()
+                if value is not None or _existing_litellm_params_dict.get(key) is not None
+            }
 
-            for key, value in _mp.items():
-                if value is not None:
-                    merged_dictionary[key] = value
-                elif key in _existing_litellm_params_dict and _existing_litellm_params_dict[key] is not None:
-                    merged_dictionary[key] = _existing_litellm_params_dict[key]
-                else:
-                    pass
-
+            renamed_to: Final = (
+                model_params.model_name
+                if model_params.model_name not in (None, deployment.model_name)
+                and deployment.model_info.team_id is None
+                else None
+            )
             _data: Final[dict[str, str]] = {
                 "litellm_params": json.dumps(merged_dictionary),
                 "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+                **({} if renamed_to is None else {"model_name": renamed_to}),
             }
             model_response: Final = await _proxy_model_table(prisma_client).update(
                 where={"model_id": _model_id},
                 data=_data,
             )
+            if renamed_to is not None:
+                await sync_access_groups_for_renamed_model(
+                    prisma_client=prisma_client,
+                    model_id=_model_id,
+                    old_name=deployment.model_name,
+                    new_name=renamed_to,
+                    llm_router=llm_router,
+                )
 
             # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
             live_before_reload: Final = live_model_ids_snapshot()

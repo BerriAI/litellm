@@ -17,7 +17,7 @@ until they're actually needed.
 
 import importlib
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -57,10 +57,11 @@ from ._lazy_imports_registry import (
 )
 
 if TYPE_CHECKING:
+    import httpx
     from tiktoken import Encoding
 
 
-def get_litellm_globals() -> dict:
+def get_litellm_globals() -> dict[str, object]:
     """
     Get the globals dictionary of the litellm module.
 
@@ -70,7 +71,7 @@ def get_litellm_globals() -> dict:
     return sys.modules["litellm"].__dict__
 
 
-def _get_utils_globals() -> dict:
+def _get_utils_globals() -> dict[str, object]:
     """
     Get the globals dictionary of the utils module.
 
@@ -78,6 +79,11 @@ def _get_utils_globals() -> dict:
     When you do `litellm.utils.some_function`, it gets stored in this dictionary.
     """
     return sys.modules["litellm.utils"].__dict__
+
+
+def _get_module_level_client_timeout(litellm_globals: Mapping[str, Any]) -> "float | httpx.Timeout | None":
+    """Read the configured `litellm.request_timeout` used for the module level http clients."""
+    return litellm_globals.get("request_timeout")
 
 
 # These are special lazy loaders for things that are used internally
@@ -435,8 +441,8 @@ def _lazy_import_http_handlers(name: str) -> object:
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 
         # Get timeout from module config (if set)
-        timeout = _globals.get("request_timeout")
-        params: Final = {"timeout": timeout, "client_alias": "module level aclient"}
+        async_timeout: Final = _get_module_level_client_timeout(_globals)
+        params: Final = {"timeout": async_timeout, "client_alias": "module level aclient"}
 
         # Create the client instance
         provider_id: Final = cast(Any, "litellm_module_level_client")
@@ -453,8 +459,8 @@ def _lazy_import_http_handlers(name: str) -> object:
         # Create a sync HTTP client
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-        timeout = _globals.get("request_timeout")
-        sync_client: Final = HTTPHandler(timeout=timeout)
+        sync_timeout: Final = _get_module_level_client_timeout(_globals)
+        sync_client: Final = HTTPHandler(timeout=sync_timeout)
 
         # Cache it
         _globals["module_level_client"] = sync_client

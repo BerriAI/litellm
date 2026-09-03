@@ -2404,3 +2404,111 @@ class TestBedrockFilesS3SignatureEncoding:
             body=None,
             headers=litellm_params[S3_SIGNED_GET_HEADERS_PARAM],
         )
+
+
+def test_sign_s3_request_assumes_role_with_external_id(monkeypatch):
+    """A trust policy requiring sts:ExternalId must be satisfied when signing the S3 upload request."""
+    import datetime
+    from unittest.mock import patch
+
+    import boto3
+    from botocore.exceptions import ClientError
+
+    from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+    monkeypatch.delenv("AWS_EXTERNAL_ID", raising=False)
+
+    class FakeSTSClient:
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if params.get("ExternalId") != "external-id-files-put":
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:AssumeRole"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIAFILESPUTROLE",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+                }
+            }
+
+    optional_params = {
+        "aws_region_name": "us-east-1",
+        "aws_access_key_id": "AKIAFILESPUTCALLER",
+        "aws_secret_access_key": "pod-caller-secret",
+        "aws_role_name": "arn:aws:iam::999999999999:role/litellm-files-put-role",
+        "aws_session_name": "litellm-files-put-session",
+        "aws_external_id": "external-id-files-put",
+    }
+
+    with patch.object(boto3, "client", return_value=FakeSTSClient()):
+        signed_headers, _signed_body = BedrockFilesConfig()._sign_s3_request(
+            content='{"custom_id": "req-1"}',
+            api_base="https://s3.us-east-1.amazonaws.com/safe-bucket/litellm-bedrock-files-model-id-abc.jsonl",
+            optional_params=optional_params,
+        )
+
+    authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
+    assert "ASIAFILESPUTROLE" in authorization
+
+
+def test_sign_s3_get_request_assumes_role_with_external_id(monkeypatch):
+    """A trust policy requiring sts:ExternalId must be satisfied when signing the S3 download request."""
+    import datetime
+    from unittest.mock import patch
+
+    import boto3
+    from botocore.exceptions import ClientError
+
+    from litellm.llms.bedrock.files.transformation import (
+        BedrockFilesConfig,
+        _BedrockS3RequestParams,
+    )
+
+    monkeypatch.delenv("AWS_EXTERNAL_ID", raising=False)
+
+    class FakeSTSClient:
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if params.get("ExternalId") != "external-id-files-get":
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:AssumeRole"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIAFILESGETROLE",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+                }
+            }
+
+    request_params = _BedrockS3RequestParams.model_validate(
+        {
+            "aws_region_name": "us-east-1",
+            "aws_access_key_id": "AKIAFILESGETCALLER",
+            "aws_secret_access_key": "pod-caller-secret",
+            "aws_role_name": "arn:aws:iam::999999999999:role/litellm-files-get-role",
+            "aws_session_name": "litellm-files-get-session",
+            "aws_external_id": "external-id-files-get",
+        }
+    )
+    assert request_params.aws_external_id == "external-id-files-get"
+
+    with patch.object(boto3, "client", return_value=FakeSTSClient()):
+        signed_headers = BedrockFilesConfig()._sign_s3_get_request(
+            api_base="https://s3.us-east-1.amazonaws.com/safe-bucket/litellm-bedrock-files-model-id-abc.jsonl",
+            aws_region_name="us-east-1",
+            request_params=request_params,
+        )
+
+    authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
+    assert "ASIAFILESGETROLE" in authorization

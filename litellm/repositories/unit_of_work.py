@@ -118,6 +118,7 @@ class BudgetCascadeUnitOfWork:
     keys: LinkedSpendResetWrites
     organizations: LinkedSpendResetWrites
     tags: LinkedSpendResetWrites
+    model_access_groups: LinkedSpendResetWrites
     endusers: LinkedSpendResetWrites
     budgets: BudgetWindowWrites
 
@@ -143,6 +144,7 @@ async def budget_cascade_unit_of_work(
         keys=LinkedSpendResetWrites(table=batch.litellm_verificationtoken),
         organizations=LinkedSpendResetWrites(table=batch.litellm_organizationtable),
         tags=LinkedSpendResetWrites(table=batch.litellm_tagtable),
+        model_access_groups=LinkedSpendResetWrites(table=batch.litellm_modelaccessgroupbudgettable),
         endusers=LinkedSpendResetWrites(table=batch.litellm_endusertable),
         budgets=BudgetWindowWrites(table=batch.litellm_budgettable),
     )

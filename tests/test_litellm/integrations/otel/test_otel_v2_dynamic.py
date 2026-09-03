@@ -2,21 +2,33 @@
 
 import base64
 
-
+import pytest
 from opentelemetry.trace import NoOpTracer
 
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+from litellm.integrations.otel.plumbing.providers import parse_headers
+from litellm.integrations.otel.plumbing.routing import TenantTracerCache
 from litellm.integrations.otel.presets import (
+    DYNAMIC_HEADERS_BY_CALLBACK,
     dynamic_otlp_endpoint,
     dynamic_otlp_headers,
     project_routing_headers,
 )
-from litellm.integrations.otel.plumbing.providers import parse_headers
-from litellm.integrations.otel.plumbing.routing import TenantTracerCache
 
 
 def _cache(callback_name, exporters=None):
-    cfg = OpenTelemetryV2Config(exporters=exporters or [ExporterSpec(kind="in_memory")])
+    # A credential-routing callback always contributes an owned OTLP exporter
+    # from its preset, so default the fixture to one (a simple processor, no
+    # background flush thread); otherwise its dynamic credentials have nowhere
+    # to stamp and the route stays on the default tracer.
+    if exporters is None:
+        owned = (
+            [ExporterSpec(kind="otlp_http", owner=callback_name, use_simple_processor=True)]
+            if callback_name in DYNAMIC_HEADERS_BY_CALLBACK
+            else []
+        )
+        exporters = [ExporterSpec(kind="in_memory"), *owned]
+    cfg = OpenTelemetryV2Config(exporters=exporters)
     return TenantTracerCache(cfg, callback_name, "litellm")
 
 
@@ -505,6 +517,127 @@ def test_newrelic_provider_cached_per_key_and_region():
     assert len(cache._providers) == 2
     cache.route_for(default, {"newrelic_api_key": "K2", "newrelic_region": "eu"})
     assert len(cache._providers) == 3
+
+
+# --- credential routes must detach: their tenant backend never receives the --- #
+# --- operator-side request-root span, so a parented LLM span is orphaned.    --- #
+
+
+@pytest.mark.parametrize(
+    "callback, dynamic_params",
+    [
+        ("newrelic", {"newrelic_api_key": "NRAL-KEY"}),
+        ("arize", {"arize_space_id": "S", "arize_api_key": "K"}),
+        ("langfuse_otel", {"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}),
+        ("weave_otel", {"wandb_api_key": "w", "weave_project_id": "p"}),
+    ],
+)
+def test_credential_route_detaches_from_request_trace(callback, dynamic_params):
+    # The request root, auth, guardrail and db spans stay on the operator's
+    # default backend; a credential-routed LLM span exports to the tenant's own
+    # account, which never sees that root. Parenting it there leaves it
+    # orphaned ("Missing parent"/fragmented), so a credential route must root
+    # its own trace and link back, exactly as a Phoenix project route does.
+    cache = _cache(
+        callback,
+        exporters=[
+            ExporterSpec(kind="in_memory"),
+            ExporterSpec(kind="otlp_http", owner=callback, use_simple_processor=True),
+        ],
+    )
+    default = NoOpTracer()
+    routed = cache.route_for(default, dynamic_params)
+    assert routed.tracer is not default
+    assert routed.detached is True  # own trace + link back, never parented cross-account
+    cache.release(routed.provider)
+
+
+def test_credential_route_without_owned_otlp_exporter_stays_parented():
+    # A callback owning only a console/in_memory exporter has nowhere to stamp
+    # the dynamic credentials, so the span exports to the operator's default
+    # backend unchanged. Detaching there would orphan it on the very backend
+    # that holds its parent, so it must stay parented (mirrors the project guard).
+    cache = _cache("newrelic", exporters=[ExporterSpec(kind="in_memory")])
+    default = NoOpTracer()
+    routed = cache.route_for(default, {"newrelic_api_key": "NRAL-KEY"})
+    assert routed.tracer is default  # no scoped provider built
+    assert routed.detached is False
+    assert cache._providers == {}
+
+
+@pytest.mark.parametrize("typo_kind", ["otlp", "grcp", "htttp", "otlphttp"])
+def test_credential_route_with_unresolvable_exporter_kind_stays_parented(typo_kind):
+    # An owned exporter whose kind does not resolve to a real OTLP exporter
+    # (a typo or an unavailable protocol) falls back to a header-ignoring
+    # console exporter, so the dynamic credentials never reach a tenant backend.
+    # A denylist would wrongly treat it as routable and detach the span onto the
+    # operator's console, orphaning it; routability must instead follow the same
+    # kind resolution the exporter build uses.
+    cache = _cache(
+        "newrelic",
+        exporters=[ExporterSpec(kind="in_memory"), ExporterSpec(kind=typo_kind, owner="newrelic")],
+    )
+    default = NoOpTracer()
+    routed = cache.route_for(default, {"newrelic_api_key": "NRAL-KEY"})
+    assert routed.tracer is default  # no scoped provider built
+    assert routed.detached is False
+    assert cache._providers == {}
+
+
+def test_credential_routed_span_roots_new_trace_and_links_back():
+    # Beyond the detached flag: an emitted credential-routed span must actually
+    # root its own trace (a fresh trace id, no parent) and carry a link back to
+    # the request trace, so the tenant account can correlate it without holding
+    # the operator-side root it never received.
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from litellm.integrations.otel.logger import _request_trace_links
+
+    default_exporter = InMemorySpanExporter()
+    default_provider = TracerProvider()
+    default_provider.add_span_processor(SimpleSpanProcessor(default_exporter))
+    default = default_provider.get_tracer("litellm")
+
+    cache = _cache(
+        "newrelic",
+        exporters=[ExporterSpec(kind="otlp_http", owner="newrelic", use_simple_processor=True)],
+    )
+    with default.start_as_current_span("chat gemini-flash") as request_root:
+        request_ctx = trace.set_span_in_context(request_root)
+        route = cache.route_for(default, {"newrelic_api_key": "NRAL-KEY"})
+        assert route.detached is True
+        from opentelemetry.trace import INVALID_SPAN, set_span_in_context
+
+        with route.tracer.start_as_current_span(
+            "chat gemini-flash",
+            context=set_span_in_context(INVALID_SPAN, request_ctx),
+            links=_request_trace_links(request_ctx),
+        ) as tenant_span:
+            tenant_ctx = tenant_span.get_span_context()
+    cache.release(route.provider)
+
+    root_ctx = request_root.get_span_context()
+    assert tenant_ctx.trace_id != root_ctx.trace_id  # fresh trace, not parented
+    (link,) = tenant_span.links
+    assert link.context.trace_id == root_ctx.trace_id  # linked back to the request trace
+
+
+def test_service_name_route_stays_parented_unlike_credential_route():
+    # Guard the boundary the fix must NOT cross: service.name routing relabels
+    # the span on the SAME operator backend, where the request root is present,
+    # so it stays parented. Only credential/project routes (different backend)
+    # detach.
+    cache = _cache("otel")
+    default = NoOpTracer()
+    routed = cache.route_for(default, None, {"otel_service_name": "payments-gateway"})
+    assert routed.tracer is not default
+    assert routed.detached is False
+    cache.release(routed.provider)
 
 
 def test_requires_headers_spec_skipped_without_headers():

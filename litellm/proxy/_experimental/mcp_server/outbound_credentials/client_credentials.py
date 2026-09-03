@@ -19,9 +19,9 @@ Implements the client-credentials behavior contract for the v2 resolver:
   identity.
 
 The token-endpoint POST is injected (``M2MTokenEndpointPost``) so the grant orchestration is
-testable without a live IdP; ``post_client_credentials_grant`` is the httpx edge and the one
-place the untyped response boundary is contained. Failures are values: the source returns
-``Result[OAuthToken, CredError]``; only the httpx edge touches exceptions.
+testable without a live IdP; ``post_client_credentials_grant`` is the httpx edge. Failures are
+values: the source returns ``Result[OAuthToken, CredError]``; only the httpx edge touches
+exceptions.
 """
 
 from __future__ import annotations
@@ -95,18 +95,17 @@ async def post_client_credentials_grant(
 ) -> TokenEndpointOutcome:
     """POST the grant to the token endpoint and classify the transport outcome.
 
-    The httpx edge: litellm's handler is partially typed (and raises ``HTTPStatusError`` itself on
-    a 4xx/5xx), so the untyped boundary is contained here and every field the caller reads comes
-    out of a validated ``TokenEndpointOutcome``.
+    The httpx edge: litellm's handler raises ``HTTPStatusError`` itself on a 4xx/5xx, and every
+    field the caller reads comes out of a validated ``TokenEndpointOutcome``.
     """
     from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415  # defer heavy handler import to call time
-        get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # handler is partially typed
+        get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # handler factory params are coarsely typed
     )
     from litellm.types.llms.custom_http import httpxSpecialProvider  # noqa: PLC0415  # deferred with the handler import
 
     try:
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-        response = await client.post(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # handler is partially typed
+        response: Final = await client.post(  # pyright: ignore[reportUnknownMemberType]  # handler params are coarsely typed
             url, headers={"Accept": "application/json", **headers}, data=form
         )
     except httpx.HTTPStatusError as status_err:
@@ -114,8 +113,6 @@ async def post_client_credentials_grant(
         return TokenEndpointDenied(status_code=status_code, detail=f"token endpoint returned HTTP {status_code}")
     except Exception as exc:  # noqa: BLE001  # any transport failure is the same outcome: unreachable
         return TokenEndpointUnreachable(detail=str(exc))
-    if not isinstance(response, httpx.Response):
-        return TokenEndpointUnreachable(detail="token endpoint returned no response")
     try:
         body: Final = _TOKEN_BODY_ADAPTER.validate_json(response.content)
     except ValidationError:

@@ -22,6 +22,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     create_response,
+    proxy_exception_from_http_exception,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.types.utils import TokenCountResponse
@@ -213,6 +214,9 @@ async def anthropic_response(
             timeout=getattr(e, "timeout", None),
             litellm_logging_obj=None,
         )
+
+        if isinstance(e, HTTPException):
+            raise proxy_exception_from_http_exception(e, headers)
 
         error_msg: Final = f"{e}"
         raise ProxyException(

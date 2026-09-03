@@ -3,7 +3,6 @@ import contextlib
 import json
 import logging
 import math
-import traceback
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
@@ -18,7 +17,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.types import Receive, Scope, Send
 
 import litellm
-from litellm._logging import _redact_string, verbose_proxy_logger
+from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
@@ -176,6 +175,9 @@ if TYPE_CHECKING:
     ProxyConfig = _ProxyConfig
 else:
     ProxyConfig = Any
+from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
+    AnthropicStreamModelRestamper,
+)
 from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
     refresh_proxy_server_request_body_snapshot,
@@ -502,7 +504,7 @@ def _as_success_dispatcher(logging_obj: _DispatchesSuccessHandlers) -> _Dispatch
     return logging_obj
 
 
-def _serialize_http_exception_detail(
+def serialize_http_exception_detail(
     detail: object,
 ) -> tuple[str, dict | None]:
     """
@@ -531,6 +533,21 @@ def _serialize_http_exception_detail(
             return msg, detail
         return json.dumps(detail), detail
     return str(detail), None
+
+
+def proxy_exception_from_http_exception(exc: HTTPException, headers: dict[str, str]) -> ProxyException:
+    raw_detail: Final = _getattr_object(exc, "detail", str(exc))
+    message, structured_fields = serialize_http_exception_detail(raw_detail)
+    existing_fields: Final = getattr(exc, "provider_specific_fields", None) or {}
+    merged_fields: Final = {**existing_fields, **structured_fields} if structured_fields else (existing_fields or None)
+    return ProxyException(
+        message=message,
+        type=getattr(exc, "type", "None"),
+        param=getattr(exc, "param", "None"),
+        code=getattr(exc, "status_code", status.HTTP_400_BAD_REQUEST),
+        provider_specific_fields=merged_fields,
+        headers=headers,
+    )
 
 
 def _collect_response_file_search_vector_store_ids(data: Mapping[str, object]) -> set[str]:
@@ -803,7 +820,7 @@ async def _buffer_first_chunk_honoring_disconnect(
     raise _ClientDisconnectedBeforeFirstChunk()
 
 
-def _sse_error_payload(exc: BaseException) -> tuple[int, Mapping[str, object]]:
+def sse_error_payload(exc: BaseException) -> tuple[int, Mapping[str, object]]:
     """Build the ProxyException-shaped ``{"error": ...}`` body used in SSE error frames.
 
     Matches ``ProxyException.to_dict()`` so streaming and non-streaming error frames
@@ -812,7 +829,7 @@ def _sse_error_payload(exc: BaseException) -> tuple[int, Mapping[str, object]]:
     # Preserve status code from HTTPException (e.g. guardrail blocks)
     error_status: Final = getattr(exc, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
     raw_detail: Final = _getattr_object(exc, "detail", "Error processing stream start")
-    message, structured_fields = _serialize_http_exception_detail(raw_detail)
+    message, structured_fields = serialize_http_exception_detail(raw_detail)
 
     existing_fields: Final = getattr(exc, "provider_specific_fields", None) or {}
     merged_fields: Final = {**existing_fields, **structured_fields} if structured_fields else (existing_fields or None)
@@ -927,7 +944,7 @@ async def create_response(
         # Unexpected error consuming first chunk.
         verbose_proxy_logger.exception("Error consuming first chunk from generator: %s", e)
 
-        error_status, error_obj = _sse_error_payload(e)
+        error_status, error_obj = sse_error_payload(e)
 
         async def error_gen_message() -> AsyncGenerator[str, None]:
             for frame in _sse_error_frames(error_obj):
@@ -1104,7 +1121,7 @@ async def open_sse_before_first_byte(
                 # would never fire and the failure would go unaudited. The hook
                 # also gets to sanitize what reaches the client, by returning or
                 # raising a replacement, so its answer decides the frame.
-                _, error_obj = _sse_error_payload(await _sanitized_late_failure(exc, on_late_failure))
+                _, error_obj = sse_error_payload(await _sanitized_late_failure(exc, on_late_failure))
                 for frame in _sse_error_frames(error_obj):
                     yield frame.encode()
                 return
@@ -1362,6 +1379,8 @@ def _classifier_cost_from_request_data(request_data: Mapping[str, object] | None
     routes and in `metadata` on chat-style routes, so both buckets are consulted, in the same
     precedence `get_or_create_metadata_bucket` writes them.
     """
+    from litellm.proxy.spend_tracking.savings import classifier_cost_from_decision
+
     data: Final = request_data or {}
     for metadata_key in ("litellm_metadata", "metadata"):
         metadata = data.get(metadata_key)
@@ -1370,10 +1389,10 @@ def _classifier_cost_from_request_data(request_data: Mapping[str, object] | None
         decision = metadata.get("routing_decision")
         if not isinstance(decision, dict):
             continue
-        cost = decision.get("classifier_cost")
-        if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+        cost = classifier_cost_from_decision(decision)
+        if cost is None:
             continue
-        return float(cost)
+        return cost
     return None
 
 
@@ -1458,9 +1477,54 @@ async def _await_llm_call_cancelling_on_disconnect(
         monitor.cancel()
 
 
+def _timing_values(
+    *,
+    hidden_params: Mapping[str, object],
+    logging_obj: LiteLLMLoggingObj | None,
+    use_logging_obj: bool,
+) -> Mapping[str, object]:
+    """Both timing values from one source, so the two headers always describe the same window.
+
+    /v1/messages returns a plain dict and the Anthropic / Responses bridge stream wrappers carry no
+    ``_hidden_params``, so ``update_response_metadata`` leaves their timing on the logging object.
+    """
+    if hidden_params.get("_response_ms") is not None or not use_logging_obj or logging_obj is None:
+        return hidden_params
+    return getattr(logging_obj, "response_timing_metrics", None) or {}  # mutable-ok: empty fallback
+
+
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict):
         self.data = data
+
+    @staticmethod
+    def _merge_passthrough_streaming_headers(
+        response_headers: httpx.Headers | dict | None,
+        custom_headers: dict,
+    ) -> dict:
+        """
+        Merge upstream passthrough headers with proxy/custom headers.
+
+        Proxy/custom headers win on key collisions.
+        """
+        excluded_headers: Final = {  # mutable-ok: set of header names to exclude from forwarding
+            "transfer-encoding",
+            "content-encoding",
+            "set-cookie",
+            "connection",
+            "keep-alive",
+            "proxy-authenticate",
+            "proxy-authorization",
+            "te",
+            "trailer",
+            "upgrade",
+        }
+
+        merged_headers: Final = {  # mutable-ok: dict comprehension for merged headers forwarded to httpx
+            key: value for key, value in dict(response_headers or {}).items() if key.lower() not in excluded_headers
+        }
+        merged_headers.update(custom_headers)
+        return merged_headers
 
     @staticmethod
     def get_custom_headers(
@@ -1478,10 +1542,16 @@ class ProxyBaseLLMRequestProcessing:
         request_data: dict | None = {},
         timeout: float | httpx.Timeout | None = None,
         litellm_logging_obj: LiteLLMLoggingObj | None = None,
+        read_timing_from_logging_obj: bool = True,
         **kwargs,
     ) -> dict:
         exclude_values: Final = {"", None, "None"}
         hidden_params = hidden_params or {}
+        timing_values: Final = _timing_values(
+            hidden_params=hidden_params,
+            logging_obj=litellm_logging_obj,
+            use_logging_obj=read_timing_from_logging_obj,
+        )
 
         cost_breakdown: Final = _get_cost_breakdown_from_logging_obj(
             litellm_logging_obj=litellm_logging_obj, response_cost=response_cost
@@ -1549,8 +1619,8 @@ class ProxyBaseLLMRequestProcessing:
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
             "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),
             "x-litellm-key-spend": str(updated_spend),
-            "x-litellm-response-duration-ms": str(hidden_params.get("_response_ms", None)),
-            "x-litellm-overhead-duration-ms": str(hidden_params.get("litellm_overhead_time_ms", None)),
+            "x-litellm-response-duration-ms": str(timing_values.get("_response_ms")),
+            "x-litellm-overhead-duration-ms": str(timing_values.get("litellm_overhead_time_ms")),
             "x-litellm-callback-duration-ms": str(hidden_params.get("callback_duration_ms", None)),
             **(
                 {
@@ -2341,54 +2411,25 @@ class ProxyBaseLLMRequestProcessing:
                 if requested_model_from_client:
                     self.data["_litellm_client_requested_model"] = requested_model_from_client
 
-                # Streaming: attach a closure that fires after all guardrail
-                # end-of-stream blocks complete.  CSW.__anext__ stores the
-                # assembled response on logging_obj; the outer consumer
-                # (ProxyLogging._fire_deferred_stream_logging) fires the
-                # closure after the full streaming pipeline finishes.
-                # The closure runs non-apply_guardrail hooks on the
-                # assembled response, then fires success logging.
-                # Only for CustomStreamWrapper — raw async generators from
-                # passthrough routes bypass CSW and would orphan the closure.
-                from litellm.litellm_core_utils.streaming_handler import (
-                    CustomStreamWrapper,
-                )
-
-                if _post_call_guardrails_active and isinstance(response, CustomStreamWrapper):
-                    # Intentionally a live reference (not a copy) — mirrors
-                    # ProxyLogging.post_call_success_hook which also mutates
-                    # data["guardrail_to_apply"] during iteration.
-                    _captured_data: Final = self.data
-                    _captured_user_api_key_dict: Final = user_api_key_dict
-                    _captured_logging_obj: Final = logging_obj
-
-                    async def _on_deferred_stream_complete(assembled_response: object, cache_hit: object) -> None:
-                        await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
-                            captured_data=_captured_data,
-                            captured_user_api_key_dict=_captured_user_api_key_dict,
-                            captured_logging_obj=_captured_logging_obj,
-                            assembled_response=assembled_response,
-                            cache_hit=cache_hit,
-                        )
-
-                    logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete
-                elif (
-                    _post_call_guardrails_active
-                    and route_type == "anthropic_messages"
-                    and self._is_streaming_response(response)
-                ):
-                    from litellm.litellm_core_utils.logging_worker import (
-                        GLOBAL_LOGGING_WORKER,
+                if _post_call_guardrails_active:
+                    self._arm_deferred_stream_dispatch(
+                        response=response,
+                        route_type=route_type,
+                        user_api_key_dict=user_api_key_dict,
+                        logging_obj=logging_obj,
                     )
 
-                    async def _on_deferred_native_stream_complete(
-                        logging_coroutine: Coroutine[object, object, object],
-                    ) -> None:
-                        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
-
-                    logging_obj._on_deferred_stream_complete = _on_deferred_native_stream_complete
-
                 if route_type == "allm_passthrough_route":
+                    upstream_response_headers: Final = getattr(response, "headers", None)
+                    streaming_headers: Final = (
+                        ProxyBaseLLMRequestProcessing._merge_passthrough_streaming_headers(
+                            response_headers=upstream_response_headers,
+                            custom_headers=custom_headers,
+                        )
+                        if upstream_response_headers is not None
+                        else custom_headers
+                    )
+
                     # Check if response is an async generator
                     if self._is_streaming_response(response):
                         if asyncio.iscoroutine(response):
@@ -2418,11 +2459,11 @@ class ProxyBaseLLMRequestProcessing:
 
                         # For passthrough routes, stream directly without error parsing
                         # since we're dealing with raw binary data (e.g., AWS event streams)
-                        return StreamingResponse(
-                            content=generator,
-                            status_code=status.HTTP_200_OK,
+                        return _UpstreamClosingStreamingResponse(
+                            content=generator,  # pyright: ignore[reportArgumentType]  # generator-configured StreamingResponse
+                            status_code=getattr(response, "status_code", status.HTTP_200_OK),
                             media_type=self._passthrough_event_stream_media_type(),
-                            headers=custom_headers,
+                            headers=streaming_headers,
                         )
                     else:
                         _early = await self._handle_non_streaming_allm_passthrough_route(
@@ -2437,7 +2478,7 @@ class ProxyBaseLLMRequestProcessing:
                         return StreamingResponse(
                             content=response.aiter_bytes(),
                             status_code=response.status_code,
-                            headers=custom_headers,
+                            headers=streaming_headers,
                         )
                 elif route_type == "anthropic_messages":
                     # Check if response is actually a streaming response (async generator)
@@ -2451,6 +2492,9 @@ class ProxyBaseLLMRequestProcessing:
                             request_data=self.data,
                             proxy_logging_obj=proxy_logging_obj,
                             request=request,
+                            restamp_model=(
+                                None if _should_return_raw_model_name(self.data) else requested_model_from_client
+                            ),
                         )
                         return await create_response(
                             generator=wrap_sse_stream_with_keepalive_pings(
@@ -3057,6 +3101,94 @@ class ProxyBaseLLMRequestProcessing:
         except Exception as e:
             verbose_proxy_logger.exception("Error firing deferred logging: %s", e)
 
+    def _arm_deferred_stream_dispatch(
+        self,
+        response: object,
+        route_type: str,
+        user_api_key_dict: "UserAPIKeyAuth",
+        logging_obj: LiteLLMLoggingObj,
+    ) -> None:
+        """
+        Streaming with post-call guardrails active: attach a closure that
+        ProxyLogging._fire_deferred_stream_logging fires after all guardrail
+        end-of-stream blocks complete, so the spend log sees
+        guardrail_information.
+
+        Three closure shapes, matching who owns logging for the stream:
+        - CustomStreamWrapper (chat completions) stores
+          (assembled_response, cache_hit); the closure also runs
+          non-apply_guardrail post-call hooks via
+          _run_deferred_stream_guardrails.
+        - Bridged /v1/responses (LiteLLMCompletionStreamingIterator) shares
+          its inner CustomStreamWrapper's logging_obj, so it stores the same
+          (assembled_response, cache_hit) shape; the closure only dispatches
+          success logging, matching the route's pre-existing hook surface.
+        - Native anthropic_messages/aresponses iterators store a single
+          ready-made logging coroutine to enqueue.
+
+        Raw async generators from passthrough routes bypass all three and
+        would orphan the closure, so they are not armed here.
+
+        The router wraps iterators that cannot carry _hidden_params in
+        HiddenParamsAsyncIteratorWrapper, so class sniffing runs on the
+        unwrapped inner iterator.
+        """
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+        from litellm.router_utils.add_retry_fallback_headers import HiddenParamsAsyncIteratorWrapper
+
+        unwrapped: Final = response._inner if isinstance(response, HiddenParamsAsyncIteratorWrapper) else response
+
+        if isinstance(unwrapped, CustomStreamWrapper):
+            # Intentionally a live reference (not a copy) — mirrors
+            # ProxyLogging.post_call_success_hook which also mutates
+            # data["guardrail_to_apply"] during iteration.
+            _captured_data: Final = self.data
+            _captured_user_api_key_dict: Final = user_api_key_dict
+            _captured_logging_obj: Final = logging_obj
+
+            async def _on_deferred_stream_complete(assembled_response: object, cache_hit: object) -> None:
+                await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+                    captured_data=_captured_data,
+                    captured_user_api_key_dict=_captured_user_api_key_dict,
+                    captured_logging_obj=_captured_logging_obj,
+                    assembled_response=assembled_response,
+                    cache_hit=cache_hit,
+                )
+
+            logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete
+            return
+
+        if route_type not in ("anthropic_messages", "aresponses") or not self._is_streaming_response(response):
+            return
+
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        if isinstance(unwrapped, LiteLLMCompletionStreamingIterator):
+            _captured_bridge_logging_obj: Final = logging_obj
+
+            async def _on_deferred_bridged_stream_complete(assembled_response: object, cache_hit: object) -> None:
+                await _as_success_dispatcher(_captured_bridge_logging_obj).dispatch_success_handlers(
+                    assembled_response,
+                    cache_hit=cache_hit,
+                    start_time=None,
+                    end_time=None,
+                    prefer_async_handlers=True,
+                )
+
+            logging_obj._on_deferred_stream_complete = _on_deferred_bridged_stream_complete
+            return
+
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+        async def _on_deferred_native_stream_complete(
+            logging_coroutine: Coroutine[object, object, object],
+        ) -> None:
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
+
+        logging_obj._on_deferred_stream_complete = _on_deferred_native_stream_complete
+
     @staticmethod
     async def _run_deferred_stream_guardrails(
         captured_data: dict,
@@ -3207,6 +3339,8 @@ class ProxyBaseLLMRequestProcessing:
             request_data=self.data,
             timeout=timeout,
             litellm_logging_obj=_litellm_logging_obj,
+            # a failed request reports no timing, matching /v1/chat/completions
+            read_timing_from_logging_obj=False,
         )
         # Extract headers from exception - check both e.headers and e.response.headers
         headers = getattr(e, "headers", None) or {}
@@ -3244,21 +3378,7 @@ class ProxyBaseLLMRequestProcessing:
             raise e
 
         if isinstance(e, HTTPException):
-            raw_detail: Final = _getattr_object(e, "detail", str(e))
-            message, structured_fields = _serialize_http_exception_detail(raw_detail)
-            existing_fields: Final = getattr(e, "provider_specific_fields", None) or {}
-            if structured_fields:
-                merged_fields: dict | None = {**existing_fields, **structured_fields}
-            else:
-                merged_fields = existing_fields or None
-            raise ProxyException(
-                message=message,
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-                provider_specific_fields=merged_fields,
-                headers=safe_headers,
-            )
+            raise proxy_exception_from_http_exception(e, safe_headers)
         elif isinstance(e, httpx.HTTPStatusError):
             # Handle httpx.HTTPStatusError - extract actual error from response
             # This matches the original behavior before the refactor in commit 511d435f6f
@@ -3296,7 +3416,7 @@ class ProxyBaseLLMRequestProcessing:
         else:
             _code = status.HTTP_500_INTERNAL_SERVER_ERROR
         raise ProxyException(
-            message=getattr(e, "message", error_msg),
+            message=redact_internal_details_from_client_message(getattr(e, "message", error_msg)),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             openai_code=getattr(e, "code", None),
@@ -3326,6 +3446,16 @@ class ProxyBaseLLMRequestProcessing:
             return f"{STREAM_SSE_DATA_PREFIX}{chunk_str}\n\n"
         else:
             return chunk
+
+    @staticmethod
+    def _sse_chunk_serializer(restamper: AnthropicStreamModelRestamper | None) -> StreamChunkSerializer:
+        if restamper is None:
+            return ProxyBaseLLMRequestProcessing.return_sse_chunk
+
+        def serialize(chunk: object) -> str:
+            return ProxyBaseLLMRequestProcessing.return_sse_chunk(restamper.process(chunk))
+
+        return serialize
 
     @staticmethod
     async def _finalize_streaming_generator_cleanup(
@@ -3387,11 +3517,16 @@ class ProxyBaseLLMRequestProcessing:
         serialize_chunk: StreamChunkSerializer,
         serialize_error: StreamErrorSerializer,
         request: Request | None = None,
+        flush_tail: Callable[[], bytes] | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Shared streaming data generator: runs proxy iterator hook, per-chunk hook,
         cost injection, then yields chunks via serialize_chunk; on exception runs
         failure hook and yields via serialize_error. Use for SSE or NDJSON.
+
+        ``flush_tail`` runs once after the upstream iterator completes cleanly and
+        its non-empty result is yielded, so a serializer that buffers bytes across
+        chunks can emit anything still held at end of stream.
         """
         verbose_proxy_logger.debug("inside generator")
         # Resolve per-stream (not per-chunk) whether the heavy per-chunk path
@@ -3454,6 +3589,9 @@ class ProxyBaseLLMRequestProcessing:
                 # so it must not suppress that refund.
                 delivered_chunk = delivered_chunk or chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
                 yield serialize_chunk(chunk)
+            held_tail: Final = flush_tail() if flush_tail is not None else b""
+            if held_tail:
+                yield serialize_chunk(held_tail)
             stream_completed = True
         except (asyncio.CancelledError, GeneratorExit):
             # Client disconnected mid-stream. CancelledError / GeneratorExit
@@ -3464,8 +3602,7 @@ class ProxyBaseLLMRequestProcessing:
             # billing and release exactly once. This is the outermost generator
             # Starlette closes on disconnect, so the nested iterator hook (which
             # only sees GeneratorExit on GC) cannot own the refund.
-            if not stream_completed:
-                client_disconnected = True
+            client_disconnected = not stream_completed
             if not delivered_chunk and not _withheld_provider_output(response):
                 from litellm.proxy.spend_tracking.budget_reservation import (
                     release_budget_reservation_on_cancel,
@@ -3491,10 +3628,8 @@ class ProxyBaseLLMRequestProcessing:
 
             if isinstance(e, HTTPException):
                 raise e
-            error_traceback: Final = _redact_string(traceback.format_exc())
-            error_msg: Final = f"{e}\n\n{error_traceback}"
             proxy_exception: Final = ProxyException(
-                message=getattr(e, "message", error_msg),
+                message=redact_internal_details_from_client_message(getattr(e, "message", str(e))),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", 500),
@@ -3519,6 +3654,7 @@ class ProxyBaseLLMRequestProcessing:
         request_data: dict,
         proxy_logging_obj: ProxyLogging,
         request: Request | None = None,
+        restamp_model: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Anthropic /messages and Google /generateContent streaming data generator require SSE events.
@@ -3527,17 +3663,23 @@ class ProxyBaseLLMRequestProcessing:
         SSE serializers directly (rather than re-wrapping it in another
         ``async for: yield`` trampoline), so a streamed chunk traverses one
         fewer async-generator layer / coroutine resume on the hot path.
+
+        ``restamp_model`` publishes that name on the Anthropic ``message_start``
+        event in place of the provider's model, matching what the non-streaming
+        response reports.
         """
+        restamper: Final = AnthropicStreamModelRestamper(restamp_model) if restamp_model else None
         return ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
             response=response,
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
             proxy_logging_obj=proxy_logging_obj,
-            serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
+            serialize_chunk=ProxyBaseLLMRequestProcessing._sse_chunk_serializer(restamper),
             serialize_error=lambda proxy_exc: (
                 f"{STREAM_SSE_DATA_PREFIX}{json.dumps({'error': proxy_exc.to_dict()})}\n\n"
             ),
             request=request,
+            flush_tail=None if restamper is None else restamper.flush,
         )
 
     @overload

@@ -77,21 +77,21 @@ describe("Settings", () => {
   });
 
   it("should render the logging callbacks tab when access token is provided", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    render(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+      expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
     });
   });
 
   it("should display additional settings tabs", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    render(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(getByText("CloudZero Cost Tracking")).toBeInTheDocument();
-      expect(getByText("Alerting Types")).toBeInTheDocument();
-      expect(getByText("Alerting Settings")).toBeInTheDocument();
-      expect(getByText("Email Alerts")).toBeInTheDocument();
+      expect(screen.getByText("CloudZero Cost Tracking")).toBeInTheDocument();
+      expect(screen.getByText("Alerting Types")).toBeInTheDocument();
+      expect(screen.getByText("Alerting Settings")).toBeInTheDocument();
+      expect(screen.getByText("Email Alerts")).toBeInTheDocument();
     });
   });
 
@@ -279,13 +279,13 @@ describe("Settings", () => {
   });
 
   it("should display CloudZero Cost Tracking tab", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    render(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+      expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
     });
 
-    expect(getByText("CloudZero Cost Tracking")).toBeInTheDocument();
+    expect(screen.getByText("CloudZero Cost Tracking")).toBeInTheDocument();
   });
 });
 

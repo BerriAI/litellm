@@ -160,7 +160,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
         top_k: int | None = None,
         top_p: float | None = None,
         output_format: AnthropicOutputSchema | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> AnthropicMessagesResponse | AsyncIterator[bytes]:
         responses_kwargs: Final = _build_responses_kwargs(
             max_tokens=max_tokens,
@@ -214,7 +214,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
         top_p: float | None = None,
         output_format: AnthropicOutputSchema | None = None,
         _is_async: bool = False,
-        **kwargs,
+        **kwargs: object,
     ) -> (
         AnthropicMessagesResponse
         | AsyncIterator[bytes]

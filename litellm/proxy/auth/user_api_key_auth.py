@@ -19,12 +19,15 @@ import fastapi
 import orjson
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
+from starlette.exceptions import WebSocketException
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import (
     GLOBAL_PROXY_SPEND_CACHE_KEY,
+    INVALID_VIRTUAL_KEY_ERROR_MARKER,
+    INVALID_VIRTUAL_KEY_ERROR_MESSAGE,
     LITELLM_PROXY_BUDGET_NAME,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
 )
@@ -65,6 +68,7 @@ from litellm.proxy.auth.auth_utils import (
     get_model_from_request,
     get_request_route,
     get_request_route_template,
+    is_invalid_virtual_key_error,
     iter_request_fallback_targets,
     normalize_request_route,
     pre_db_read_auth_checks,
@@ -539,6 +543,8 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
     try:
         return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
     except Exception as e:
+        if is_invalid_virtual_key_error(e):
+            raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
         verbose_proxy_logger.exception(e)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise HTTPException(status_code=403, detail=str(e))
@@ -1867,13 +1873,17 @@ async def _user_api_key_auth_builder(
                 _masked_key: Final = f"{api_key[:4]}****{api_key[-4:]}" if len(api_key) > 8 else "****"
                 if not api_key.startswith("sk-"):
                     _hint = _JWT_AUTH_DISABLED_HINT if not enable_jwt_auth and JWTHandler.is_jwt(token=api_key) else ""
-                    raise HTTPException(
+                    _malformed_key_error = HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         detail=(
-                            f"LiteLLM Virtual Key expected. Received={_masked_key}, "
+                            f"{INVALID_VIRTUAL_KEY_ERROR_MESSAGE}. Received={_masked_key}, "
                             f"expected to start with 'sk-'.{_hint}"
                         ),
                     )  # prevent token hashes from being used
+                    # Stamp provenance here so log routing classifies this 401 by
+                    # where it was raised, never by its message text.
+                    setattr(_malformed_key_error, INVALID_VIRTUAL_KEY_ERROR_MARKER, True)
+                    raise _malformed_key_error
             else:
                 verbose_logger.warning(
                     "litellm.proxy.proxy_server.user_api_key_auth(): Warning - Key is not a string. Got type={}".format(

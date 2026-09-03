@@ -286,7 +286,7 @@ async def _resolve_mcp_server_identifiers_to_ids(
     return resolved
 
 
-def _rewrite_object_permission_mcp_servers(
+def _drop_stale_object_permission_mcp_servers(
     object_permission: ObjectPermissionDict,
     identifier_to_server_ids: dict[str, set[str]],
 ) -> None:
@@ -294,16 +294,18 @@ def _rewrite_object_permission_mcp_servers(
     if not isinstance(mcp_servers, list):
         return
 
-    normalized_servers: Final[list[str]] = []
-    for identifier in mcp_servers:
-        if identifier == SpecialMCPServerNames.no_mcp_servers.value:
-            normalized_servers.append(SpecialMCPServerNames.no_mcp_servers.value)
-            continue
-        normalized_servers.extend(sorted(identifier_to_server_ids.get(identifier, [])))
-    object_permission["mcp_servers"] = _dedupe_preserving_order(normalized_servers)
+    # Persist original identifiers, never resolved ids: shared-DB multi-region
+    # instances each expand a name/alias to their own local server id at read
+    # time. Only entries resolving to nothing (deleted servers, typos) drop.
+    kept_servers: Final = [
+        identifier
+        for identifier in mcp_servers
+        if identifier == SpecialMCPServerNames.no_mcp_servers.value or identifier_to_server_ids.get(identifier)
+    ]
+    object_permission["mcp_servers"] = _dedupe_preserving_order(kept_servers)
 
 
-def _rewrite_object_permission_mcp_tool_permissions(
+def _drop_stale_object_permission_mcp_tool_permissions(
     object_permission: ObjectPermissionDict,
     identifier_to_server_ids: dict[str, set[str]],
 ) -> None:
@@ -311,31 +313,25 @@ def _rewrite_object_permission_mcp_tool_permissions(
     if not isinstance(mcp_tool_permissions, dict):
         return
 
-    normalized_tool_permissions: Final[dict[str, list[str]]] = {}
-    for identifier, tools in mcp_tool_permissions.items():
-        if not isinstance(tools, list):
-            tools = []
-        for server_id in sorted(identifier_to_server_ids.get(identifier, [])):
-            normalized_tool_permissions.setdefault(server_id, [])
-            normalized_tool_permissions[server_id].extend(tools)
-
     object_permission["mcp_tool_permissions"] = {
-        server_id: _dedupe_preserving_order(tools) for server_id, tools in normalized_tool_permissions.items()
+        identifier: _dedupe_preserving_order(tools if isinstance(tools, list) else [])
+        for identifier, tools in mcp_tool_permissions.items()
+        if identifier_to_server_ids.get(identifier)
     }
 
 
-def _rewrite_object_permission_mcp_identifiers(
+def _drop_stale_object_permission_mcp_identifiers(
     object_permission: ObjectPermissionDict | None,
     identifier_to_server_ids: dict[str, set[str]],
 ) -> None:
     if not object_permission or not isinstance(object_permission, dict):
         return
 
-    _rewrite_object_permission_mcp_servers(
+    _drop_stale_object_permission_mcp_servers(
         object_permission=object_permission,
         identifier_to_server_ids=identifier_to_server_ids,
     )
-    _rewrite_object_permission_mcp_tool_permissions(
+    _drop_stale_object_permission_mcp_tool_permissions(
         object_permission=object_permission,
         identifier_to_server_ids=identifier_to_server_ids,
     )
@@ -615,7 +611,7 @@ async def validate_key_mcp_servers_against_team(
                 "validate_key_mcp_servers_against_team: ignoring stale MCP server identifiers (no longer in registry or DB): %s",
                 sorted(stale_identifiers),
             )
-        _rewrite_object_permission_mcp_identifiers(
+        _drop_stale_object_permission_mcp_identifiers(
             object_permission=object_permission,
             identifier_to_server_ids=identifier_to_server_ids,
         )

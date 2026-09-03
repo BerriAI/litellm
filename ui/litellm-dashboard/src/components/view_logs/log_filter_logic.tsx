@@ -132,8 +132,8 @@ export function useLogFilterLogic({
   const activeSort = sorting[0] ?? DEFAULT_LOGS_SORTING[0];
   const sortBy: LogsSortField = isSortField(activeSort.id) ? activeSort.id : "startTime";
   const sortOrder: "asc" | "desc" = activeSort.desc ? "desc" : "asc";
-  const isSessionGrouped = sortBy === "startTime";
-  const sessionCursor = isSessionGrouped ? sessionCursors[pagination.pageIndex] : undefined;
+  const usesSessionCursor = sortBy === "startTime";
+  const sessionCursor = usesSessionCursor ? sessionCursors[pagination.pageIndex] : undefined;
 
   const logsQueryOptions: UseQueryOptions<PaginatedResponse> = {
     queryKey: [
@@ -188,7 +188,7 @@ export function useLogFilterLogic({
           sort_by: sortBy,
           sort_order: sortOrder,
           exclude_internal_health_checks: excludeInternalHealthChecks,
-          group_by_session: isSessionGrouped,
+          group_by_session: true,
           session_cursor: sessionCursor,
         },
       });
@@ -227,6 +227,6 @@ export function useLogFilterLogic({
     logsQuery,
     filteredLogs,
     allTeams,
-    isSessionGrouped,
+    usesSessionCursor,
   };
 }

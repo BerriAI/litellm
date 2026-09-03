@@ -1,4 +1,5 @@
 
+import time
 import pytest
 import requests
 
@@ -732,3 +733,17 @@ def test_update_other_errors(client):
     with pytest.raises(requests.exceptions.HTTPError) as exc_info:
         client.update(model_id=model_id, model_params=model_params)
     assert exc_info.value.response.status_code == 500
+
+
+def test_list_gives_up_at_the_timeout_instead_of_hanging(hanging_server):
+    """
+    A proxy that accepts the connection but never answers used to pin the caller's
+    process forever, since the request carried no timeout at all.
+    """
+    client = ModelsManagementClient(base_url=hanging_server, api_key="sk-test", timeout=1)
+
+    started = time.monotonic()
+    with pytest.raises(requests.exceptions.Timeout):
+        client.list()
+
+    assert time.monotonic() - started < 10

@@ -3742,6 +3742,93 @@ async def test_list_team_v2_with_status_deleted():
 
 
 @pytest.mark.asyncio
+async def test_list_team_v2_includes_litellm_model_table():
+    """
+    Regression test for GH #26312: GET /v2/team/list must eagerly load the
+    litellm_model_table relation for active teams, same as /team/info and
+    /team/list, or a team's model_aliases always read back as null from this
+    endpoint. Deleted teams are excluded: LiteLLM_DeletedTeamTable has no such
+    relation in the Prisma schema, so requesting it there raises
+    UnknownRelationalFieldError against a real database.
+
+    The fake find_many below only attaches litellm_model_table when its own
+    `include` kwarg actually asks for the relation, so the assertions below
+    are on what the caller gets back, not on how find_many was called.
+    """
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_123",
+    )
+
+    def _team_row(team_id: str, include) -> Mock:
+        model_table = (
+            {
+                "id": 1,
+                "model_aliases": {"my-fast-model": "fake-model"},
+                "created_by": "u",
+                "updated_by": "u",
+                "team": None,
+            }
+            if (include or {}).get("litellm_model_table")
+            else None
+        )
+        return Mock(
+            team_id=team_id,
+            model_dump=lambda: {
+                "team_id": team_id,
+                "team_alias": "t",
+                "litellm_model_table": model_table,
+            },
+        )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:  # test-quality-ok: this file's DB-mock convention
+        mock_db = Mock()
+        mock_prisma_client.db = mock_db
+
+        mock_db.litellm_teamtable.find_many = AsyncMock(
+            side_effect=lambda **kw: [_team_row("team_1", kw.get("include"))]
+        )
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=1)
+        mock_db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
+
+        result = await list_team_v2(
+            http_request=mock_request,
+            user_id=None,
+            user_api_key_dict=mock_user_api_key_dict_admin,
+            page=1,
+            page_size=10,
+            status=None,
+        )
+
+        assert result["teams"][0].litellm_model_table is not None
+        assert result["teams"][0].litellm_model_table.model_aliases == {"my-fast-model": "fake-model"}
+
+        mock_db.litellm_deletedteamtable.find_many = AsyncMock(
+            side_effect=lambda **kw: [_team_row("team_2", kw.get("include"))]
+        )
+        mock_db.litellm_deletedteamtable.count = AsyncMock(return_value=1)
+
+        await list_team_v2(
+            http_request=mock_request,
+            user_id=None,
+            user_api_key_dict=mock_user_api_key_dict_admin,
+            page=1,
+            page_size=10,
+            status="deleted",
+        )
+
+        assert "include" not in mock_db.litellm_deletedteamtable.find_many.call_args.kwargs
+
+
+@pytest.mark.asyncio
 async def test_list_team_v2_org_admin_sees_org_teams():
     """
     Test that an org admin (internal_user role with org_admin membership)

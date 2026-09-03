@@ -6,7 +6,7 @@ import tempfile
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from fastapi import (
     APIRouter,
@@ -1317,7 +1317,7 @@ async def test_prompt(
 async def convert_prompt_file_to_json(
     file: UploadFile = File(...),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> dict[str, Any]:
+) -> Mapping[str, object]:
     """
     Convert a .prompt file to JSON format.
 

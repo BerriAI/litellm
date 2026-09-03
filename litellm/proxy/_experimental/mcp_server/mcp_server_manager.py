@@ -13,7 +13,7 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cast
@@ -820,17 +820,43 @@ def _should_strip_caller_authorization(
     if not (mcp_server.is_oauth_passthrough or mcp_server.is_oauth_delegate):
         return False
 
-    normalized_raw_headers: Final = {str(k).lower(): v for k, v in (raw_headers or {}).items() if isinstance(k, str)}
-    has_explicit_litellm_admission_header: Final = normalized_raw_headers.get("x-litellm-api-key") is not None
+    has_explicit_litellm_admission_header: Final = _has_explicit_litellm_admission_header(raw_headers)
     if mcp_server.is_oauth_delegate:
         return not has_explicit_litellm_admission_header
-    admission_consumed_authorization_as_litellm_key: Final = (
-        user_api_key_auth is not None
-        and bool(getattr(user_api_key_auth, "api_key", None))
-        and not has_explicit_litellm_admission_header
-    )
-    return admission_consumed_authorization_as_litellm_key or (
+    return _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth) or (
         user_api_key_auth is None and not has_explicit_litellm_admission_header
+    )
+
+
+LITELLM_VIRTUAL_KEY_PREFIX: Final = "sk-"
+
+
+def _raw_header_value(raw_headers: Mapping[str, str] | None, name: str) -> str | None:
+    return next((v for k, v in (raw_headers or {}).items() if isinstance(k, str) and k.lower() == name), None)
+
+
+def _has_explicit_litellm_admission_header(raw_headers: Mapping[str, str] | None) -> bool:
+    """Admission only consumes a non-empty ``x-litellm-api-key``; an empty one falls back to ``Authorization``."""
+    return bool(_raw_header_value(raw_headers, "x-litellm-api-key"))
+
+
+def _authorization_is_litellm_admission_credential(
+    raw_headers: Mapping[str, str] | None,
+    user_api_key_auth: UserAPIKeyAuth | None,
+) -> bool:
+    """True when ``Authorization`` carries the LiteLLM key admission validated.
+
+    That is the case when no usable ``x-litellm-api-key`` was sent, or when the client repeated the
+    same key in both headers.
+    """
+    if user_api_key_auth is None or not user_api_key_auth.api_key:
+        return False
+    admission_header: Final = _raw_header_value(raw_headers, "x-litellm-api-key")
+    if not admission_header:
+        return True
+    authorization: Final = _raw_header_value(raw_headers, "authorization")
+    return authorization is not None and strip_auth_scheme(authorization, "Bearer") == strip_auth_scheme(
+        admission_header, "Bearer"
     )
 
 
@@ -1206,7 +1232,7 @@ def _deserialize_json_dict(data: str | _StringMap | None) -> dict[str, str] | No
         return data
 
 
-def _deserialize_json_list(data: Any) -> list[dict[str, Any]] | None:
+def _deserialize_json_list(data: object) -> list[dict[str, Any]] | None:
     """Deserialize a JSON array stored in the DB (``env_vars`` and friends).
 
     Returns ``None`` for empty / null / unparseable input. Accepts strings
@@ -1219,7 +1245,7 @@ def _deserialize_json_list(data: Any) -> list[dict[str, Any]] | None:
         return None
     if isinstance(data, str):
         try:
-            parsed: Final = json.loads(data)
+            parsed: Final[object] = json.loads(data)
         except (json.JSONDecodeError, TypeError):
             return None
         data = parsed
@@ -1914,7 +1940,7 @@ class MCPServerManager:
 
     async def load_servers_from_config(
         self,
-        mcp_servers_config: dict[str, Any],
+        mcp_servers_config: dict[str, MCPServerConfig],
         mcp_aliases: dict[str, str] | None = None,
     ):
         """
@@ -3068,7 +3094,7 @@ class MCPServerManager:
             return {}
 
         cache_key: Final = "toolset_perms:" + ",".join(sorted(toolset_ids))
-        cached: Final = await user_api_key_cache.async_get_cache(key=cache_key)
+        cached: Final[dict[str, list[str]] | None] = await user_api_key_cache.async_get_cache(key=cache_key)
         if cached is not None:
             return cached
 
@@ -3277,8 +3303,8 @@ class MCPServerManager:
     #########################################################
     @staticmethod
     def _extract_bearer_token(
-        oauth2_headers: dict[str, str] | None,
-        raw_headers: dict[str, str] | None,
+        oauth2_headers: Mapping[str, str] | None,
+        raw_headers: Mapping[str, str] | None,
     ) -> str | None:
         """Extract the bare Bearer token from oauth2_headers or raw_headers.
 
@@ -3298,10 +3324,29 @@ class MCPServerManager:
             return auth_value
         return None
 
+    @staticmethod
+    def _extract_subject_token(
+        oauth2_headers: Mapping[str, str] | None,
+        raw_headers: Mapping[str, str] | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> str | None:
+        """The caller's upstream identity token, or ``None`` when the bearer is a LiteLLM key.
+
+        Rejects the key admission validated and, because virtual keys always carry the ``sk-`` prefix,
+        any other LiteLLM key a client puts in ``Authorization`` next to ``x-litellm-api-key``.
+        """
+        if _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth):
+            return None
+        bearer: Final = MCPServerManager._extract_bearer_token(oauth2_headers, raw_headers)
+        if bearer is not None and bearer.startswith(LITELLM_VIRTUAL_KEY_PREFIX):
+            return None
+        return bearer
+
     def _obo_subject_token(
         self,
         server: MCPServer,
-        raw_headers: dict[str, str] | None,
+        raw_headers: Mapping[str, str] | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
     ) -> str | None:
         """The caller's bearer as the token_exchange (OBO) subject token, for that mode only.
 
@@ -3311,7 +3356,7 @@ class MCPServerManager:
         """
         if server.auth_type != MCPAuth.oauth2_token_exchange:
             return None
-        return self._extract_bearer_token(None, raw_headers)
+        return self._extract_subject_token(None, raw_headers, user_api_key_auth)
 
     def _build_stdio_env(
         self,
@@ -3566,6 +3611,7 @@ class MCPServerManager:
         server: MCPServer,
         oauth2_headers: dict[str, str] | None,
         user_api_key_auth: UserAPIKeyAuth | None,
+        raw_headers: Mapping[str, str] | None = None,
     ) -> None:
         """Run the OBO exchange for a caller-supplied subject at the transport edge.
 
@@ -3577,13 +3623,15 @@ class MCPServerManager:
         """
         if server.auth_type != MCPAuth.oauth2_token_exchange:
             return
-        subject_token: Final = self._extract_bearer_token(oauth2_headers, None)
-        if not subject_token:
+        if not self._extract_bearer_token(oauth2_headers, None):
             return
         resolved_server: Final = await self.ensure_oauth_metadata_discovered(server)
         spec: Final = to_server_spec(resolved_server)
         if spec is None or not isinstance(spec.config, TokenExchangeConfig):
             return
+        subject_token: Final = self._extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
+        if subject_token is None:
+            raise_token_exchange_challenge(resolved_server, root_path=get_server_root_path())
         match await self._cred_provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
             case Ok(_):
                 return
@@ -3851,7 +3899,7 @@ class MCPServerManager:
             # token (mirrors the call path), not v1's deleted client_credentials fallback. Other modes
             # never read the inbound bearer, so leave subject_token None to avoid forwarding it.
             subject_token: Final = (
-                self._extract_bearer_token(oauth2_headers, raw_headers)
+                self._extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
                 if server.auth_type == MCPAuth.oauth2_token_exchange
                 else None
             )
@@ -3931,6 +3979,7 @@ class MCPServerManager:
     async def get_prompts_from_server(
         self,
         server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
         mcp_auth_header: str | dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
         add_prefix: bool = True,
@@ -3959,7 +4008,7 @@ class MCPServerManager:
                 extra_headers.update(server.static_headers)
 
             stdio_env: Final = self._build_stdio_env(server, raw_headers)
-            subject_token: Final = self._obo_subject_token(server, raw_headers)
+            subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
 
             client = await self._create_mcp_client(
                 server=server,
@@ -3982,6 +4031,7 @@ class MCPServerManager:
     async def get_resources_from_server(
         self,
         server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
         mcp_auth_header: str | dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
         add_prefix: bool = True,
@@ -4001,7 +4051,7 @@ class MCPServerManager:
                 extra_headers.update(server.static_headers)
 
             stdio_env: Final = self._build_stdio_env(server, raw_headers)
-            subject_token: Final = self._obo_subject_token(server, raw_headers)
+            subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
 
             client = await self._create_mcp_client(
                 server=server,
@@ -4024,6 +4074,7 @@ class MCPServerManager:
     async def get_resource_templates_from_server(
         self,
         server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
         mcp_auth_header: str | dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
         add_prefix: bool = True,
@@ -4043,7 +4094,7 @@ class MCPServerManager:
                 extra_headers.update(server.static_headers)
 
             stdio_env: Final = self._build_stdio_env(server, raw_headers)
-            subject_token: Final = self._obo_subject_token(server, raw_headers)
+            subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
 
             client = await self._create_mcp_client(
                 server=server,
@@ -4068,6 +4119,7 @@ class MCPServerManager:
     async def read_resource_from_server(
         self,
         server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
         url: AnyUrl,
         mcp_auth_header: str | dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
@@ -4084,7 +4136,7 @@ class MCPServerManager:
             extra_headers.update(server.static_headers)
 
         stdio_env: Final = self._build_stdio_env(server, raw_headers)
-        subject_token: Final = self._obo_subject_token(server, raw_headers)
+        subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
 
         client: Final = await self._create_mcp_client(
             server=server,
@@ -4099,6 +4151,7 @@ class MCPServerManager:
     async def get_prompt_from_server(
         self,
         server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
         prompt_name: str,
         arguments: dict[str, str] | None = None,
         mcp_auth_header: str | dict[str, str] | None = None,
@@ -4116,7 +4169,7 @@ class MCPServerManager:
             extra_headers.update(server.static_headers)
 
         stdio_env: Final = self._build_stdio_env(server, raw_headers)
-        subject_token: Final = self._obo_subject_token(server, raw_headers)
+        subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
 
         client: Final = await self._create_mcp_client(
             server=server,
@@ -5154,7 +5207,7 @@ class MCPServerManager:
 
         # Wrapped so the bridge runs inside the task: the caller only holds the task and
         # gathers it later, so there is no other point that still sees a block here.
-        async def _run_during_call_hook() -> Mapping[str, Any] | None:
+        async def _run_during_call_hook() -> Mapping[str, object] | None:
             try:
                 return await proxy_logging_obj.during_call_hook(
                     user_api_key_dict=user_api_key_auth,
@@ -5290,7 +5343,7 @@ class MCPServerManager:
             MCPAuth.oauth2_token_exchange,
             MCPAuth.oauth2_id_jag,
         ):
-            subject_token = self._extract_bearer_token(oauth2_headers, raw_headers)
+            subject_token = self._extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
         elif mcp_server.auth_type == MCPAuth.oauth2:
             if mcp_server.has_client_credentials:
                 # For M2M OAuth servers, Authorization must come from token fetch.
@@ -5638,7 +5691,7 @@ class MCPServerManager:
 
         subject_token: str | None = None
         if isinstance(spec.config, (TokenExchangeConfig, IdJagConfig)):
-            subject_token = self._extract_bearer_token(oauth2_headers, raw_headers)
+            subject_token = self._extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
         elif isinstance(spec.config, PassthroughConfig):
             inbound_token, forwarded_headers = _take_forwarded_authorization(forwarded_headers)
             per_server_token: Final = _passthrough_token_from_mcp_auth_header(mcp_auth_header)
@@ -5656,7 +5709,7 @@ class MCPServerManager:
 
     async def _gather_openapi_tool_tasks(
         self,
-        tasks: list[Any],
+        tasks: Sequence[Awaitable[object]],
         proxy_logging_obj: ProxyLogging | None,
     ) -> CallToolResult:
         """Await OpenAPI tool tasks and return the tool call result."""

@@ -54,6 +54,7 @@ FUNCTION_CALL_ATTRIBUTE: Final = "function_call"
 _SYNC_ITER_EXHAUSTED: Final = object()
 
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
+_USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
 
 
 def _next_sync_or_exhausted(it: Any) -> object:
@@ -93,7 +94,7 @@ def print_verbose(print_statement: object):
 
 @dataclass(frozen=True, slots=True)
 class _ProviderChunkParsed:
-    response_obj: dict[str, Any]
+    response_obj: dict[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -862,6 +863,8 @@ class CustomStreamWrapper:
         model_response: Final = ModelResponseStream(**args)
         if self.response_id is not None:
             model_response.id = self.response_id
+        elif model_response.id:
+            self.response_id = model_response.id
         if self.system_fingerprint is not None:
             model_response.system_fingerprint = self.system_fingerprint
 
@@ -1288,7 +1291,7 @@ class CustomStreamWrapper:
                 for key, value in anthropic_response_obj["provider_specific_fields"].items():
                     setattr(model_response, key, value)
 
-            response_obj = cast(dict[str, Any], anthropic_response_obj)
+            response_obj = cast(dict[str, object], anthropic_response_obj)
         elif self.model == "replicate" or self.custom_llm_provider == "replicate":
             response_obj = self.handle_replicate_chunk(chunk)
             completion_obj["content"] = response_obj["text"]
@@ -1444,7 +1447,7 @@ class CustomStreamWrapper:
             if not isinstance(chunk, str):
                 raise ValueError(f"chunk is not a string: {chunk}")
             response_obj = cast(
-                dict[str, Any],
+                dict[str, object],
                 litellm.CodestralTextCompletionConfig()._chunk_parser(chunk),
             )
             completion_obj["content"] = response_obj["text"]
@@ -1884,8 +1887,8 @@ class CustomStreamWrapper:
     @staticmethod
     def _resolve_provider_reported_cost(usage_cost: object) -> float | None:
         """
-        Providers report usage.cost either as a number or, for Perplexity, as a
-        breakdown object whose total lives under ``total_cost``.
+        Providers report usage.cost either as a number or as a breakdown object
+        whose total lives under ``total_cost``.
         """
         if isinstance(usage_cost, bool):
             return None
@@ -1898,12 +1901,10 @@ class CustomStreamWrapper:
     @staticmethod
     def _propagate_usage_cost_to_hidden_params(
         response: "ModelResponse",
+        custom_llm_provider: str | None,
     ) -> None:
-        """
-        If the assembled response carries a provider-reported cost on
-        usage.cost, copy it into _hidden_params so litellm's cost
-        calculator uses it instead of a token-based estimate.
-        """
+        if custom_llm_provider not in _USAGE_COST_HEADER_PROVIDERS:
+            return
         _usage: Final[Usage | None] = getattr(response, "usage", None)
         _cost: Final = CustomStreamWrapper._resolve_provider_reported_cost(getattr(_usage, "cost", None))
         if _cost is not None:
@@ -2018,7 +2019,7 @@ class CustomStreamWrapper:
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
-                    self._propagate_usage_cost_to_hidden_params(complete_streaming_response)
+                    self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
 
                     setattr(
                         response,
@@ -2268,7 +2269,7 @@ class CustomStreamWrapper:
 
             response: Final = self.model_response_creator()
             if complete_streaming_response is not None:
-                self._propagate_usage_cost_to_hidden_params(complete_streaming_response)
+                self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
 
                 setattr(
                     response,
@@ -2551,7 +2552,7 @@ def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
 
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    latest_usage_chunk = None
+    latest_usage_chunk: Usage | Mapping[str, int] | None = None
     prompt_tokens_details: PromptTokensDetailsWrapper | None = None
     completion_tokens_details: CompletionTokensDetailsWrapper | None = None
     cache_creation_token_details: CacheCreationTokenDetails | None = None

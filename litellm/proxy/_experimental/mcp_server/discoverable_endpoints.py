@@ -1096,8 +1096,7 @@ async def exchange_token_with_server(
             headers={"Accept": "application/json", **token_request.headers},
             data=token_data,
         )
-        if response is not None:
-            response.raise_for_status()
+        response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         fault: Final = classify_upstream_token_rejection(
             exc.response,
@@ -1119,11 +1118,6 @@ async def exchange_token_with_server(
             )
             return _bridge_mint_error_response("invalid_refresh")
         return render_token_fault(fault)
-    if response is None:
-        raise HTTPException(
-            status_code=502,
-            detail="MCP upstream token endpoint returned no response",
-        )
     token_response = response.json()
 
     # Validate token response against server-configured rules before any storage.
@@ -1536,16 +1530,10 @@ async def _post_dcr_registration(
             headers=headers,
             json=register_data,
         )
-        if response is not None:
-            response.raise_for_status()
+        response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         status_code, detail = dcr_fault_detail(classify_upstream_dcr_rejection(exc.response, log_context=server_id))
         raise HTTPException(status_code=status_code, detail=detail) from exc
-    if response is None:
-        raise HTTPException(
-            status_code=502,
-            detail="MCP upstream registration endpoint returned no response",
-        )
     return response
 
 

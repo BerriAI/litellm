@@ -303,7 +303,7 @@ const SSOProviderField = ({ field }: { field: SSOProviderConfig["fields"][number
 
   if (field.type === "checkbox") {
     return (
-      <FormField control={control} name={field.name} label={field.label}>
+      <FormField control={control} name={field.name} label={field.label} orientation="horizontal">
         {({ value, onChange, onBlur, id, ...rest }) => (
           <Checkbox
             id={id}
@@ -413,7 +413,7 @@ export const MappingToggleField = ({
   const { control } = useFormContext<SSOSettingsFormValues>();
 
   return (
-    <FormField control={control} name={name} label={label}>
+    <FormField control={control} name={name} label={label} orientation="horizontal">
       {({ value, onChange, onBlur, id, ...rest }) => (
         <Checkbox
           id={id}

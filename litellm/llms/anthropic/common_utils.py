@@ -13,7 +13,12 @@ import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
-from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME
+from litellm.constants import (
+    DEFAULT_MODEL_CREATED_AT_TIME,
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
 )
@@ -28,10 +33,15 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
+    AnthropicMessagesToolChoice,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.model_listing import ModelInfoResponse
 
+DROP_FORCED_TOOL_CHOICE_WARNING: Final = (
+    "Downgrading forced tool_choice to 'auto' for model=%s (drop_params=True): this model rejects tool_choice type "
+    "'any'/'tool' with a 400 because thinking is always on and a forced call would skip it."
+)
 DROP_DISABLED_THINKING_WARNING: Final = (
     "Dropping `thinking={'type': 'disabled'}` for model=%s: thinking is always on for this model and cannot be "
     "disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain "
@@ -321,6 +331,45 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             )
 
     @staticmethod
+    def forced_tool_use_unsupported(model: str) -> bool:
+        return AnthropicModelInfo._get_model_capability(model, "supports_forced_tool_use") is False
+
+    @staticmethod
+    def forced_tool_use_downgraded(model: str, drop_params: bool) -> bool:
+        """True when the model map flags the model with
+        ``supports_forced_tool_use: false`` (Fable 5.1 / Mythos 5.1 400 on
+        ``any``/``tool``) and ``drop_params`` asks for the ``auto`` downgrade;
+        raises a clean client-side 400 for such models without ``drop_params``."""
+        if not AnthropicModelInfo.forced_tool_use_unsupported(model):
+            return False
+        if not (litellm.drop_params or drop_params):
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} does not support forced tool use (tool_choice='required' or a named tool). "
+                    "Use tool_choice='auto' and tell the model in the prompt when to call the tool, or set "
+                    "`litellm.drop_params = True` to downgrade to 'auto' automatically."
+                ),
+                status_code=400,
+            )
+        litellm.verbose_logger.warning(DROP_FORCED_TOOL_CHOICE_WARNING, model)
+        return True
+
+    @staticmethod
+    def _apply_forced_tool_choice(
+        model: str,
+        tool_choice: AnthropicMessagesToolChoice,
+        drop_params: bool,
+    ) -> AnthropicMessagesToolChoice:
+        if tool_choice["type"] not in ("any", "tool"):
+            return tool_choice
+        if not AnthropicModelInfo.forced_tool_use_downgraded(model, drop_params):
+            return tool_choice
+        disable_parallel: Final = tool_choice.get("disable_parallel_tool_use")
+        if disable_parallel is None:
+            return AnthropicMessagesToolChoice(type="auto")
+        return AnthropicMessagesToolChoice(type="auto", disable_parallel_tool_use=disable_parallel)
+
+    @staticmethod
     def _strip_version_suffix(model: str) -> str:
         at: Final = model.rfind("@")
         if at > 0:
@@ -489,6 +538,51 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             model,
         )
         optional_params.pop("thinking", None)
+
+    @staticmethod
+    def translate_legacy_thinking_for_adaptive_model(
+        model: str,
+        optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param like the sibling helpers
+        custom_llm_provider: str,
+    ) -> None:
+        """Translate legacy ``thinking.type=enabled`` to adaptive for the
+        adaptive-thinking models that reject it (4.7+ and the 5 families).
+        Models flagged ``supports_legacy_thinking`` (the 4.6 family) accept the
+        legacy shape natively, so it is forwarded verbatim and the caller's
+        ``budget_tokens`` cap keeps applying. Caller-provided
+        ``output_config.effort`` is never overridden.
+        """
+        if not AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
+            return
+        if AnthropicModelInfo._supports_legacy_thinking(model, custom_llm_provider):
+            return
+        thinking: Final = optional_params.get("thinking")
+        if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
+            return
+
+        effort: Final = AnthropicModelInfo._legacy_budget_to_effort(
+            model=model,
+            budget_tokens=int(thinking.get("budget_tokens") or 0),
+            custom_llm_provider=custom_llm_provider,
+        )
+        existing_output_config: Final = optional_params.get("output_config")
+        optional_params["thinking"] = {"type": "adaptive"}
+        optional_params["output_config"] = {
+            "effort": effort,
+            **(existing_output_config if isinstance(existing_output_config, dict) else MappingProxyType({})),
+        }
+
+    @staticmethod
+    def _legacy_budget_to_effort(model: str, budget_tokens: int, custom_llm_provider: str) -> str:
+        if budget_tokens >= DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET and (
+            AnthropicModelInfo._supports_model_capability(model, "supports_xhigh_reasoning_effort", custom_llm_provider)
+        ):
+            return "xhigh"
+        if budget_tokens >= DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET:
+            return "high"
+        if budget_tokens >= DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET:
+            return "medium"
+        return "low"
 
     def is_effort_used(
         self,
@@ -865,13 +959,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 f"Failed to fetch models from Anthropic. Status code: {response.status_code}, Response: {response.text}"
             )
 
-        models: Final = response.json()["data"]
+        models: Final[Sequence[Mapping[str, str]]] = response.json()["data"]
 
-        litellm_model_names: Final = []
-        for model in models:
-            stripped_model_name = model["id"]
-            litellm_model_name = "anthropic/" + stripped_model_name
-            litellm_model_names.append(litellm_model_name)
+        litellm_model_names: Final = ["anthropic/" + model["id"] for model in models]
         return litellm_model_names
 
     def get_token_counter(self) -> BaseTokenCounter | None:
@@ -1077,7 +1167,7 @@ def strip_empty_content_blocks_from_anthropic_messages(
     return out
 
 
-def _is_empty_text_block(block: Any) -> bool:
+def _is_empty_text_block(block: object) -> bool:
     if not isinstance(block, dict) or block.get("type") != "text":
         return False
     text: Final = block.get("text")
@@ -1099,6 +1189,25 @@ def is_empty_thinking_block(block: object) -> bool:
     return not isinstance(thinking, str) or not thinking.strip()
 
 
+def is_empty_unsigned_thinking_block(block: object) -> bool:
+    """
+    True for an empty ``{"type": "thinking"}`` block carrying no signature.
+
+    The emit-side predicate: response paths drop a thinking block only when it
+    holds nothing the client could need.  A signature-only block is a real
+    provider response (Bedrock Converse under adaptive thinking emits a
+    reasoning block with empty text and only a signature) and the client needs
+    the signature to replay reasoning across tool-use turns, so it must be
+    emitted.  Request paths keep using :func:`is_empty_thinking_block`:
+    Anthropic rejects empty thinking blocks in request history regardless of
+    signature, and the inbound strip self-heals a replayed signature-only
+    block.
+    """
+    if not isinstance(block, dict) or not is_empty_thinking_block(block):
+        return False
+    return not block.get("signature")
+
+
 def normalize_anthropic_tool_use_id(raw_id: str) -> str:
     """
     Normalize a tool_use / tool_result id for Anthropic's ``^[a-zA-Z0-9_-]+$``
@@ -1112,7 +1221,7 @@ def normalize_anthropic_tool_use_id(raw_id: str) -> str:
     return sanitized or "tool_use_id"
 
 
-def _sanitize_tool_use_id_content_block(block: Any) -> Any:
+def _sanitize_tool_use_id_content_block(block: object) -> object:
     if not isinstance(block, dict):
         return block
     block_type: Final = block.get("type")
@@ -1302,6 +1411,97 @@ def flatten_unencrypted_web_search_results_in_anthropic_messages(  # mutable-ok:
     return [_flatten_web_search_results_in_message(m) for m in messages]  # mutable-ok: JSON wire format
 
 
+def _normalized_cache_control(cache_control: object) -> dict[str, str] | None:  # mutable-ok: JSON wire format
+    if not isinstance(cache_control, Mapping):
+        return None
+    cache_type: Final = cache_control.get("type")
+    return {"type": cache_type if isinstance(cache_type, str) else "ephemeral"}  # mutable-ok: JSON wire format
+
+
+def _with_portable_cache_control(block: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: JSON wire format
+    if "cache_control" not in block:
+        return dict(block)  # mutable-ok: JSON wire format
+    normalized: Final = _normalized_cache_control(block["cache_control"])
+    rest: Final = {key: value for key, value in block.items() if key != "cache_control"}  # mutable-ok: JSON wire format
+    return rest if normalized is None else {**rest, "cache_control": normalized}  # mutable-ok: JSON wire format
+
+
+def _with_portable_cache_control_in_blocks(blocks: object) -> object:
+    if isinstance(blocks, str) or not isinstance(blocks, Sequence):
+        return blocks
+    return [  # mutable-ok: JSON wire format
+        _with_portable_cache_control(block) if isinstance(block, Mapping) else block for block in blocks
+    ]
+
+
+def _with_portable_cache_control_in_content_block(block: object) -> object:
+    if not isinstance(block, Mapping):
+        return block
+    portable: Final = _with_portable_cache_control(block)
+    if portable.get("type") != "tool_result" or "content" not in portable:
+        return portable
+    return {  # mutable-ok: JSON wire format
+        **portable,
+        "content": _with_portable_cache_control_in_blocks(portable["content"]),
+    }
+
+
+def _with_portable_cache_control_in_message(message: object) -> object:
+    if not isinstance(message, Mapping) or "content" not in message:
+        return message
+    content: Final = message["content"]
+    if isinstance(content, str) or not isinstance(content, Sequence):
+        return message
+    return {  # mutable-ok: JSON wire format
+        **message,
+        "content": [  # mutable-ok: JSON wire format
+            _with_portable_cache_control_in_content_block(block) for block in content
+        ],
+    }
+
+
+def _with_portable_cache_control_in_messages(messages: object) -> object:
+    if isinstance(messages, str) or not isinstance(messages, Sequence):
+        return messages
+    return [  # mutable-ok: JSON wire format
+        _with_portable_cache_control_in_message(message) for message in messages
+    ]
+
+
+def _with_portable_cache_control_in_scoped_value(key: str, value: object) -> object:
+    match key:
+        case "system" | "tools":
+            return _with_portable_cache_control_in_blocks(value)
+        case "messages":
+            return _with_portable_cache_control_in_messages(value)
+        case _:
+            return value
+
+
+def normalize_cache_control_in_anthropic_payload(
+    payload: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: JSON wire format
+    """
+    Return a copy of an Anthropic /v1/messages payload with every
+    ``cache_control`` entry reduced to ``{"type": <its type, or "ephemeral">}``
+    at the places the Messages API defines it: the request itself, system
+    blocks, tools, message content blocks, and ``tool_result`` content blocks.
+    Application data such as ``tool_use.input`` and tool ``input_schema`` is
+    never touched, even when it happens to contain a ``cache_control`` key.
+
+    Anthropic itself accepts prompt-caching extensions such as ``ttl``, but
+    strict non-Anthropic implementations of the Messages API validate the field
+    literally and reject the whole request (``cache_control.ttl: 1h is not
+    supported``, ``cache_control.type is required``), which 400s clients like
+    Claude Code that send cache hints. Non-dict ``cache_control`` values are
+    dropped entirely. The caller's payload is never mutated.
+    """
+    portable: Final = _with_portable_cache_control(payload)
+    return {  # mutable-ok: JSON wire format
+        key: _with_portable_cache_control_in_scoped_value(key, value) for key, value in portable.items()
+    }
+
+
 def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
     openai_headers: Final = {}
     if "anthropic-ratelimit-requests-limit" in headers:
@@ -1319,31 +1519,38 @@ def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
     return additional_headers
 
 
-def _anthropic_model_entry(model: ModelInfoResponse, created_at: str) -> Mapping[str, object]:
+def _anthropic_model_entry(
+    model: ModelInfoResponse, created_at: str, display_names: Mapping[str, str]
+) -> Mapping[str, object]:
     return {  # mutable-ok: JSON response body, serialized by the route and never mutated
         "type": "model",
         "id": model["id"],
-        "display_name": model["id"],
+        "display_name": display_names.get(model["id"], model["id"]),
         "created_at": created_at,
         "max_input_tokens": model.get("max_input_tokens"),
         "max_tokens": model.get("max_output_tokens"),
     }
 
 
-def create_anthropic_model_list_response(models: Sequence[ModelInfoResponse]) -> Mapping[str, object]:
+def create_anthropic_model_list_response(
+    models: Sequence[ModelInfoResponse],
+    display_names: Mapping[str, str] = MappingProxyType({}),
+) -> Mapping[str, object]:
     """Build the Anthropic-native /v1/models envelope.
 
     Clients that send an anthropic-version header parse the Anthropic Models API
     shape (type/display_name/created_at plus has_more/first_id/last_id) and filter
     the list themselves, so every model is returned here. The token limits carry
     over from the OpenAI-shaped listing, named as the Messages API names them, and
-    are always present because the vendor shape declares them nullable, not optional
+    are always present because the vendor shape declares them nullable, not optional.
+    display_names maps a listed model id to a configured human-readable name; ids
+    without an entry fall back to the id itself, matching the vendor behavior
     """
     created_at: Final = (
         datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     )
     data: Final = [  # mutable-ok: JSON response body, serialized by the route and never mutated
-        _anthropic_model_entry(model, created_at) for model in models
+        _anthropic_model_entry(model, created_at, display_names) for model in models
     ]
     return {  # mutable-ok: JSON response body, serialized by the route and never mutated
         "data": data,

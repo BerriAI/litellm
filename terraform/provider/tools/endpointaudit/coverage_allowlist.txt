@@ -126,3 +126,6 @@ POST /customer/delete                             # known gap: litellm_customer 
 GET /team/{team_id}/callback                      # known gap: team callback resource
 POST /team/{team_id}/callback                     # known gap: team callback resource
 DELETE /team/{team_id}/callback/{callback_name}   # known gap: team callback resource
+GET /access_group/{access_group}/budget           # known gap: budget attributes on litellm_access_group
+PUT /access_group/{access_group}/budget           # known gap: budget attributes on litellm_access_group
+DELETE /access_group/{access_group}/budget        # known gap: budget attributes on litellm_access_group

@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     Delta,
+    ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     StandardLoggingPayload,
@@ -1750,7 +1751,7 @@ def test_openrouter_streaming_cost_propagates_to_hidden_params():
     assert complete_response.usage.cost == 0.00025
 
     # Use the real propagation method from CustomStreamWrapper
-    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response)
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response, "openrouter")
 
     assert "additional_headers" in complete_response._hidden_params
     assert (
@@ -1769,14 +1770,12 @@ def test_openrouter_streaming_cost_propagates_to_hidden_params():
     assert provider_cost == 0.00025
 
 
-def test_perplexity_streaming_dict_cost_propagates_to_hidden_params():
-    """
-    Regression: Perplexity reports usage.cost as a breakdown object, which used to
-    blow up the end of the stream with
-    `float() argument must be a string or a real number, not 'dict'`.
-    """
+def test_perplexity_streaming_dict_cost_bills_through_its_own_calculator():
     import litellm
-    from litellm.cost_calculator import get_response_cost_from_hidden_params
+    from litellm.cost_calculator import (
+        get_response_cost_from_hidden_params,
+        response_cost_calculator,
+    )
 
     chunks = [
         ModelResponseStream(
@@ -1828,12 +1827,80 @@ def test_perplexity_streaming_dict_cost_propagates_to_hidden_params():
 
     assert complete_response is not None
 
-    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response)
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response, "perplexity")
 
-    assert (
-        get_response_cost_from_hidden_params(complete_response._hidden_params)
-        == 0.00503
+    assert get_response_cost_from_hidden_params(complete_response._hidden_params) is None
+    assert response_cost_calculator(
+        response_object=complete_response,
+        model="perplexity/sonar",
+        custom_llm_provider="perplexity",
+        call_type="completion",
+        optional_params={},
+    ) == pytest.approx(0.00503)
+
+
+def test_openai_compatible_streaming_cost_is_priced_from_the_cost_map():
+    import litellm
+    from litellm.cost_calculator import (
+        get_response_cost_from_hidden_params,
+        response_cost_calculator,
     )
+
+    model = "openai/streams-cost-in-nanodollars"
+    litellm.register_model(
+        {
+            model: {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        }
+    )
+    complete_response = ModelResponse(
+        id="chatcmpl-openai-compatible",
+        model=model,
+        choices=[],
+        usage=Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=3_144_000),
+    )
+
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response, "openai")
+
+    assert get_response_cost_from_hidden_params(complete_response._hidden_params) is None
+    assert response_cost_calculator(
+        response_object=complete_response,
+        model=model,
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+    ) == pytest.approx(2e-5)
+
+
+def test_xai_streaming_reported_cost_still_takes_the_margin(monkeypatch):
+    import litellm
+    from litellm.cost_calculator import (
+        get_response_cost_from_hidden_params,
+        response_cost_calculator,
+    )
+
+    complete_response = ModelResponse(
+        id="chatcmpl-xai",
+        model="grok-4-latest",
+        choices=[],
+        usage=Usage(completion_tokens=353, prompt_tokens=198, total_tokens=551, cost=0.0009956),
+    )
+
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response, "xai")
+
+    assert get_response_cost_from_hidden_params(complete_response._hidden_params) is None
+    monkeypatch.setattr(litellm, "cost_margin_config", {"xai": 0.5})
+    assert response_cost_calculator(
+        response_object=complete_response,
+        model="xai/grok-4-latest",
+        custom_llm_provider="xai",
+        call_type="completion",
+        optional_params={},
+    ) == pytest.approx(0.0009956 * 1.5)
 
 
 def test_provider_reported_cost_ignores_unusable_shapes():
@@ -4692,3 +4759,82 @@ async def test_async_stream_assembled_response_keeps_vertex_traffic_type(logging
     assembled = litellm.stream_chunk_builder(chunks=received, messages=[{"role": "user", "content": "hi"}])
     assert assembled is not None
     assert assembled._hidden_params["provider_specific_fields"]["traffic_type"] == "ON_DEMAND_FLEX"
+
+
+class TestStableStreamingResponseId:
+    """
+    All chunks of one streamed response must share the same top-level id
+    (OpenAI streaming contract). Providers streaming via GenericStreamingChunk
+    (e.g. GigaChat) do not propagate an upstream response id, so
+    CustomStreamWrapper must pin the id from the first chunk it creates,
+    mirroring the existing `created` pinning (issue #11437).
+
+    Clients such as goose merge streamed deltas into one assistant message by
+    chunk id; per-chunk ids split a single reply into many messages.
+    """
+
+    def test_generic_chunks_share_one_id(self):
+        def _generic_chunks():
+            return iter(
+                [
+                    {
+                        "text": "Hello",
+                        "tool_use": None,
+                        "is_finished": False,
+                        "finish_reason": "",
+                        "usage": None,
+                        "index": 0,
+                    },
+                    {
+                        "text": " world",
+                        "tool_use": None,
+                        "is_finished": False,
+                        "finish_reason": "",
+                        "usage": None,
+                        "index": 0,
+                    },
+                    {
+                        "text": "",
+                        "tool_use": None,
+                        "is_finished": True,
+                        "finish_reason": "stop",
+                        "usage": {
+                            "prompt_tokens": 1,
+                            "completion_tokens": 2,
+                            "total_tokens": 3,
+                        },
+                        "index": 0,
+                    },
+                ]
+            )
+
+        wrapper = CustomStreamWrapper(
+            completion_stream=_generic_chunks(),
+            model="gigachat/GigaChat-2-Max",
+            logging_obj=MagicMock(),
+            custom_llm_provider="gigachat",
+        )
+        ids = [chunk.id for chunk in wrapper if chunk.id]
+        assert ids, "no chunks emitted"
+        assert len(set(ids)) == 1, f"chunk ids differ across one stream: {ids}"
+
+    def test_creator_pins_id_from_first_chunk(self):
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="gigachat/GigaChat-2-Max",
+            logging_obj=MagicMock(),
+            custom_llm_provider="gigachat",
+        )
+        first = wrapper.model_response_creator()
+        assert wrapper.response_id == first.id
+        assert wrapper.model_response_creator().id == first.id
+
+    def test_provider_supplied_id_still_wins(self):
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="gigachat/GigaChat-2-Max",
+            logging_obj=MagicMock(),
+            custom_llm_provider="gigachat",
+        )
+        wrapper.response_id = "chatcmpl-from-provider"
+        assert wrapper.model_response_creator().id == "chatcmpl-from-provider"

@@ -26,6 +26,64 @@ def _owners(*backup_paths):
 
 CLAUDE_SETTINGS_MODULE = "litellm.proxy.client.cli.commands.claude_settings"
 AUTH_MODULE = "litellm.proxy.client.cli.commands.auth"
+WINDOWS_LITE_EXE = "C:\\Users\\u\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\lite.EXE"
+
+CMD_METACHARACTERS = frozenset("&|<>^()")
+CMD_PERCENT_GUARD = "%%cd:~,%"
+
+
+def _through_cmd_exe(command):
+    """The line cmd.exe hands to CreateProcess after reading the apiKeyHelper.
+
+    A `"` toggles cmd's quote state and the metacharacters only act outside it. cmd expands
+    `%VAR%` even inside quotes, so every `%` has to arrive as the `%%cd:~,%` guard: the first
+    `%` has no variable name and stays literal, and `%cd:~,%` is a zero length substring of `cd`.
+    """
+    assert not any(CMD_METACHARACTERS & set(run) for run in command.split('"')[::2]), command
+    assert command.count("%") == 3 * command.count(CMD_PERCENT_GUARD), command
+    return command.replace(CMD_PERCENT_GUARD, "%")
+
+
+def _through_c_runtime(command_line):
+    """argv as the Microsoft C runtime builds it for the `lite` executable.
+
+    Outside quotes whitespace ends an argument. A `"` toggles quoting, and inside quotes `""`
+    is a literal quote. Backslashes are literal unless they run up to a `"`, where each pair
+    is one backslash and an odd one left over makes the quote literal.
+    """
+    argv = []
+    current = None
+    quoted = False
+    i = 0
+    while i < len(command_line):
+        ch = command_line[i]
+        if ch in " \t" and not quoted:
+            if current is not None:
+                argv.append(current)
+            current = None
+            i += 1
+            continue
+        if current is None:
+            current = ""
+        if ch == "\\":
+            run = len(command_line[i:]) - len(command_line[i:].lstrip("\\"))
+            before_quote = command_line[i + run : i + run + 1] == '"'
+            current += "\\" * (run // 2 if before_quote else run)
+            if before_quote and run % 2:
+                current += '"'
+                i += 1
+            i += run
+        elif ch == '"':
+            if quoted and command_line[i + 1 : i + 2] == '"':
+                current += '"'
+                i += 1
+            else:
+                quoted = not quoted
+            i += 1
+        else:
+            current += ch
+            i += 1
+    return argv if current is None else [*argv, current]
 
 
 @pytest.fixture
@@ -48,6 +106,7 @@ class TestWriteClaudeSettings:
 
         written = json.loads(settings_path.read_text())
         assert written["env"]["ANTHROPIC_BASE_URL"] == "https://proxy.example.com"
+        assert written["env"]["ENABLE_TOOL_SEARCH"] == "true"
         assert written["apiKeyHelper"] == "/usr/local/bin/lite --base-url https://proxy.example.com auth print-token"
 
     def test_updates_an_existing_file_preserving_unrelated_settings(self, paths, lite_on_path):
@@ -196,6 +255,36 @@ class TestApiKeyHelperIsActuallyInvocable:
         with patch(f"{AUTH_MODULE}.load_cli_token", return_value=stale):
             result = CliRunner().invoke(cli, self._helper_args("http://localhost:4000"))
 
+        assert "Not authenticated for this server" in result.output
+
+    def _windows_argv(self, lite_exe, base_url):
+        with patch(f"{CLAUDE_SETTINGS_MODULE}.shutil.which", return_value=lite_exe):
+            helper = resolve_api_key_helper(base_url, platform="win32")
+        return _through_c_runtime(_through_cmd_exe(helper))
+
+    @pytest.mark.parametrize(
+        ("lite_exe", "base_url"),
+        [
+            (WINDOWS_LITE_EXE, "http://localhost:4000"),
+            ("C:\\Program Files\\LiteLLM\\lite.EXE", "https://gateway.example.com/?a=1&b=2"),
+            ("C:\\Users\\u\\Scripts\\lite.EXE", "https://gateway.example.com/team%20a/%7Eproxy"),
+            ('C:\\odd "dir"\\lite.EXE', "http://localhost:4000/x\\"),
+        ],
+    )
+    def test_the_windows_command_survives_cmd_exe_and_the_c_runtime(self, lite_exe, base_url):
+        assert self._windows_argv(lite_exe, base_url) == [lite_exe, "--base-url", base_url, "auth", "print-token"]
+
+    def test_the_windows_command_carries_the_base_url_through_cmd_quoting(self):
+        stale = CliTokenRecord(
+            base_url="http://other-proxy.example.com",
+            key="sk-stale",
+            timestamp=time.time(),
+        )
+        argv = self._windows_argv(WINDOWS_LITE_EXE, "http://localhost:4000")
+        with patch(f"{AUTH_MODULE}.load_cli_token", return_value=stale):
+            result = CliRunner().invoke(cli, argv[1:])
+
+        assert argv[0] == WINDOWS_LITE_EXE
         assert "Not authenticated for this server" in result.output
 
 

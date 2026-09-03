@@ -195,8 +195,7 @@ function DataTableHeadCell<TData>({ header, size, stickyHeader, enableColumnResi
       )}
       {canResize && (
         <div
-          data-resizer
-          data-header-id={header.id}
+          data-testid={`column-resizer-${header.id}`}
           onMouseDown={header.getResizeHandler()}
           onTouchStart={header.getResizeHandler()}
           onDoubleClick={() => column.resetSize()}
@@ -589,15 +588,19 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
   const paginationNode = renderPagination();
 
   return (
-    <div className={cn("w-full", fill.outer)}>
-      <div className={cn("overflow-hidden rounded-lg border border-border", fill.frame)}>
+    <div data-testid="data-table-root" className={cn("w-full", fill.outer)}>
+      <div data-testid="data-table-frame" className={cn("overflow-hidden rounded-lg border border-border", fill.frame)}>
         {toolbar !== undefined && <div className="shrink-0 border-b border-border px-4 py-3">{toolbar(table)}</div>}
         <div
+          data-testid="data-table-scroller"
           className={cn(stickyHeader ? "overflow-auto" : "overflow-x-auto", fill.body)}
           style={maxBodyHeight !== undefined ? { maxHeight: maxBodyHeight } : undefined}
         >
           <TableRoot className={enableColumnResizing ? "table-fixed" : ""} style={tableStyle}>
-            <TableHeader className={cn(stickyHeader ? "sticky top-0 z-sticky" : "", fill.header)}>
+            <TableHeader
+              data-testid="data-table-head"
+              className={cn(stickyHeader ? "sticky top-0 z-sticky" : "", fill.header)}
+            >
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id} className="bg-muted/50">
                   {headerGroup.headers.map((header) => (

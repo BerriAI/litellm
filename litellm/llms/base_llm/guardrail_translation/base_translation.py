@@ -1,8 +1,11 @@
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 if TYPE_CHECKING:
+    from fastapi import HTTPException
+
     from litellm.integrations.custom_guardrail import (
         CustomGuardrail,
         ModifyResponseException,
@@ -30,6 +33,22 @@ class StreamTransformSink:
 
     mutated_text_per_choice: dict[int, str] = field(default_factory=dict)
     holdback_per_choice: dict[int, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class StreamingScanKey:
+    """What a streaming guardrail round would hand to ``apply_guardrail``. Two keys
+    compare equal when the round would scan the same content again; ``stream_ended``
+    stays out of the comparison and only says whether the handler is on its
+    end-of-stream path, where an empty payload is still scanned today."""
+
+    texts: tuple[str, ...]
+    tool_calls: tuple[str, ...] = ()
+    stream_ended: bool = field(default=False, compare=False)
+
+    @property
+    def has_nothing_to_scan(self) -> bool:
+        return not self.stream_ended and not any(self.texts) and not self.tool_calls
 
 
 class BaseTranslation(ABC):
@@ -72,6 +91,31 @@ class BaseTranslation(ABC):
                 transformed[f"user_api_key_{key}"] = value
 
         return transformed
+
+    @staticmethod
+    def merge_user_api_key_metadata_into_request(
+        request_data: dict[str, Any],  # mutable-ok: proxy hooks share and mutate the request payload dict in place
+        user_api_key_dict: Optional["UserAPIKeyAuth"],
+    ) -> None:
+        """
+        Add the prefixed ``user_api_key_*`` metadata to the request's resolved
+        metadata bucket without overwriting existing keys.
+
+        Writes must go through ``get_or_create_metadata_bucket``: creating a
+        ``litellm_metadata`` key on a route whose bucket is ``metadata`` (chat
+        completions) flips the bucket for every later metadata write, and spend
+        logging never sees those writes (e.g. guardrail_information).
+        """
+        from litellm.litellm_core_utils.core_helpers import (
+            get_or_create_metadata_bucket,
+        )
+
+        user_metadata: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+        if not user_metadata:
+            return
+        _, metadata_bucket = get_or_create_metadata_bucket(request_data)
+        for key, value in user_metadata.items():
+            metadata_bucket.setdefault(key, value)
 
     @abstractmethod
     async def process_input_messages(
@@ -123,12 +167,15 @@ class BaseTranslation(ABC):
         """
         return responses_so_far
 
+    def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        return None
+
     def build_block_sse_chunks(
         self,
         exc: "ModifyResponseException",
         stream_started: bool = False,
-        responses_so_far: list[Any] | None = None,
-    ) -> list[bytes] | None:
+        responses_so_far: Sequence[Any] | None = None,
+    ) -> Sequence[bytes] | None:
         """
         Build the streaming chunks that deliver a guardrail block message and
         cleanly terminate the stream in this provider's wire format.
@@ -144,6 +191,26 @@ class BaseTranslation(ABC):
         re-raises ``exc`` so the proxy can surface a clean error instead.
         Override in provider subclasses that support synthesizing a block
         stream.
+        """
+        return None
+
+    def build_stream_error_items(
+        self,
+        exc: "HTTPException",
+        responses_so_far: Sequence[Any] | None = None,
+    ) -> Sequence[Any] | None:
+        """
+        Build the stream items that surface a guardrail HTTPException (a block
+        with the default exception-on-block config, or a failed scan) after the
+        response has already started streaming, in this endpoint's wire format.
+
+        Called only once chunks have been sent: the HTTP status is gone, so the
+        failure must travel as an in-stream error frame. ``responses_so_far``
+        holds the chunks the client has already received, for formats whose
+        error frame continues the stream (e.g. sequence numbers).
+
+        Returns None when the format has no in-stream error frame; the caller
+        then re-raises ``exc``. Override in endpoint subclasses.
         """
         return None
 
