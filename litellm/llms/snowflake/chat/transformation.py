@@ -120,7 +120,9 @@ def _convert_image_url_to_anthropic(block: Mapping[str, object]) -> dict[str, ob
             "data": image["data"],
         },
     }
-    return {**converted, "cache_control": cache_control} if cache_control is not None else converted  # mutable-ok: JSON wire block
+    return (
+        {**converted, "cache_control": cache_control} if cache_control is not None else converted
+    )  # mutable-ok: JSON wire block
 
 
 def _convert_image_url_blocks_to_anthropic(content: object) -> object:  # mutable-ok: JSON wire blocks
@@ -144,12 +146,16 @@ def _convert_tool_result_content_to_anthropic(content: object, tool_call_id: str
         tool_call_id=tool_call_id,
         content=content,
     )
-    tool_result: Final = convert_to_anthropic_tool_result(tool_message, force_base64=True)  # cast-ok: validated tool message
+    tool_result: Final = convert_to_anthropic_tool_result(
+        tool_message, force_base64=True
+    )  # cast-ok: validated tool message
     return tool_result.get("content", "")
 
 
 def _clean_input_schema(schema: object) -> object:  # mutable-ok: JSON schema copy
-    return {key: value for key, value in schema.items() if key != "$schema"} if isinstance(schema, Mapping) else schema  # mutable-ok: JSON schema copy
+    return (
+        {key: value for key, value in schema.items() if key != "$schema"} if isinstance(schema, Mapping) else schema
+    )  # mutable-ok: JSON schema copy
 
 
 class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
@@ -318,7 +324,9 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 tool_call_id_value = (
                     msg.get("tool_call_id", "") if isinstance(msg, dict) else getattr(msg, "tool_call_id", "")
                 )
-                tool_call_id = tool_call_id_value if isinstance(tool_call_id_value, str) else ""  # rebind-ok: normalized loop value
+                tool_call_id = (
+                    tool_call_id_value if isinstance(tool_call_id_value, str) else ""
+                )  # rebind-ok: normalized loop value
                 tool_content = _convert_tool_result_content_to_anthropic(content, tool_call_id)
                 tool_result_block = {  # mutable-ok: JSON wire block
                     "type": "tool_result",
@@ -334,10 +342,15 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 ):
                     conversation[-1]["content"].append(tool_result_block)
                 else:
-                    conversation.append({"role": "user", "content": [tool_result_block]})  # mutable-ok: JSON wire message
+                    conversation.append(
+                        {"role": "user", "content": [tool_result_block]}
+                    )  # mutable-ok: JSON wire message
             else:
                 conversation.append(  # mutable-ok: JSON wire message
-                    {"role": role, "content": _convert_image_url_blocks_to_anthropic(content)}  # mutable-ok: JSON wire message
+                    {
+                        "role": role,
+                        "content": _convert_image_url_blocks_to_anthropic(content),
+                    }  # mutable-ok: JSON wire message
                 )
 
         system: Final[list[dict] | None] = system_parts if system_parts else None  # mutable-ok: JSON wire messages
