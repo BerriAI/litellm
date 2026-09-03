@@ -537,6 +537,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bytestring"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86566c496f2f47d9b8147a4c8b02ffdb69c919fe0c2b2e7195d22cbba0e635c9"
+dependencies = [
+ "bytes",
+]
+
+[[package]]
 name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1435,6 +1444,12 @@ dependencies = [
  "aws-sigv4",
  "aws-smithy-runtime-api",
  "aws-types",
+ "base64",
+ "bytes",
+ "bytestring",
+ "futures-util",
+ "h2 0.4.15",
+ "http 1.4.2",
  "rand 0.8.7",
  "reqwest",
  "serde",
@@ -1449,6 +1464,7 @@ dependencies = [
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "criterion",
  "futures-util",
  "litellm-ai-gateway",
@@ -1456,8 +1472,10 @@ dependencies = [
  "litellm-python-interop",
  "pyo3",
  "pyo3-async-runtimes",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tokio-tungstenite",
  "tracing",
@@ -1468,6 +1486,7 @@ dependencies = [
 name = "litellm-python-interop"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "pyo3",
  "pythonize",
  "rstest",
@@ -1686,6 +1705,7 @@ version = "0.29.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4688ddedf473e32662b9b067670129a8afb8c18e351482c70d62ba4a88171e8b"
 dependencies = [
+ "bytes",
  "libc",
  "once_cell",
  "portable-atomic",

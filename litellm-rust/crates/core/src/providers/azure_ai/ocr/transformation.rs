@@ -1,3 +1,4 @@
+use crate::http_utils::body::JsonPayload;
 use std::collections::BTreeSet;
 
 use crate::error::{Error, json_type_name};
@@ -216,14 +217,16 @@ pub fn complete_document_intelligence_url(
     Ok(url)
 }
 
-fn document_url_from_mistral_document(document: &Value) -> Result<&str, Error> {
+fn document_url_from_mistral_document(
+    document: &JsonPayload,
+) -> Result<&crate::http_utils::body::SharedText, Error> {
     let object = document.as_object().ok_or_else(|| Error::InvalidType {
         expected: "object",
-        actual: json_type_name(document),
+        actual: document.type_name(),
     })?;
     let doc_type = object
         .get("type")
-        .and_then(Value::as_str)
+        .and_then(JsonPayload::as_str)
         .ok_or(Error::MissingField("document.type"))?;
     let field_name = match doc_type {
         "document_url" => "document_url",
@@ -236,16 +239,9 @@ fn document_url_from_mistral_document(document: &Value) -> Result<&str, Error> {
     };
     object
         .get(field_name)
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
+        .and_then(JsonPayload::as_text)
+        .filter(|value| !value.as_str().is_empty())
         .ok_or(Error::MissingField(field_name))
-}
-
-fn extract_base64_from_data_uri(data_uri: &str) -> &str {
-    data_uri
-        .split_once(',')
-        .map(|(_, data)| data)
-        .unwrap_or(data_uri)
 }
 
 fn page_markdown(page: &Map<String, Value>) -> String {
@@ -285,13 +281,13 @@ impl OcrProviderConfig for AzureAiOcrConfig {
         MISTRAL_OCR_CONFIG.supported_ocr_params()
     }
 
-    fn transform_ocr_request(
+    fn transform_ocr_payload(
         &self,
         model: &str,
-        document: Value,
+        document: JsonPayload,
         optional_params: Map<String, Value>,
     ) -> Result<OcrRequestData, Error> {
-        MISTRAL_OCR_CONFIG.transform_ocr_request(model, document, optional_params)
+        MISTRAL_OCR_CONFIG.transform_ocr_payload(model, document, optional_params)
     }
 
     fn transform_ocr_response(
@@ -330,27 +326,24 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
         AZURE_DOCUMENT_INTELLIGENCE_SUPPORTED_OCR_PARAMS
     }
 
-    fn transform_ocr_request(
+    fn transform_ocr_payload(
         &self,
         _model: &str,
-        document: Value,
+        document: JsonPayload,
         _optional_params: Map<String, Value>,
     ) -> Result<OcrRequestData, Error> {
         let document_url = document_url_from_mistral_document(&document)?;
-        let mut data = Map::new();
-        if document_url.starts_with("data:") {
-            data.insert(
-                "base64Source".to_string(),
-                Value::String(extract_base64_from_data_uri(document_url).to_string()),
-            );
+        let (field, value) = if document_url.as_str().starts_with("data:") {
+            let start = document_url.as_str().find(',').map_or(0, |index| index + 1);
+            (
+                "base64Source",
+                document_url.slice(start..document_url.bytes().len())?,
+            )
         } else {
-            data.insert(
-                "urlSource".to_string(),
-                Value::String(document_url.to_string()),
-            );
-        }
+            ("urlSource", document_url.clone())
+        };
         Ok(OcrRequestData {
-            data: Value::Object(data),
+            data: JsonPayload::object([(field, JsonPayload::String(value))]),
             files: None,
         })
     }
@@ -440,6 +433,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn document_intelligence_slices_the_shared_data_uri() {
+        use crate::http_utils::body::SharedText;
+        use bytes::Bytes;
+        let source = Bytes::from(String::from("data:application/pdf;base64,AQIDBA=="));
+        let offset = source.iter().position(|byte| *byte == b',').unwrap() + 1;
+        let document = JsonPayload::object([
+            ("type", "document_url".into()),
+            (
+                "document_url",
+                JsonPayload::String(SharedText::new(source.clone()).unwrap()),
+            ),
+        ]);
+        let body = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
+            .transform_ocr_payload("prebuilt-layout", document, Map::new())
+            .unwrap()
+            .data;
+        let shared = body["base64Source"].as_text().unwrap();
+        assert_eq!(shared.as_str(), "AQIDBA==");
+        assert_eq!(shared.bytes().as_ptr(), source[offset..].as_ptr());
+    }
+
+    #[test]
     fn azure_ai_reuses_mistral_body_transform() {
         let body = AZURE_AI_OCR_CONFIG
             .transform_ocr_request(
@@ -451,7 +466,7 @@ mod tests {
             .data;
 
         assert_eq!(body["model"], "pixtral-12b-2409");
-        assert_eq!(body["include_image_base64"], true);
+        assert_eq!(body["include_image_base64"], json!(true));
         assert_eq!(
             body["document"]["document_url"],
             "data:application/pdf;base64,abc"

@@ -1,4 +1,3 @@
-import base64
 from typing import Final
 
 import httpx
@@ -26,7 +25,7 @@ class BedrockAudioTranscriptionRustDispatch:
         if audio_format not in {"wav", "mp3", "flac", "ogg"}:
             raise ValueError(f"Unsupported Bedrock audio format for file {processed_audio.filename!r}")
         return {
-            "data": base64.b64encode(processed_audio.file_content).decode("ascii"),
+            "data": processed_audio.file_content,
             "format": audio_format,
             "filename": processed_audio.filename,
         }

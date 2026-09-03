@@ -440,6 +440,42 @@ pub fn sign_bedrock_post(
     credentials: &Credentials,
     signing_time: SystemTime,
 ) -> Result<BTreeMap<String, String>, Error> {
+    sign_bedrock_body(
+        url,
+        SignableBody::Bytes(body),
+        headers,
+        region,
+        credentials,
+        signing_time,
+    )
+}
+
+pub fn sign_bedrock_digest(
+    url: &str,
+    digest: &str,
+    headers: &BTreeMap<String, String>,
+    region: &str,
+    credentials: &Credentials,
+    signing_time: SystemTime,
+) -> Result<BTreeMap<String, String>, Error> {
+    sign_bedrock_body(
+        url,
+        SignableBody::Precomputed(digest.to_owned()),
+        headers,
+        region,
+        credentials,
+        signing_time,
+    )
+}
+
+fn sign_bedrock_body(
+    url: &str,
+    body: SignableBody<'_>,
+    headers: &BTreeMap<String, String>,
+    region: &str,
+    credentials: &Credentials,
+    signing_time: SystemTime,
+) -> Result<BTreeMap<String, String>, Error> {
     let identity: Identity = credentials.clone().into();
     let params = v4::SigningParams::builder()
         .identity(&identity)
@@ -453,7 +489,7 @@ pub fn sign_bedrock_post(
     let header_refs = headers
         .iter()
         .map(|(name, value)| (name.as_str(), value.as_str()));
-    let request = SignableRequest::new("POST", url, header_refs, SignableBody::Bytes(body))
+    let request = SignableRequest::new("POST", url, header_refs, body)
         .map_err(|error| Error::Auth(format!("AWS signable request failed: {error}")))?;
     let (instructions, _) = sign(request, &params)
         .map_err(|error| Error::Auth(format!("AWS request signing failed: {error}")))?
@@ -847,6 +883,39 @@ mod tests {
                 "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20240102/us-east-1/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-security-token, Signature=55c027ef47527d3ad63f1735f9d099efdbc99f296ff914bd94e727e24ec0e464"
             )
         );
+    }
+
+    #[test]
+    fn streamed_raw_and_encoded_audio_sign_like_buffered_json() {
+        use crate::http_utils::body::JsonPayload;
+        use crate::http_utils::body::PreparedJsonBody;
+        use bytes::Bytes;
+        let credentials = Credentials::new("access", "secret", Some("token".into()), None, "test");
+        let headers = BTreeMap::from([("Content-Type".into(), "application/json".into())]);
+        let url = "https://bedrock-runtime.us-east-1.amazonaws.com/model/test/converse";
+        for payload in [
+            JsonPayload::Base64(Bytes::from(vec![5; 131_073])),
+            "AQI=".into(),
+        ] {
+            let payload = JsonPayload::object([("audio", payload)]);
+            let buffered = serde_json::to_vec(&payload).unwrap();
+            let streamed = PreparedJsonBody::streamed(payload).unwrap();
+            assert_eq!(streamed.content_length(), buffered.len() as u64);
+            let time = UNIX_EPOCH + std::time::Duration::from_secs(1_704_164_645);
+            assert_eq!(
+                sign_bedrock_digest(
+                    url,
+                    &streamed.sha256(),
+                    &headers,
+                    "us-east-1",
+                    &credentials,
+                    time
+                )
+                .unwrap(),
+                sign_bedrock_post(url, &buffered, &headers, "us-east-1", &credentials, time)
+                    .unwrap()
+            );
+        }
     }
 
     #[test]

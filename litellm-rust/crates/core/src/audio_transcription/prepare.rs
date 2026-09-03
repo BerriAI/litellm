@@ -1,4 +1,5 @@
 use crate::error::Error;
+use crate::http_utils::body::JsonPayload;
 use crate::http_utils::{has_header, string_headers};
 #[cfg(feature = "bedrock-auth")]
 use crate::providers::bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG;
@@ -18,8 +19,8 @@ fn provider_config(provider: &str) -> Option<&'static dyn AudioTranscriptionProv
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub fn prepare_audio_transcription_provider_call(
-    request: AudioTranscriptionRequest<'_>,
+pub fn prepare_audio_transcription_provider_call<A: Into<JsonPayload>>(
+    request: AudioTranscriptionRequest<'_, A>,
 ) -> Result<ProviderAudioTranscriptionRequest, Error> {
     let provider_info = get_custom_llm_provider(request.model, request.custom_llm_provider)
         .or_else(|| {
@@ -58,7 +59,7 @@ pub fn prepare_audio_transcription_provider_call(
     )?;
     let filtered_params = config.map_transcription_params(&request.optional_params);
     let transformed =
-        config.transform_transcription_request(&model, request.audio, filtered_params)?;
+        config.transform_transcription_payload(&model, request.audio.into(), filtered_params)?;
     Ok(ProviderAudioTranscriptionRequest {
         model,
         custom_llm_provider: provider_info.custom_llm_provider.to_string(),

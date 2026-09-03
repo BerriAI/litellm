@@ -1,5 +1,6 @@
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use litellm_core::error::Error;
+use litellm_core::http_utils::body::JsonPayload;
 use serde_json::{Map, Value, json};
 use std::future::Future;
 use std::pin::Pin;
@@ -64,7 +65,7 @@ impl OcrLifecycleHooks {
             Err(_) => optional_params,
         };
         Ok(PreparedOcrRequest {
-            document,
+            document: document.into(),
             optional_params,
             ..request
         })
@@ -95,7 +96,7 @@ impl OcrLifecycleHooks {
             request.document
         };
         let body = config
-            .transform_ocr_request(&request.model, document, request.optional_params)?
+            .transform_ocr_payload(&request.model, document, request.optional_params)?
             .data;
         let body = self
             .run_during_call_guardrails(&model, &custom_llm_provider, &url, body)
@@ -115,8 +116,8 @@ impl OcrLifecycleHooks {
         model: &str,
         custom_llm_provider: &str,
         url: &str,
-        body: Value,
-    ) -> Result<Value, Error> {
+        body: JsonPayload,
+    ) -> Result<JsonPayload, Error> {
         if self.guardrail_runner.is_empty() {
             return Ok(body);
         }
@@ -133,7 +134,7 @@ impl OcrLifecycleHooks {
             .run_during_call(&context, guardrail_request)
             .await
             .map_err(guardrail_error_to_core_error)?;
-        parse_ocr_during_call_guardrail_request(guardrail_request)
+        parse_ocr_during_call_guardrail_request(guardrail_request).map(JsonPayload::from)
     }
 
     fn standard_logging_payload(

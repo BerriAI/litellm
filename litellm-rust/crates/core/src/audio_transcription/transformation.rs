@@ -1,4 +1,5 @@
 use crate::Error;
+use crate::http_utils::body::JsonPayload;
 use serde_json::{Map, Value};
 
 use super::types::{AudioTranscriptionRequestData, AudioTranscriptionResponseData};
@@ -31,6 +32,15 @@ pub trait AudioTranscriptionProviderConfig: Sync {
         &self,
         model: &str,
         audio: Value,
+        optional_params: Map<String, Value>,
+    ) -> Result<AudioTranscriptionRequestData, Error> {
+        self.transform_transcription_payload(model, audio.into(), optional_params)
+    }
+
+    fn transform_transcription_payload(
+        &self,
+        model: &str,
+        audio: JsonPayload,
         optional_params: Map<String, Value>,
     ) -> Result<AudioTranscriptionRequestData, Error>;
 

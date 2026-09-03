@@ -1,9 +1,10 @@
+use crate::http_utils::body::JsonPayload;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OcrRequestData {
-    pub data: Value,
+    pub data: JsonPayload,
     pub files: Option<Value>,
 }
 
@@ -26,4 +27,13 @@ impl OcrResponseData {
             "object": self.object,
         })
     }
+}
+
+pub struct ProviderOcrRequest {
+    pub model: String,
+    pub config: &'static dyn super::transformation::OcrProviderConfig,
+    pub url: String,
+    pub body: JsonPayload,
+    pub upstream_headers: Vec<(String, String)>,
+    pub timeout: Option<std::time::Duration>,
 }

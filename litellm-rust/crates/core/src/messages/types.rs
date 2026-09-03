@@ -1,3 +1,5 @@
+use crate::http_utils::body::{JsonPayload, SharedText};
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -5,9 +7,9 @@ use serde_json::{Map, Value};
 
 use super::transformation::AnthropicMessagesProviderConfig;
 
-pub struct MessagesRequest<'a> {
+pub struct MessagesRequest<'a, B = Value> {
     pub model: &'a str,
-    pub body: Value,
+    pub body: B,
     pub api_key: Option<&'a str>,
     pub api_base: Option<&'a str>,
     pub custom_llm_provider: Option<&'a str>,
@@ -20,7 +22,7 @@ pub(super) struct ProviderMessagesRequest {
     pub(super) model: String,
     pub(super) config: &'static dyn AnthropicMessagesProviderConfig,
     pub(super) url: String,
-    pub(super) body: Value,
+    pub(super) body: AnthropicMessagesRequest,
     pub(super) upstream_headers: Vec<(String, String)>,
     pub(super) timeout: Option<Duration>,
 }
@@ -28,14 +30,14 @@ pub(super) struct ProviderMessagesRequest {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SystemPrompt {
-    Text(String),
+    Text(SharedText),
     Blocks(Vec<ContentBlock>),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum MessageContent {
-    Text(String),
+    Text(SharedText),
     Blocks(Vec<ContentBlock>),
 }
 
@@ -44,7 +46,7 @@ pub struct ContentBlock {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_control: Option<CacheControl>,
     #[serde(flatten)]
-    pub extra: Map<String, Value>,
+    pub extra: BTreeMap<String, JsonPayload>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -56,7 +58,7 @@ pub struct CacheControl {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     #[serde(flatten)]
-    pub extra: Map<String, Value>,
+    pub extra: BTreeMap<String, JsonPayload>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -64,7 +66,7 @@ pub struct AnthropicMessage {
     pub role: String,
     pub content: MessageContent,
     #[serde(flatten)]
-    pub extra: Map<String, Value>,
+    pub extra: BTreeMap<String, JsonPayload>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -76,7 +78,7 @@ pub struct AnthropicMessagesRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system: Option<SystemPrompt>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<Value>,
+    pub metadata: Option<JsonPayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -88,29 +90,29 @@ pub struct AnthropicMessagesRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_k: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<Value>>,
+    pub tools: Option<Vec<JsonPayload>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_choice: Option<Value>,
+    pub tool_choice: Option<JsonPayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<Value>,
+    pub thinking: Option<JsonPayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub container: Option<Value>,
+    pub container: Option<JsonPayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mcp_servers: Option<Vec<Value>>,
+    pub mcp_servers: Option<Vec<JsonPayload>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_management: Option<Value>,
+    pub context_management: Option<JsonPayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_format: Option<Value>,
+    pub output_format: Option<JsonPayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_config: Option<Value>,
+    pub output_config: Option<JsonPayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speed: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inference_geo: Option<String>,
     #[serde(flatten)]
-    pub extra: Map<String, Value>,
+    pub extra: BTreeMap<String, JsonPayload>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -131,4 +133,22 @@ pub struct AnthropicMessagesResponse {
     pub container: Option<Value>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+pub trait IntoMessagesRequest {
+    fn into_messages_request(self) -> Result<AnthropicMessagesRequest, crate::Error>;
+}
+
+impl IntoMessagesRequest for AnthropicMessagesRequest {
+    fn into_messages_request(self) -> Result<AnthropicMessagesRequest, crate::Error> {
+        Ok(self)
+    }
+}
+
+impl IntoMessagesRequest for Value {
+    fn into_messages_request(self) -> Result<AnthropicMessagesRequest, crate::Error> {
+        serde_json::from_value(self).map_err(|error| {
+            crate::Error::InvalidRequest(format!("invalid Anthropic messages request: {error}"))
+        })
+    }
 }

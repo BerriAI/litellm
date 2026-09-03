@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::thread;
 
@@ -12,11 +12,25 @@ async fn bedrock_request_is_signed_and_contains_audio() {
     let address = listener.local_addr().expect("address");
     let server = thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("connection");
-        let mut request = Vec::new();
-        let mut buffer = [0_u8; 16_384];
-        let count = stream.read(&mut buffer).expect("request");
-        request.extend_from_slice(&buffer[..count]);
-        let request = String::from_utf8_lossy(&request);
+        let mut reader = BufReader::new(&mut stream);
+        let mut headers = String::new();
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("headers");
+            if line == "\r\n" {
+                break;
+            }
+            headers.push_str(&line);
+        }
+        let length = headers
+            .lines()
+            .find_map(|line| line.strip_prefix("content-length: "))
+            .expect("content length")
+            .parse::<usize>()
+            .unwrap();
+        let mut body = vec![0; length];
+        reader.read_exact(&mut body).expect("complete request body");
+        let request = headers + &String::from_utf8(body).unwrap();
         assert!(request.contains("POST /model/mistral.voxtral-mini-3b-2507/converse"));
         assert!(request.contains("authorization: AWS4-HMAC-SHA256"));
         assert!(request.contains("x-amz-date:"));

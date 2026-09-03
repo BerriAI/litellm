@@ -1,7 +1,9 @@
 use crate::error::{Error, json_type_name};
+use crate::http_utils::body::JsonPayload;
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value, json};
+use std::collections::BTreeMap;
 
 use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
 
@@ -125,14 +127,14 @@ pub fn complete_vertex_deepseek_url(
     ))
 }
 
-fn document_content_item(document: &Value) -> Result<Value, Error> {
+fn document_content_item(document: &JsonPayload) -> Result<JsonPayload, Error> {
     let object = document.as_object().ok_or_else(|| Error::InvalidType {
         expected: "object",
-        actual: json_type_name(document),
+        actual: document.type_name(),
     })?;
     let doc_type = object
         .get("type")
-        .and_then(Value::as_str)
+        .and_then(JsonPayload::as_str)
         .ok_or(Error::MissingField("document.type"))?;
     let url_field = match doc_type {
         "image_url" => "image_url",
@@ -143,16 +145,22 @@ fn document_content_item(document: &Value) -> Result<Value, Error> {
             )));
         }
     };
-    let url = object
+    let _url = object
         .get(url_field)
-        .and_then(Value::as_str)
+        .and_then(JsonPayload::as_str)
         .filter(|value| !value.is_empty())
         .ok_or(Error::MissingField(url_field))?;
 
-    Ok(json!({
-        "type": "image_url",
-        "image_url": url,
-    }))
+    Ok(JsonPayload::object([
+        ("type", "image_url".into()),
+        (
+            "image_url",
+            object
+                .get(url_field)
+                .ok_or(Error::MissingField(url_field))?
+                .clone(),
+        ),
+    ]))
 }
 
 fn deepseek_model_name(model: &str) -> String {
@@ -212,13 +220,13 @@ impl OcrProviderConfig for VertexAiOcrConfig {
         MISTRAL_OCR_CONFIG.supported_ocr_params()
     }
 
-    fn transform_ocr_request(
+    fn transform_ocr_payload(
         &self,
         model: &str,
-        document: Value,
+        document: JsonPayload,
         optional_params: Map<String, Value>,
     ) -> Result<OcrRequestData, Error> {
-        MISTRAL_OCR_CONFIG.transform_ocr_request(model, document, optional_params)
+        MISTRAL_OCR_CONFIG.transform_ocr_payload(model, document, optional_params)
     }
 
     fn transform_ocr_response(
@@ -257,28 +265,35 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
         DEEPSEEK_SUPPORTED_OCR_PARAMS
     }
 
-    fn transform_ocr_request(
+    fn transform_ocr_payload(
         &self,
         model: &str,
-        document: Value,
+        document: JsonPayload,
         optional_params: Map<String, Value>,
     ) -> Result<OcrRequestData, Error> {
-        let mut data = Map::new();
-        data.insert(
-            "model".to_string(),
-            Value::String(deepseek_model_name(model)),
-        );
-        data.insert(
-            "messages".to_string(),
-            json!([{"role": "user", "content": [document_content_item(&document)?]}]),
-        );
+        let mut data = BTreeMap::from([
+            (
+                "model".into(),
+                JsonPayload::from(deepseek_model_name(model)),
+            ),
+            (
+                "messages".into(),
+                JsonPayload::Array(vec![JsonPayload::object([
+                    ("role", "user".into()),
+                    (
+                        "content",
+                        JsonPayload::Array(vec![document_content_item(&document)?]),
+                    ),
+                ])]),
+            ),
+        ]);
         for (key, value) in optional_params {
             if DEEPSEEK_SUPPORTED_OCR_PARAMS.contains(&key.as_str()) {
-                data.insert(key, value);
+                data.insert(key, value.into());
             }
         }
         Ok(OcrRequestData {
-            data: Value::Object(data),
+            data: JsonPayload::Object(data),
             files: None,
         })
     }
@@ -404,7 +419,7 @@ mod tests {
             .data;
 
         assert_eq!(body["model"], "deepseek-ai/deepseek-ocr-maas");
-        assert_eq!(body["temperature"], 0.1);
+        assert_eq!(body["temperature"], json!(0.1));
         assert_eq!(
             body["messages"][0]["content"][0],
             json!({"type": "image_url", "image_url": "gs://bucket/doc.pdf"})

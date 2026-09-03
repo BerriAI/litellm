@@ -1,3 +1,4 @@
+use crate::http_utils::body::JsonPayload;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -5,9 +6,9 @@ use serde_json::{Map, Value};
 
 use super::transformation::{AudioTranscriptionAuth, AudioTranscriptionProviderConfig};
 
-pub struct AudioTranscriptionRequest<'a> {
+pub struct AudioTranscriptionRequest<'a, A = Value> {
     pub model: &'a str,
-    pub audio: Value,
+    pub audio: A,
     pub api_key: Option<&'a str>,
     pub api_base: Option<&'a str>,
     pub custom_llm_provider: Option<&'a str>,
@@ -22,7 +23,7 @@ pub struct ProviderAudioTranscriptionRequest {
     pub(super) custom_llm_provider: String,
     pub(super) config: &'static dyn AudioTranscriptionProviderConfig,
     pub(super) url: String,
-    pub(super) body: Value,
+    pub(super) body: JsonPayload,
     pub(super) upstream_headers: Vec<(String, String)>,
     pub(super) auth: AudioTranscriptionAuth,
     #[cfg(feature = "bedrock-auth")]
@@ -43,18 +44,21 @@ impl ProviderAudioTranscriptionRequest {
         &self.url
     }
 
-    pub fn body(&self) -> &Value {
+    pub fn body(&self) -> &JsonPayload {
         &self.body
     }
 
     pub fn with_body(self, body: Value) -> Self {
-        Self { body, ..self }
+        Self {
+            body: body.into(),
+            ..self
+        }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AudioTranscriptionRequestData {
-    pub body: Value,
+    pub body: JsonPayload,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

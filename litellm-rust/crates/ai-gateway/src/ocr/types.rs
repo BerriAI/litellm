@@ -1,3 +1,5 @@
+use litellm_core::http_utils::body::JsonPayload;
+pub use litellm_core::ocr::types::ProviderOcrRequest;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,9 +11,9 @@ use crate::integrations::custom_guardrail::CustomGuardrail;
 use crate::integrations::custom_logger::CustomLogger;
 use crate::integrations::types::RequestMetadata;
 
-pub struct OcrRequest<'a> {
+pub struct OcrRequest<'a, D = Value> {
     pub model: &'a str,
-    pub document: Value,
+    pub document: D,
     pub api_key: Option<&'a str>,
     pub api_base: Option<&'a str>,
     pub custom_llm_provider: Option<&'a str>,
@@ -29,7 +31,7 @@ pub(crate) struct PreparedOcrRequest {
     pub(crate) model: String,
     pub(crate) custom_llm_provider: String,
     pub(crate) litellm_call_id: String,
-    pub(crate) document: Value,
+    pub(crate) document: JsonPayload,
     pub(crate) api_key: Option<String>,
     pub(crate) api_base: Option<String>,
     pub(crate) extra_headers: Option<Map<String, Value>>,
@@ -46,13 +48,4 @@ impl CallLifecycleRequest for PreparedOcrRequest {
             self.litellm_call_id.clone(),
         )
     }
-}
-
-pub(crate) struct ProviderOcrRequest {
-    pub(crate) model: String,
-    pub(crate) config: &'static dyn OcrProviderConfig,
-    pub(crate) url: String,
-    pub(crate) body: Value,
-    pub(crate) upstream_headers: Vec<(String, String)>,
-    pub(crate) timeout: Option<Duration>,
 }

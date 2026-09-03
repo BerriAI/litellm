@@ -149,3 +149,13 @@ async def test_bedrock_atranscription_uses_rust_only_path() -> None:
         rust_bridge.configure_rust_transcription(transcription=None, atranscription=None)
 
     assert response.text == "rust"
+
+
+def test_dispatch_shares_raw_audio_with_native_bridge() -> None:
+    from typing import Final
+
+    raw: Final = b"audio" * 1024
+    payload: Final = BedrockAudioTranscriptionRustDispatch._audio_payload(("audio.wav", raw, "audio/wav"))
+    assert payload["data"] is raw
+    assert payload["format"] == "wav"
+    assert payload["filename"] == "audio.wav"

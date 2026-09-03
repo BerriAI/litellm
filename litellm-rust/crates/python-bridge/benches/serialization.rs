@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::time::Duration;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group};
 use litellm_python_interop::{from_py, to_py};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -99,4 +99,13 @@ criterion_group! {
         .measurement_time(Duration::from_secs(4));
     targets = bridge_serialization
 }
-criterion_main!(benches);
+mod media;
+
+fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--media") {
+        media::run();
+    } else {
+        benches();
+        Criterion::default().configure_from_args().final_summary();
+    }
+}

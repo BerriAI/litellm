@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+bytes.workspace = true
 pyo3.workspace = true
 pythonize.workspace = true
 serde.workspace = true

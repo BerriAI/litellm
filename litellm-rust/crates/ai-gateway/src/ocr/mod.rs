@@ -1,5 +1,6 @@
 use litellm_core::Error;
 use litellm_core::call_lifecycle::CallLifecycle;
+use litellm_core::http_utils::body::JsonPayload;
 use serde_json::Value;
 
 mod common_utils;
@@ -14,7 +15,7 @@ use handler::execute_ocr_provider_call;
 use prepare::{PreparedOcrCall, prepare_ocr_call};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
+pub async fn ocr<D: Into<JsonPayload>>(request: OcrRequest<'_, D>) -> Result<Value, Error> {
     let PreparedOcrCall { request, hooks } = prepare_ocr_call(request);
     CallLifecycle::default()
         .run_request(request, &hooks, |request| {

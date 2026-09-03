@@ -1,17 +1,19 @@
 use litellm_core::Error;
 use litellm_core::messages::messages as run_messages;
-use litellm_core::messages::types::{AnthropicMessagesResponse, MessagesRequest};
+use litellm_core::messages::types::{
+    AnthropicMessagesRequest, AnthropicMessagesResponse, MessagesRequest,
+};
 use pyo3::prelude::*;
 use serde_json::Value;
 use std::future::Future;
 
 use crate::errors::core_error_to_pyerr;
-use crate::marshal::{RouteOptions, RouteOptionsInputs, required_value};
+use crate::marshal::{RouteOptions, RouteOptionsInputs};
 
 fn prepare_messages(
     inputs: MessagesInputs,
 ) -> PyResult<impl Future<Output = Result<AnthropicMessagesResponse, Error>> + Send + 'static> {
-    let body = required_value("body", inputs.body, Value::is_object, "dict")?;
+    let body = inputs.body;
     let options = RouteOptions::from_python(RouteOptionsInputs {
         model: inputs.model,
         api_key: inputs.api_key,
@@ -49,8 +51,8 @@ bridge_route! {
     inputs = MessagesInputs,
     required = {
         model: String,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        body: Value,
+        #[pyo3(from_py_with = crate::messages::messages_from_py)]
+        body: AnthropicMessagesRequest,
     },
     optional = {
         api_key: Option<String>,
