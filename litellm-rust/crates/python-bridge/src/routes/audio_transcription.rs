@@ -1,5 +1,6 @@
 use litellm_core::Error;
 use litellm_core::http_utils::body::JsonPayload;
+use pyo3::pybacked::PyBackedStr;
 use std::future::Future;
 
 use litellm_core::audio_transcription::{
@@ -53,14 +54,14 @@ bridge_route! {
     asynchronous = atranscription,
     inputs = AudioTranscriptionInputs,
     required = {
-        model: String,
+        model: PyBackedStr,
         #[pyo3(from_py_with = crate::payload::audio_payload_from_py)]
         audio: JsonPayload,
     },
     optional = {
-        api_key: Option<String>,
-        api_base: Option<String>,
-        custom_llm_provider: Option<String>,
+        api_key: Option<PyBackedStr>,
+        api_base: Option<PyBackedStr>,
+        custom_llm_provider: Option<PyBackedStr>,
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
         extra_headers: Option<Value>,
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
@@ -69,4 +70,5 @@ bridge_route! {
     },
     prepare = prepare_transcription,
     errors = core_error_to_pyerr,
+    marshal = crate::execution::ValueMarshal,
 }

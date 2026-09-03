@@ -4,8 +4,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use pyo3::exceptions::PyValueError;
 use pyo3::panic::PanicException;
 use pyo3::prelude::*;
+use pyo3::types::{PyFrozenSet, PyList, PySequence, PySet, PyString, PyTuple};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 
 pub fn from_py<T>(value: &Bound<'_, PyAny>) -> PyResult<T>
 where
@@ -21,6 +23,24 @@ where
     pythonize::pythonize(py, value)
         .map(Bound::unbind)
         .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+pub fn array_from_py(name: &'static str, value: &Bound<'_, PyAny>) -> PyResult<Value> {
+    if !is_array_input(value) {
+        return Err(PyValueError::new_err(format!("{name} must be a list")));
+    }
+    from_py(value)
+}
+
+fn is_array_input(value: &Bound<'_, PyAny>) -> bool {
+    if value.is_instance_of::<PyString>() {
+        return false;
+    }
+    value.is_instance_of::<PyList>()
+        || value.is_instance_of::<PyTuple>()
+        || value.is_instance_of::<PySet>()
+        || value.is_instance_of::<PyFrozenSet>()
+        || value.cast::<PySequence>().is_ok()
 }
 
 pub struct Pythonized<T>(pub T);

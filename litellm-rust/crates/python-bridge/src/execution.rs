@@ -4,39 +4,99 @@ use std::time::Duration;
 
 use futures_util::FutureExt;
 use litellm_core::error::Error;
-use litellm_python_interop::{Pythonized, panic_to_pyerr, release_gil};
+use litellm_python_interop::{PythonValue, Pythonized, panic_to_pyerr, release_gil};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use serde::Serialize;
+use serde_json::Value;
 use tokio::runtime::{Handle, Runtime};
 use tokio::time::{self, MissedTickBehavior};
 
-pub(crate) fn run_sync<T, F>(
+use crate::function_trace::TraceResponse;
+
+pub(crate) trait ResponseMarshal<T>: 'static {
+    type Output: for<'py> IntoPyObject<'py, Error = PyErr, Output = Bound<'py, PyAny>>
+        + Send
+        + 'static;
+
+    fn wrap(value: T) -> Self::Output;
+}
+
+pub(crate) struct GenericMarshal;
+
+impl<T> ResponseMarshal<T> for GenericMarshal
+where
+    T: Serialize + Send + 'static,
+{
+    type Output = Pythonized<T>;
+
+    fn wrap(value: T) -> Self::Output {
+        Pythonized(value)
+    }
+}
+
+pub(crate) struct ValueMarshal;
+
+impl ResponseMarshal<TraceResponse<Value>> for ValueMarshal {
+    type Output = ValueTraceResponse;
+
+    fn wrap(value: TraceResponse<Value>) -> Self::Output {
+        ValueTraceResponse(value)
+    }
+}
+
+pub(crate) struct ValueTraceResponse(TraceResponse<Value>);
+
+impl<'py> IntoPyObject<'py> for ValueTraceResponse {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
+        match self.0 {
+            TraceResponse::Plain(value) => PythonValue(value).into_pyobject(py),
+            TraceResponse::Traced { response, trace } => {
+                let traced = PyDict::new(py);
+                traced.set_item("response", PythonValue(response))?;
+                traced.set_item("trace", Pythonized(trace))?;
+                Ok(traced.into_any())
+            }
+        }
+    }
+}
+
+pub(crate) fn run_sync<T, F, M>(
     py: Python<'_>,
     future: F,
     map_error: fn(Error) -> PyErr,
+    _marshal: M,
 ) -> PyResult<Py<PyAny>>
 where
-    T: Serialize + Send + 'static,
+    T: Send + 'static,
     F: Future<Output = Result<T, Error>> + Send + 'static,
+    M: ResponseMarshal<T>,
 {
     run_sync_on(
         py,
         pyo3_async_runtimes::tokio::get_runtime(),
         future,
         map_error,
+        _marshal,
     )
 }
 
-fn run_sync_on<T, F>(
+fn run_sync_on<T, F, M>(
     py: Python<'_>,
     runtime: &Runtime,
     future: F,
     map_error: fn(Error) -> PyErr,
+    _marshal: M,
 ) -> PyResult<Py<PyAny>>
 where
-    T: Serialize + Send + 'static,
+    T: Send + 'static,
     F: Future<Output = Result<T, Error>> + Send + 'static,
+    M: ResponseMarshal<T>,
 {
     if Handle::try_current().is_ok() {
         return Err(PyRuntimeError::new_err(
@@ -46,22 +106,24 @@ where
 
     let result = release_gil(py, move || runtime.block_on(wait_for_sync_result(future)))?;
     let result = map_core_result(result, map_error)?;
-    Pythonized(result).into_pyobject(py).map(Bound::unbind)
+    M::wrap(result).into_pyobject(py).map(Bound::unbind)
 }
 
-pub(crate) fn run_async<T, F>(
+pub(crate) fn run_async<T, F, M>(
     py: Python<'_>,
     future: F,
     map_error: fn(Error) -> PyErr,
+    _marshal: M,
 ) -> PyResult<Bound<'_, PyAny>>
 where
-    T: Serialize + Send + 'static,
+    T: Send + 'static,
     F: Future<Output = Result<T, Error>> + Send + 'static,
+    M: ResponseMarshal<T>,
 {
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let result = catch_future_panic(future).await?;
         let result = map_core_result(result, map_error)?;
-        Ok(Pythonized(result))
+        Ok(M::wrap(result))
     })
 }
 
@@ -120,6 +182,8 @@ mod tests {
     use tokio::runtime::Builder;
 
     use super::*;
+    use crate::function_trace::FunctionTraceEvent;
+    use litellm_python_interop::to_py;
 
     fn runtime_error(error: Error) -> PyErr {
         PyRuntimeError::new_err(error.to_string())
@@ -144,7 +208,25 @@ mod tests {
 
     #[pyfunction]
     fn async_serialization_panic(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
-        run_async(py, async { Ok(PanickingOutput) }, runtime_error)
+        run_async(
+            py,
+            async { Ok(PanickingOutput) },
+            runtime_error,
+            GenericMarshal,
+        )
+    }
+
+    #[pyfunction]
+    fn async_value_probe(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        run_async(
+            py,
+            crate::function_trace::trace_call(
+                async { Ok(serde_json::json!({"content": [{"type": "text", "text": "héllo"}]})) },
+                false,
+            ),
+            runtime_error,
+            ValueMarshal,
+        )
     }
 
     #[pyfunction]
@@ -156,6 +238,7 @@ mod tests {
                 Ok(true)
             },
             runtime_error,
+            GenericMarshal,
         )
     }
 
@@ -192,6 +275,73 @@ mod tests {
     }
 
     #[test]
+    fn value_marshal_matches_pythonized_conversion() {
+        Python::initialize();
+        Python::attach(|py| {
+            let payload = serde_json::json!({
+                "id": "msg_01",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "héllo 🌍", "index": 0},
+                    {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "sf"}},
+                ],
+                "stop_reason": null,
+                "usage": {"input_tokens": 10, "output_tokens": 20},
+            });
+            let plain = TraceResponse::Plain(payload.clone());
+            let traced = TraceResponse::Traced {
+                response: payload,
+                trace: vec![FunctionTraceEvent {
+                    function: "transform",
+                    depth: 1,
+                }],
+            };
+            for response in [plain, traced] {
+                let reference = to_py(py, &response).expect("pythonize should convert");
+                let fast = ValueMarshal::wrap(response)
+                    .into_pyobject(py)
+                    .expect("value marshal should convert");
+                let equal: bool = fast
+                    .eq(reference.bind(py))
+                    .expect("converted values should compare equal in Python");
+                assert!(equal, "value marshal diverged from pythonize");
+            }
+        });
+    }
+
+    #[test]
+    fn async_value_marshal_returns_the_response_dict() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "runtime").expect("module should be created");
+            module
+                .add_function(
+                    wrap_pyfunction!(async_value_probe, &module).expect("function should wrap"),
+                )
+                .expect("function should register");
+            let locals = PyDict::new(py);
+            locals
+                .set_item("runtime", &module)
+                .expect("module should enter Python locals");
+            let code = CString::new(
+                r#"
+import asyncio
+
+async def exercise():
+    result = await runtime.async_value_probe()
+    assert result == {"content": [{"type": "text", "text": "héllo"}]}
+
+asyncio.run(exercise())
+"#,
+            )
+            .expect("Python source should not contain null bytes");
+            py.run(&code, Some(&locals), Some(&locals))
+                .expect("async value route should deliver its response");
+        });
+    }
+
+    #[test]
     fn sync_runner_polls_future_on_the_caller_thread() {
         Python::initialize();
         Python::attach(|py| {
@@ -200,6 +350,7 @@ mod tests {
                 py,
                 async move { Ok(std::thread::current().id() == caller_thread) },
                 runtime_error,
+                GenericMarshal,
             );
 
             assert!(extract_bool(py, result));
@@ -221,6 +372,7 @@ mod tests {
                     Ok(matches!(gil_acquired, Ok(Ok(true))))
                 },
                 runtime_error,
+                GenericMarshal,
             );
 
             assert!(extract_bool(py, result));
@@ -237,7 +389,7 @@ mod tests {
 
         let error = runtime.block_on(async {
             Python::attach(|py| {
-                run_sync::<bool, _>(py, async { Ok(true) }, runtime_error)
+                run_sync::<bool, _, _>(py, async { Ok(true) }, runtime_error, GenericMarshal)
                     .expect_err("sync route should reject a nested Tokio runtime")
             })
         });
@@ -264,6 +416,7 @@ mod tests {
                     Ok(true)
                 },
                 runtime_error,
+                GenericMarshal,
             );
             assert!(extract_bool(py, result));
         });
@@ -273,10 +426,11 @@ mod tests {
     fn sync_runner_maps_a_panicked_future() {
         Python::initialize();
         Python::attach(|py| {
-            let error = run_sync::<bool, _>(
+            let error = run_sync::<bool, _, _>(
                 py,
                 poll_fn(|_| -> Poll<Result<bool, Error>> { panic!("route future panicked") }),
                 runtime_error,
+                GenericMarshal,
             )
             .expect_err("panicked route should become a Python exception");
 
@@ -289,10 +443,11 @@ mod tests {
     fn sync_runner_maps_a_panicked_error_mapper() {
         Python::initialize();
         Python::attach(|py| {
-            let error = run_sync::<bool, _>(
+            let error = run_sync::<bool, _, _>(
                 py,
                 async { Err(Error::InvalidRequest("invalid".to_string())) },
                 panicking_error_mapper,
+                GenericMarshal,
             )
             .expect_err("panicked mapper should become a Python exception");
 
@@ -305,8 +460,13 @@ mod tests {
     fn sync_runner_surfaces_serializer_panics() {
         Python::initialize();
         Python::attach(|py| {
-            let error = run_sync(py, async { Ok(PanickingOutput) }, runtime_error)
-                .expect_err("serializer panic should become a Python exception");
+            let error = run_sync(
+                py,
+                async { Ok(PanickingOutput) },
+                runtime_error,
+                GenericMarshal,
+            )
+            .expect_err("serializer panic should become a Python exception");
 
             assert!(error.is_instance_of::<PanicException>(py));
             assert_eq!(error.to_string(), "PanicException: serializer panicked");
@@ -332,6 +492,7 @@ mod tests {
                                         .is_ok())
                                 },
                                 runtime_error,
+                                GenericMarshal,
                             ),
                         )
                     })

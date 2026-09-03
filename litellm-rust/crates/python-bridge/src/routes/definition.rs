@@ -10,7 +10,8 @@ macro_rules! bridge_route {
         required = { $($(#[$required_attr:meta])* $required_name:ident: $required_type:ty),+ $(,)? },
         optional = { $($(#[$optional_attr:meta])* $optional_name:ident: $optional_type:ty),* $(,)? },
         prepare = $prepare:path,
-        errors = $map_error:path
+        errors = $map_error:path,
+        marshal = $marshal:path
         $(, extra = [$($extra:ident),* $(,)?])?
         $(,)?
     ) => {
@@ -36,6 +37,7 @@ macro_rules! bridge_route {
                 py,
                 $crate::function_trace::trace_call(future, trace),
                 $map_error,
+                $marshal,
             )
         }
 
@@ -56,6 +58,7 @@ macro_rules! bridge_route {
                 py,
                 $crate::function_trace::trace_call(future, trace),
                 $map_error,
+                $marshal,
             )
         }
 
@@ -122,6 +125,7 @@ mod tests {
             optional = {},
             prepare = prepare_echo,
             errors = map_error,
+            marshal = crate::execution::GenericMarshal,
             extra = [future_dropped],
         }
 

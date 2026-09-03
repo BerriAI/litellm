@@ -1490,6 +1490,7 @@ dependencies = [
  "pyo3",
  "pythonize",
  "rstest",
+ "rustc-hash",
  "serde",
  "serde_json",
 ]
