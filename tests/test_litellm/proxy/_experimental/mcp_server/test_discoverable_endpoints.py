@@ -6432,6 +6432,23 @@ async def test_bridge_mint_db_outage_is_503_before_upstream():
     response, post = await _prepare_only_bridge_exchange("unavailable")
     assert response.status_code == 503
     assert json.loads(response.body)["error"] == "temporarily_unavailable"
+    assert "retry shortly" in json.loads(response.body)["error_description"]
+    post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_bridge_mint_permanent_db_fault_is_503_without_retry_advice():
+    """A query engine fault that never heals is still a 503 (the gateway is at fault, not the client), but
+    the description must not tell the client the database is temporarily unreachable and to retry: that
+    sends an operator to wait out an outage that is not one. The code stays temporarily_unavailable, the
+    only RFC 6749 error a client treats as a server-side 503."""
+    response, post = await _prepare_only_bridge_exchange("faulted")
+    assert response.status_code == 503
+    body = json.loads(response.body)
+    assert body["error"] == "temporarily_unavailable"
+    assert "temporarily unreachable" not in body["error_description"]
+    assert "retry shortly" not in body["error_description"]
+    assert "not a transient outage" in body["error_description"]
     post.assert_not_called()
 
 
@@ -7144,6 +7161,56 @@ async def test_resolve_active_litellm_key_db_outage_is_unavailable(proxy_globals
 
 
 @pytest.mark.asyncio
+async def test_resolve_active_litellm_key_permanent_engine_fault_is_faulted(proxy_globals):
+    """A query engine that is missing or version-skewed cannot resolve any key until the deployment is
+    repaired, so the resolver reports "faulted" (still statused 503 by the mint) rather than "unavailable",
+    whose wording promises the outage is transient and asks the client to retry."""
+    from prisma.engine.errors import BinaryNotFoundError
+
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
+        _resolve_active_litellm_key,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    class _FaultedPrisma:
+        async def get_data(self, token, table_name, parent_otel_span=None, proxy_logging_obj=None):
+            raise BinaryNotFoundError("query engine binary not found")
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = _FaultedPrisma()
+
+    request = _token_request({"x-litellm-api-key": "sk-during-engine-fault"})
+    assert await _resolve_active_litellm_key(request) == "faulted"
+
+
+@pytest.mark.asyncio
+async def test_resolve_active_litellm_key_transport_error_over_permanent_fault_is_faulted(proxy_globals):
+    """A reconnect that dies on a missing engine binary raises the transport error last, with the
+    BinaryNotFoundError as __context__. The binary is what blocks recovery, so the key read is "faulted",
+    not the "unavailable" that the outer ConnectError alone would suggest."""
+    import httpx
+    from prisma.engine.errors import BinaryNotFoundError
+
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
+        _resolve_active_litellm_key,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    class _ReconnectFailedPrisma:
+        async def get_data(self, token, table_name, parent_otel_span=None, proxy_logging_obj=None):
+            try:
+                raise BinaryNotFoundError("query engine binary not found")
+            except BinaryNotFoundError:
+                raise httpx.ConnectError("All connection attempts failed")
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = _ReconnectFailedPrisma()
+
+    request = _token_request({"x-litellm-api-key": "sk-during-failed-reconnect"})
+    assert await _resolve_active_litellm_key(request) == "faulted"
+
+
+@pytest.mark.asyncio
 async def test_resolve_active_litellm_key_no_database_is_unresolvable(proxy_globals):
     """With no database connection configured the gateway cannot verify the presented key at all, so
     the resolver reports "unresolvable" (the mint statuses it 500) instead of blaming the caller.
@@ -7212,6 +7279,26 @@ async def test_reload_active_user_by_id_db_outage_is_unavailable(proxy_globals):
         new=AsyncMock(side_effect=_wrapped_user_lookup_error(ConnectionError("user database unreachable"))),
     ):
         assert await _reload_active_user_by_id("sso-user-7") == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_reload_active_user_by_id_permanent_engine_fault_is_faulted(proxy_globals):
+    """A permanent query engine fault while re-validating the user on refresh is "faulted", not
+    "unavailable": both are 503s, but only the transient one may tell the client to retry. get_user_object
+    wraps the fault in a bare ValueError, so the classification has to read the wrapped cause."""
+    from prisma.engine.errors import MismatchedVersionsError
+
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import _reload_active_user_by_id
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = object()
+
+    with patch(  # test-quality-ok: get_user_object is the DB seam that wraps the fault; same patch as the outage sibling
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        new=AsyncMock(side_effect=_wrapped_user_lookup_error(MismatchedVersionsError(expected="1", got="2"))),
+    ):
+        assert await _reload_active_user_by_id("sso-user-7") == "faulted"
 
 
 @pytest.mark.asyncio

@@ -181,6 +181,7 @@ export function useLogFilterLogic({
           sort_by: sortBy,
           sort_order: sortOrder,
           exclude_internal_health_checks: excludeInternalHealthChecks,
+          group_by_session: true,
         },
       });
     },

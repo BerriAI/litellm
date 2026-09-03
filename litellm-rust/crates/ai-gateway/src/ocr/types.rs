@@ -25,6 +25,7 @@ pub struct OcrRequest<'a> {
 }
 
 pub(crate) struct PreparedOcrRequest {
+    pub(crate) config: Result<&'static dyn OcrProviderConfig, litellm_core::Error>,
     pub(crate) model: String,
     pub(crate) custom_llm_provider: String,
     pub(crate) litellm_call_id: String,

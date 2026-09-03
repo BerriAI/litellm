@@ -55,6 +55,10 @@ router: Final = APIRouter()
 
 SPEND_LOGS_PAGINATION_COUNT_CAP: Final = 10000
 
+_SESSION_GROUP_KEY_SQL: Final = "COALESCE(NULLIF(session_id, ''), request_id), api_key"
+_MCP_CALL_TYPES_SQL: Final = "('call_mcp_tool', 'list_mcp_tools')"
+_AGENT_CALL_TYPE_SQL: Final = "'asend_message'"
+
 _INTERNAL_HEALTH_CHECK_API_KEYS: Final = (
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     hash_token(token=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME),
@@ -144,21 +148,16 @@ class _DailyTagSpendRow(TypedDict):
     total_spend: float
 
 
-class _SessionCountAggregate(TypedDict):
-    session_id: int
-
-
-class _SessionCountRow(TypedDict):
-    session_id: str
-    _count: _SessionCountAggregate
-
-
 class _SessionSpendRow(TypedDict):
     session_id: str
+    api_key: ReadOnly[str]
+    session_total_count: ReadOnly[int]
     session_total_spend: float
     mcp_tool_call_count: int
     mcp_tool_call_spend: float
     session_cache_hit_count: ReadOnly[int]
+    session_llm_count: ReadOnly[int]
+    session_agent_count: ReadOnly[int]
 
 
 class _SpendSumAggregate(TypedDict, total=False):
@@ -240,18 +239,6 @@ async def _find_spend_log_row(prisma_client: PrismaClient, request_id: str) -> _
 async def _count_spend_logs(prisma_client: PrismaClient, where: Mapping[str, object]) -> int:
     """Count the spend log rows matching ``where``."""
     return await _spend_logs_table(prisma_client).count(where=where)
-
-
-async def _count_logs_per_session(
-    prisma_client: PrismaClient, session_ids: Sequence[str | None]
-) -> Sequence[_SessionCountRow]:
-    """Count spend log rows per session for the given session ids."""
-    rows: Final = await _spend_logs_table(prisma_client).group_by(
-        by=["session_id"],
-        where={"session_id": {"in": session_ids}},
-        count={"session_id": True},
-    )
-    return cast(Sequence[_SessionCountRow], rows)  # cast-ok: group_by(count=) shape is fixed by the by/count args
 
 
 async def _find_team_row(prisma_client: PrismaClient, team_id: str) -> _SupportsModelDump | None:
@@ -1204,7 +1191,10 @@ async def get_global_spend_report(
     ),
     api_key: str | None = fastapi.Query(
         default=None,
-        description="View spend for a specific api_key. Example api_key='sk-1234",
+        description=(
+            "View spend for a specific api_key. Pass the key's sha256 hash so the raw key stays "
+            "out of URLs and access logs. Example api_key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa'"
+        ),
     ),
     internal_user_id: str | None = fastapi.Query(
         default=None,
@@ -1685,7 +1675,11 @@ async def get_key_spend_report(
     api_key: Annotated[
         str | None,
         fastapi.Query(
-            description="View spend for a specific api_key. Proxy admin only; other callers are scoped to their own key."
+            description=(
+                "View spend for a specific api_key. Proxy admin only; other callers are scoped to their "
+                "own key. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. "
+                "Example api_key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa'"
+            )
         ),
     ] = None,
 ) -> Sequence[Mapping[str, object]]:
@@ -2283,6 +2277,10 @@ async def ui_view_spend_logs(
         default=False,
         description="Exclude LiteLLM internal health check requests from results",
     ),
+    group_by_session: bool = fastapi.Query(
+        default=False,
+        description="Paginate over sessions instead of raw logs: one representative row per session, total counts sessions",
+    ),
 ):
     """
     View spend logs with pagination support.
@@ -2637,12 +2635,16 @@ async def ui_view_spend_logs(
         else:
             _order_expr = order_column
 
+        joined_conditions: Final = " AND ".join(sql_conditions)
+        session_grouping: Final = group_by_session is True
+        count_group_clause: Final = f"GROUP BY {_SESSION_GROUP_KEY_SQL}" if session_grouping else ""
         count_query: Final = f"""
             SELECT COUNT(*) AS total_count
             FROM (
                 SELECT 1
                 FROM "LiteLLM_SpendLogs"
-                WHERE {" AND ".join(sql_conditions)}
+                WHERE {joined_conditions}
+                {count_group_clause}
                 LIMIT ${p}
             ) AS bounded_matches
         """
@@ -2653,21 +2655,36 @@ async def ui_view_spend_logs(
         total_is_capped: Final = raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP
         total_records: Final = SPEND_LOGS_PAGINATION_COUNT_CAP if total_is_capped else raw_total
 
-        sql_query: Final = f"""
-            SELECT
-                request_id, call_type, api_key, spend, total_tokens,
+        select_columns: Final = """request_id, call_type, api_key, spend, total_tokens,
                 prompt_tokens, completion_tokens, "startTime", "endTime",
                 "completionStartTime", model, model_id, model_group,
                 custom_llm_provider, api_base, "user", metadata,
                 cache_hit, cache_key, request_tags, team_id,
                 organization_id, end_user, requester_ip_address,
                 session_id, status, mcp_namespaced_tool_name, agent_id,
-                COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
+                COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms"""
+        sql_query: Final = (
+            f"""
+                SELECT * FROM (
+                    SELECT DISTINCT ON ({_SESSION_GROUP_KEY_SQL})
+                        {select_columns}
+                    FROM "LiteLLM_SpendLogs"
+                    WHERE {joined_conditions}
+                    ORDER BY {_SESSION_GROUP_KEY_SQL}, call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC
+                ) AS session_representatives
+                ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}, request_id
+                LIMIT ${p} OFFSET ${p + 1}
+            """
+            if session_grouping
+            else f"""
+            SELECT
+                {select_columns}
             FROM "LiteLLM_SpendLogs"
-            WHERE {" AND ".join(sql_conditions)}
+            WHERE {joined_conditions}
             ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
             LIMIT ${p} OFFSET ${p + 1}
         """
+        )
         sql_params.extend([page_size, skip])
 
         data: Final = await prisma_client.db.query_raw(sql_query, *sql_params)
@@ -2945,7 +2962,7 @@ async def view_spend_logs(
 
     Example Request for specific api_key
     ```
-    curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-test-example-key-123" \
+    curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" \
 -H "Authorization: Bearer sk-1234"
     ```
 
@@ -4068,11 +4085,12 @@ async def _build_ui_spend_logs_response(
     Build the paginated response for the UI spend-logs endpoint.
 
     When ``enrich_session_counts`` is ``True`` (the default for the v1/UI
-    endpoint), each row is enriched with ``session_total_count`` so the
-    frontend knows which sessions are expandable (multi-call sessions).
-    For every row that carries a ``session_id``, a single ``GROUP BY`` query
-    fetches the total number of logs in each referenced session.  Rows without
-    a ``session_id`` default to ``1``.
+    endpoint), each row is enriched with ``session_total_count`` plus spend
+    and call-type aggregates so the frontend knows which sessions are
+    expandable (multi-call sessions).  One ``GROUP BY (session_id, api_key)``
+    query serves every referenced session, keyed per api key so two callers
+    reusing a session id never see each other's totals.  Rows without a
+    ``session_id`` default to ``1``.
 
     When ``enrich_session_counts`` is ``False`` (v2 endpoint), rows are
     serialised without the extra query.
@@ -4094,7 +4112,6 @@ async def _build_ui_spend_logs_response(
         A dict with ``data`` (enriched rows), ``total``, ``page``,
         ``page_size``, ``total_pages``, and ``total_is_capped``.
     """
-    count_map: dict[str, int] = {}
     if enrich_session_counts:
         session_ids: Final[Sequence[str | None]] = list(
             {
@@ -4103,15 +4120,8 @@ async def _build_ui_spend_logs_response(
                 if (row.get("session_id") if isinstance(row, dict) else getattr(row, "session_id", None))
             }
         )
-        if session_ids:
-            # NOTE: This GROUP BY runs on every v1/UI page load. The IN clause
-            # is bounded by page_size (typically 25-50 distinct session IDs).
-            # If performance degrades at scale, consider short-lived caching or
-            # folding the count into the main query via a window function.
-            counts: Final = await _count_logs_per_session(prisma_client, session_ids)
-            count_map = {r["session_id"]: r["_count"]["session_id"] for r in counts if r.get("session_id")}
 
-    session_spend_map: dict[str, dict[str, int | float]] = {}
+    session_spend_map: dict[tuple[str, str], dict[str, int | float]] = {}
     if enrich_session_counts and session_ids:
         from prisma.errors import PrismaError
 
@@ -4123,38 +4133,46 @@ async def _build_ui_spend_logs_response(
                 {
                     (row.get("api_key") if isinstance(row, dict) else getattr(row, "api_key", None))
                     for row in data
-                    if (row.get("api_key") if isinstance(row, dict) else getattr(row, "api_key", None))
+                    if (row.get("api_key") if isinstance(row, dict) else getattr(row, "api_key", None)) is not None
                 }
             )
             rows: Final[Sequence[_SessionSpendRow]] = await _query_raw(
                 prisma_client,
-                """
-                SELECT session_id,
+                f"""
+                SELECT session_id, api_key,
+                       COUNT(*)::int AS session_total_count,
                        COALESCE(SUM(spend), 0)::double precision AS session_total_spend,
                        COUNT(*) FILTER (
-                           WHERE call_type IN ('call_mcp_tool', 'list_mcp_tools')
+                           WHERE call_type IN {_MCP_CALL_TYPES_SQL}
                        )::int AS mcp_tool_call_count,
                        COALESCE(SUM(spend) FILTER (
-                           WHERE call_type IN ('call_mcp_tool', 'list_mcp_tools')
+                           WHERE call_type IN {_MCP_CALL_TYPES_SQL}
                        ), 0)::double precision AS mcp_tool_call_spend,
-                       COUNT(*) FILTER (WHERE LOWER(cache_hit) = 'true')::int AS session_cache_hit_count
+                       COUNT(*) FILTER (WHERE LOWER(cache_hit) = 'true')::int AS session_cache_hit_count,
+                       COUNT(*) FILTER (
+                           WHERE call_type NOT IN {_MCP_CALL_TYPES_SQL} AND call_type != {_AGENT_CALL_TYPE_SQL}
+                       )::int AS session_llm_count,
+                       COUNT(*) FILTER (WHERE call_type = {_AGENT_CALL_TYPE_SQL})::int AS session_agent_count
                 FROM "LiteLLM_SpendLogs"
                 WHERE session_id = ANY($1::text[])
                   AND api_key = ANY($2::text[])
-                GROUP BY session_id
+                GROUP BY session_id, api_key
                 """,
                 session_ids,
                 authorized_api_keys,
             )
             session_spend_map = {
-                row["session_id"]: {
+                (row["session_id"], row["api_key"]): {
+                    "session_total_count": int(row.get("session_total_count") or 0),
                     "session_total_spend": float(row.get("session_total_spend") or 0.0),
                     "mcp_tool_call_count": int(row.get("mcp_tool_call_count") or 0),
                     "mcp_tool_call_spend": float(row.get("mcp_tool_call_spend") or 0.0),
                     "session_cache_hit_count": int(row.get("session_cache_hit_count") or 0),
+                    "session_llm_count": int(row.get("session_llm_count") or 0),
+                    "session_agent_count": int(row.get("session_agent_count") or 0),
                 }
                 for row in rows
-                if row.get("session_id")
+                if row.get("session_id") and row.get("api_key") is not None
             }
         except PrismaError:
             verbose_proxy_logger.debug(
@@ -4167,14 +4185,17 @@ async def _build_ui_spend_logs_response(
         for row in data:
             row_dict = dict(row) if isinstance(row, dict) else row.model_dump()
             sid = row_dict.get("session_id")
-            row_dict["session_total_count"] = count_map.get(sid, 1) if sid else 1
-            session_stats = session_spend_map.get(sid) if sid else None
+            row_api_key = row_dict.get("api_key")
+            session_stats = session_spend_map.get((sid, row_api_key)) if sid and row_api_key is not None else None
+            row_dict["session_total_count"] = int(session_stats["session_total_count"]) if session_stats else 1
             if session_stats:
                 row_dict["session_total_spend"] = session_stats["session_total_spend"]
                 if session_stats["mcp_tool_call_count"]:
                     row_dict["mcp_tool_call_count"] = session_stats["mcp_tool_call_count"]
                     row_dict["mcp_tool_call_spend"] = session_stats["mcp_tool_call_spend"]
                 row_dict["session_cache_hit_count"] = session_stats["session_cache_hit_count"]
+                row_dict["session_llm_count"] = session_stats["session_llm_count"]
+                row_dict["session_agent_count"] = session_stats["session_agent_count"]
             enriched.append(row_dict)
         response_data: list = enriched
     else:
