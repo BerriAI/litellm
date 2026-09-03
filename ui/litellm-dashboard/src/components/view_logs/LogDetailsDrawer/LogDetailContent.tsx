@@ -388,7 +388,7 @@ function MetricLabel({ label, tooltip, docsUrl }: { label: string; tooltip: stri
  * Aggregate per-request outcomes for a batch cost row: batch id, success/failure counts
  * from the parsed output and error files, and the models the batch actually ran on.
  */
-function BatchResultsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: Record<string, any> }) {
+function BatchResultsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: Record<string, unknown> }) {
   const counts = getBatchRequestCounts(metadata);
   const batchId = getBatchIdFromRequestId(logEntry.request_id);
   const batchModels = getBatchModels(metadata);
