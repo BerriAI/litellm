@@ -42,7 +42,7 @@
     "limit": 52
   },
   "B010": {
-    "limit": 188
+    "limit": 187
   },
   "B018": {
     "limit": 2
@@ -144,7 +144,7 @@
     "limit": 1
   },
   "PLR1704": {
-    "limit": 3
+    "limit": 1
   },
   "PLR1714": {
     "limit": 253
@@ -240,13 +240,13 @@
     "limit": 96
   },
   "TRY201": {
-    "limit": 403
+    "limit": 401
   },
   "TRY203": {
-    "limit": 111
+    "limit": 109
   },
   "TRY300": {
-    "limit": 854
+    "limit": 852
   },
   "UP028": {
     "limit": 2
