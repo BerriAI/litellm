@@ -559,19 +559,23 @@ def test_redaction_keeps_the_conversation_shape_without_its_content() -> None:
     assert result["meta"]["output"]["messages"] == [{"role": "assistant", "content": "redacted-by-litellm"}]
 
 
-def test_redaction_drops_an_unrecognized_message_role() -> None:
-    """Callers control the role text, so redaction must not carry an arbitrary one onto the span."""
+def test_redaction_drops_unrecognized_and_malformed_message_roles() -> None:
+    """Caller-controlled role values must not bypass redaction or crash span creation."""
     result = _span_json(
         _redacting_logger(turn_off_message_logging=True),
         build_payload(
             messages=[
                 {"role": "SECRET-39402", "content": "hello"},
+                {"role": ["SECRET-39402"], "content": "hello"},
+                {"role": {"secret": "SECRET-39402"}, "content": "hello"},
                 {"role": "agent", "content": "hello"},
             ]
         ),
     )
 
     assert result["meta"]["input"]["messages"] == [
+        {"role": "", "content": "redacted-by-litellm"},
+        {"role": "", "content": "redacted-by-litellm"},
         {"role": "", "content": "redacted-by-litellm"},
         {"role": "agent", "content": "redacted-by-litellm"},
     ]

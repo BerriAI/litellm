@@ -123,7 +123,7 @@ def _redact_messages(messages: Sequence[Message]) -> tuple[Message, ...]:
     """Each message's shape with its content replaced and tool payloads dropped; no message is invented."""
     return tuple(
         {
-            "role": role if role in _SAFE_REDACTED_MESSAGE_ROLES else "",
+            "role": role if isinstance(role, str) and role in _SAFE_REDACTED_MESSAGE_ROLES else "",
             "content": REDACTED_BY_LITELLM,
         }
         for message in messages
