@@ -222,7 +222,9 @@ class OffPeakPricing(TypedDict, total=False):
     weekday_timezone: ReadOnly[str]
     input_cost_per_token: ReadOnly[float]
     output_cost_per_token: ReadOnly[float]
+    output_cost_per_reasoning_token: ReadOnly[float]
     cache_read_input_token_cost: ReadOnly[float]
+    cache_creation_input_token_cost: ReadOnly[float]
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
