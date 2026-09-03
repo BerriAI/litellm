@@ -38,6 +38,9 @@ vi.mock("@/components/networking", () => ({
   organizationInfoCall: vi.fn(),
   getRouterSettingsCall: vi.fn().mockResolvedValue({ fields: [] }),
   getPassThroughEndpointsCall: vi.fn(),
+  fetchMCPServers: vi.fn().mockResolvedValue([]),
+  fetchMCPToolsets: vi.fn().mockResolvedValue([]),
+  getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
 }));
 
 const can = vi.fn();
@@ -300,6 +303,47 @@ describe("TeamInfoView", () => {
         "href",
         expect.stringContaining("/models-and-endpoints?model_group=claude-sonnet-5"),
       );
+    });
+
+    it("shows MCP servers and agents inherited from access groups in the Object Permissions card, naming the group on hover", async () => {
+      const user = userEvent.setup();
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+        { server_id: "mcp-github-1234", server_name: "github", alias: "github" },
+      ]);
+      vi.mocked(networking.getAgentsList).mockResolvedValue({
+        agents: [{ agent_id: "agent-support-5678", agent_name: "support_agent" }],
+      });
+      const platformToolsGroup = {
+        access_group_id: "ag-1",
+        access_group_name: "platform-tools",
+        models: [],
+        mcp_server_ids: ["mcp-github-1234"],
+        agent_ids: ["agent-support-5678"],
+      };
+      const inheritedGrants = {
+        object_permission: null,
+        access_group_ids: ["ag-1"],
+        access_group_mcp_server_ids: ["mcp-github-1234"],
+        access_group_agent_ids: ["agent-support-5678"],
+        access_group_details: [platformToolsGroup],
+      };
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData(inheritedGrants));
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      const serverRow = await screen.findByText(/github \(mcp\.\.\.1234\)/);
+      const agentRow = await screen.findByText(/support_agent \(age\.\.\.5678\)/);
+      expect(screen.queryByText("No MCP servers, access groups, or toolsets configured")).not.toBeInTheDocument();
+      expect(screen.queryByText("No agents or access groups configured")).not.toBeInTheDocument();
+
+      await user.hover(serverRow);
+      expect(
+        await screen.findByText("Granted via access group platform-tools. Full ID: mcp-github-1234"),
+      ).toBeInTheDocument();
+      await user.hover(agentRow);
+      expect(
+        await screen.findByText("Granted via access group platform-tools. Full ID: agent-support-5678"),
+      ).toBeInTheDocument();
     });
 
     it("keeps the all-proxy-models badge non-clickable", async () => {
@@ -1844,6 +1888,8 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     mcp_access_groups: [],
     mcp_tool_permissions: {},
     mcp_toolsets: [],
+    agents: [],
+    agent_access_groups: [],
     vector_stores: ["vs-1"],
   };
 
@@ -1862,6 +1908,49 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
       ...alwaysSent,
       object_permission: mcpPermissions,
     });
+  });
+
+  const openEditorWithAgents = async (user: ReturnType<typeof userEvent.setup>) => {
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        models: ["gpt-4"],
+        object_permission: { agents: ["agent-1"], agent_access_groups: ["group-a"] },
+      }),
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await screen.findByLabelText("Team Name");
+  };
+
+  it("resends the stored agents and agent_access_groups when the selector is left untouched", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithAgents(user);
+
+    const payload = await save(user);
+
+    const objectPermission = wireBody(payload).object_permission as Record<string, unknown>;
+    expect(objectPermission.agents).toStrictEqual(["agent-1"]);
+    expect(objectPermission.agent_access_groups).toStrictEqual(["group-a"]);
+  });
+
+  it("sends empty agents and agent_access_groups arrays after the last agent chip is removed", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditorWithAgents(user);
+
+    await user.click(within(screen.getByLabelText("agent-1")).getByRole("button"));
+    await user.click(within(screen.getByLabelText("group:group-a")).getByRole("button"));
+    expect(screen.queryByLabelText("agent-1")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("group:group-a")).not.toBeInTheDocument();
+
+    const payload = await save(user);
+
+    const objectPermission = wireBody(payload).object_permission as Record<string, unknown>;
+    expect(objectPermission.agents).toStrictEqual([]);
+    expect(objectPermission.agent_access_groups).toStrictEqual([]);
   });
 
   it("resends every stored value once both sections are opened", async () => {

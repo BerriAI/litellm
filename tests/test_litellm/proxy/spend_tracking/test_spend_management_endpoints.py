@@ -4235,6 +4235,91 @@ async def test_build_ui_spend_logs_response_sums_multi_round_session_spend():
 
 
 @pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_sums_multi_round_session_tokens():
+    """
+    Regression test for LIT-4929: the logs table showed the summed session cost but
+    only the last call's token usage.  Every row of a multi-round session must carry
+    the session-wide prompt, completion and total token sums from the aggregate
+    query, while rows outside a session carry none of them.
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    session_id = "sess-multi-round-tokens"
+    api_key = "hashed-key-xyz"
+    dict_rows = [
+        {
+            "request_id": "req-1",
+            "session_id": session_id,
+            "call_type": "completion",
+            "api_key": api_key,
+            "total_tokens": 10,
+            "prompt_tokens": 7,
+            "completion_tokens": 3,
+        },
+        {
+            "request_id": "req-2",
+            "session_id": session_id,
+            "call_type": "completion",
+            "api_key": api_key,
+            "total_tokens": 50,
+            "prompt_tokens": 35,
+            "completion_tokens": 15,
+        },
+        {
+            "request_id": "req-3",
+            "session_id": None,
+            "call_type": "completion",
+            "api_key": api_key,
+            "total_tokens": 5,
+            "prompt_tokens": 4,
+            "completion_tokens": 1,
+        },
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "api_key": api_key,
+                "session_total_count": 2,
+                "session_total_spend": 0.06,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+                "session_total_prompt_tokens": 42,
+                "session_total_completion_tokens": 18,
+                "session_total_tokens": 60,
+            }
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=3,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    rows = result["data"]
+    session_rows = rows[:2]
+    assert [row["session_total_tokens"] for row in session_rows] == [60, 60]
+    assert [row["session_total_prompt_tokens"] for row in session_rows] == [42, 42]
+    assert [row["session_total_completion_tokens"] for row in session_rows] == [18, 18]
+    assert [(row["total_tokens"], row["prompt_tokens"], row["completion_tokens"]) for row in session_rows] == [
+        (10, 7, 3),
+        (50, 35, 15),
+    ]
+
+    token_keys = ("session_total_tokens", "session_total_prompt_tokens", "session_total_completion_tokens")
+    assert all(key not in rows[2] for key in token_keys)
+
+
+@pytest.mark.asyncio
 async def test_build_ui_spend_logs_response_session_cache_hit_count():
     """
     Each row of a session must carry session_cache_hit_count aggregated across
