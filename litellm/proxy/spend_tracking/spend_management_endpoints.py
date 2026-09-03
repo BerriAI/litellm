@@ -163,6 +163,10 @@ class _SessionSpendRow(TypedDict):
     session_models: ReadOnly[Sequence[str]]
 
 
+_SESSION_MODELS_LIMIT: Final = 10
+_SESSION_MODEL_NAME_MAX_LEN: Final = 256
+
+
 class _SessionSpendStats(NamedTuple):
     session_total_count: int
     session_total_spend: float
@@ -172,6 +176,7 @@ class _SessionSpendStats(NamedTuple):
     session_llm_count: int
     session_agent_count: int
     session_models: Sequence[str]
+    session_models_truncated: bool
 
 
 _SessionSpendMap: TypeAlias = Mapping[tuple[str, str], _SessionSpendStats]
@@ -4156,32 +4161,44 @@ async def _build_ui_spend_logs_response(
             rows: Final[Sequence[_SessionSpendRow]] = await _query_raw(
                 prisma_client,
                 f"""
-                SELECT session_id, api_key,
-                       COUNT(*)::int AS session_total_count,
-                       COALESCE(SUM(spend), 0)::double precision AS session_total_spend,
-                       COUNT(*) FILTER (
-                           WHERE call_type IN {_MCP_CALL_TYPES_SQL}
-                       )::int AS mcp_tool_call_count,
-                       COALESCE(SUM(spend) FILTER (
-                           WHERE call_type IN {_MCP_CALL_TYPES_SQL}
-                       ), 0)::double precision AS mcp_tool_call_spend,
-                       COUNT(*) FILTER (WHERE LOWER(cache_hit) = 'true')::int AS session_cache_hit_count,
-                       COUNT(*) FILTER (
-                           WHERE call_type NOT IN {_MCP_CALL_TYPES_SQL} AND call_type != {_AGENT_CALL_TYPE_SQL}
-                       )::int AS session_llm_count,
-                       COUNT(*) FILTER (WHERE call_type = {_AGENT_CALL_TYPE_SQL})::int AS session_agent_count,
-                       COALESCE(
-                           ARRAY_AGG(DISTINCT model ORDER BY model)
-                           FILTER (WHERE model IS NOT NULL AND model <> ''),
-                           ARRAY[]::text[]
-                       ) AS session_models
-                FROM "LiteLLM_SpendLogs"
-                WHERE session_id = ANY($1::text[])
-                  AND api_key = ANY($2::text[])
-                GROUP BY session_id, api_key
+                SELECT s.*, COALESCE(m.session_models, ARRAY[]::text[]) AS session_models
+                FROM (
+                    SELECT session_id, api_key,
+                           COUNT(*)::int AS session_total_count,
+                           COALESCE(SUM(spend), 0)::double precision AS session_total_spend,
+                           COUNT(*) FILTER (
+                               WHERE call_type IN {_MCP_CALL_TYPES_SQL}
+                           )::int AS mcp_tool_call_count,
+                           COALESCE(SUM(spend) FILTER (
+                               WHERE call_type IN {_MCP_CALL_TYPES_SQL}
+                           ), 0)::double precision AS mcp_tool_call_spend,
+                           COUNT(*) FILTER (WHERE LOWER(cache_hit) = 'true')::int AS session_cache_hit_count,
+                           COUNT(*) FILTER (
+                               WHERE call_type NOT IN {_MCP_CALL_TYPES_SQL} AND call_type != {_AGENT_CALL_TYPE_SQL}
+                           )::int AS session_llm_count,
+                           COUNT(*) FILTER (WHERE call_type = {_AGENT_CALL_TYPE_SQL})::int AS session_agent_count
+                    FROM "LiteLLM_SpendLogs"
+                    WHERE session_id = ANY($1::text[])
+                      AND api_key = ANY($2::text[])
+                    GROUP BY session_id, api_key
+                ) s
+                LEFT JOIN LATERAL (
+                    SELECT ARRAY_AGG(d.model ORDER BY d.model) AS session_models
+                    FROM (
+                        SELECT DISTINCT LEFT(model, $3::int) AS model
+                        FROM "LiteLLM_SpendLogs"
+                        WHERE session_id = s.session_id
+                          AND api_key = s.api_key
+                          AND model IS NOT NULL AND model <> ''
+                        ORDER BY 1
+                        LIMIT $4::int
+                    ) d
+                ) m ON TRUE
                 """,
                 session_ids,
                 authorized_api_keys,
+                _SESSION_MODEL_NAME_MAX_LEN,
+                _SESSION_MODELS_LIMIT + 1,
             )
             session_spend_map = {
                 (row["session_id"], row["api_key"]): _SessionSpendStats(
@@ -4192,10 +4209,12 @@ async def _build_ui_spend_logs_response(
                     session_cache_hit_count=int(row.get("session_cache_hit_count") or 0),
                     session_llm_count=int(row.get("session_llm_count") or 0),
                     session_agent_count=int(row.get("session_agent_count") or 0),
-                    session_models=TypeAdapter(list[str]).validate_python(row.get("session_models") or ()),
+                    session_models=models[:_SESSION_MODELS_LIMIT],
+                    session_models_truncated=len(models) > _SESSION_MODELS_LIMIT,
                 )
                 for row in rows
                 if row.get("session_id") and row.get("api_key") is not None
+                for models in (TypeAdapter(list[str]).validate_python(row.get("session_models") or ()),)
             }
         except PrismaError:
             verbose_proxy_logger.debug(
@@ -4220,6 +4239,7 @@ async def _build_ui_spend_logs_response(
                 row_dict["session_llm_count"] = session_stats.session_llm_count
                 row_dict["session_agent_count"] = session_stats.session_agent_count
                 row_dict["session_models"] = session_stats.session_models
+                row_dict["session_models_truncated"] = session_stats.session_models_truncated
             enriched.append(row_dict)
         response_data: list = enriched
     else:

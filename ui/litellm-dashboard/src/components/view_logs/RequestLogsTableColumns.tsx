@@ -228,7 +228,7 @@ export const getRequestLogsTableColumns = ({
       const provider = log.custom_llm_provider;
       const sessionModels = log.session_models ?? [];
       const modelNames = sessionModels.length > 0 ? sessionModels : [log.model ?? ""];
-      const modelLabel = modelNames.join(", ");
+      const modelLabel = log.session_models_truncated ? `${modelNames.join(", ")}, ...` : modelNames.join(", ");
       const isSingleModel = modelNames.length === 1;
       return (
         <div className="flex items-center space-x-2">

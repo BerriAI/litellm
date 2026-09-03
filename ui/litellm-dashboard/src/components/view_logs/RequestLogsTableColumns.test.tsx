@@ -87,9 +87,7 @@ describe("Type column", () => {
       mcp_tool_call_count: 1,
       session_agent_count: 0,
     };
-    renderRows([
-      logEntry(mcpRepresentative),
-    ]);
+    renderRows([logEntry(mcpRepresentative)]);
 
     expect(screen.queryByText("MCP")).not.toBeInTheDocument();
     await user.hover(screen.getByText("3"));
@@ -116,6 +114,20 @@ describe("Model column", () => {
 
     expect(screen.getByText("claude-sonnet-5, gpt-5.6")).toBeInTheDocument();
     expect(screen.queryByText("gpt-5.6")).not.toBeInTheDocument();
+  });
+
+  it("marks a conversation whose model list was capped by the server", () => {
+    const cappedCall = {
+      request_id: "req-capped",
+      model: "gpt-5.6",
+      session_id: "sess-2",
+      session_total_count: 30,
+      session_models: ["claude-sonnet-5", "gpt-5.6"],
+      session_models_truncated: true,
+    };
+    renderRows([logEntry(cappedCall)]);
+
+    expect(screen.getByText("claude-sonnet-5, gpt-5.6, ...")).toBeInTheDocument();
   });
 
   it("keeps a single call's own model", () => {

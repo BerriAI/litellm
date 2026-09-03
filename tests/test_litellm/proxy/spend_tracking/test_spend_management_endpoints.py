@@ -4013,6 +4013,54 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
 
 
 @pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_caps_session_models():
+    """The per-session model list is bounded server-side and flags when it was cut."""
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _SESSION_MODELS_LIMIT,
+        _build_ui_spend_logs_response,
+    )
+
+    session_id = "sess-many-models"
+    api_key = "hashed-key-xyz"
+    over_limit_models = [f"model-{i:02d}" for i in range(_SESSION_MODELS_LIMIT + 1)]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "api_key": api_key,
+                "session_total_count": len(over_limit_models),
+                "session_total_spend": 1.0,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+                "session_llm_count": len(over_limit_models),
+                "session_agent_count": 0,
+                "session_models": over_limit_models,
+            }
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=[{"request_id": "req-1", "session_id": session_id, "call_type": "completion", "api_key": api_key}],
+        total_records=1,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    row = result["data"][0]
+    assert row["session_models"] == over_limit_models[:_SESSION_MODELS_LIMIT]
+    assert row["session_models_truncated"] is True
+
+    sql, *params = mock_prisma.db.query_raw.await_args.args
+    assert "LIMIT $4" in sql
+    assert params[3] == _SESSION_MODELS_LIMIT + 1
+
+
+@pytest.mark.asyncio
 async def test_build_ui_spend_logs_response_key_split_session_gets_per_key_aggregates():
     """
     Two keys reusing one session id are separate rows under grouped pagination,
