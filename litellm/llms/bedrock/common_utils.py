@@ -748,6 +748,15 @@ def strip_bedrock_throughput_suffix(model: str) -> str:
 
 
 MANTLE_MESSAGES_PATH: Final = "/anthropic/v1/messages"
+_MANTLE_OPENAI_BASE_SUFFIXES: Final = ("/openai/v1", "/v1")
+
+
+def _mantle_api_base_from_env() -> str | None:
+    env_base: Final = get_secret_str("BEDROCK_MANTLE_API_BASE")
+    if env_base is None:
+        return None
+    base: Final = env_base.rstrip("/")
+    return next((base[: -len(suffix)] for suffix in _MANTLE_OPENAI_BASE_SUFFIXES if base.endswith(suffix)), base)
 
 
 def build_mantle_messages_url(
@@ -758,12 +767,15 @@ def build_mantle_messages_url(
     """Build the bedrock-mantle Anthropic /messages URL.
 
     Honors an explicit endpoint override (``api_base``, then
-    ``aws_bedrock_runtime_endpoint``) so private VPC / VPCE / GovCloud Mantle
-    endpoints are reachable; otherwise falls back to the public regional host.
+    ``aws_bedrock_runtime_endpoint``, then ``BEDROCK_MANTLE_API_BASE``) so
+    private VPC / VPCE / GovCloud Mantle endpoints are reachable; otherwise
+    falls back to the public regional host.
     The mantle messages path is appended unless the override already carries it,
-    so callers can pass either the host or the full messages URL.
+    so callers can pass either the host or the full messages URL. The env var is
+    shared with the OpenAI-surface ``bedrock_mantle/*`` routes, which need it to
+    carry their ``/v1`` or ``/openai/v1`` base, so that suffix is dropped first.
     """
-    override: Final = api_base or aws_bedrock_runtime_endpoint
+    override: Final = api_base or aws_bedrock_runtime_endpoint or _mantle_api_base_from_env()
     if override:
         base: Final = override.rstrip("/")
         if base.endswith(MANTLE_MESSAGES_PATH):
@@ -814,6 +826,30 @@ def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
         (litellm.model_cost.get(candidate) or {}).get("supports_parallel_tool_use_config") is True
         for candidate in (model, get_bedrock_base_model(model))
     )
+
+
+def bedrock_model_accepts_cache_points(model: str | None) -> bool:
+    """
+    Whether Converse ``cachePoint`` blocks may be sent to this model.
+
+    Bedrock rejects requests carrying cachePoint blocks for models without prompt
+    caching support ("You invoked an unsupported model or your request did not allow
+    prompt caching"), so a model whose cost-map entry does not declare
+    ``supports_prompt_caching`` must not receive them. A model absent from the map
+    (an application inference profile ARN, a model newer than the map) keeps emitting
+    so existing caching setups never silently degrade. ``litellm.utils.supports_prompt_caching``
+    is not reusable here: it returns False for unmapped models, the opposite polarity.
+    """
+    if model is None:
+        return True
+    entries: Final = tuple(
+        entry
+        for candidate in (model, get_bedrock_base_model(model))
+        if (entry := litellm.model_cost.get(candidate)) is not None
+    )
+    if not entries:
+        return True
+    return any(entry.get("supports_prompt_caching") is True for entry in entries)
 
 
 def is_claude_4_5_on_bedrock(model: str) -> bool:

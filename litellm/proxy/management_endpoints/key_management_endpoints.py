@@ -3785,15 +3785,22 @@ async def info_key_fn_v2(
 @router.get("/key/info", tags=["key management"], dependencies=[Depends(user_api_key_auth)])
 @management_endpoint_wrapper
 async def info_key_fn(
-    key: str | None = fastapi.Query(default=None, description="Key in the request parameters"),
+    key: str | None = fastapi.Query(
+        default=None,
+        description=(
+            "Key to look up. Pass the key's sha256 hash so the raw key stays out of URLs and access "
+            "logs. Example key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa'"
+        ),
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Retrieve information about a key.
 
     Parameters:
-    - key: str | None (query parameter) - The key to look up. Accepts the plaintext key or its hash.
-      Defaults to the key in the Authorization header.
+    - key: str | None (query parameter) - The key to look up. Accepts the plaintext key or its hash;
+      prefer the hash, since a query parameter is recorded verbatim by any HTTP access log in front
+      of the proxy. Defaults to the key in the Authorization header.
 
     Returns:
     - key: str - The key that was looked up, echoed back as it was passed in
@@ -3825,7 +3832,7 @@ async def info_key_fn(
 
     Example Curl:
     ```
-    curl -X GET "http://0.0.0.0:4000/key/info?key=sk-test-example-key-123" \
+    curl -X GET "http://0.0.0.0:4000/key/info?key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" \
 -H "Authorization: Bearer sk-1234"
     ```
 

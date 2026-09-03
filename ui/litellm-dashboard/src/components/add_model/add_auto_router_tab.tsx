@@ -342,6 +342,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     planModeMinTier: complexityRouterConfig.plan_mode_min_tier,
     classificationPrompt: complexityRouterConfig.classification_prompt,
     heuristicFirstMaxTier: complexityRouterConfig.heuristic_first_max_tier,
+    hybridBoundaryMargin: complexityRouterConfig.hybrid_boundary_margin,
     classificationMode: complexityRouterConfig.classification_mode,
     tierLabels: complexityRouterConfig.tier_labels,
     classifierType: complexityRouterConfig.classifier_type,
@@ -548,7 +549,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                     "Select the team this auto router belongs to. Only keys for this team will be able to call it.",
                   )}
                 >
-                  {({ id, value, onChange }) => <TeamDropdown id={id} value={value} onChange={onChange} />}
+                  {({ id, value, onChange }) => (
+                    <TeamDropdown id={id} value={value} onChange={(next) => onChange(next ?? "")} />
+                  )}
                 </FormField>
               )}
 

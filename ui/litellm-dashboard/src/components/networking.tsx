@@ -310,6 +310,8 @@ export interface AgentCredentialFieldMetadata {
   options?: string[] | null;
   default_value?: string | null;
   include_in_litellm_params?: boolean;
+  validation_pattern?: string | null;
+  validation_message?: string | null;
 }
 
 export interface AgentCreateInfo {
@@ -6970,7 +6972,7 @@ export const vectorStoreSearchCall = async (
     if (!response.ok) {
       const errorData = await response.text();
       await handleError(errorData);
-      return null;
+      throw new Error(errorData);
     }
 
     const data = await response.json();

@@ -3158,3 +3158,35 @@ class TestAzureAIAnalyzeNamedIndexClassification:
             user_api_key_dict=self._team_member("analyze", ["read"]),
         )
         assert result is True
+
+
+@pytest.mark.parametrize(
+    "blocked_key",
+    ["embedding_model", "litellm_embedding_model", "litellm_embedding_config", "litellm_credential_name"],
+)
+def test_vector_store_search_rejects_caller_embedding_selection_params(blocked_key):
+    """
+    Regression: the search request body must not pick the embedding model or
+    credential used to embed the query. Those resolve through the Router with
+    the proxy's credentials, bypassing the key's model permissions, so they may
+    only come from the managed store's server-side registration.
+    """
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+
+    mock_auth = UserAPIKeyAuth(user_id="test_internal_user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/v1/vector_stores/s3-store/search",
+            json={"query": "hello", blocked_key: "attacker-choice"},
+        )
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 400, response.json()
+    assert blocked_key in str(response.json())
