@@ -232,11 +232,12 @@ class TestCompletionWiring:
     @pytest.mark.parametrize(
         "model, expected_url",
         [
-            ("opencode/claude-opus-5", f"{ZEN_API_BASE}/chat/completions"),
+            ("opencode/kimi-k3", f"{ZEN_API_BASE}/chat/completions"),
             ("opencode_go/kimi-k3", f"{GO_API_BASE}/chat/completions"),
+            ("opencode_go/glm-5.3-flash", f"{GO_API_BASE}/chat/completions"),
         ],
     )
-    def test_session_header_reaches_the_wire(self, model, expected_url):
+    def test_session_header_reaches_the_wire(self, local_model_cost_map, model, expected_url):
         client = RecordingHTTPHandler(response_model=model.split("/", 1)[1])
         response = litellm.completion(
             model=model,
@@ -252,7 +253,7 @@ class TestCompletionWiring:
         assert client.requests[0]["headers"][OPENCODE_SESSION_HEADER] == "session-42"
         assert OPENCODE_SESSION_HEADER not in client.requests[0]["body"]
 
-    def test_session_header_is_stable_across_turns_of_one_session(self):
+    def test_session_header_is_stable_across_turns_of_one_session(self, local_model_cost_map):
         client = RecordingHTTPHandler(response_model="kimi-k3")
         for turn in ("first", "second"):
             litellm.completion(
@@ -266,7 +267,7 @@ class TestCompletionWiring:
         sent = [r["headers"][OPENCODE_SESSION_HEADER] for r in client.requests]
         assert sent == ["session-42", "session-42"]
 
-    def test_header_present_even_without_a_caller_supplied_session_id(self):
+    def test_header_present_even_without_a_caller_supplied_session_id(self, local_model_cost_map):
         client = RecordingHTTPHandler(response_model="kimi-k3")
         litellm.completion(
             model="opencode_go/kimi-k3",
@@ -345,13 +346,13 @@ class TestEndpointRouting:
             pytest.param("opencode_go/qwen3.7-max", "/v1/messages", id="go-qwen-messages"),
             pytest.param("opencode_go/qwen3.5-plus", "/v1/messages", id="go-qwen35-messages-undocumented"),
             pytest.param("opencode/claude-opus-5", "/v1/messages", id="zen-claude-messages"),
-            pytest.param("opencode/gemini-3.1-pro", "/v1/models", id="zen-gemini-models"),
+            pytest.param("opencode/gemini-3.1-pro", "/v1/models:generateContent", id="zen-gemini-models"),
             pytest.param("opencode/gpt-5.5", "/v1/responses", id="zen-gpt-responses"),
             pytest.param("opencode/kimi-k3", "/v1/chat/completions", id="zen-kimi-chat"),
         ],
     )
     def test_cost_map_records_the_endpoint(self, local_model_cost_map, model, expected_endpoint):
-        assert litellm.get_model_info(model)["supported_endpoints"] == [expected_endpoint]
+        assert litellm.model_cost[model]["supported_endpoints"] == [expected_endpoint]
 
     @pytest.mark.parametrize(
         "model, expected_endpoint",
@@ -665,3 +666,79 @@ class TestChatConfigProviderNames:
             litellm_params={},
         )
         assert url == "https://proxy.internal/v1/messages"
+
+
+class RecordingAnthropicHTTPHandler(HTTPHandler):
+    """OpenCode's /messages answers in Anthropic's shape, so the canned reply differs again."""
+
+    def __init__(self, response_model: str):
+        super().__init__()
+        self.response_model = response_model
+        self.requests: tuple[Mapping[str, object], ...] = ()
+
+    def post(self, url, data=None, headers=None, **kwargs):
+        raw_body: Final = data.decode("utf-8") if isinstance(data, bytes) else data
+        self.requests = (
+            *self.requests,
+            {"url": url, "headers": dict(headers or {}), "body": json.loads(raw_body or "{}")},
+        )
+        return httpx.Response(
+            status_code=200,
+            json={
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": self.response_model,
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 5, "output_tokens": 1},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+
+class TestMessagesCompletionWiring:
+    """Claude and the qwen/minimax families are served on /messages, not /chat/completions."""
+
+    @pytest.mark.parametrize(
+        "model, expected_url",
+        [
+            ("opencode/claude-opus-5", f"{ZEN_API_BASE}/messages"),
+            ("opencode/claude-haiku-4-5", f"{ZEN_API_BASE}/messages"),
+            ("opencode_go/minimax-m3", f"{GO_API_BASE}/messages"),
+            ("opencode_go/qwen3.7-max", f"{GO_API_BASE}/messages"),
+        ],
+    )
+    def test_session_header_reaches_the_wire(self, local_model_cost_map, model, expected_url):
+        client = RecordingAnthropicHTTPHandler(response_model=model.split("/", 1)[1])
+        response = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="fake-key",
+            litellm_session_id="session-42",
+            client=client,
+        )
+
+        assert response.choices[0].message.content == "ok"
+        assert len(client.requests) == 1
+        sent = client.requests[0]
+        assert sent["url"] == expected_url
+        assert sent["headers"][OPENCODE_SESSION_HEADER] == "session-42"
+        assert sent["headers"]["x-api-key"] == "fake-key"
+        assert "Authorization" not in sent["headers"]
+
+    def test_body_is_anthropic_shaped_not_openai_shaped(self, local_model_cost_map):
+        """A regression here means the model is being sent to /chat/completions, which answers 500."""
+        client = RecordingAnthropicHTTPHandler(response_model="claude-opus-5")
+        litellm.completion(
+            model="opencode/claude-opus-5",
+            messages=[{"role": "system", "content": "Be terse."}, {"role": "user", "content": "hello"}],
+            api_key="fake-key",
+            max_tokens=16,
+            client=client,
+        )
+
+        body = client.requests[0]["body"]
+        assert body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hello"}]}]
+        assert body["system"] == [{"type": "text", "text": "Be terse."}]
+        assert body["max_tokens"] == 16

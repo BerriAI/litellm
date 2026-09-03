@@ -8213,7 +8213,7 @@ class ProviderConfigManager:
         endpoint: Final = opencode_endpoint_for_model(provider.value, model)
         if endpoint == "/v1/messages":
             return litellm.OpenCodeGoMessagesChatConfig() if is_go else litellm.OpenCodeZenMessagesChatConfig()
-        if endpoint == "/v1/models" and not is_go:
+        if endpoint == "/v1/models:generateContent" and not is_go:
             return litellm.OpenCodeZenGeminiChatConfig()
         return litellm.OpenCodeGoChatConfig() if is_go else litellm.OpenCodeZenChatConfig()
 
