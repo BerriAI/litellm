@@ -638,6 +638,13 @@ describe("KeyInfoView", () => {
       await userEvent.click(screen.getByRole("tab", { name: /settings/i }));
     };
 
+    it("should render the settings panel as a bounded scroll container", async () => {
+      await renderAndOpenSettingsTab();
+
+      const settingsCard = screen.getByRole("heading", { name: /key settings/i }).closest("[data-slot='card']");
+      expect(settingsCard).toHaveClass("overflow-y-auto", "max-h-[65vh]");
+    });
+
     it("should show the Edit Settings button when the user is a proxy admin for a key they do not own", async () => {
       vi.mocked(useAuthorized).mockReturnValue({
         ...baseUseAuthorizedMock,
