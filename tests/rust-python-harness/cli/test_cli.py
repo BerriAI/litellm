@@ -233,13 +233,16 @@ def _assert_unavailable_cell(strategy: Strategy, case: HarnessCase, section_titl
     assert result.status is expected
     assert spec.reason in report
     assert section_title in report
-    assert f"Status: {'INCOMPLETE' if expected is RunStatus.NOT_IMPLEMENTED else 'SKIPPED'}" in report
+    expected_result: Final = "NOT RUN" if expected is RunStatus.NOT_IMPLEMENTED else "SKIPPED"
+    expected_implemented: Final = 0 if expected is RunStatus.NOT_IMPLEMENTED else 1
+    assert f"Result: {expected_result}" in report
+    assert f"Coverage: {expected_implemented}/1 cases implemented" in report
 
 
 def test_every_unavailable_case_finishes_and_explains_itself() -> None:
     section_titles: Final = {
         "e2e_parity": "End-to-end parity outcomes",
-        "trace_parity": "Trace comparisons",
+        "trace_parity": "trace comparisons",
         "unit_tests_mapping": "Python/Rust unit-test mappings",
         "unit_tests_parity": "Python backend parity outcomes",
         "unit_tests_rust": "Native Rust unit-test outcomes",
@@ -396,16 +399,17 @@ def test_run_all_selects_every_declared_case_once(monkeypatch: pytest.MonkeyPatc
     assert sum(case.surface is not None for case in selected) == 4
 
 
-def test_run_reports_not_implemented_surface_as_incomplete(
+def test_run_reports_not_implemented_surface_as_not_run(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     exit_code: Final = main(["run", "trace_parity", "--surface", "gateway"])
     captured: Final = capsys.readouterr()
 
     assert exit_code == 0
-    assert "Status: INCOMPLETE" in captured.out
+    assert "Result: NOT RUN" in captured.out
+    assert "Coverage: 0/6 cases implemented" in captured.out
     assert "Cases: 6 selected, 6 not implemented, 0 skipped" in captured.out
-    assert "Trace: NOT IMPLEMENTED" in captured.out
+    assert "Not implemented" in captured.out
     assert "No gateway OCR trace-parity case is registered." in captured.out
 
 

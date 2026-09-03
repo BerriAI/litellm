@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from typing import Final
 
+import pytest
+
 from ...shared.reporting.models import CaseResult, Coverage, HarnessCase, ResultArtifact, RunStatus
-from ...shared.reporting.strategy import ModuleCaseSpec
+from ...shared.reporting.strategy import ModuleCaseSpec, NotImplementedCaseSpec
 from ...shared.tracing.profiler import FunctionTraceEvent
+from . import reporting
 from .reporting import TRACE_COMPARISON_ARTIFACT, TraceComparisonArtifact, render_trace_results
 
 
@@ -14,6 +17,7 @@ def _result(comparison: TraceComparisonArtifact) -> CaseResult:
         strategy_label="Trace parity",
         sdk_function=comparison.sdk_function,
         spec=ModuleCaseSpec(coverage=Coverage.PARTIAL, module="example"),
+        surface=comparison.surface,
     )
     result: Final = CaseResult(case=case)
     nodeid: Final = f"trace:sdk:{comparison.sdk_function}:{comparison.mode}"
@@ -53,10 +57,10 @@ def test_renderer_shows_matching_python_and_rust_paths() -> None:
     section: Final = render_trace_results((_result(_comparison(events, events)),))[0]
     report: Final = "\n\n".join(section.blocks)
 
-    assert section.title == "Trace comparisons"
-    assert "Trace comparison: sdk/ocr" in report
-    assert "sync\n\npython (2 steps)\nocr\n  http_request" in report
-    assert "rust (2 steps)\nocr\n  http_request" in report
+    assert section.title == "SDK trace comparisons"
+    assert "Case: ocr" in report
+    assert "Mode: sync\n----------\n\nPYTHON (2 steps)\nocr\n  http_request" in report
+    assert "RUST (2 steps)\nocr\n  http_request" in report
     assert "Trace: MATCH" in report
     assert "Same steps, order, and nesting" in report
 
@@ -82,6 +86,7 @@ def test_unavailable_check_reports_mode_from_nodeid() -> None:
         strategy_label="Trace parity",
         sdk_function="ocr",
         spec=ModuleCaseSpec(coverage=Coverage.PARTIAL, module="example"),
+        surface="sdk",
     )
     result: Final = CaseResult(case=case)
     result.collected.add("trace:sdk:ocr:sync")
@@ -90,8 +95,8 @@ def test_unavailable_check_reports_mode_from_nodeid() -> None:
     section: Final = render_trace_results((result,))[0]
     report: Final = "\n\n".join(section.blocks)
 
-    assert "Trace comparison: sdk/ocr" in report
-    assert "sync\n\nTrace: NOT AVAILABLE\nTest outcome: error" in report
+    assert "Case: ocr" in report
+    assert "Mode: sync\n----------\n\nTrace: NOT AVAILABLE\nTest outcome: error" in report
     assert "unknown mode" not in report
 
 
@@ -103,7 +108,7 @@ def test_renderer_keeps_collected_trace_when_one_engine_errors() -> None:
     )[0]
     report: Final = "\n\n".join(section.blocks)
 
-    assert "python (2 steps)\nocr  [python only]\n  http_request  [python only]" in report
+    assert "PYTHON (2 steps)\nocr  [python only]\n  http_request  [python only]" in report
     assert "Rust error: rust: native Rust bridge must include the trace-parity feature" in report
     assert "hint: rebuild the native bridge with the trace-parity feature" in report
     assert "Contract: FAIL" in report
@@ -115,6 +120,7 @@ def test_renderer_groups_all_modes_under_one_case_header() -> None:
         strategy_label="Trace parity",
         sdk_function="ocr",
         spec=ModuleCaseSpec(coverage=Coverage.PARTIAL, module="example"),
+        surface="sdk",
     )
     result: Final = CaseResult(case=case)
     events: Final = (FunctionTraceEvent("ocr", 0),)
@@ -142,6 +148,45 @@ def test_renderer_groups_all_modes_under_one_case_header() -> None:
 
     assert len(section.blocks) == 1
     report: Final = section.blocks[0]
-    assert report.count("Trace comparison: sdk/ocr") == 1
-    assert "sync" in report.split("\n\n")
-    assert "async" in report.split("\n\n")
+    assert report.count("Case: ocr") == 1
+    assert "Mode: sync\n----------" in report
+    assert "Mode: async\n-----------" in report
+
+
+def test_renderer_colors_every_trace_line_in_a_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: Final = (FunctionTraceEvent("ocr", 0), FunctionTraceEvent("http_request", 1))
+    monkeypatch.setattr(reporting.sys.stdout, "isatty", lambda: True)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+
+    section: Final = render_trace_results((_result(_comparison(events, events)),))[0]
+    report: Final = "\n\n".join(section.blocks)
+
+    assert "\033[36mPYTHON\033[0m (2 steps)" in report
+    assert "\033[36mocr\033[0m\n\033[36m  http_request\033[0m" in report
+    assert "\033[33mRUST\033[0m (2 steps)" in report
+    assert "\033[33mocr\033[0m\n\033[33m  http_request\033[0m" in report
+
+
+def test_renderer_groups_cases_and_unavailable_entries_by_surface() -> None:
+    events: Final = (FunctionTraceEvent("ocr", 0),)
+    gateway_results: Final = tuple(
+        CaseResult(
+            case=HarnessCase(
+                strategy_id="trace_parity",
+                strategy_label="Trace parity",
+                sdk_function=sdk_function,
+                spec=NotImplementedCaseSpec(reason=f"No {sdk_function} case is registered."),
+                surface="gateway",
+            ),
+            status=RunStatus.NOT_IMPLEMENTED,
+        )
+        for sdk_function in ("ocr", "messages")
+    )
+
+    sections: Final = render_trace_results((_result(_comparison(events, events)), *gateway_results))
+
+    assert tuple(section.title for section in sections) == ("SDK trace comparisons", "GATEWAY trace comparisons")
+    gateway_report: Final = "\n\n".join(sections[1].blocks)
+    assert gateway_report.count("Not implemented") == 1
+    assert "- ocr: No ocr case is registered." in gateway_report
+    assert "- messages: No messages case is registered." in gateway_report

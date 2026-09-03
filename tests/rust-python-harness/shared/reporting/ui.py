@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
-import sys
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from textwrap import indent
@@ -20,7 +18,11 @@ if TYPE_CHECKING:
 
 class HarnessOutputFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        return not (record.name == "LiteLLM" and record.getMessage().startswith("OCR cost:"))
+        noisy_prefixes: Final = (
+            "OCR cost:",
+            "LoggingWorker: event loop changed;",
+        )
+        return not (record.name == "LiteLLM" and record.getMessage().startswith(noisy_prefixes))
 
 
 _HARNESS_OUTPUT_FILTER: Final = HarnessOutputFilter()
@@ -116,12 +118,12 @@ def _format_section(section: ReportSection) -> str:
     return f"{section.title}\n" + ("\n\n".join(section.blocks) or "- No results")
 
 
-def _report_status(run: HarnessRun, exit_code: int) -> str:
+def _run_result(run: HarnessRun, exit_code: int) -> str:
     statuses: Final = tuple(result.status for result in run.results.values())
     if exit_code:
         return "FAILED"
-    if not statuses or RunStatus.NOT_IMPLEMENTED in statuses:
-        return "INCOMPLETE"
+    if not statuses or all(status is RunStatus.NOT_IMPLEMENTED for status in statuses):
+        return "NOT RUN"
     if all(status is RunStatus.SKIPPED for status in statuses):
         return "SKIPPED"
     return "PASSED"
@@ -129,9 +131,10 @@ def _report_status(run: HarnessRun, exit_code: int) -> str:
 
 def final_report(run: HarnessRun, exit_code: int, strategies: Sequence[Strategy]) -> str:
     passed, failed, errors, skipped = _summary(run)
-    status: Final = _report_status(run, exit_code)
-    statuses: Final = tuple(result.status for result in run.results.values())
+    run_result: Final = _run_result(run, exit_code)
+    statuses: Final = tuple(case_result.status for case_result in run.results.values())
     not_implemented: Final = statuses.count(RunStatus.NOT_IMPLEMENTED)
+    implemented: Final = len(statuses) - not_implemented
     skipped_cells: Final = statuses.count(RunStatus.SKIPPED)
     failure_lines: Final = tuple(
         f"{index}. {nodeid}\n{indent(detail.strip(), '    ')}"
@@ -140,7 +143,8 @@ def final_report(run: HarnessRun, exit_code: int, strategies: Sequence[Strategy]
     rendered: Final = tuple(_format_section(section) for section in _rendered_sections(run, strategies))
     summary: Final = (
         "Rust <-> Python parity report\n\n"
-        f"Status: {status}\n"
+        f"Result: {run_result}\n"
+        f"Coverage: {implemented}/{len(statuses)} cases implemented\n"
         f"Cases: {len(statuses)} selected, {not_implemented} not implemented, {skipped_cells} skipped\n"
         f"Checks: {run.completed_checks}/{run.unique_checks} completed, {passed} passed, "
         f"{failed} failed, {errors} errors, {skipped} skipped\n"
@@ -229,22 +233,30 @@ class PlainDashboard(AbstractContextManager["PlainDashboard"]):
 
     def update(self, run: HarnessRun) -> None:
         for key, result in run.results.items():
-            self._update_result(key, result.status, len(result.completed), result.total)
+            self._update_result(key, result.case.display_name, result.status, len(result.completed), result.total)
 
-    def _update_result(self, key: str, status: RunStatus, completed: int, total: int) -> None:
+    def _update_result(self, key: str, label: str, status: RunStatus, completed: int, total: int) -> None:
         state: Final = (status, completed)
         previous: Final = self._seen.get(key)
-        should_print: Final = previous is None or previous[0] is not status or (completed > 0 and completed % 25 == 0)
         self._seen[key] = state
+        visible: Final = status not in {
+            RunStatus.NOT_RUN,
+            RunStatus.QUEUED,
+            RunStatus.NOT_IMPLEMENTED,
+            RunStatus.SKIPPED,
+        }
+        should_print: Final = visible and (
+            previous is None or previous[0] is not status or (completed > 0 and completed % 25 == 0)
+        )
         if should_print:
             progress: Final = f" {completed}/{total}" if total else ""
             print(  # noqa: T201  # CLI output
-                f"{key}: {status.value}{progress}", flush=True
+                f"{label}: {status.value}{progress}", flush=True
             )
 
     def finish(self, run: HarnessRun, exit_code: int) -> None:
         print(  # noqa: T201  # CLI output
-            final_report(run, exit_code, self.strategies), flush=True
+            f"\n{final_report(run, exit_code, self.strategies)}", flush=True
         )
 
 

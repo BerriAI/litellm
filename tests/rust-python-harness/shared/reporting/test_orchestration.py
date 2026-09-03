@@ -49,9 +49,7 @@ def _render_test_results(results: Sequence[CaseResult]) -> tuple[ReportSection, 
 
 
 def _strategy(name: str, module: str, *, render: StrategyRenderer = _render_test_results) -> Strategy:
-    case_definition: Final = CaseDefinition(
-        "ocr", ModuleCaseSpec(coverage=Coverage.COMPLETE, module=module)
-    )
+    case_definition: Final = CaseDefinition("ocr", ModuleCaseSpec(coverage=Coverage.COMPLETE, module=module))
     definition: Final = StrategyDefinition(
         id=name,
         order=1,
@@ -82,7 +80,7 @@ def test_combines_strategy_reports_and_delegates_rendering() -> None:
     assert report.results["second:ocr"].status is RunStatus.PASSED
     assert report.completed_checks == 2
     rendered: Final = final_report(report, code, strategies)
-    assert "Status: FAILED" in rendered
+    assert "Result: FAILED" in rendered
     assert rendered.count("Test outcomes") == 2
     assert "- ocr: failed, 1/1 checks, complete coverage" in rendered
     assert "- ocr: passed, 1/1 checks, complete coverage" in rendered
@@ -104,7 +102,7 @@ def test_strategy_can_replace_the_generic_result_view() -> None:
     assert "sdk/ocr" not in rendered
 
 
-def test_not_implemented_case_makes_a_successful_report_incomplete() -> None:
+def test_report_separates_successful_execution_from_incomplete_coverage() -> None:
     runnable: Final = _strategy("mixed", "pass")
     unavailable: Final = HarnessCase(
         strategy_id="mixed",
@@ -123,11 +121,12 @@ def test_not_implemented_case_makes_a_successful_report_incomplete() -> None:
     rendered: Final = final_report(combined, code, (runnable,))
 
     assert code == 0
-    assert "Status: INCOMPLETE" in rendered
+    assert "Result: PASSED" in rendered
+    assert "Coverage: 1/2 cases implemented" in rendered
     assert "Cases: 2 selected, 1 not implemented, 0 skipped" in rendered
 
 
-def test_harness_output_filter_suppresses_only_ocr_cost_warnings() -> None:
+def test_harness_output_filter_suppresses_expected_harness_warnings() -> None:
     output_filter: Final = HarnessOutputFilter()
     ocr_cost_warning: Final = logging.LogRecord(
         "LiteLLM",
@@ -147,6 +146,16 @@ def test_harness_output_filter_suppresses_only_ocr_cost_warnings() -> None:
         (),
         None,
     )
+    loop_warning: Final = logging.LogRecord(
+        "LiteLLM",
+        logging.WARNING,
+        "/repo/litellm/litellm_core_utils/logging_worker.py",
+        129,
+        "LoggingWorker: event loop changed; carried %d pending and revived %d dequeued logging task(s) onto the new loop",
+        (1, 0),
+        None,
+    )
 
     assert output_filter.filter(ocr_cost_warning) is False
+    assert output_filter.filter(loop_warning) is False
     assert output_filter.filter(other_warning) is True

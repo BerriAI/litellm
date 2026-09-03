@@ -135,4 +135,5 @@ def test_strategy_subcommand_accepts_function_filter(capsys: pytest.CaptureFixtu
 
     captured: Final = capsys.readouterr()
     assert exit_code == 0
-    assert "unit_tests_mapping:messages: not_implemented" in captured.out
+    assert "- messages: not_implemented" in captured.out
+    assert "unit_tests_mapping:messages: not_implemented" not in captured.out
