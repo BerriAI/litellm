@@ -4694,9 +4694,12 @@ export const updatePromptCall = async (accessToken: string, promptId: string, pr
   }
 };
 
-export const deletePromptCall = async (accessToken: string, promptId: string) => {
+export const deletePromptCall = async (accessToken: string, promptId: string, environment?: string) => {
   try {
-    const data = await apiClient.delete(`/prompts/${promptId}`, { accessToken });
+    const data = await apiClient.delete(`/prompts/${promptId}`, {
+      accessToken,
+      query: { environment: environment || undefined },
+    });
     return data;
   } catch (error) {
     console.error("Failed to delete prompt:", error);

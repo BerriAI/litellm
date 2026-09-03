@@ -2,7 +2,9 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import PromptEditorHeader from "./PromptEditorHeader";
 
-vi.mock("./PromptCodeSnippets", () => ({ default: () => <button>Get Code</button> }));
+vi.mock("./PromptCodeSnippets", () => ({
+  default: ({ environment }: { environment?: string }) => <button data-environment={environment}>Get Code</button>,
+}));
 
 describe("PromptEditorHeader", () => {
   it("preserves navigation, naming, and save actions", () => {
@@ -48,5 +50,6 @@ describe("PromptEditorHeader", () => {
     );
 
     expect(screen.getByRole("combobox", { name: "Environment" })).toHaveTextContent(label);
+    expect(screen.getByRole("button", { name: "Get Code" })).toHaveAttribute("data-environment", environment);
   });
 });
