@@ -113,10 +113,8 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
                 )
             )
 
-            # Compliant: Save a strong reference to prevent GC
             self._background_tasks.add(task)
 
-            # Remove the task from the set when it finishes to avoid memory leaks
             task.add_done_callback(self._background_tasks.discard)
         except Exception as e:  # noqa: BLE001 # Safe catch-all for verbose logging
             verbose_logger.exception(
@@ -578,7 +576,6 @@ def llm_passthrough_route(
             else:
                 return response
     except Exception as e:
-        # provider_config is guaranteed non-None here due to the earlier guard
         assert provider_config is not None
         raise base_llm_http_handler._handle_error(
             e=e,
