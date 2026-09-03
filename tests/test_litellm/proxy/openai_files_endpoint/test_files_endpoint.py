@@ -2920,9 +2920,9 @@ def test_unscoped_list_files_accepts_every_documented_purpose(
 def test_list_files_reports_a_bad_target_model_names_as_a_400(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):
-    """The exception tail reports an HTTPException with its own status and error
-    type rather than relabelling it, so a client that branches on either keeps
-    reading the same thing off a bad request."""
+    """The exception tail answers with the OpenAI error object a client can branch on:
+    the type its 400 status stands for, and a JSON null param rather than the literal
+    string "None" no OpenAI SDK has a case for."""
     _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _permissive_afile_list)
 
     response = _get_list_files("/v1/files?target_model_names=gpt-3.5-turbo,gpt-4o")
@@ -2931,8 +2931,8 @@ def test_list_files_reports_a_bad_target_model_names_as_a_400(
     assert response.json() == {
         "error": {
             "message": "target_model_names on list files must be a list of one model name. Example: ['gpt-4o']",
-            "type": "None",
-            "param": "None",
+            "type": "invalid_request_error",
+            "param": None,
             "code": "400",
         }
     }

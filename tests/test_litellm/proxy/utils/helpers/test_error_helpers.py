@@ -135,7 +135,7 @@ def test_handle_exception_on_proxy_happy_path_generic_exception_defaults_to_500(
         "message": "kaboom",
         "type": ProxyErrorTypes.internal_server_error.value,
         "code": "500",
-        "param": "None",
+        "param": None,
     }
 
 
