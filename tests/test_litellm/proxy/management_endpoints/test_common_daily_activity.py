@@ -516,6 +516,7 @@ async def test_get_api_key_metadata_recovers_double_hashed_key_via_spend_logs():
             }
         ]
     )
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -525,6 +526,24 @@ async def test_get_api_key_metadata_recovers_double_hashed_key_via_spend_logs():
     assert result[double_hashed]["key_alias"] == "from-spend-log"
     assert result[double_hashed]["team_id"] == "team-spend"
     mock_prisma.db.query_raw.assert_called_once()
+
+
+def test_key_metadata_includes_recovered_user_email():
+    from litellm.proxy.management_endpoints.common_daily_activity import _key_metadata
+
+    meta = _key_metadata(
+        {
+            "dirty-key": {
+                "key_alias": "batch-worker",
+                "team_id": "team-1",
+                "user_email": "alice@example.com",
+            }
+        },
+        "dirty-key",
+    )
+
+    assert meta.key_alias == "batch-worker"
+    assert meta.user_email == "alice@example.com"
 
 
 @pytest.mark.asyncio
