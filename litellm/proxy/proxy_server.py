@@ -16,7 +16,16 @@ import threading
 import time
 import traceback
 import warnings
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Collection, Mapping, MutableMapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Collection,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, UnionType
 from typing import (
@@ -50,6 +59,7 @@ from litellm.constants import (
     AIOHTTP_NEEDS_CLEANUP_CLOSED,
     AIOHTTP_TTL_DNS_CACHE,
     AUDIO_SPEECH_CHUNK_SIZE,
+    BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME,
     BASE_MCP_ROUTE,
     DAILY_TAG_SPEND_BATCH_MULTIPLIER,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -224,7 +234,7 @@ def generate_feedback_box():
 import contextlib
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from functools import lru_cache
+from functools import lru_cache, partial
 
 import litellm
 import litellm._redis
@@ -402,6 +412,7 @@ from litellm.proxy.config_resolvers.alerting import (
 )
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
     SPEND_LOG_CLEANUP_BOUND_SETTINGS,
     SpendLogCleanup,
@@ -3580,12 +3591,35 @@ async def _run_direct_health_check_with_instrumentation(
     raise AssertionError("perform_health_check rejected every optional argument")
 
 
+async def _window_gated_health_check_db_save(
+    save: Callable[[], Awaitable[None]],
+    pod_lock_manager: PodLockManager | None,
+    lock_ttl: int | None,
+) -> None:
+    """
+    Persist at most once per window fleet-wide: the lock is the "this window's save is
+    done" marker, so it is deliberately never released and expires with the interval.
+    """
+    if pod_lock_manager is not None and pod_lock_manager.redis_cache is not None:
+        acquired: Final = await pod_lock_manager.acquire_lock(
+            cronjob_id=BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME,
+            ttl=lock_ttl,
+            allow_reentrant=False,
+        )
+        if not acquired:
+            verbose_proxy_logger.debug("background_health_check_db_save_skipped another pod persisted this window")
+            return
+    await save()
+
+
 def _schedule_background_health_check_db_save(
     prisma_client,
     shared_health_manager,
     model_list: list,
     healthy_endpoints: list,
     unhealthy_endpoints: list,
+    pod_lock_manager: PodLockManager | None = None,
+    lock_ttl: int | None = None,
 ):
     """Fire-and-forget: persist health check results to DB if prisma is available."""
     if prisma_client is None:
@@ -3598,16 +3632,16 @@ def _schedule_background_health_check_db_save(
 
     checked_by: Final = shared_health_manager.pod_id if shared_health_manager is not None else "background_health_check"
     start_time: Final = time_module.time()
-    asyncio.create_task(
-        _save_background_health_checks_to_db(
-            prisma_client,
-            model_list,
-            healthy_endpoints,
-            unhealthy_endpoints,
-            start_time,
-            checked_by=checked_by,
-        )
+    save: Final = partial(
+        _save_background_health_checks_to_db,
+        prisma_client,
+        model_list,
+        healthy_endpoints,
+        unhealthy_endpoints,
+        start_time,
+        checked_by=checked_by,
     )
+    asyncio.create_task(_window_gated_health_check_db_save(save, pod_lock_manager, lock_ttl))
 
 
 def _get_endpoint_exception_status(endpoint: dict, exceptions: dict) -> int:
@@ -3914,6 +3948,8 @@ async def _run_background_health_check():
             _llm_model_list,
             healthy_endpoints,
             unhealthy_endpoints,
+            pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
+            lock_ttl=health_check_interval,
         )
 
         # Write health state to router cache for health-check-driven routing
