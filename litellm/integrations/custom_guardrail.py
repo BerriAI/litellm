@@ -1485,7 +1485,7 @@ def log_guardrail_information(func):
         if func.__name__ == "apply_guardrail" and "inputs" in kwargs:
             original_inputs = kwargs.get("inputs")
 
-        logging_obj: Final = kwargs.get("logging_obj")
+        logging_obj: Final = kwargs.get("logging_obj") or request_data.get("litellm_logging_obj")
         self_recorded_token: Final = _guardrail_self_recorded.set(False)
         try:
             response: Final = await func(*args, **kwargs)
@@ -1527,7 +1527,7 @@ def log_guardrail_information(func):
         if func.__name__ == "apply_guardrail" and "inputs" in kwargs:
             original_inputs = kwargs.get("inputs")
 
-        logging_obj: Final = kwargs.get("logging_obj")
+        logging_obj: Final = kwargs.get("logging_obj") or request_data.get("litellm_logging_obj")
         self_recorded_token: Final = _guardrail_self_recorded.set(False)
         try:
             response: Final = func(*args, **kwargs)
