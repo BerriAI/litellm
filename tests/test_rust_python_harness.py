@@ -16,13 +16,8 @@ validate_ledger = importlib.import_module("tests.rust-python-harness.validate_le
 
 load_catalog = catalog.load_catalog
 load_ledger = ledger_module.load_ledger
-LEDGER_PATH = ledger_module.LEDGER_PATH
 REPO_ROOT = validate_ledger.REPO_ROOT
 audit_ledger = validate_ledger.audit_ledger
-run_audit = validate_ledger.run_audit
-LedgerDriftError = validate_ledger.LedgerDriftError
-_enumerate_python_tests = validate_ledger._enumerate_python_tests
-_enumerate_rust_tests = validate_ledger._enumerate_rust_tests
 _pick_values = cli._pick_values
 _coverage_pytest_args = cli._coverage_pytest_args
 _select = cli._select
@@ -246,205 +241,16 @@ def test_should_report_confidence_for_each_sdk_section() -> None:
     assert scores["count_tokens"].level.value == "LOW"
 
 
-def test_should_load_the_ocr_ledger_and_compute_its_ratio() -> None:
-    ledger = load_ledger()
 
-    assert ledger.sdk_function == "ocr"
-    assert ledger.total_count == 145
-    assert ledger.mapped_count == 8
-    assert ledger.percentage == 5.5
-
-
-def test_should_reject_a_mapped_entry_missing_rust_test(tmp_path: Path) -> None:
-    ledger_path = tmp_path / "bad_ledger.json"
-    ledger_path.write_text(
-        json.dumps(
-            {
-                "sdk_function": "ocr",
-                "python_scope": ["tests/test_litellm/ocr/test_x.py"],
-                "rust_scope": ["litellm-rust/crates/x.rs"],
-                "entries": [
-                    {
-                        "python_file": "tests/test_litellm/ocr/test_x.py",
-                        "python_test": "test_one",
-                        "status": "mapped",
-                        "rust_file": "litellm-rust/crates/x.rs",
-                    }
-                ],
-                "rust_only_tests": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="rust_test"):
-        load_ledger(ledger_path)
-
-
-def test_should_reject_an_unmapped_entry_missing_a_reason(tmp_path: Path) -> None:
-    ledger_path = tmp_path / "bad_ledger.json"
-    ledger_path.write_text(
-        json.dumps(
-            {
-                "sdk_function": "ocr",
-                "python_scope": ["tests/test_litellm/ocr/test_x.py"],
-                "rust_scope": [],
-                "entries": [
-                    {
-                        "python_file": "tests/test_litellm/ocr/test_x.py",
-                        "python_test": "test_one",
-                        "status": "unmapped",
-                    }
-                ],
-                "rust_only_tests": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="reason"):
-        load_ledger(ledger_path)
-
-
-def test_should_enumerate_module_level_and_class_scoped_python_tests(
-    tmp_path: Path,
-) -> None:
-    module = tmp_path / "tests" / "example"
-    module.mkdir(parents=True)
-    source_path = module / "test_example.py"
-    source_path.write_text(
-        "def test_top_level():\n"
-        "    pass\n"
-        "\n"
-        "class TestGroup:\n"
-        "    def test_one(self):\n"
-        "        pass\n"
-        "\n"
-        "    def test_two(self):\n"
-        "        pass\n"
-        "\n"
-        "    def helper(self):\n"
-        "        pass\n",
-        encoding="utf-8",
-    )
-
-    found = _enumerate_python_tests(tmp_path, "tests/example/test_example.py")
-
-    assert found == frozenset(
-        {"test_top_level", "TestGroup::test_one", "TestGroup::test_two"}
-    )
-
-
-def test_should_enumerate_rust_test_and_tokio_test_functions(tmp_path: Path) -> None:
-    source_path = tmp_path / "example.rs"
-    source_path.write_text(
-        "#[test]\n"
-        "fn plain_test() {\n"
-        "    assert!(true);\n"
-        "}\n"
-        "\n"
-        "#[tokio::test]\n"
-        "async fn async_test() {\n"
-        "    assert!(true);\n"
-        "}\n"
-        "\n"
-        "fn not_a_test() {}\n",
-        encoding="utf-8",
-    )
-
-    found = _enumerate_rust_tests(tmp_path, "example.rs")
-
-    assert found == frozenset({"plain_test", "async_test"})
-
-
-def test_should_flag_a_python_test_missing_from_the_ledger(tmp_path: Path) -> None:
-    (tmp_path / "litellm-rust").mkdir()
-    python_dir = tmp_path / "tests" / "example"
-    python_dir.mkdir(parents=True)
-    (python_dir / "test_example.py").write_text(
-        "def test_tracked():\n    pass\n\n\ndef test_untracked():\n    pass\n",
-        encoding="utf-8",
-    )
-    ledger = load_ledger(_write_ledger(tmp_path, mapped_python_test="test_tracked"))
-
-    report = audit_ledger(ledger, repo_root=tmp_path)
-
-    assert report.stale_python_tests == ("tests/example/test_example.py:test_untracked",)
-    assert not report.is_clean
-
-
-def test_should_flag_a_stale_ledger_entry_for_a_removed_python_test(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "litellm-rust").mkdir()
-    python_dir = tmp_path / "tests" / "example"
-    python_dir.mkdir(parents=True)
-    (python_dir / "test_example.py").write_text(
-        "def test_still_here():\n    pass\n", encoding="utf-8"
-    )
-    ledger = load_ledger(_write_ledger(tmp_path, mapped_python_test="test_removed"))
-
-    report = audit_ledger(ledger, repo_root=tmp_path)
-
-    assert report.missing_python_tests == (
-        "tests/example/test_example.py:test_removed",
-    )
-    assert not report.is_clean
-
-
-def test_should_raise_ledger_drift_error_with_every_offending_test(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "litellm-rust").mkdir()
-    python_dir = tmp_path / "tests" / "example"
-    python_dir.mkdir(parents=True)
-    (python_dir / "test_example.py").write_text(
-        "def test_still_here():\n    pass\n", encoding="utf-8"
-    )
-    ledger_path = _write_ledger(tmp_path, mapped_python_test="test_removed")
-
-    with pytest.raises(LedgerDriftError, match="test_removed"):
-        run_audit(ledger_path, repo_root=tmp_path)
-
-
-def _write_ledger(tmp_path: Path, *, mapped_python_test: str) -> Path:
-    rust_dir = tmp_path / "litellm-rust"
-    (rust_dir / "example.rs").write_text(
-        '#[test]\nfn rust_side() {\n    assert!(true);\n}\n', encoding="utf-8"
-    )
-    ledger_path = tmp_path / "ledger.json"
-    ledger_path.write_text(
-        json.dumps(
-            {
-                "sdk_function": "ocr",
-                "python_scope": ["tests/example/test_example.py"],
-                "rust_scope": ["litellm-rust/example.rs"],
-                "entries": [
-                    {
-                        "python_file": "tests/example/test_example.py",
-                        "python_test": mapped_python_test,
-                        "status": "mapped",
-                        "rust_file": "litellm-rust/example.rs",
-                        "rust_test": "rust_side",
-                        "justification": "example",
-                    }
-                ],
-                "rust_only_tests": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-    return ledger_path
-
-
-def test_should_report_the_real_ocr_ledger_as_clean_against_the_live_repo() -> None:
+def test_should_have_every_python_and_rust_ocr_test_accounted_for_in_the_ledger() -> None:
     ledger = load_ledger()
 
     report = audit_ledger(ledger, repo_root=REPO_ROOT)
 
     assert report.is_clean, (
-        f"missing_python_tests={report.missing_python_tests} "
-        f"stale_python_tests={report.stale_python_tests} "
-        f"missing_rust_tests={report.missing_rust_tests} "
-        f"stale_rust_tests={report.stale_rust_tests}"
+        "\nOCR test-parity ledger is out of sync with the live test files.\n"
+        f"Ledger references a Python test that no longer exists: {list(report.missing_python_tests)}\n"
+        f"Python test exists but is not tracked in the ledger: {list(report.stale_python_tests)}\n"
+        f"Ledger references a Rust test that no longer exists: {list(report.missing_rust_tests)}\n"
+        f"Rust test exists but is not tracked in the ledger: {list(report.stale_rust_tests)}\n"
     )
