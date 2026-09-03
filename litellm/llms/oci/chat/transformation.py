@@ -748,6 +748,24 @@ class OCIStreamWrapper(CustomStreamWrapper):
     def _with_stream_identity(self, parsed: ModelResponseStream) -> ModelResponseStream:
         return self.model_response_creator(chunk={"choices": parsed.choices})
 
+    def _record_terminal_state(self, parsed: ModelResponseStream) -> None:
+        """Mirror the finish state the parent wrapper's ``chunk_creator`` would
+        normally record, so its ``StopIteration`` fallback emits a trailing
+        chunk with the real finish reason instead of defaulting to ``"stop"``.
+
+        Without this, skipping ``[DONE]`` lets the source iterator exhaust
+        cleanly and the parent's ``finish_reason_handler()`` runs with
+        ``received_finish_reason`` and ``tool_call`` both unset, producing a
+        trailing ``"stop"`` chunk that overwrites an earlier ``"tool_calls"``
+        finish reason for consumers (and ``stream_chunk_builder``) that keep
+        the last non-null value.
+        """
+        for choice in parsed.choices:
+            if getattr(choice, "finish_reason", None):
+                self.received_finish_reason = choice.finish_reason
+            if getattr(choice.delta, "tool_calls", None):
+                self.tool_call = True
+
     def chunk_creator(self, chunk: Any) -> ModelResponseStream | None:
         if not isinstance(chunk, str):
             raise ValueError(f"Chunk is not a string: {chunk}")
@@ -780,8 +798,11 @@ class OCIStreamWrapper(CustomStreamWrapper):
                     if getattr(choice.delta, "content", None):
                         self._cohere_text_emitted = True
                         break
+            self._record_terminal_state(result)
             return self._with_stream_identity(result)
-        return self._with_stream_identity(handle_generic_stream_chunk(dict_chunk))
+        generic_result: Final = handle_generic_stream_chunk(dict_chunk)
+        self._record_terminal_state(generic_result)
+        return self._with_stream_identity(generic_result)
 
 
 __all__ = [

@@ -2041,3 +2041,57 @@ class TestOCIStreamWrapperDoneSentinel:
         wrapper = _make_stream_wrapper(_STREAM_GENERIC_MODEL)
         with pytest.raises(OCIError, match="Chunk cannot be parsed as JSON"):
             wrapper.chunk_creator("data: [DONE] trailing garbage")
+
+
+class TestOCIStreamWrapperRecordsFinishState:
+    """After skipping ``[DONE]`` the source iterator ends normally, so
+    ``CustomStreamWrapper.__next__`` falls back to ``finish_reason_handler()``
+    to emit a trailing chunk. That helper reads ``received_finish_reason`` and
+    ``tool_call``, so ``chunk_creator`` must mirror both onto ``self`` or the
+    trailing chunk defaults to ``"stop"`` and overwrites an earlier
+    ``"tool_calls"`` finish reason for consumers that keep the last one."""
+
+    def test_generic_tool_calls_terminal_chunk_records_finish_state(self):
+        wrapper = _make_stream_wrapper(_STREAM_GENERIC_MODEL)
+        tool_call_event = (
+            'data: {"index":0,"message":{"role":"ASSISTANT","content":null,'
+            '"toolCalls":[{"id":"call_1","type":"FUNCTION","name":"get_weather","arguments":"{}"}]},'
+            '"finishReason":"TOOL_CALLS"}'
+        )
+
+        wrapper.chunk_creator(tool_call_event)
+
+        assert wrapper.received_finish_reason == "tool_calls"
+        assert wrapper.tool_call is True
+
+        trailing = wrapper.finish_reason_handler()
+        assert trailing.choices[0].finish_reason == "tool_calls"
+
+    def test_generic_stop_terminal_chunk_records_finish_state(self):
+        wrapper = _make_stream_wrapper(_STREAM_GENERIC_MODEL)
+
+        wrapper.chunk_creator(_GENERIC_TERMINAL_EVENT)
+
+        assert wrapper.received_finish_reason == "stop"
+        assert wrapper.tool_call is False
+
+        trailing = wrapper.finish_reason_handler()
+        assert trailing.choices[0].finish_reason == "stop"
+
+    def test_cohere_terminal_chunk_records_finish_state(self):
+        wrapper = _make_stream_wrapper(_STREAM_COHERE_MODEL)
+
+        wrapper.chunk_creator(_COHERE_TERMINAL_EVENT)
+
+        assert wrapper.received_finish_reason == "stop"
+
+        trailing = wrapper.finish_reason_handler()
+        assert trailing.choices[0].finish_reason == "stop"
+
+    def test_non_terminal_generic_chunk_leaves_finish_state_untouched(self):
+        wrapper = _make_stream_wrapper(_STREAM_GENERIC_MODEL)
+
+        wrapper.chunk_creator(_GENERIC_TEXT_EVENT.format(text="hi"))
+
+        assert wrapper.received_finish_reason is None
+        assert wrapper.tool_call is False
