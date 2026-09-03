@@ -30,6 +30,9 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
             json_mode=json_mode,
         )
         self.model = model
+        # Text already emitted downstream, used to collapse cumulative snapshots.
+        self._emitted_text: str = ""
+        self._delta_count: int = 0
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
         """
@@ -57,8 +60,8 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
         }
         """
         try:
-            # Extract text from A2A response
-            text: Final = extract_text_from_a2a_response(chunk)
+            # Extract text from A2A response, then reduce it to what is actually new.
+            text: Final = self._to_incremental_text(extract_text_from_a2a_response(chunk))
 
             # Determine finish reason
             finish_reason: Final = self._get_finish_reason(chunk)
@@ -82,6 +85,36 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
                 index=0,
                 tool_use=None,
             )
+
+    def _to_incremental_text(self, text: str) -> str:
+        """
+        Reduce an A2A event's text to the portion not yet emitted.
+
+        A2A servers interleave true deltas with cumulative snapshots of the whole reply: a
+        terminal non-partial ``status-update`` and an ``artifact-update`` carrying
+        ``append: false`` both repeat everything produced so far. Forwarding those verbatim
+        makes the client render the reply two or three times over, so emit only new text.
+
+        Handles both streaming styles: servers that send deltas ("O", "K") and servers that
+        send growing snapshots ("O", "OK") collapse to the same output.
+        """
+        if not text:
+            return ""
+
+        emitted: str = self._emitted_text
+        if emitted and text.startswith(emitted):
+            suffix: str = text[len(emitted) :]
+            if suffix:
+                self._emitted_text = text
+                return suffix
+            # text == emitted. Treat as a snapshot repeat, except while only a single delta
+            # has been emitted, where a genuinely repeated delta is still indistinguishable.
+            if self._delta_count > 1:
+                return ""
+
+        self._emitted_text = emitted + text
+        self._delta_count += 1
+        return text
 
     def _get_finish_reason(self, chunk: dict) -> str | None:
         """Extract finish reason from A2A chunk"""
