@@ -10169,6 +10169,7 @@ class _AnthropicMessagesHangingByteStream:
     def __init__(self, chunks: list) -> None:
         self._chunks = list(chunks)
         self._hidden_params: dict = {}
+        self.closed = False
 
     def __aiter__(self):
         return self
@@ -10180,7 +10181,7 @@ class _AnthropicMessagesHangingByteStream:
         raise AssertionError("unreachable")  # pragma: no cover
 
     async def aclose(self) -> None:
-        pass
+        self.closed = True
 
 
 class _AnthropicMessagesFallbackByteStream:
@@ -10323,6 +10324,34 @@ async def test_anthropic_messages_streaming_iterator_skips_buffering_without_any
 
     first_chunk = await asyncio.wait_for(wrapped.__anext__(), timeout=1.0)
     assert first_chunk == _anthropic_messages_message_start_chunk()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_streaming_iterator_closes_upstream_on_disconnect_without_fallback():
+    """Regression: without any fallback configured, the live-forwarding generator must
+    still close the upstream stream when the caller disconnects mid-stream (aclose()
+    on the wrapper), not just when the source iterator runs to exhaustion on its own -
+    otherwise a client that disconnects during a long thinking pass leaks the upstream
+    request/connection to the provider indefinitely."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+            },
+        ]
+    )
+    source = _AnthropicMessagesHangingByteStream([_anthropic_messages_message_start_chunk()])
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(
+        response=source, initial_kwargs={"model": "primary"}
+    )
+
+    await asyncio.wait_for(wrapped.__anext__(), timeout=1.0)
+    assert source.closed is False
+
+    await wrapped.aclose()
+    assert source.closed is True
 
 
 @pytest.mark.asyncio

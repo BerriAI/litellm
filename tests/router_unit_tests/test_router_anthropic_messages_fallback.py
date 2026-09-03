@@ -524,6 +524,26 @@ def test_has_any_configured_fallback_honors_per_request_kwargs_override():
     )
 
 
+def test_has_any_configured_fallback_matches_stripped_model_group():
+    """Regression: async_function_with_fallbacks_common_utils resolves a fallback keyed by
+    the bare model name even when the request was routed with a provider prefix (e.g. a
+    fallback keyed "fable-tier" still arms "openai/fable-tier"); the gate must recognize
+    that same stripped match instead of requiring an exact model-group key."""
+    router = Router(model_list=[FABLE_TIER, OPUS_TARGET], fallbacks=[{"fable-tier": ["opus-target"]}])
+
+    assert router._has_any_configured_fallback("openai/fable-tier", {}) is True
+
+
+def test_has_any_configured_fallback_matches_non_standard_client_fallbacks():
+    """Regression: a client-supplied non-standard `fallbacks` list (a plain list of model
+    names, not keyed by model group at all) applies unconditionally at retry time via
+    _check_non_standard_fallback_format, so the gate must arm for it too rather than only
+    recognizing the dict-keyed `{"model_group": [...]}` shape."""
+    router = Router(model_list=[FABLE_TIER, OPUS_TARGET])
+
+    assert router._has_any_configured_fallback("fable-tier", {"fallbacks": ["opus-target"]}) is True
+
+
 def test_get_fallback_model_group_for_lookup_groups_orders_tier_before_requested():
     router = _router(content_policy_fallbacks=None)
     fallbacks = [{"tier1": ["backup-a"]}, {"smart-router": ["backup-b"]}]

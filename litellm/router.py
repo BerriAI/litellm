@@ -517,9 +517,23 @@ async def _anthropic_messages_stream_without_fallback_protection(
 ) -> AsyncGenerator[bytes, None]:
     """No fallback is configured for the requested model group, so there is nothing the
     buffer-until-content protection in Router._aanthropic_messages_streaming_iterator would
-    protect: forward the source iterator live instead of wrapping it."""
-    async for chunk in source_iterator:
-        yield chunk
+    protect: forward the source iterator live instead of wrapping it.
+
+    A client that disconnects mid-stream leaves this generator suspended at `yield`
+    rather than exhausted, so the `finally` below - not the `async for` running to
+    completion - is what closes the upstream connection; without it, a disconnect
+    during a long adaptive-thinking pass would leak the request to the provider.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        aclose_if_supported,
+    )
+
+    try:
+        async for chunk in source_iterator:
+            yield chunk
+    finally:
+        with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+            await aclose_if_supported(source_iterator)
 
 
 class FallbackAwareAnthropicMessagesStream:
@@ -8141,16 +8155,28 @@ class Router:
         until real content arrives protects nothing and only adds latency (most visibly
         on adaptive-thinking models, where the first content_block_delta can lag
         message_start by well over a minute).
+
+        Matching mirrors what async_function_with_fallbacks_common_utils actually resolves
+        at retry time, not just an exact model-group key: get_fallback_model_group_for_lookup_groups
+        also checks a stripped model-group match (e.g. a fallback keyed by the bare model name
+        still arming a request routed with a provider prefix), and a client-supplied non-standard
+        ``fallbacks`` list (a plain list of model names, or of full override params) applies to
+        every model group unconditionally rather than being keyed by one at all - self._get_fallback_model_group_for_lookup_groups
+        checks neither, so using it here would report "nothing to fall back to" for a request
+        that a real error would in fact retry.
         """
+        fallbacks: Final = kwargs.get("fallbacks", self.fallbacks)
+        if _check_non_standard_fallback_format(fallbacks=fallbacks):
+            return True
         lookup_groups: Final = fallback_lookup_groups(kwargs, model_group)
         candidate_fallback_lists: Final = (
-            kwargs.get("fallbacks", self.fallbacks),
+            fallbacks,
             kwargs.get("context_window_fallbacks", self.context_window_fallbacks),
             kwargs.get("content_policy_fallbacks", self.content_policy_fallbacks),
         )
         if any(
             fallbacks_value is not None
-            and self._get_fallback_model_group_for_lookup_groups(fallbacks=fallbacks_value, lookup_groups=lookup_groups)
+            and get_fallback_model_group_for_lookup_groups(fallbacks=fallbacks_value, lookup_groups=lookup_groups)[0]
             is not None
             for fallbacks_value in candidate_fallback_lists
         ):
