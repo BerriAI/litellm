@@ -2265,6 +2265,7 @@ if MCP_AVAILABLE:
             try:
                 prompts = await global_mcp_server_manager.get_prompts_from_server(
                     server=server,
+                    user_api_key_auth=user_api_key_auth,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=True,  # Always add server prefix
@@ -2318,6 +2319,7 @@ if MCP_AVAILABLE:
             try:
                 resources = await global_mcp_server_manager.get_resources_from_server(
                     server=server,
+                    user_api_key_auth=user_api_key_auth,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=True,  # Always add server prefix
@@ -2369,6 +2371,7 @@ if MCP_AVAILABLE:
             try:
                 resource_templates = await global_mcp_server_manager.get_resource_templates_from_server(
                     server=server,
+                    user_api_key_auth=user_api_key_auth,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
                     add_prefix=True,  # Always add server prefix
@@ -3296,6 +3299,7 @@ if MCP_AVAILABLE:
 
         return await global_mcp_server_manager.get_prompt_from_server(
             server=server,
+            user_api_key_auth=user_api_key_auth,
             prompt_name=original_prompt_name,
             arguments=arguments,
             mcp_auth_header=server_auth_header,
@@ -3346,6 +3350,7 @@ if MCP_AVAILABLE:
 
         return await global_mcp_server_manager.read_resource_from_server(
             server=server,
+            user_api_key_auth=user_api_key_auth,
             url=url,
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
@@ -3808,6 +3813,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: UserAPIKeyAuth | None,
         client_ip: str | None,
         allowed_server_ids: set[str] | None = None,
+        raw_headers: Mapping[str, str] | None = None,
     ) -> None:
         """Fail fast with HTTP 401 for MCP servers that need user auth but
         didn't receive it on this request. Covers both gateway-managed OAuth2
@@ -3952,6 +3958,7 @@ if MCP_AVAILABLE:
                     server=server,
                     oauth2_headers=oauth2_headers,
                     user_api_key_auth=user_api_key_auth,
+                    raw_headers=raw_headers,
                 )
 
             # Pass-through OAuth: when the admin has opted a server into
@@ -4280,6 +4287,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_client_ip,
                 allowed_server_ids=toolset_allowed_server_ids,
+                raw_headers=raw_headers,
             )
 
             # Pre-flight auth check for pass-through servers.  Must run after
@@ -4603,6 +4611,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_sse_client_ip,
                 allowed_server_ids=toolset_allowed_server_ids,
+                raw_headers=raw_headers,
             )
 
             # Pre-flight auth check for pass-through servers: surface upstream

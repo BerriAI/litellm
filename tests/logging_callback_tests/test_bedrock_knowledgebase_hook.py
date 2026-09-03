@@ -370,12 +370,13 @@ async def test_bedrock_kb_request_body_has_transformed_filters(
         custom_llm_provider,
         litellm_params,
         logging_obj,
+        embedding_executor=None,
         extra_headers=None,
         extra_body=None,
         timeout=None,
         client=None,
         _is_async=False,
-        router: "litellm.Router | None" = None,
+        embedding_executor=None,
     ):
         litellm_params_dict = (
             litellm_params.model_dump(exclude_none=False)
