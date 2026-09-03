@@ -8,14 +8,17 @@ The matrix always has these SDK columns:
 - `messages / amessages`
 - `responses / aresponses`
 - `count_tokens`
+- `chat_completions / acompletion`
+- `transcription / atranscription`
 
-The harness has three deliberately broad test-strategy folders:
+The harness has four deliberately broad test-strategy folders:
 
 | Strategy | Folder |
 | --- | --- |
 | Public SDK parity over generated and recorded inputs | [`e2e_fuzz_tests/`](e2e_fuzz_tests/) |
 | Focused tests of Rust-owned behavior | [`unit_tests_rust/`](unit_tests_rust/) |
 | Isolated transform and Python-to-Rust helper coverage | [`validate_sub_methods/`](validate_sub_methods/) |
+| Already-existing live-API SDK tests | [`existing_e2e_test_sdk/`](existing_e2e_test_sdk/) |
 
 ## Run it
 
@@ -112,7 +115,7 @@ The initial end-to-end entries deliberately show `◐`: the repository has Rust 
 
 ## Attach parity tests
 
-Each of the three folders contains a concise `README.md` and a `strategy.json`. Add a pytest file or node ID to the appropriate SDK function's `selectors` list:
+Each of the four folders contains a concise `README.md` and a `strategy.json`. Add a pytest file or node ID to the appropriate SDK function's `selectors` list:
 
 ```json
 {
@@ -123,7 +126,7 @@ Each of the three folders contains a concise `README.md` and a `strategy.json`. 
 }
 ```
 
-Selectors use the same syntax as pytest. A file selector aggregates every test in the file; a node selector can target one test or parametrized family. The runner deduplicates selectors, so one test may intentionally prove more than one cell without executing twice.
+Selectors use the same syntax as pytest. A file selector aggregates every test in the file; a node selector can target one test or parametrized family; a selector ending in `/` aggregates every test in that folder, recursively. The runner deduplicates selectors, so one test may intentionally prove more than one cell without executing twice.
 
 Use these coverage values:
 
