@@ -1,6 +1,7 @@
 import base64
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -105,6 +106,22 @@ class TestChatGPTAuthenticator:
 
         assert exc.value.status_code == 401
         assert "event loop" in str(exc.value)
+        assert authenticator.auth_file not in str(exc.value)
+        mock_login.assert_not_called()
+        mock_wait.assert_not_called()
+
+    def test_get_access_token_refuses_device_code_login_in_worker_thread(self, authenticator):
+        with (
+            patch("builtins.open", side_effect=FileNotFoundError),
+            patch.object(authenticator, "_login_device_code") as mock_login,
+            patch.object(authenticator, "_wait_for_access_token") as mock_wait,
+        ):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                with pytest.raises(GetAccessTokenError) as exc:
+                    pool.submit(authenticator.get_access_token).result()
+
+        assert exc.value.status_code == 401
+        assert "worker thread" in str(exc.value)
         assert authenticator.auth_file not in str(exc.value)
         mock_login.assert_not_called()
         mock_wait.assert_not_called()

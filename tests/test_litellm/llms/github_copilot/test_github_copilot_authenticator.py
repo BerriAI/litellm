@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -100,6 +101,20 @@ class TestGitHubCopilotAuthenticator:
 
         assert exc.value.status_code == 401
         assert "event loop" in str(exc.value)
+        assert authenticator.access_token_file not in str(exc.value)
+        mock_login.assert_not_called()
+
+    def test_get_access_token_refuses_device_code_login_in_worker_thread(self, authenticator):
+        with (
+            patch("builtins.open", side_effect=FileNotFoundError),
+            patch.object(authenticator, "_login") as mock_login,
+        ):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                with pytest.raises(GetAccessTokenError) as exc:
+                    pool.submit(authenticator.get_access_token).result()
+
+        assert exc.value.status_code == 401
+        assert "worker thread" in str(exc.value)
         assert authenticator.access_token_file not in str(exc.value)
         mock_login.assert_not_called()
 

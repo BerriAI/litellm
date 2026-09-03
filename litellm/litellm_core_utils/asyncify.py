@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import threading
 from collections.abc import Awaitable, Callable
 from typing import Final
 
@@ -74,6 +75,10 @@ def is_event_loop_running() -> bool:
     except RuntimeError:
         return False
     return True
+
+
+def can_block_current_thread() -> bool:
+    return threading.current_thread() is threading.main_thread() and not is_event_loop_running()
 
 
 def run_async_function(async_function, *args, **kwargs):
