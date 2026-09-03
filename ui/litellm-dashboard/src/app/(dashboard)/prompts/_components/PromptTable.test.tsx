@@ -65,11 +65,13 @@ describe("PromptTable", () => {
     expect(within(rows[1]).getByText("prompt-older")).toBeInTheDocument();
   });
 
-  it("should call onPromptClick when the prompt ID is clicked", async () => {
+  it("should call onPromptClick with the row's environment, defaulting to development", async () => {
     const user = userEvent.setup();
     render(<PromptTable {...defaultProps} />);
     await user.click(screen.getByRole("button", { name: "prompt-newer" }));
-    expect(mockOnPromptClick).toHaveBeenCalledWith("prompt-newer");
+    expect(mockOnPromptClick).toHaveBeenCalledWith("prompt-newer", "production");
+    await user.click(screen.getByRole("button", { name: "prompt-older" }));
+    expect(mockOnPromptClick).toHaveBeenCalledWith("prompt-older", "development");
   });
 
   it("should label the environment and default missing environments to development", () => {
@@ -83,7 +85,7 @@ describe("PromptTable", () => {
     render(<PromptTable {...defaultProps} />);
     await user.click(screen.getByTestId("prompt-actions-prompt-newer"));
     await user.click(await screen.findByTestId("prompt-action-delete"));
-    expect(mockOnDeleteClick).toHaveBeenCalledWith("prompt-newer", "prompt-newer");
+    expect(mockOnDeleteClick).toHaveBeenCalledWith("prompt-newer", "prompt-newer", "production");
   });
 
   it("should copy the prompt ID through the actions menu", async () => {

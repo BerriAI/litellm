@@ -165,7 +165,7 @@ export function KeyEditView({
       if (!accessToken) return;
       try {
         const response = await getPromptsList(accessToken);
-        setPromptsList(response.prompts.map((prompt) => prompt.prompt_id));
+        setPromptsList(Array.from(new Set(response.prompts.map((prompt) => prompt.prompt_id))));
       } catch (error) {
         console.error("Failed to fetch prompts:", error);
       }

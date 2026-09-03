@@ -47,8 +47,7 @@ def test_azure_ai_gpt_5_5_model_info(model):
 
     routed_model, provider, _, _ = get_llm_provider(model=model)
     assert routed_model == model.split("/", 1)[1]
-    # azure_ai/* models resolve under the azure provider in get_llm_provider
-    assert provider == "azure"
+    assert provider == "azure_ai"
 
 
 def test_azure_ai_gpt_5_5_backup_matches_main():
