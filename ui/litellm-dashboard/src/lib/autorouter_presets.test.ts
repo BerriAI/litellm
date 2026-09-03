@@ -1,9 +1,8 @@
 import { describe, it, expect } from "vitest";
-import bundledPresets from "../../../../litellm/proxy/public_endpoints/autorouter_presets.json";
+import { BUNDLED_PRESETS_RESPONSE } from "../../tests/mocks/autoRouterPresets";
 import {
   hydratePresets,
   AutoRouterPreset,
-  AutoRouterPresetsResponse,
   getRequiredModelsInPreset,
   getMissingModelsInPreset,
   getRequiredModels,
@@ -21,14 +20,20 @@ import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKe
 const groupsOnly = (models: Iterable<string>) => buildModelAvailability(models, []);
 
 // Hydrated from the real bundled catalog so a catalog edit flows into these expectations.
-const PRESETS = hydratePresets(bundledPresets as AutoRouterPresetsResponse);
+const PRESETS = hydratePresets(BUNDLED_PRESETS_RESPONSE);
 const getAllPresets = (): AutoRouterPreset[] => PRESETS;
 const getPresetByKey = (key: string): AutoRouterPreset | undefined => PRESETS.find((p) => p.key === key);
 
 describe("autorouter_presets", () => {
   it("hydrates exactly the bundled presets", () => {
     const presets = getAllPresets();
-    expect(presets.map((p) => p.label).sort()).toEqual(["Anthropic Family", "Gemini Family", "Lite", "OpenAI Family"]);
+    expect(presets.map((p) => p.label).sort()).toEqual([
+      "1M Context",
+      "Anthropic Family",
+      "Gemini Family",
+      "Lite",
+      "OpenAI Family",
+    ]);
     // Every preset carries all four fields the UI relies on; a JSON typo dropping one fails here.
     for (const p of presets) {
       expect(p).toMatchObject({ key: expect.any(String), label: expect.any(String), description: expect.any(String) });
@@ -199,6 +204,25 @@ describe("autorouter_presets", () => {
     const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
     expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
       REASONING: { "gpt-5.6-sol": { reasoning_effort: "xhigh" } },
+    });
+  });
+
+  it("pins the 1M context preset to Luna, Terra, and Opus at high thinking", () => {
+    const preset = getPresetByKey("1m_context")!;
+    const expectedTiers = {
+      SIMPLE: ["gpt-5.6-luna"],
+      MEDIUM: ["gpt-5.6-terra"],
+      COMPLEX: ["claude-opus-5"],
+      REASONING: ["claude-opus-5"],
+    };
+    expect(preset.complexity_router_config.classifier_type).toBe("heuristic_v2");
+    expect(preset.complexity_router_config.tiers).toEqual(expectedTiers);
+    expect(preset.complexity_router_config.tier_model_configs).toEqual({
+      REASONING: [{ model_name: "claude-opus-5", litellm_params: { reasoning_effort: "high" } }],
+    });
+    const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
+    expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+      REASONING: { "claude-opus-5": { reasoning_effort: "high" } },
     });
   });
 
