@@ -56,6 +56,9 @@ from litellm.types.utils import (
 _EMPTY_MAPPING: Final[Mapping[str, Any]] = MappingProxyType({})
 _EMPTY_MESSAGE: Final[Message] = {"role": "", "content": ""}
 _MAX_PARSED_TOOL_ARGUMENT_CHARS: Final = 256 * 1024
+_SAFE_REDACTED_MESSAGE_ROLES: Final = frozenset(
+    {"assistant", "developer", "function", "model", "system", "tool", "user"}
+)
 
 _PROMPT_CARRYING_METADATA_FIELDS: Final = frozenset(
     {
@@ -118,7 +121,14 @@ def _metadata_without_prompt_carriers(standard_logging_metadata: Mapping[str, An
 
 def _redact_messages(messages: Sequence[Message]) -> tuple[Message, ...]:
     """Each message's shape with its content replaced and tool payloads dropped; no message is invented."""
-    return tuple({"role": message.get("role", ""), "content": REDACTED_BY_LITELLM} for message in messages)
+    return tuple(
+        {
+            "role": role if role in _SAFE_REDACTED_MESSAGE_ROLES else "",
+            "content": REDACTED_BY_LITELLM,
+        }
+        for message in messages
+        for role in [message.get("role", "")]
+    )
 
 
 def _cost_dimension_tags(

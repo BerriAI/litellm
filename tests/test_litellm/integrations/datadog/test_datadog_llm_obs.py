@@ -553,6 +553,16 @@ def test_redaction_keeps_the_conversation_shape_without_its_content() -> None:
     assert result["meta"]["output"]["messages"] == [{"role": "assistant", "content": "redacted-by-litellm"}]
 
 
+def test_redaction_drops_an_unrecognized_message_role() -> None:
+    result = _span_json(
+        _redacting_logger(turn_off_message_logging=True),
+        build_payload(messages=[{"role": "SECRET-39402", "content": "hello"}]),
+    )
+
+    assert result["meta"]["input"]["messages"] == [{"role": "", "content": "redacted-by-litellm"}]
+    assert "SECRET-39402" not in safe_dumps(result)
+
+
 def test_the_deprecated_message_logging_flag_engages_the_same_redaction() -> None:
     """The platform redacts for `message_logging is not True`, so this callback's own gate must agree."""
     result = _span_json(
