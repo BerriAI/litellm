@@ -460,13 +460,14 @@ def test_rag_query_forwards_managed_store_credentials_to_search(client_internal_
         ]
     )
 
-    with patch(  # test-quality-ok: asearch is the boundary the store-credential forwarding under test targets; the real aquery pipeline runs in between
-        "litellm.vector_stores.asearch", new=fake_search
-    ), patch.object(litellm, "vector_store_registry", mock_registry), patch(  # test-quality-ok: seeds the managed-store registry and a mock-response router so real store resolution and the completion step run
-        "litellm.proxy.proxy_server.llm_router", router
-    ), patch(  # test-quality-ok: grants store access, which is not under test, so the endpoint reaches the search boundary
-        "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
-        new=AsyncMock(return_value=True),
+    with (
+        patch("litellm.vector_stores.asearch", new=fake_search),  # test-quality-ok: the search boundary under test
+        patch.object(litellm, "vector_store_registry", mock_registry),  # test-quality-ok: seeds the store under test
+        patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: mock-response router for completion
+        patch(  # test-quality-ok: store access is not under test, so the request reaches the search boundary
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         response = client_internal_user.post(
             "/v1/rag/query",

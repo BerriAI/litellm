@@ -413,8 +413,9 @@ async def test_aquery_forwards_vector_store_params_to_search_but_not_completion(
             model="gpt-4o-mini",
         )
     )
-    with patch("litellm.vector_stores.asearch", new=fake_search), patch(  # test-quality-ok: asearch and acompletion are the two boundaries the forwarding contract under test targets
-        "litellm.acompletion", new=fake_completion
+    with (
+        patch("litellm.vector_stores.asearch", new=fake_search),  # test-quality-ok: the search boundary under test
+        patch("litellm.acompletion", new=fake_completion),  # test-quality-ok: the completion boundary under test
     ):
         await litellm.aquery(
             model="gpt-4o-mini",
