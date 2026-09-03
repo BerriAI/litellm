@@ -10258,6 +10258,10 @@ class Router:
         model_list: Final = self.get_model_list(model_name=model_group)
         if model_list is None:
             return None
+        model_group_description: Final[str | None] = next(
+            (d for d in (m.get("model_info", {}).get("description") for m in model_list) if isinstance(d, str)),
+            None,
+        )
         for model in model_list:
             is_match = False
             if (
@@ -10362,6 +10366,7 @@ class Router:
                     **{
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
+                        "description": model_group_description,
                         **model_info,
                         "supported_reasoning_efforts": None,
                     }

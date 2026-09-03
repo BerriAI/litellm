@@ -24,6 +24,7 @@ export interface ModelGroupInfo {
   health_status?: string;
   health_response_time?: number;
   health_checked_at?: string;
+  description?: string;
   [key: string]: any;
 }
 
