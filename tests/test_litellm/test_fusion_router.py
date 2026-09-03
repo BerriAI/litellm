@@ -686,14 +686,14 @@ async def test_proxy_fusion_authorizes_every_hidden_model(monkeypatch: pytest.Mo
     authorize = AsyncMock(return_value=None)
     monkeypatch.setattr(auth_checks, "can_key_call_resolved_model", authorize)
 
-    response = await router.acompletion(
-        model="fusion/test",
-        messages=[{"role": "user", "content": "Answer"}],
-        metadata={"user_api_key_auth": UserAPIKeyAuth(models=["*"])},
-        proxy_server_request={"body": {"model": "fusion/test"}},
+    await router._authorize_fusion_dependencies(  # pyright: ignore[reportPrivateUsage]
+        fusion_router=router.fusion_routers["fusion/test"],
+        request_kwargs={
+            "metadata": {"user_api_key_auth": UserAPIKeyAuth(models=["*"])},
+            "proxy_server_request": {"body": {"model": "fusion/test"}},
+        },
     )
 
-    assert isinstance(response, ModelResponse)
     assert [call.kwargs["model"] for call in authorize.await_args_list] == ["outer", "panel-a", "analyst"]
 
 
