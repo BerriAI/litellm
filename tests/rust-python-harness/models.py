@@ -33,7 +33,7 @@ class ConfidenceLevel(str, Enum):
     LOW = "LOW"
 
 
-SDK_FUNCTIONS = ("ocr", "messages", "responses", "count_tokens")
+SDK_FUNCTIONS = ("ocr", "messages", "responses", "count_tokens", "chat_completions", "transcription")
 
 
 @dataclass(frozen=True)
