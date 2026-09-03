@@ -177,6 +177,52 @@ def test_info_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
     assert response_json["error"]["code"] == "404"
 
 
+@pytest.mark.parametrize(
+    "user_role",
+    [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, LitellmUserRoles.TEAM],
+)
+def test_info_customer_non_admin_is_rejected(mock_prisma_client, user_role):
+    """
+    Security regression: end users live in one global table with no tenant
+    scoping, so a non-admin caller (for example an org admin whose route gate
+    passes via `org_admin_allowed_routes`) must not be able to read another
+    tenant's customer record through /customer/info.
+    """
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=LiteLLM_EndUserTable(user_id="victim-customer", alias="Victim", blocked=False)
+    )
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="org-admin-user", user_role=user_role)
+    try:
+        response = client.get(
+            "/customer/info?end_user_id=victim-customer",
+            headers={"Authorization": "Bearer org-admin-key"},
+        )
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 401
+    assert "Admin-only endpoint" in response.json()["error"]["message"]
+    mock_prisma_client.db.litellm_endusertable.find_first.assert_not_called()
+
+
+def test_info_customer_admin_viewer_allowed(mock_prisma_client):
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=LiteLLM_EndUserTable(user_id="c1", alias="Customer One", blocked=False)
+    )
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    )
+    try:
+        response = client.get("/customer/info?end_user_id=c1", headers={"Authorization": "Bearer viewer-key"})
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    assert response.json()["user_id"] == "c1"
+
+
 def test_delete_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
     """
     Test that delete_end_user raises a 404 ProxyException when user_ids do not exist.
@@ -795,9 +841,7 @@ def test_char_new_body(mock_prisma_client, mock_user_api_key_auth):
 
 
 @pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
-def test_customer_new_rejects_a_duration_that_never_advances(
-    mock_prisma_client, mock_user_api_key_auth, bad_duration
-):
+def test_customer_new_rejects_a_duration_that_never_advances(mock_prisma_client, mock_user_api_key_auth, bad_duration):
     """A zero-length window resets to "now", leaving the customer's budget row
     permanently due for the reset job to re-read every tick."""
     mock_prisma_client.db.litellm_endusertable.create = AsyncMock(return_value=_row(_FULL_DB_ROW))
