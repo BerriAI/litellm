@@ -151,8 +151,8 @@ class CheckBatchCost:
             return org_id
         api_key = getattr(job, "api_key", None)
         team_id = getattr(job, "team_id", None)
-        try:
-            if api_key:
+        if api_key:
+            try:
                 key_row: prisma_models.LiteLLM_VerificationToken | None = (
                     await self.prisma_client.db.litellm_verificationtoken.find_unique(
                         where={"token": api_key}
@@ -161,16 +161,22 @@ class CheckBatchCost:
                 key_org_id = getattr(key_row, "org_id", None) if key_row is not None else None
                 if key_org_id:
                     return key_org_id
-            if team_id:
-                team_row: prisma_models.LiteLLM_TeamTable | None = (
-                    await self.prisma_client.db.litellm_teamtable.find_unique(
-                        where={"team_id": team_id}
-                    )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"CheckBatchCost: could not resolve the key's org for batch {batch_id}, "
+                    f"still trying the team's: {e}"
                 )
-                return getattr(team_row, "organization_id", None) if team_row is not None else None
+        if not team_id:
             return None
+        try:
+            team_row: prisma_models.LiteLLM_TeamTable | None = (
+                await self.prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
+            )
+            return getattr(team_row, "organization_id", None) if team_row is not None else None
         except Exception as e:
-            verbose_proxy_logger.error(f"CheckBatchCost: could not resolve org for batch {batch_id}: {e}")
+            verbose_proxy_logger.error(f"CheckBatchCost: could not resolve the team's org for batch {batch_id}: {e}")
             return None
 
     async def _build_creator_attribution_metadata(
