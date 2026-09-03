@@ -1694,8 +1694,6 @@ async def test_apply_guardrail_litellm_timeout_fail_open_forwards_uncompressed()
     assert result["structured_messages"] == ORIGINAL_MESSAGES
 
 
-
-
 # ---------------------------------------------------------------------------
 # Content-parts flattening (LIT-4795)
 #
@@ -2669,7 +2667,9 @@ async def _plan_for(guardrail: HeadroomGuardrail, response, messages: list):
         return_value=_make_retrieve_response("ORIGINAL CONTENT"),
     ):
         return await guardrail.async_build_agentic_loop_plan(
-            tools={"tool_calls": [{"id": "call_1", "name": HEADROOM_RETRIEVE_TOOL_NAME, "arguments": {"hash": "h" * 24}}]},
+            tools={
+                "tool_calls": [{"id": "call_1", "name": HEADROOM_RETRIEVE_TOOL_NAME, "arguments": {"hash": "h" * 24}}]
+            },
             model="claude-sonnet-4-5-20250929",
             messages=messages,
             response=response,
@@ -2745,13 +2745,7 @@ def _timeout_of(mock_call) -> httpx.Timeout:
 
 @pytest.mark.asyncio
 async def test_compress_call_passes_bounded_timeout(guardrail: HeadroomGuardrail):
-    """Regression test: /v1/compress must carry an explicit timeout.
-
-    Without one the call inherits the shared GuardrailCallback client, whose read
-    timeout is 600s (or litellm.request_timeout when set), so a stalled Headroom
-    service holds the caller's request open for the whole window instead of
-    hitting unreachable_fallback.
-    """
+    """Without an explicit timeout the call inherits the shared client's 600s read leg."""
     inputs = GenericGuardrailAPIInputs(texts=["A" * 5000], structured_messages=ORIGINAL_MESSAGES)
 
     with patch.object(
@@ -2766,8 +2760,6 @@ async def test_compress_call_passes_bounded_timeout(guardrail: HeadroomGuardrail
     assert timeout.read == 60.0
     assert timeout.write == 60.0
     assert timeout.pool == 60.0
-    # The connect leg keeps the http_handler default so an unroutable host still
-    # fails in 5s rather than waiting out the read budget.
     assert timeout.connect == 5.0
 
 
@@ -2790,8 +2782,7 @@ async def test_retrieve_call_passes_bounded_timeout(guardrail: HeadroomGuardrail
 
 @pytest.mark.asyncio
 async def test_configured_timeout_overrides_the_default():
-    """litellm_params.timeout is documented as the per-request guardrail timeout;
-    Headroom previously accepted it and ignored it."""
+    """Headroom accepted litellm_params.timeout and ignored it."""
     guardrail = _make_guardrail(timeout=3.5)
     inputs = GenericGuardrailAPIInputs(texts=["A" * 5000], structured_messages=ORIGINAL_MESSAGES)
 
@@ -2805,8 +2796,6 @@ async def test_configured_timeout_overrides_the_default():
 
     timeout = _timeout_of(mock_post.call_args)
     assert timeout.read == 3.5
-    # A configured budget shorter than the connect default shrinks the connect leg
-    # too, so the whole call still fits inside what the admin asked for.
     assert timeout.connect == 3.5
 
 
@@ -2846,8 +2835,7 @@ async def test_read_timeout_forwards_uncompressed_under_fail_open():
 
 
 def test_initializer_forwards_configured_timeout(monkeypatch: pytest.MonkeyPatch):
-    """The config value has to reach the guardrail; wiring it only in __init__
-    leaves `timeout:` in config.yaml silently ignored."""
+    """Wiring it only in __init__ leaves `timeout:` in config.yaml silently ignored."""
     from litellm.proxy.guardrails.guardrail_hooks.headroom import initialize_guardrail
     from litellm.types.guardrails import LitellmParams
 
@@ -2869,10 +2857,7 @@ def test_initializer_forwards_configured_timeout(monkeypatch: pytest.MonkeyPatch
 
 
 def test_in_place_update_keeps_the_timeout_resolved():
-    """Regression: CustomGuardrail.update_in_memory_litellm_params copies every
-    LitellmParams attribute onto the guardrail, so an unset timeout would replace
-    the resolved httpx.Timeout with None and put the compress call back on the
-    shared client's 600s."""
+    """The base implementation copies every attribute over, nulling an unset timeout."""
     from litellm.types.guardrails import LitellmParams
 
     guardrail = _make_guardrail(timeout=5.0)
@@ -2890,15 +2875,9 @@ def test_in_place_update_keeps_the_timeout_resolved():
     assert guardrail.timeout.read == 7.0
 
 
-@pytest.mark.parametrize("configured", [0, 0.0, -1, -30.0])
-def test_non_positive_timeout_falls_back_to_the_default(configured: float):
-    """A non-positive budget must not reach httpx.
-
-    Under the default aiohttp transport 0 means "no deadline", which restores the
-    unbounded stall this bound exists to prevent, and a negative one is a deadline
-    already in the past, so every compress call fails instantly and fail_closed
-    turns that into a 502 on every request.
-    """
+@pytest.mark.parametrize("configured", [0, 0.0, -1, -30.0, float("inf"), float("-inf"), float("nan")])
+def test_unusable_timeout_falls_back_to_the_default(configured: float):
+    """0 and inf read as no deadline at all, a negative one as a deadline already past."""
     guardrail = _make_guardrail(timeout=configured)
 
     assert guardrail.timeout.read == 60.0

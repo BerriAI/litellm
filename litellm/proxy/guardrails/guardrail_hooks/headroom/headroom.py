@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 import uuid
@@ -55,15 +56,8 @@ BYPASS_HEADER: Final = "x-headroom-bypass"
 _STREAM_CONVERTIBLE_CALL_TYPES: Final = frozenset(
     (CallTypes.completion, CallTypes.acompletion, CallTypes.responses, CallTypes.aresponses)
 )
-# Default budget for a call to the compression service. The shared GuardrailCallback
-# client is built with no params, so its read/write/pool legs are 600s (or
-# litellm.request_timeout when that is set explicitly, which defaults to 6000s). That
-# is far too long for a pre-call guardrail: a stalled service holds the caller's
-# request open for the whole window instead of reaching unreachable_fallback, and
-# because that client is shared with every other no-params guardrail, each stalled
-# call also holds a pooled connection for the same window, so once the pool saturates
-# unrelated requests block on the pool leg too. Overridable per guardrail with
-# `timeout` in litellm_params.
+# The shared GuardrailCallback client carries no per-call bound, so without this a
+# stalled service holds the caller's request and a pooled connection for 600s or more.
 _COMPRESS_TIMEOUT_SECONDS: Final = 60.0
 HEADROOM_RETRIEVE_TOOL_NAME: Final = "headroom_retrieve"
 _HASH_PATTERN: Final = re.compile(r"hash=([a-f0-9]{24})")
@@ -529,32 +523,22 @@ class HeadroomGuardrail(CustomGuardrail):
     def _resolve_timeout(timeout: float | None) -> httpx.Timeout:
         """Budget for one call to the compression service, unset meaning the default.
 
-        A non-positive value is rejected rather than passed through: httpx accepts it
-        and the aiohttp transport then reads 0 as "no deadline" (restoring the
-        unbounded stall this bound exists to prevent) and a negative one as a deadline
-        already in the past, which fails every call instantly. The connect leg is
-        clamped to the budget so a short one is honored end to end rather than
-        spending the http_handler default on connect alone.
+        Zero, negative and non-finite values are rejected instead of passed through:
+        httpx accepts them, and the transport then reads 0 and inf as no deadline at
+        all and a negative one as a deadline already past.
         """
-        if timeout is not None and timeout <= 0:
+        rejected: Final = timeout is not None and not (math.isfinite(timeout) and timeout > 0)
+        if rejected:
             verbose_proxy_logger.warning(
-                "Headroom: ignoring non-positive timeout %s, using %s seconds",
+                "Headroom: ignoring unusable timeout %s, using %s seconds",
                 timeout,
                 _COMPRESS_TIMEOUT_SECONDS,
             )
-        seconds: Final = _COMPRESS_TIMEOUT_SECONDS if timeout is None or timeout <= 0 else timeout
+        seconds: Final = _COMPRESS_TIMEOUT_SECONDS if timeout is None or rejected else timeout
         return httpx.Timeout(timeout=seconds, connect=min(seconds, HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS))
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
-        """Re-resolve the timeout after an in-place guardrail update.
-
-        The base implementation copies every LitellmParams attribute onto the
-        guardrail, so an unset timeout would overwrite the resolved httpx.Timeout
-        with None and put the compress call back on the shared client's 600s. No
-        route reaches this today (guardrail updates rebuild the instance through
-        ``reinitialize_guardrail``), so this guards the method's own contract for
-        whoever calls it next.
-        """
+        """Re-resolve the timeout, which the base implementation would otherwise null out."""
         super().update_in_memory_litellm_params(litellm_params)
         self.timeout = self._resolve_timeout(litellm_params.timeout)
 
