@@ -10,11 +10,11 @@ Tests the cost calculation for Dashscope models including:
 
 import math
 import os
+from datetime import datetime, timezone
 
 import pytest
 
 # Add the project root to Python path
-
 import litellm
 from litellm.llms.dashscope.cost_calculator import (
     cost_per_token as dashscope_cost_per_token,
@@ -526,3 +526,139 @@ class TestDashscopeCostCalculator:
 
         assert prompt_cost == 0.0
         assert math.isclose(completion_cost, 500 * 1.6e-06, rel_tol=1e-10)
+
+    OFF_PEAK_WINDOW = "14:00-00:00"
+    INSIDE_WINDOW = datetime(2026, 9, 3, 17, 25, tzinfo=timezone.utc)
+    OUTSIDE_WINDOW = datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc)
+
+    def _register_off_peak_flat_model(self, model_key: str, off_peak_pricing: dict) -> None:
+        litellm.model_cost[model_key] = {
+            "litellm_provider": "dashscope",
+            "mode": "chat",
+            "input_cost_per_token": 2.4e-06,
+            "output_cost_per_token": 4.8e-06,
+            "cache_read_input_token_cost": 2e-07,
+            "cache_creation_input_token_cost": 3e-06,
+            "off_peak_pricing": off_peak_pricing,
+        }
+
+    def test_dashscope_off_peak_window_swaps_in_the_off_peak_rates(self):
+        """
+        Regression (LIT-6782): a deployment configured with off_peak_pricing kept billing the
+        standard dashscope rates inside its window, while the same block on a deepseek
+        deployment billed the off-peak rates.
+        """
+        self._register_off_peak_flat_model(
+            "dashscope/deepseek-off-peak-test",
+            {
+                "hours_utc": self.OFF_PEAK_WINDOW,
+                "input_cost_per_token": 1.2e-06,
+                "output_cost_per_token": 2.4e-06,
+                "cache_read_input_token_cost": 1e-07,
+            },
+        )
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=200,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=300, cache_creation_tokens=100),
+        )
+
+        prompt_cost, completion_cost = dashscope_cost_per_token(
+            model="deepseek-off-peak-test", usage=usage, current_time=self.INSIDE_WINDOW
+        )
+
+        assert math.isclose(prompt_cost, (600 * 1.2e-06) + (300 * 1e-07) + (100 * 3e-06), rel_tol=1e-10)
+        assert math.isclose(completion_cost, 200 * 2.4e-06, rel_tol=1e-10)
+
+        peak_prompt_cost, peak_completion_cost = dashscope_cost_per_token(
+            model="deepseek-off-peak-test", usage=usage, current_time=self.OUTSIDE_WINDOW
+        )
+
+        assert math.isclose(peak_prompt_cost, (600 * 2.4e-06) + (300 * 2e-07) + (100 * 3e-06), rel_tol=1e-10)
+        assert math.isclose(peak_completion_cost, 200 * 4.8e-06, rel_tol=1e-10)
+
+    def test_dashscope_off_peak_window_overrides_the_selected_tier(self):
+        """An open off-peak window bills the whole request at the flat off-peak rates, whichever tier
+        the input volume selected."""
+        self._register_tiered_model(
+            "dashscope/qwen-tiered-off-peak-test",
+            [
+                {"range": [0, 1000], "input_cost_per_token": 4e-07, "output_cost_per_token": 1.6e-06},
+                {"range": [1000, 2000], "input_cost_per_token": 8e-07, "output_cost_per_token": 3.2e-06},
+            ],
+        )
+        litellm.model_cost["dashscope/qwen-tiered-off-peak-test"]["off_peak_pricing"] = {
+            "hours_utc": self.OFF_PEAK_WINDOW,
+            "input_cost_per_token": 1e-07,
+            "output_cost_per_token": 4e-07,
+        }
+        usage = Usage(prompt_tokens=1500, completion_tokens=300)
+
+        prompt_cost, completion_cost = dashscope_cost_per_token(
+            model="qwen-tiered-off-peak-test", usage=usage, current_time=self.INSIDE_WINDOW
+        )
+
+        assert math.isclose(prompt_cost, 1500 * 1e-07, rel_tol=1e-10)
+        assert math.isclose(completion_cost, 300 * 4e-07, rel_tol=1e-10)
+
+        peak_prompt_cost, peak_completion_cost = dashscope_cost_per_token(
+            model="qwen-tiered-off-peak-test", usage=usage, current_time=self.OUTSIDE_WINDOW
+        )
+
+        assert math.isclose(peak_prompt_cost, 1500 * 8e-07, rel_tol=1e-10)
+        assert math.isclose(peak_completion_cost, 300 * 3.2e-06, rel_tol=1e-10)
+
+    def test_dashscope_off_peak_rates_left_unset_keep_the_standard_rates(self):
+        """A block that only overrides the input rate leaves output and cache reads on the standard
+        rates, and an explicit reasoning rate is never swapped out."""
+        self._register_off_peak_flat_model(
+            "dashscope/qwen-partial-off-peak-test",
+            {"hours_utc": self.OFF_PEAK_WINDOW, "input_cost_per_token": 1.2e-06},
+        )
+        litellm.model_cost["dashscope/qwen-partial-off-peak-test"]["output_cost_per_reasoning_token"] = 9e-06
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=200,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=300),
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=50),
+        )
+
+        prompt_cost, completion_cost = dashscope_cost_per_token(
+            model="qwen-partial-off-peak-test", usage=usage, current_time=self.INSIDE_WINDOW
+        )
+
+        assert math.isclose(prompt_cost, (700 * 1.2e-06) + (300 * 2e-07), rel_tol=1e-10)
+        assert math.isclose(completion_cost, (150 * 4.8e-06) + (50 * 9e-06), rel_tol=1e-10)
+
+    def test_dashscope_off_peak_output_rate_covers_reasoning_without_a_dedicated_rate(self):
+        """Reasoning tokens on a model with no dedicated reasoning rate follow the off-peak output
+        rate, the same way they follow the standard output rate outside the window."""
+        self._register_off_peak_flat_model(
+            "dashscope/qwen-reasoning-off-peak-test",
+            {"hours_utc": self.OFF_PEAK_WINDOW, "output_cost_per_token": 2.4e-06},
+        )
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=200,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=50),
+        )
+
+        _, completion_cost = dashscope_cost_per_token(
+            model="qwen-reasoning-off-peak-test", usage=usage, current_time=self.INSIDE_WINDOW
+        )
+
+        assert math.isclose(completion_cost, 200 * 2.4e-06, rel_tol=1e-10)
+
+    def test_dashscope_off_peak_defaults_to_the_current_time(self):
+        """The proxy's cost dispatch passes no clock, so an all-day window has to apply on the
+        default current time."""
+        self._register_off_peak_flat_model(
+            "dashscope/qwen-all-day-off-peak-test",
+            {"hours_utc": "00:00-00:00", "input_cost_per_token": 1.2e-06, "output_cost_per_token": 2.4e-06},
+        )
+        usage = Usage(prompt_tokens=1000, completion_tokens=200)
+
+        prompt_cost, completion_cost = dashscope_cost_per_token(model="qwen-all-day-off-peak-test", usage=usage)
+
+        assert math.isclose(prompt_cost, 1000 * 1.2e-06, rel_tol=1e-10)
+        assert math.isclose(completion_cost, 200 * 2.4e-06, rel_tol=1e-10)
