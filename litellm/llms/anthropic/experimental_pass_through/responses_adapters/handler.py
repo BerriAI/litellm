@@ -5,7 +5,7 @@ Used when the target model is an OpenAI or Azure model.
 """
 
 from collections.abc import AsyncIterator, Coroutine, Mapping
-from typing import TYPE_CHECKING, Any, Final, TypeAlias
+from typing import Any, Final, TypeAlias
 
 import litellm
 from litellm.types.llms.anthropic import (
@@ -20,23 +20,13 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 
-from ..utils import local_model_name
+from ..utils import litellm_logging_obj_from_kwargs, local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
-
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 
 AnthropicRequestMessages: TypeAlias = list[AllAnthropicMessageValues] | list[dict[str, object]]
 
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
-
-
-def _litellm_logging_obj(responses_kwargs: Mapping[str, object]) -> "LiteLLMLoggingObject | None":
-    from litellm.litellm_core_utils.litellm_logging import Logging
-
-    candidate: Final = responses_kwargs.get("litellm_logging_obj")
-    return candidate if isinstance(candidate, Logging) else None
 
 
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -198,7 +188,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
             wrapper: Final = AnthropicResponsesStreamWrapper(
                 responses_stream=result,
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
-                litellm_logging_obj=_litellm_logging_obj(responses_kwargs),
+                litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
             )
             return wrapper.async_anthropic_sse_wrapper()
 
@@ -280,7 +270,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
             wrapper: Final = AnthropicResponsesStreamWrapper(
                 responses_stream=result,
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
-                litellm_logging_obj=_litellm_logging_obj(responses_kwargs),
+                litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
             )
             return wrapper.async_anthropic_sse_wrapper()
 
