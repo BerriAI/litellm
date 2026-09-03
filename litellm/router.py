@@ -7417,7 +7417,10 @@ class Router:
             # Check retry policy FIRST, before should_retry_this_error
             # This allows retry policies to override the healthy deployments check
             _retry_policy_applies = False
-            if self.retry_policy is not None or model_group_retry_policy is not None:
+            if (
+                deployment_num_retries is None
+                and (self.retry_policy is not None or model_group_retry_policy is not None)
+            ):
                 # get num_retries from retry policy
                 # Use the model_group captured at the start of the function, or get it from metadata
                 # kwargs.get("model") at this point is the deployment model, not the model_group
