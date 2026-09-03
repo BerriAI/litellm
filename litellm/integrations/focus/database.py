@@ -96,7 +96,14 @@ class FocusLiteLLMDatabase:
 
         try:
             db_response: Final = await client.db.query_raw(query, *query_params)
-            return pl.DataFrame(db_response, infer_schema_length=None)
+            from litellm.proxy.spend_tracking.key_metadata_recovery import (
+                fill_missing_api_key_aliases,
+            )
+
+            # v1.99 double-hashed DailyUserSpend.api_key values miss the
+            # VerificationToken join above; recover alias/team for those rows.
+            recovered_rows: Final = await fill_missing_api_key_aliases(client, db_response)
+            return pl.DataFrame(list(recovered_rows), infer_schema_length=None)
         except Exception as exc:
             raise RuntimeError(f"Error retrieving usage data: {exc}") from exc
 

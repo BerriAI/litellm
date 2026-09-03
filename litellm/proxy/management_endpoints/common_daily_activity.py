@@ -10,10 +10,12 @@ from typing_extensions import TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PTU_SENTINEL_API_KEY
-from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
 from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy.spend_tracking.key_metadata_recovery import (
+    recover_double_hashed_key_metadata,
+)
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
-from litellm.proxy.utils import PrismaClient, hash_token
+from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import DeletedVerificationTokenRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
@@ -114,25 +116,6 @@ class DailySpendRecord(Protocol):
 class _KeyMetadataDict(TypedDict, total=False):
     key_alias: str | None
     team_id: str | None
-
-
-# Cap reverse-hash scans so a Usage page with orphaned double-hashed api_key
-# values cannot pull an unbounded VerificationToken table into memory.
-_MAX_DOUBLE_HASH_TOKEN_SCAN: Final = 10_000
-
-_SPEND_LOGS_KEY_METADATA_SQL: Final = """
-SELECT DISTINCT ON (api_key)
-    api_key,
-    metadata->>'user_api_key_alias' AS key_alias,
-    metadata->>'user_api_key_team_id' AS team_id
-FROM "LiteLLM_SpendLogs"
-WHERE api_key = ANY($1::text[])
-  AND (
-    NULLIF(metadata->>'user_api_key_alias', '') IS NOT NULL
-    OR NULLIF(metadata->>'user_api_key_team_id', '') IS NOT NULL
-  )
-ORDER BY api_key, "startTime" DESC NULLS LAST
-"""
 
 
 _WhereValue = str | dict[str, object]
@@ -459,136 +442,6 @@ def update_breakdown_metrics(
     return breakdown
 
 
-class _TokenAliasRecord(Protocol):
-    @property
-    def token(self) -> str: ...
-
-    @property
-    def key_alias(self) -> str | None: ...
-
-    @property
-    def team_id(self) -> str | None: ...
-
-
-def _token_digest_metadata(
-    records: Sequence[_TokenAliasRecord],
-    wanted: AbstractSet[str],
-) -> dict[str, _KeyMetadataDict]:
-    return {
-        digested: {"key_alias": record.key_alias, "team_id": record.team_id}
-        for record in records
-        for digested in (hash_token(record.token),)
-        if digested in wanted
-    }
-
-
-async def _reverse_hash_active_key_metadata(
-    prisma_client: PrismaClient,
-    wanted: AbstractSet[str],
-) -> dict[str, _KeyMetadataDict]:
-    try:
-        active_records: Final[Sequence[_TokenAliasRecord]] = await VerificationTokenRepository(
-            prisma_client
-        ).table.find_many(take=_MAX_DOUBLE_HASH_TOKEN_SCAN)
-    except Exception as e:
-        verbose_proxy_logger.warning(
-            "Failed reverse-hash recovery against active keys for %d missing keys: %s",
-            len(wanted),
-            e,
-        )
-        return {}
-    return _token_digest_metadata(active_records, wanted)
-
-
-async def _reverse_hash_deleted_key_metadata(
-    prisma_client: PrismaClient,
-    wanted: AbstractSet[str],
-) -> dict[str, _KeyMetadataDict]:
-    try:
-        deleted_records: Final[Sequence[_TokenAliasRecord]] = await DeletedVerificationTokenRepository(
-            prisma_client
-        ).table.find_many(
-            take=_MAX_DOUBLE_HASH_TOKEN_SCAN,
-            order={"deleted_at": "desc"},
-        )
-    except Exception as e:
-        verbose_proxy_logger.warning(
-            "Failed reverse-hash recovery against deleted keys for %d missing keys: %s",
-            len(wanted),
-            e,
-        )
-        return {}
-    return _token_digest_metadata(deleted_records, wanted)
-
-
-async def _reverse_hash_key_metadata(
-    prisma_client: PrismaClient,
-    wanted: AbstractSet[str],
-) -> dict[str, _KeyMetadataDict]:
-    from_active: Final = await _reverse_hash_active_key_metadata(prisma_client, wanted)
-    still_wanted: Final = wanted - frozenset(from_active)
-    if not still_wanted:
-        return from_active
-    return {**from_active, **(await _reverse_hash_deleted_key_metadata(prisma_client, still_wanted))}
-
-
-async def _spend_logs_key_metadata(
-    prisma_client: PrismaClient,
-    wanted: AbstractSet[str],
-) -> dict[str, _KeyMetadataDict]:
-    try:
-        spend_log_rows: Final = await prisma_client.db.query_raw(
-            _SPEND_LOGS_KEY_METADATA_SQL,
-            list(wanted),
-        )
-    except Exception as e:
-        verbose_proxy_logger.warning(
-            "Failed SpendLogs metadata recovery for %d missing keys: %s",
-            len(wanted),
-            e,
-        )
-        return {}
-
-    if not isinstance(spend_log_rows, list):
-        return {}
-
-    return {
-        row["api_key"]: {
-            "key_alias": row.get("key_alias"),
-            "team_id": row.get("team_id"),
-        }
-        for row in spend_log_rows
-        if isinstance(row, dict)
-        and isinstance(row.get("api_key"), str)
-        and row["api_key"] in wanted
-    }
-
-
-async def _recover_double_hashed_key_metadata(
-    prisma_client: PrismaClient,
-    missing_keys: AbstractSet[str],
-) -> dict[str, _KeyMetadataDict]:
-    """
-    Recover key_alias/team_id for DailyUserSpend.api_key values that were
-    double-hashed by the v1.99 spend-log provenance gate.
-
-    Those rows store hash(VerificationToken.token) instead of the token, so the
-    exact join misses. Prefer a bounded reverse-hash against active/deleted
-    tokens; fall back to the alias/team stamped into SpendLogs metadata (which
-    stayed correct even when api_key did not).
-    """
-    sha_missing: Final = frozenset(key for key in missing_keys if is_valid_sha256_hash(key))
-    if not sha_missing:
-        return {}
-
-    from_tokens: Final = await _reverse_hash_key_metadata(prisma_client, sha_missing)
-    still_missing: Final = sha_missing - frozenset(from_tokens)
-    if not still_missing:
-        return from_tokens
-
-    return {**from_tokens, **(await _spend_logs_key_metadata(prisma_client, still_missing))}
-
-
 async def get_api_key_metadata(
     prisma_client: PrismaClient,
     api_keys: AbstractSet[str],
@@ -635,7 +488,7 @@ async def get_api_key_metadata(
         return result
     return {
         **result,
-        **(await _recover_double_hashed_key_metadata(prisma_client, still_missing)),
+        **(await recover_double_hashed_key_metadata(prisma_client, still_missing)),
     }
 
 
