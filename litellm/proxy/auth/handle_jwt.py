@@ -142,7 +142,7 @@ def jwks_unavailable_exception(error: JWKSUnreachableError) -> ProxyException:
             f"unreachable, so the JWT signature could not be verified. Please retry shortly. Error: {error}"
         ),
         type=ProxyErrorTypes.auth_provider_unavailable,
-        param="None",
+        param=None,
         code=status.HTTP_503_SERVICE_UNAVAILABLE,
     )
 

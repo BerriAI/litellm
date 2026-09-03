@@ -30,7 +30,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import INVALID_VIRTUAL_KEY_ERROR_MARKER
 from litellm.exceptions import BudgetExceededError
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
+from litellm.proxy.auth.auth_exception_handler import (
+    UserAPIKeyAuthExceptionHandler,
+    _as_proxy_exception,
+)
 
 
 class _EngineHttp500:
@@ -871,3 +874,32 @@ async def test_handle_authentication_error_traceback_only_for_unexpected_errors(
     assert records[0].levelname == expect_level
     expected_logger_name = "LiteLLM Proxy.stdout" if expect_level == "WARNING" else "LiteLLM Proxy"
     assert records[0].name == expected_logger_name
+
+
+@pytest.mark.parametrize(
+    "auth_failure,expected_type",
+    [
+        pytest.param(
+            HTTPException(status_code=401, detail="Authentication Error, invalid key"),
+            ProxyErrorTypes.auth_error.value,
+            id="http_exception",
+        ),
+        pytest.param(
+            httpx.ConnectError("All connection attempts failed"),
+            ProxyErrorTypes.no_db_connection.value,
+            id="database_unavailable",
+        ),
+        pytest.param(
+            Exception("Invalid proxy server token passed"),
+            ProxyErrorTypes.auth_error.value,
+            id="bare_exception",
+        ),
+    ],
+)
+def test_auth_failure_error_body_is_openai_shaped(auth_failure, expected_type):
+    """Every auth rejection must serialize as an OpenAI error object: a real
+    `type` string and a JSON null `param`, never the literal string "None"."""
+    body = json.loads(json.dumps({"error": _as_proxy_exception(auth_failure).to_dict()}))
+
+    assert body["error"]["type"] == expected_type
+    assert body["error"]["param"] is None

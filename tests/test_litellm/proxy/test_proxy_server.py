@@ -12507,3 +12507,14 @@ def test_disabling_docs_does_not_disable_other_routes(monkeypatch):
 
     assert client.get("/redoc").status_code == 404
     assert client.get("/health/liveliness").status_code == 200
+
+
+def test_assistants_error_body_is_openai_shaped(client_no_auth):
+    """A failed /v1/assistants call must answer with an OpenAI error object: a
+    real `type` string and a JSON null `param`, never the literal string "None"."""
+    response = client_no_auth.get("/v1/assistants")
+
+    assert response.status_code >= 400
+    error = response.json()["error"]
+    assert error["type"] == "internal_server_error"
+    assert error["param"] is None
