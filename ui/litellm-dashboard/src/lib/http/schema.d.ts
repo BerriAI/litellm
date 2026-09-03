@@ -12129,6 +12129,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/autorouter_presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Public Autorouter Presets
+         * @description Return the auto-router preset catalog the dashboard's template picker renders.
+         *
+         *     Resolved once per process, like the model cost map: fetched from ``litellm.autorouter_presets_url``
+         *     (override with ``LITELLM_AUTOROUTER_PRESETS_URL``) on the first request, falling back to the
+         *     catalog bundled with the package on any failure. Set ``LITELLM_LOCAL_AUTOROUTER_PRESETS=True``
+         *     to serve the bundled catalog only. A restart picks up a newly published catalog.
+         */
+        get: operations["get_public_autorouter_presets_public_autorouter_presets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/public/complexity_router/scorer_defaults": {
         parameters: {
             query?: never;
@@ -23390,6 +23415,49 @@ export interface components {
             context_window_size: number;
             /** Tier Definitions */
             tier_definitions: components["schemas"]["TierDefinition"][];
+        };
+        /**
+         * AutoRouterPresetConfig
+         * @description The complexity_router_config a preset prefills.
+         *
+         *     Only tiers is validated, because every dashboard consumer dereferences it; everything else
+         *     passes through verbatim with unknown fields kept (extra="allow"), so a catalog published after
+         *     this proxy shipped still serves its new fields intact.
+         */
+        AutoRouterPresetConfig: {
+            tiers: components["schemas"]["AutoRouterPresetTiers"];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * AutoRouterPresetRecord
+         * @description One auto-router preset as served to the dashboard's template picker.
+         */
+        AutoRouterPresetRecord: {
+            complexity_router_config: components["schemas"]["AutoRouterPresetConfig"];
+            /** Description */
+            description: string;
+            /** Label */
+            label: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * AutoRouterPresetTiers
+         * @description Exactly the four built-in tiers the dashboard's preset prefill can apply.
+         *
+         *     extra="forbid" on purpose: a tier name this dashboard cannot apply would grey out or crash the
+         *     picker, so such a catalog is rejected wholesale and the bundled one serves instead.
+         */
+        AutoRouterPresetTiers: {
+            /** Complex */
+            COMPLEX: string[];
+            /** Medium */
+            MEDIUM: string[];
+            /** Reasoning */
+            REASONING: string[];
+            /** Simple */
+            SIMPLE: string[];
         };
         /**
          * AutoRouterRoutingTestRequest
@@ -54675,6 +54743,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentCreateInfo"][];
+                };
+            };
+        };
+    };
+    get_public_autorouter_presets_public_autorouter_presets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: components["schemas"]["AutoRouterPresetRecord"];
+                    };
                 };
             };
         };
