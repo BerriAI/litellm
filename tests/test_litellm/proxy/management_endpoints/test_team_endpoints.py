@@ -13527,3 +13527,204 @@ async def test_team_member_update_skips_invalidation_when_no_budget_fields_sent(
 
     assert await real_cache.async_get_cache(key="team-1_member-1") == "still-fresh-membership"
     assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:member-1:team-1") == 1.5
+
+
+# ---------------------------------------------------------------------------
+# /team/list (v1) — _authorize_and_filter_teams
+# Regression tests for https://github.com/BerriAI/litellm/issues/39394:
+# a user who is org_admin of any org must still see teams they are a plain
+# member of in other orgs when querying their own user_id.
+# ---------------------------------------------------------------------------
+
+
+def _make_team_row(team_id: str, organization_id: Optional[str], member_ids: list) -> MagicMock:
+    """Build a mock prisma LiteLLM_TeamTable row for /team/list tests."""
+    row = MagicMock()
+    row.team_id = team_id
+    row.organization_id = organization_id
+    row.members_with_roles = [{"user_id": uid, "role": "user"} for uid in member_ids]
+    row.model_dump.return_value = {
+        "team_id": team_id,
+        "team_alias": f"alias-{team_id}",
+        "organization_id": organization_id,
+        "members_with_roles": row.members_with_roles,
+    }
+    return row
+
+
+def _make_teams_prisma_mock(all_team_rows: list) -> MagicMock:
+    """Mock prisma client whose litellm_teamtable.find_many honors the
+    organization_id where-clause used by _authorize_and_filter_teams."""
+    mock_prisma = MagicMock()
+
+    async def fake_find_many(**kwargs):
+        where = kwargs.get("where") or {}
+        org_filter = where.get("organization_id")
+        if org_filter is not None:
+            return [t for t in all_team_rows if t.organization_id in org_filter["in"]]
+        return list(all_team_rows)
+
+    mock_prisma.db.litellm_teamtable.find_many = AsyncMock(side_effect=fake_find_many)
+    mock_prisma.db.litellm_teammembership.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    return mock_prisma
+
+
+def _make_org_membership_user(user_id: str, org_roles: dict) -> LiteLLM_UserTable:
+    """org_roles: {organization_id: user_role}"""
+    now = datetime.now(timezone.utc)
+    return LiteLLM_UserTable(
+        user_id=user_id,
+        organization_memberships=[
+            LiteLLM_OrganizationMembershipTable(
+                user_id=user_id,
+                organization_id=org_id,
+                user_role=role,
+                spend=0.0,
+                created_at=now,
+                updated_at=now,
+            )
+            for org_id, role in org_roles.items()
+        ],
+    )
+
+
+_MIXED_ROLE_TEAMS: Final = [
+    # ("team_id", "organization_id", [member user_ids])
+    ("team_a1", "org_A", ["mixed_user"]),
+    ("team_a2", "org_A", ["other_user"]),
+    ("team_b1", "org_B", ["mixed_user"]),
+    ("team_b2", "org_B", ["other_user"]),
+]
+
+
+async def _run_authorize_and_filter_teams(
+    caller_user: Optional[LiteLLM_UserTable],
+    user_api_key_dict: UserAPIKeyAuth,
+    user_id: Optional[str],
+    mock_prisma: MagicMock,
+):
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _authorize_and_filter_teams,
+    )
+
+    with patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+        "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+        new_callable=AsyncMock,
+        return_value=caller_user,
+    ):
+        return await _authorize_and_filter_teams(
+            user_api_key_dict=user_api_key_dict,
+            user_id=user_id,
+            prisma_client=mock_prisma,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_team_list_org_admin_own_query_includes_member_teams_in_other_orgs():
+    """
+    Mixed-role user: org_admin of org_A, plain member of a team in org_B.
+    An own query must return BOTH the org_A team they belong to and the
+    org_B team they are a direct member of (issue #39394 — previously the
+    org_admin branch dropped the org_B membership entirely).
+    """
+    teams = [_make_team_row(*t) for t in _MIXED_ROLE_TEAMS]
+    mock_prisma = _make_teams_prisma_mock(teams)
+    caller = _make_org_membership_user("mixed_user", {"org_A": "org_admin"})
+    key = UserAPIKeyAuth(user_id="mixed_user", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    result = await _run_authorize_and_filter_teams(caller, key, "mixed_user", mock_prisma)
+
+    assert {t.team_id for t in result} == {"team_a1", "team_b1"}
+
+
+@pytest.mark.asyncio
+async def test_team_list_pure_member_own_query_unchanged():
+    """A user with no org_admin role anywhere still gets all their member teams."""
+    teams = [_make_team_row(*t) for t in _MIXED_ROLE_TEAMS]
+    mock_prisma = _make_teams_prisma_mock(teams)
+    caller = _make_org_membership_user("mixed_user", {"org_A": "internal_user"})
+    key = UserAPIKeyAuth(user_id="mixed_user", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    result = await _run_authorize_and_filter_teams(caller, key, "mixed_user", mock_prisma)
+
+    assert {t.team_id for t in result} == {"team_a1", "team_b1"}
+
+
+@pytest.mark.asyncio
+async def test_team_list_org_admin_bare_query_unchanged():
+    """An org admin listing without user_id still sees every team in their orgs."""
+    teams = [_make_team_row(*t) for t in _MIXED_ROLE_TEAMS]
+    mock_prisma = _make_teams_prisma_mock(teams)
+    caller = _make_org_membership_user("mixed_user", {"org_A": "org_admin"})
+    key = UserAPIKeyAuth(user_id="mixed_user", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    result = await _run_authorize_and_filter_teams(caller, key, None, mock_prisma)
+
+    assert {t.team_id for t in result} == {"team_a1", "team_a2"}
+
+
+@pytest.mark.asyncio
+async def test_team_list_org_admin_other_user_query_stays_scoped_to_their_orgs():
+    """An org admin querying ANOTHER user's teams stays scoped to the orgs
+    they administer — the fix must not widen cross-org visibility."""
+    teams = [_make_team_row(*t) for t in _MIXED_ROLE_TEAMS]
+    mock_prisma = _make_teams_prisma_mock(teams)
+    caller = _make_org_membership_user("mixed_user", {"org_A": "org_admin"})
+    key = UserAPIKeyAuth(user_id="mixed_user", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    result = await _run_authorize_and_filter_teams(caller, key, "other_user", mock_prisma)
+
+    # other_user is a member of team_a2 (org_A, administered) and team_b2
+    # (org_B, not administered) — only the org_A team may be returned.
+    assert {t.team_id for t in result} == {"team_a2"}
+
+
+@pytest.mark.asyncio
+async def test_team_list_non_admin_other_user_query_still_rejected():
+    """A non-admin querying another user's teams is still rejected with 401."""
+    teams = [_make_team_row(*t) for t in _MIXED_ROLE_TEAMS]
+    mock_prisma = _make_teams_prisma_mock(teams)
+    caller = _make_org_membership_user("mixed_user", {"org_A": "internal_user"})
+    key = UserAPIKeyAuth(user_id="mixed_user", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _run_authorize_and_filter_teams(caller, key, "other_user", mock_prisma)
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_team_list_endpoint_organization_id_filter_applies_to_mixed_role_user():
+    """
+    GET /team/list?user_id=<caller>&organization_id=org_B for the mixed-role
+    user returns exactly their org_B membership (the issue's second repro
+    line returned [] before the fix). Also verifies the organization_id
+    filter still applies on top of the widened own-query scope.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import list_team
+
+    teams = [_make_team_row(*t) for t in _MIXED_ROLE_TEAMS]
+    mock_prisma = _make_teams_prisma_mock(teams)
+    caller = _make_org_membership_user("mixed_user", {"org_A": "org_admin"})
+    key = UserAPIKeyAuth(user_id="mixed_user", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+            "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+            new_callable=AsyncMock,
+            return_value=caller,
+        ),
+    ):
+        result = await list_team(
+            http_request=MagicMock(),
+            user_id="mixed_user",
+            organization_id="org_B",
+            user_api_key_dict=key,
+        )
+
+    assert [t.team_id for t in result] == ["team_b1"]

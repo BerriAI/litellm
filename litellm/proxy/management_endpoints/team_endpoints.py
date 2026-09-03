@@ -5220,20 +5220,22 @@ async def _authorize_and_filter_teams(
     Authorize the /team/list request and return filtered teams.
 
     - Proxy admins: all teams (or filtered by user_id if provided).
-    - Org admins: teams from their orgs (scoped to user_id if provided).
-    - Own query (user_id matches caller): teams the user is a member of.
+    - Org admins: teams from their orgs (scoped to the target user_id if provided).
+    - Own query (user_id matches caller): every team the user is a member of,
+      across all orgs — even if the caller is also an org admin somewhere.
     - Others: 401.
     """
     is_proxy_admin: Final = _user_has_admin_view(user_api_key_dict)
+    is_own_query: Final = (
+        user_id is not None and user_api_key_dict.user_id is not None and user_api_key_dict.user_id == user_id
+    )
     allowed_org_ids: list[str] | None = None
 
     if not is_proxy_admin:
-        is_own_query: Final = (
-            user_id is not None and user_api_key_dict.user_id is not None and user_api_key_dict.user_id == user_id
-        )
-
-        # Check if user is an org admin (even for own queries, so they see org teams)
-        if user_api_key_dict.user_id is not None:
+        # Check if user is an org admin — that authorizes queries beyond their
+        # own memberships. Own queries don't need it: they are always allowed
+        # and return the caller's memberships across all orgs (issue #39394).
+        if user_api_key_dict.user_id is not None and not is_own_query:
             caller_user: Final = await get_user_object(
                 user_id=user_api_key_dict.user_id,
                 prisma_client=prisma_client,
@@ -5258,7 +5260,10 @@ async def _authorize_and_filter_teams(
                 },
             )
 
-    if allowed_org_ids is not None:
+    # An own query must NOT be limited to the caller's administered orgs: a user
+    # who is org_admin of one org can also be a plain member of teams in other
+    # orgs, and those direct memberships must be returned too (issue #39394).
+    if allowed_org_ids is not None and not is_own_query:
         # Org admin: query DB for teams in their orgs
         org_teams: Final = await _raw_team_db(TeamRepository(prisma_client)).find_many(
             where={"organization_id": {"in": allowed_org_ids}},
@@ -5273,7 +5278,8 @@ async def _authorize_and_filter_teams(
             if team.members_with_roles and any(m.get("user_id") == user_id for m in team.members_with_roles)
         ]
     elif user_id:
-        # Regular user: fetch all and filter by membership (Prisma can't filter JSON arrays)
+        # Own query (or proxy admin filtering by user): fetch all and filter by
+        # membership (Prisma can't filter JSON arrays)
         response: Final = await _raw_team_db(TeamRepository(prisma_client)).find_many(
             include={"litellm_model_table": True}
         )
