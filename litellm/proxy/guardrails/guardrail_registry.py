@@ -826,11 +826,12 @@ class InMemoryGuardrailHandler:
         Removes old callback from litellm.callbacks and creates fresh instance.
 
         If the new config fails to initialize (e.g. an invalid on_flagged
-        combination), the previous instance is restored rather than left
-        deleted: initialize_guardrail's own ValueError/TypeError propagate
-        uncaught, so a caller reaching this point after already deleting the
-        old instance would otherwise leave the guardrail providing no
-        protection at all, not merely "still enforcing the old config."
+        combination or an invalid regex), the previous instance is restored
+        rather than left deleted, and the failure is re-raised as ValueError so
+        every init failure reaches callers as one exception type: a caller
+        reaching this point after already deleting the old instance would
+        otherwise leave the guardrail providing no protection at all, not
+        merely "still enforcing the old config."
         """
         guardrail_id: Final = guardrail.get("guardrail_id")
         if not guardrail_id:
@@ -849,7 +850,7 @@ class InMemoryGuardrailHandler:
         # that was enforcing must never fail open because an update was bad.
         try:
             return self.initialize_guardrail(guardrail=guardrail, config_file_path=config_file_path, source=source)
-        except Exception:
+        except Exception as init_error:
             if previous_guardrail is not None:
                 verbose_proxy_logger.exception(
                     "Reinitializing guardrail %s with updated params failed; restoring the previous configuration",
@@ -861,7 +862,7 @@ class InMemoryGuardrailHandler:
                     )
                 except Exception:  # noqa: BLE001  # the original failure must propagate even if the restore breaks
                     verbose_proxy_logger.exception("Restoring previous guardrail %s also failed", guardrail_id)
-            raise
+            raise ValueError(f"Guardrail initialization failed: {init_error}") from init_error
 
     def sync_guardrail_from_db(self, guardrail: Guardrail, config_file_path: str | None = None) -> Guardrail | None:
         """
