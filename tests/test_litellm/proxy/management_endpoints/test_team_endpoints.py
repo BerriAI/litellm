@@ -11083,6 +11083,41 @@ async def test_new_team_rejects_reserved_ui_session_team_id():
         mock_prisma.get_data.assert_not_called()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team_id", ["", "   "])
+async def test_new_team_generates_id_for_blank_team_id(mock_db_client, mock_admin_auth, team_id):
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.update_data = AsyncMock(return_value=MagicMock())
+    mock_db_client.db = MagicMock()
+
+    created_team: Final = MagicMock(team_id="generated-team-id")
+    created_team.model_dump.return_value = {"team_id": "generated-team-id"}
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = AsyncMock(return_value=created_team)
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=created_team)
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+    _wire_team_create_tx(mock_db_client)
+
+    await new_team(
+        data=NewTeamRequest(team_alias="generated-id-team", team_id=team_id),
+        http_request=MagicMock(spec=Request),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    create_data: Final = mock_db_client.db.litellm_teamtable.create.await_args.kwargs["data"]
+    assert create_data["team_id"]
+    assert create_data["team_id"].strip()
+    mock_db_client.get_data.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # PATCH /team/{team_id} — RFC 7386 JSON Merge Patch
 #

@@ -77,7 +77,10 @@ const teamCreateFieldsSchema = z.object({
   tpm_limit: numericInputSchema,
   rpm_limit: numericInputSchema,
   metadata: metadataPairsSchema.optional(),
-  team_id: z.string().optional(),
+  team_id: z
+    .string()
+    .optional()
+    .transform((value) => (value?.trim() ? value : undefined)),
   team_member_budget: z.number().optional(),
   team_member_key_duration: z.string().optional(),
   team_member_rpm_limit: numericInputSchema,

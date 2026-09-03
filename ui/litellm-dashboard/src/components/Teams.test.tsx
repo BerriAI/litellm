@@ -1188,6 +1188,19 @@ describe("Teams - which fields reach the create payload depends on the open sect
     );
   });
 
+  it.each(["", "   "])("omits a blank Team ID so the backend generates one", async (teamId) => {
+    await openCreateModal();
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Generated ID Team" } });
+    toggleAdditionalSettings();
+    const teamIdInput = await screen.findByLabelText("Team ID");
+    fireEvent.change(teamIdInput, { target: { value: "temporary-id" } });
+    fireEvent.change(teamIdInput, { target: { value: teamId } });
+
+    const payload = await submit();
+
+    expect(payload.team_id).toBeUndefined();
+  });
+
   it("drops a value typed in Additional Settings when that section is closed again before saving", async () => {
     await openCreateModal();
     fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Reclosed Team" } });
