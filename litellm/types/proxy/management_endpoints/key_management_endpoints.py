@@ -2,6 +2,23 @@ from datetime import datetime
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
+from typing_extensions import ReadOnly, TypedDict
+
+from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
+
+
+class KeyTokenWhere(TypedDict):
+    token: ReadOnly[str]
+
+
+class KeyAliasContainsWhere(TypedDict):
+    key_alias: ReadOnly[InsensitiveContains]
+
+
+class KeySearchWhere(TypedDict):
+    """Prisma filter behind `/key/list?search=`: exact token or case-insensitive alias substring."""
+
+    OR: ReadOnly[tuple[KeyTokenWhere, KeyAliasContainsWhere]]
 
 
 class BulkUpdateKeyRequestItem(BaseModel):

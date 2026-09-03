@@ -100,7 +100,7 @@ Worker tuning, rarely needed: `LITELLM_LOG_CHANNEL_CAPACITY` (4096),
 
 ## Build & run with Docker
 
-The image is built `--features python-config` and installs litellm **from this
+The image is built `--features server,python-config` and installs litellm **from this
 repo's source** (the config reader is newer than any PyPI release), so the build
 **context is the repo root**:
 
@@ -135,10 +135,10 @@ docker run --rm -p 4001:4001 \
 ```bash
 # config.yaml mode — needs litellm importable in the active python env
 LITELLM_CONFIG_PATH=./crates/ai-gateway/config.yaml \
-  cargo run --release -p litellm-ai-gateway --features python-config
+  cargo run --release -p litellm-ai-gateway --features server,python-config
 
 # env stand-in mode — no python, no config
-cargo run --release -p litellm-ai-gateway
+cargo run --release -p litellm-ai-gateway --features server
 ```
 
 ## Deploy on Render

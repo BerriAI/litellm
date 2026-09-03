@@ -2229,6 +2229,31 @@ async def calculate_spend(request: SpendCalculateRequest):
         )
 
 
+class _SpendLogSearchCondition(NamedTuple):
+    sql: str
+    params: tuple[object, ...]
+
+
+def _build_spend_log_search_condition(
+    search: str,
+    start_date: datetime,
+    end_date: datetime,
+    next_param_index: int,
+) -> _SpendLogSearchCondition:
+    """request_id (indexed) matches across all time; the unindexed id columns only inside the window."""
+    raw: Final = f"${next_param_index}"
+    window_start: Final = f"${next_param_index + 1}"
+    window_end: Final = f"${next_param_index + 2}"
+    sql: Final = (
+        f"(request_id = {raw} OR ("
+        f"\"startTime\" >= ({window_start}::timestamptz AT TIME ZONE 'UTC') "
+        f"AND \"startTime\" <= ({window_end}::timestamptz AT TIME ZONE 'UTC') "
+        f'AND (api_key = {raw} OR team_id = {raw} OR "user" = {raw} OR end_user = {raw} '
+        f"OR session_id = {raw} OR model_id = {raw})))"
+    )
+    return _SpendLogSearchCondition(sql=sql, params=(search, start_date, end_date))
+
+
 @router.get(
     "/spend/logs/v2",
     tags=["Budget & Spend Tracking"],
@@ -2329,6 +2354,14 @@ async def ui_view_spend_logs(
             "UI route only, honored when sorting by startTime"
         ),
     ),
+    search: str | None = fastapi.Query(
+        default=None,
+        description=(
+            "Match a log whose request_id, api_key (hash), team_id, user, end_user, "
+            "session_id, or model_id equals this value. request_id matches across all time; the other columns "
+            "match inside start_date/end_date, which stay required"
+        ),
+    ),
 ):
     """
     View spend logs with pagination support.
@@ -2392,8 +2425,10 @@ async def ui_view_spend_logs(
     try:
         is_admin_view: Final = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
         is_request_id_lookup: Final = request_id is not None and not is_v2
+        is_search_lookup: Final = search is not None
+        search_owns_window: Final = is_search_lookup and not is_v2
 
-        if is_request_id_lookup:
+        if is_request_id_lookup and not is_search_lookup:
             # request_id is the @id primary key: it identifies a single row, so a
             # time window is meaningless. The dashboard always sends a default 24h
             # window, which hid ids copied from an older page (LIT-3981). Drop the
@@ -2576,13 +2611,24 @@ async def ui_view_spend_logs(
         # Date range. Wrap the param side with `AT TIME ZONE 'UTC'` so comparison
         # against the plain `timestamp` column does not depend on the DB session
         # timezone (see #22529). Absent for a request_id-only lookup (see above).
-        if start_date_obj is not None and end_date_obj is not None:
+        if start_date_obj is not None and end_date_obj is not None and not search_owns_window:
             sql_conditions.append(f"\"startTime\" >= (${p}::timestamptz AT TIME ZONE 'UTC')")
             sql_params.append(start_date_obj)
             p += 1
             sql_conditions.append(f"\"startTime\" <= (${p}::timestamptz AT TIME ZONE 'UTC')")
             sql_params.append(end_date_obj)
             p += 1
+
+        if search is not None and start_date_obj is not None and end_date_obj is not None:
+            search_condition: Final = _build_spend_log_search_condition(
+                search=search,
+                start_date=start_date_obj,
+                end_date=end_date_obj,
+                next_param_index=p,
+            )
+            sql_conditions.append(search_condition.sql)
+            sql_params.extend(search_condition.params)
+            p += len(search_condition.params)  # rebind-ok: advances the file's shared $N placeholder counter
 
         # Equality filters - read effective values from where_conditions (post-authorization)
         for sql_col, wc_key in [
@@ -2662,7 +2708,13 @@ async def ui_view_spend_logs(
             sql_params.append(f"%{error_message}%")
             p += 1
 
-        if group_by_session is True and not is_v2 and not is_request_id_lookup and sort_by == "startTime":
+        if (
+            group_by_session is True
+            and not is_v2
+            and not is_request_id_lookup
+            and not is_search_lookup
+            and sort_by == "startTime"
+        ):
             return await _ui_session_grouped_spend_logs(
                 prisma_client=prisma_client,
                 sql_conditions=sql_conditions,
@@ -2696,7 +2748,7 @@ async def ui_view_spend_logs(
             _order_expr = order_column
 
         joined_conditions: Final = " AND ".join(sql_conditions)
-        session_grouping: Final = group_by_session is True
+        session_grouping: Final = group_by_session is True and not is_search_lookup
         count_group_clause: Final = f"GROUP BY {_SESSION_GROUP_KEY_SQL}" if session_grouping else ""
         count_query: Final = f"""
             SELECT COUNT(*) AS total_count

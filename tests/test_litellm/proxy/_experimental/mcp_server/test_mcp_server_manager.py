@@ -129,6 +129,32 @@ class TestMCPServerManager:
         assert added_server.args == ["-m", "server"]
         assert added_server.env == {"DEBUG": "1", "TEST": "1"}
 
+    def test_get_mcp_server_by_id_allows_internal_or_unspecified_client_ip(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="private-server",
+            name="private-server",
+            transport=MCPTransport.http,
+            available_on_public_internet=False,
+        )
+        manager.registry[server.server_id] = server
+
+        assert manager.get_mcp_server_by_id(server.server_id) is server
+        assert manager.get_mcp_server_by_id(server.server_id, client_ip="10.0.0.1") is server
+
+    def test_get_mcp_server_by_id_rejects_private_server_for_public_ip(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="private-server",
+            name="private-server",
+            transport=MCPTransport.http,
+            available_on_public_internet=False,
+        )
+        manager.registry[server.server_id] = server
+
+        with patch.object(manager, "_get_general_settings", return_value={}):
+            assert manager.get_mcp_server_by_id(server.server_id, client_ip="8.8.8.8") is None
+
     async def test_create_mcp_client_stdio(self):
         """Test creating MCP client for stdio transport"""
         manager = MCPServerManager()
@@ -2591,6 +2617,69 @@ class TestMCPServerManager:
         assert resolved == ["good-subject"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "authorization",
+        [
+            "Bearer subj-jwt",
+            "bearer subj-jwt",
+            "BEARER subj-jwt",
+            "Bearer\tsubj-jwt",
+            "Bearer  subj-jwt",
+        ],
+    )
+    async def test_preflight_token_exchange_strips_inbound_authorization_scheme(self, authorization):
+        """The resolver posts inbound_token verbatim as subject_token."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError, ServerSpec, Subject
+
+        resolved: Final[list[str | None]] = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Ok[StaticHeaderAuth, CredError]:
+                resolved.append(subject.inbound_token.get_secret_value() if subject.inbound_token else None)
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server(f"te-preflight-auth-{authorization!r}")
+
+        await manager.preflight_token_exchange(
+            server=server,
+            oauth2_headers={"Authorization": authorization},
+            user_api_key_auth=None,
+        )
+
+        assert resolved == ["subj-jwt"]
+
+    @pytest.mark.asyncio
+    async def test_preflight_token_exchange_preserves_authorization_without_separator(self):
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError, ServerSpec, Subject
+
+        resolved: Final[list[str | None]] = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Ok[StaticHeaderAuth, CredError]:
+                resolved.append(subject.inbound_token.get_secret_value() if subject.inbound_token else None)
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-preflight-auth-no-separator")
+
+        await manager.preflight_token_exchange(
+            server=server,
+            oauth2_headers={"Authorization": "Bearersubj-jwt"},
+            user_api_key_auth=None,
+        )
+
+        assert resolved == ["Bearersubj-jwt"]
+
+    @pytest.mark.asyncio
     async def test_preflight_token_exchange_skips_discovery_for_other_auth_modes(self):
         """Preflight must not make unrelated auth modes depend on OAuth discovery."""
         manager = MCPServerManager()
@@ -4544,6 +4633,81 @@ class TestMCPServerManager:
         assert captured["server_label"] == "openapi-server"
         # auth_type is none here, so a 401 from this upstream must not be dressed up as a re-auth signal
         assert captured["relays_upstream_auth"] is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "auth_type, authentication_token, expected_authorization",
+        [
+            (MCPAuth.bearer_token, "Bearer abc", "Bearer abc"),
+            (MCPAuth.bearer_token, "abc", "Bearer abc"),
+            (MCPAuth.api_key, "ApiKey abc", "ApiKey abc"),
+            (MCPAuth.token, "token abc", "token abc"),
+            (MCPAuth.basic, "user:pass", "Basic dXNlcjpwYXNz"),
+            (MCPAuth.basic, "Basic dXNlcjpwYXNz", "Basic dXNlcjpwYXNz"),
+            (MCPAuth.basic, "Basic user:pass", "Basic dXNlcjpwYXNz"),
+        ],
+    )
+    async def test_register_openapi_tools_normalizes_authentication_token(
+        self, tmp_path, monkeypatch, auth_type, authentication_token, expected_authorization
+    ):
+        manager = MCPServerManager()
+        spec_path = tmp_path / "openapi.json"
+        spec_path.write_text(
+            json.dumps(
+                {
+                    "openapi": "3.0.0",
+                    "info": {"title": "Demo", "version": "1.0.0"},
+                    "paths": {
+                        "/health": {
+                            "get": {
+                                "operationId": "health_check",
+                                "summary": "health",
+                            }
+                        }
+                    },
+                }
+            )
+        )
+        server = MCPServer(
+            server_id="openapi-server",
+            name="openapi-server",
+            server_name="openapi-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=auth_type,
+            authentication_token=authentication_token,
+        )
+        captured: dict = {}
+
+        def fake_create_tool_function(
+            path, method, operation, base_url, headers=None, server_label=None, relays_upstream_auth=False
+        ):
+            captured["headers"] = headers
+
+            async def tool_func(**kwargs):
+                return "ok"
+
+            return tool_func
+
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.create_tool_function",
+            fake_create_tool_function,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.build_input_schema",
+            lambda *args, **kwargs: {"type": "object", "properties": {}, "required": []},
+        )
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.tool_registry.global_mcp_tool_registry.register_tool",
+            lambda *args, **kwargs: None,
+        )
+        await manager._register_openapi_tools(
+            spec_path=str(spec_path),
+            server=server,
+            base_url="https://example.com",
+        )
+
+        assert captured["headers"]["Authorization"] == expected_authorization
 
     @pytest.mark.asyncio
     async def test_pre_call_tool_check_allowed_tools_list_allows_tool(self):
