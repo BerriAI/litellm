@@ -1343,7 +1343,26 @@ def completion_cost(
                         and _usage["prompt_tokens_details"]
                     ):
                         prompt_tokens_details = _usage.get("prompt_tokens_details") or {}
-                        cache_read_input_tokens = prompt_tokens_details.get("cached_tokens", 0)
+                        # Only prefer details when they actually carry cached_tokens.
+                        # OpenAI-compatible providers often send both top-level
+                        # cache_read_input_tokens and a partial prompt_tokens_details
+                        # object (e.g. audio_tokens only). Using `.get(..., 0)` would
+                        # wipe the top-level cache count with a default of 0 (#39505).
+                        if (
+                            isinstance(prompt_tokens_details, dict)
+                            and "cached_tokens" in prompt_tokens_details
+                            and prompt_tokens_details["cached_tokens"] is not None
+                        ):
+                            cache_read_input_tokens = prompt_tokens_details["cached_tokens"]
+                        if (
+                            isinstance(prompt_tokens_details, dict)
+                            and not cache_creation_input_tokens
+                        ):
+                            cache_write_tokens = prompt_tokens_details.get(
+                                "cache_write_tokens"
+                            ) or prompt_tokens_details.get("cache_creation_tokens")
+                            if isinstance(cache_write_tokens, int):
+                                cache_creation_input_tokens = cache_write_tokens
 
                     total_time = getattr(completion_response, "_response_ms", 0)
 

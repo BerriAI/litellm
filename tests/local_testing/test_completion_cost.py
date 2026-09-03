@@ -2928,3 +2928,48 @@ def test_batch_cost_calculator():
 
     cost = completion_cost(**args)
     assert cost > 0
+
+
+def test_openai_compatible_top_level_cache_tokens_survive_partial_details(monkeypatch):
+    """Regression for #39505.
+
+    OpenAI-compatible providers may return top-level cache_read_input_tokens
+    together with a partial prompt_tokens_details object that omits
+    cached_tokens. The details branch must not default-wipe the top-level
+    cache count to 0.
+    """
+    captured = {}
+
+    def _fake_cost_per_token(**kwargs):
+        captured.update(kwargs)
+        return 0.01, 0.02
+
+    monkeypatch.setattr(litellm.cost_calculator, "cost_per_token", _fake_cost_per_token)
+    monkeypatch.setattr(litellm, "cost_per_token", _fake_cost_per_token)
+
+    response = {
+        "id": "chatcmpl-test-cache",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 10,
+            "total_tokens": 110,
+            "cache_read_input_tokens": 80,
+            "cache_creation_input_tokens": 5,
+            "prompt_tokens_details": {"audio_tokens": 0},
+        },
+    }
+
+    cost = completion_cost(model="gpt-4o", completion_response=response)
+    assert cost == 0.03
+    assert captured.get("cache_read_input_tokens") == 80
+    assert captured.get("cache_creation_input_tokens") == 5
