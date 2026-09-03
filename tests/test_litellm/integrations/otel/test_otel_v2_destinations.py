@@ -44,16 +44,12 @@ LANGFUSE_DEST = OtelDestination(
 
 @pytest.fixture
 def allow_test_hosts(monkeypatch):
-    """Hosts named by these fixtures do not resolve, and a tenant-supplied host now
-    goes through the SSRF guard. Allowlist them so the resolution tests stay about
-    resolution; ``TestTenantHostSsrfGuard`` covers the guard itself."""
-    from litellm.litellm_core_utils.url_utils import _public_host_rejection
-
-    monkeypatch.setattr(litellm, "user_url_validation", True, raising=False)
-    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["team.local", "key.local", "x"], raising=False)
-    _public_host_rejection.cache_clear()
-    yield
-    _public_host_rejection.cache_clear()
+    """A tenant-supplied host must be allowlisted by the operator. Allowlist the ones
+    these fixtures name so the resolution tests stay about resolution;
+    ``TestTenantHostSsrfGuard`` covers the guard itself."""
+    monkeypatch.setattr(
+        litellm, "provider_url_destination_allowed_hosts", ["team.local", "key.local", "x"], raising=False
+    )
 
 
 def in_fresh_context(fn, *args):
@@ -512,9 +508,44 @@ class TestCallbackTypeFilter:
 
 
 class TestEvictionSafety:
-    def test_evicting_a_processor_does_not_shut_it_down(self):
-        """``on_end`` hands the caller a processor and then releases the lock, so a
-        concurrent eviction that shut it down would silently drop that span."""
+    def test_an_evicted_processor_is_retired_rather_than_shut_down(self):
+        """``on_end`` hands a processor back and exports outside the lock, so shutting
+        an evicted one down there loses that span. Retirees are capped so they cannot
+        accumulate a thread each."""
+        from litellm.integrations.otel.plumbing.providers import (
+            _MAX_CACHED_DESTINATION_PROCESSORS,
+            _MAX_RETIRED_DESTINATION_PROCESSORS,
+        )
+
+        class Recording(SimpleSpanProcessor):
+            def __init__(self):
+                super().__init__(InMemorySpanExporter())
+                self.shutdown_calls = 0
+
+            def shutdown(self):
+                self.shutdown_calls += 1
+
+        built = []
+
+        def factory(_destination):
+            built.append(Recording())
+            return built[-1]
+
+        fan_out = TenantFanOutSpanProcessor(processor_factory=factory)
+        for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + _MAX_RETIRED_DESTINATION_PROCESSORS):
+            fan_out._processor_for(LANGFUSE_DEST.model_copy(update={"endpoint": f"http://d{index}/otel"}))
+
+        assert [p.shutdown_calls for p in built] == [0] * len(built)
+        assert len(fan_out._processors) == _MAX_CACHED_DESTINATION_PROCESSORS
+
+        for index in range(2):
+            fan_out._processor_for(LANGFUSE_DEST.model_copy(update={"endpoint": f"http://late{index}/otel"}))
+
+        assert [p.shutdown_calls for p in built[:2]] == [1, 1]
+        assert built[2].shutdown_calls == 0
+        assert len(fan_out._processors) == _MAX_CACHED_DESTINATION_PROCESSORS
+
+    def test_a_retired_processor_is_still_flushed_and_closed_on_shutdown(self):
         from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
 
         class Recording(SimpleSpanProcessor):
@@ -528,76 +559,144 @@ class TestEvictionSafety:
         built = []
 
         def factory(_destination):
-            processor = Recording()
-            built.append(processor)
-            return processor
+            built.append(Recording())
+            return built[-1]
 
         fan_out = TenantFanOutSpanProcessor(processor_factory=factory)
         for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + 1):
             fan_out._processor_for(LANGFUSE_DEST.model_copy(update={"endpoint": f"http://d{index}/otel"}))
+        fan_out.shutdown()
 
-        assert len(built) == _MAX_CACHED_DESTINATION_PROCESSORS + 1
-        assert built[0].shutdown_calls == 0
-        assert len(fan_out._processors) == _MAX_CACHED_DESTINATION_PROCESSORS
+        assert built[0].shutdown_calls == 1
+
+
+class TestCredentialGatedExporters:
+    def test_layering_a_second_preset_does_not_eat_the_first_gated_exporter(self, monkeypatch):
+        """``base.Preset`` advertises ``config_overrides`` layering, and the gated spec
+        is itself a console exporter with no endpoint."""
+        credential_less_proxy(monkeypatch)
+        from litellm.integrations.otel.presets.utils import credential_gated_exporters
+
+        once = credential_gated_exporters((), ExporterOwner.LANGFUSE_OTEL)
+        twice = credential_gated_exporters(once, ExporterOwner.WEAVE_OTEL)
+
+        assert [spec.owner for spec in twice] == [ExporterOwner.LANGFUSE_OTEL, ExporterOwner.WEAVE_OTEL]
+
+    def test_an_exporter_the_operator_configured_survives(self):
+        from litellm.integrations.otel.presets.utils import credential_gated_exporters
+
+        operator_console = ExporterSpec(kind="console", use_simple_processor=True)
+
+        kept = credential_gated_exporters((operator_console,), ExporterOwner.LANGFUSE_OTEL)
+
+        assert kept[0] == operator_console
+
+    def test_an_otlp_exporter_on_its_default_endpoint_survives(self):
+        """``OTEL_EXPORTER=otlp_http`` with no endpoint is a real collector on the SDK's
+        default port, not the placeholder, so the transport is what tells them apart."""
+        from litellm.integrations.otel.presets.utils import credential_gated_exporters
+
+        operator_otlp = ExporterSpec(kind="otlp_http", endpoint=None, headers=None)
+
+        kept = credential_gated_exporters((operator_otlp,), ExporterOwner.LANGFUSE_OTEL)
+
+        assert kept[0] == operator_otlp
+
+    def test_the_synthesized_stdout_placeholder_is_dropped(self):
+        from litellm.integrations.otel.presets.utils import credential_gated_exporters
+
+        placeholder = ExporterSpec(kind="console", endpoint=None, headers=None)
+
+        kept = credential_gated_exporters((placeholder,), ExporterOwner.LANGFUSE_OTEL)
+
+        assert [spec.owner for spec in kept] == [ExporterOwner.LANGFUSE_OTEL]
 
 
 class TestTenantHostSsrfGuard:
-    """Anyone who can mint a key can write ``langfuse_host``, so a tenant-named host
-    is a user-supplied URL and goes through the proxy's SSRF guard."""
+    """Anyone who can mint a key can write ``langfuse_host``, so the host it names has
+    to be one the operator approved."""
+
+    @pytest.fixture(autouse=True)
+    def _guard_on(self, monkeypatch):
+        from litellm.integrations.otel.presets.destinations import _warn_host_not_allowlisted
+
+        monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", [], raising=False)
+        _warn_host_not_allowlisted.cache_clear()
+        yield
+        _warn_host_not_allowlisted.cache_clear()
 
     @staticmethod
-    def _reset() -> None:
-        from litellm.litellm_core_utils.url_utils import _public_host_rejection
+    def _langfuse(host: str) -> Mapping[str, str]:
+        return {"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_host": host}
 
-        _public_host_rejection.cache_clear()
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "http://127.0.0.1:9111",
+            "http://169.254.169.254",
+            "http://10.0.0.5:3000",
+            "https://collector.example.com",
+            "https://langfuse.corp:99999",
+            "ftp://collector.example.com",
+        ],
+    )
+    def test_a_host_the_operator_never_approved_resolves_to_nothing(self, host):
+        assert destination_for("langfuse_otel", self._langfuse(host)) is None
 
-    @pytest.mark.parametrize("host", ["http://127.0.0.1:9111", "http://169.254.169.254", "http://10.0.0.5:3000"])
-    def test_a_tenant_host_on_a_private_address_resolves_to_nothing(self, monkeypatch, host):
-        monkeypatch.setattr(litellm, "user_url_allowed_hosts", [], raising=False)
-        monkeypatch.setattr(litellm, "user_url_validation", True, raising=False)
-        self._reset()
+    def test_userinfo_naming_an_allowlisted_host_does_not_smuggle_a_second_one(self, monkeypatch):
+        """``https://allowed@10.0.0.5`` reads as the allowlisted host to the eye and
+        posts to 10.0.0.5 on the wire."""
+        monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["collector.example.com"], raising=False)
 
-        assert (
-            destination_for(
-                "langfuse_otel",
-                {"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_host": host},
-            )
-            is None
+        assert destination_for("langfuse_otel", self._langfuse("https://collector.example.com@10.0.0.5")) is None
+
+    def test_a_malformed_host_does_not_take_the_other_backends_with_it(self, monkeypatch):
+        """``urlparse(...).port`` raises a bare ValueError, which would escape
+        ``destination_for`` and kill the whole resolution."""
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setenv("NEW_RELIC_OTEL_ENDPOINT", "https://otlp.nr-data.net")
+        monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["collector.example.com"], raising=False)
+        is_otel_v2_enabled.cache_clear()
+        auth = UserAPIKeyAuth(
+            token="hashed",
+            team_metadata={
+                "logging": [
+                    {"callback_name": "langfuse_otel", "callback_vars": self._langfuse("https://lf.corp:99999")},
+                    {"callback_name": "newrelic", "callback_vars": {"newrelic_api_key": "nr"}},
+                ]
+            },
         )
+
+        assert [d.callback_name for d in resolve_tenant_otel_destinations(auth)] == ["newrelic"]
 
     def test_the_operator_can_allowlist_its_teams_internal_langfuse(self, monkeypatch):
-        monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["127.0.0.1:9111"], raising=False)
-        monkeypatch.setattr(litellm, "user_url_validation", True, raising=False)
-        self._reset()
+        monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["127.0.0.1:9111"], raising=False)
 
-        destination = destination_for(
-            "langfuse_otel",
-            {"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_host": "http://127.0.0.1:9111"},
-        )
+        destination = destination_for("langfuse_otel", self._langfuse("http://127.0.0.1:9111"))
 
         assert destination.endpoint == "http://127.0.0.1:9111/api/public/otel"
-
-    def test_the_master_switch_still_turns_the_guard_off(self, monkeypatch):
-        monkeypatch.setattr(litellm, "user_url_allowed_hosts", [], raising=False)
-        monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
-        self._reset()
-
-        assert (
-            destination_for(
-                "langfuse_otel",
-                {"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_host": "http://127.0.0.1:9111"},
-            )
-            is not None
-        )
 
     def test_the_operators_own_internal_host_is_never_blocked(self, monkeypatch):
         """The operator configures ``LANGFUSE_HOST`` themselves, so an internal
         collector there is a deployment choice rather than caller-supplied input."""
-        monkeypatch.setattr(litellm, "user_url_allowed_hosts", [], raising=False)
-        monkeypatch.setattr(litellm, "user_url_validation", True, raising=False)
         monkeypatch.setenv("LANGFUSE_HOST", "http://127.0.0.1:9111")
-        self._reset()
 
         destination = destination_for("langfuse_otel", {"langfuse_public_key": "pk", "langfuse_secret_key": "sk"})
 
         assert destination.endpoint == "http://127.0.0.1:9111/api/public/otel"
+
+    def test_an_allowlisted_host_is_taken_without_resolving_it(self, monkeypatch):
+        """The check runs on the asyncio auth path, so it must not block on a name the
+        caller chose. ``.invalid`` never resolves, and it is still accepted."""
+        monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["lf.invalid"], raising=False)
+
+        destination = destination_for("langfuse_otel", self._langfuse("https://lf.invalid"))
+
+        assert destination.endpoint == "https://lf.invalid/api/public/otel"
+
+    def test_a_rejected_host_is_warned_about_once(self, caplog):
+        with caplog.at_level("WARNING", logger="LiteLLM"):
+            for _ in range(3):
+                destination_for("langfuse_otel", self._langfuse("http://10.0.0.5:3000"))
+
+        assert sum("provider_url_destination_allowed_hosts" in record.message for record in caplog.records) == 1

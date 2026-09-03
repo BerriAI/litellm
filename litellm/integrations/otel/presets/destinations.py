@@ -7,23 +7,39 @@ did; only the endpoint and transport need a per-backend rule.
 
 import os
 from collections.abc import Callable, Mapping
+from functools import lru_cache
 from types import MappingProxyType
 from typing import Final
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.destination import OtelDestination
-from litellm.litellm_core_utils.url_utils import SSRFError, assert_public_url
+from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
 from litellm.types.utils import StandardCallbackDynamicParams
 
+#: An endpoint plus the OTLP transport to reach it with, or ``None`` when the backend
+#: names no destination. The transport is ``None`` where the backend has only one.
+_Destination = tuple[str, str | None]
 
-def _langfuse_endpoint(params: StandardCallbackDynamicParams) -> str | None:
+
+@lru_cache(maxsize=128)
+def _warn_host_not_allowlisted(host: str) -> None:
+    """Cached so one misconfigured team logs once rather than once per request."""
+    verbose_logger.warning(
+        "OTel V2: not exporting to key/team Langfuse host '%s'. Add it to "
+        "litellm_settings.provider_url_destination_allowed_hosts to permit it",
+        host,
+    )
+
+
+def _langfuse_destination(params: StandardCallbackDynamicParams) -> "_Destination | None":
     """The tenant's own Langfuse host, else the operator's, else Langfuse US cloud.
 
-    A host the tenant named goes through the proxy's SSRF guard first. Anyone who can
-    mint a key can write it, so without the check it points the exporter, and the
-    tenant credentials it carries, at any address the proxy can reach. The operator's
-    own ``LANGFUSE_HOST`` is not checked: an internal collector is a normal
-    deployment and the operator is the one configuring it.
+    A host the tenant named has to be allowlisted by the operator, the same way a
+    URL-valued ``model`` is: anyone who can mint a key can write it, and it becomes an
+    endpoint the proxy posts the request's whole trace to, carrying the tenant's own
+    credentials. The operator's own ``LANGFUSE_HOST`` is not checked, since an internal
+    collector there is a deployment choice.
     """
     from litellm.integrations.langfuse.langfuse_otel import (
         LANGFUSE_CLOUD_US_ENDPOINT,
@@ -33,65 +49,50 @@ def _langfuse_endpoint(params: StandardCallbackDynamicParams) -> str | None:
     tenant_host: Final = params.get("langfuse_host") or None
     host: Final = tenant_host or LangfuseOtelLogger._get_langfuse_otel_host()  # pyright: ignore[reportPrivateUsage]  # reuse the backend's own env host resolver rather than duplicating it
     if not host:
-        return LANGFUSE_CLOUD_US_ENDPOINT
+        return (LANGFUSE_CLOUD_US_ENDPOINT, None)
     normalized: Final = host if host.startswith("http") else f"https://{host}"
     endpoint: Final = f"{normalized.rstrip('/')}/api/public/otel"
     if tenant_host is None:
-        return endpoint
-    try:
-        assert_public_url(endpoint)
-    except SSRFError as exc:
-        verbose_logger.warning(
-            "OTel V2: not exporting to key/team Langfuse host '%s' (%s). "
-            "Add it to general_settings.user_url_allowed_hosts to permit it",
-            host,
-            exc,
-        )
+        return (endpoint, None)
+    if not is_url_destination_allowed_by_host(endpoint, litellm.provider_url_destination_allowed_hosts):
+        _warn_host_not_allowlisted(host)
         return None
-    return endpoint
+    return (endpoint, None)
 
 
-def _arize_endpoint(params: StandardCallbackDynamicParams) -> str | None:
+def _arize_destination(params: StandardCallbackDynamicParams) -> "_Destination | None":
     from litellm.integrations.arize.arize import ArizeLogger
 
-    return ArizeLogger.get_arize_config().endpoint
+    config: Final = ArizeLogger.get_arize_config()
+    return (config.endpoint, config.protocol)
 
 
-def _arize_protocol(params: StandardCallbackDynamicParams) -> str | None:
-    from litellm.integrations.arize.arize import ArizeLogger
-
-    return ArizeLogger.get_arize_config().protocol
-
-
-def _weave_endpoint(params: StandardCallbackDynamicParams) -> str | None:
+def _weave_destination(params: StandardCallbackDynamicParams) -> "_Destination | None":
     from litellm.integrations.weave.weave_otel import weave_otel_endpoint
 
-    return weave_otel_endpoint(os.environ.get("WANDB_HOST"))
+    return (weave_otel_endpoint(os.environ.get("WANDB_HOST")), None)
 
 
-def _newrelic_endpoint(params: StandardCallbackDynamicParams) -> str | None:
+def _newrelic_destination(params: StandardCallbackDynamicParams) -> "_Destination | None":
     from litellm.integrations.otel.presets.newrelic import newrelic_dynamic_endpoint
 
-    return newrelic_dynamic_endpoint(params)
+    endpoint: Final = newrelic_dynamic_endpoint(params)
+    return (endpoint, None) if endpoint else None
 
 
-#: Callback name -> endpoint resolver. A backend is destination-capable exactly
+#: Callback name -> destination resolver. A backend is destination-capable exactly
 #: when it appears here AND in ``DYNAMIC_HEADERS_BY_CALLBACK``: without a header
 #: builder the destination would carry no tenant credentials, and the exporter
 #: would post the tenant's traffic to the operator's account.
-_ENDPOINT_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynamicParams], str | None]]] = MappingProxyType(
-    {
-        "langfuse_otel": _langfuse_endpoint,
-        "arize": _arize_endpoint,
-        "weave_otel": _weave_endpoint,
-        "newrelic": _newrelic_endpoint,
-    }
-)
-
-_PROTOCOL_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynamicParams], str | None]]] = MappingProxyType(
-    {
-        "arize": _arize_protocol,
-    }
+_DESTINATION_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynamicParams], "_Destination | None"]]] = (
+    MappingProxyType(
+        {
+            "langfuse_otel": _langfuse_destination,
+            "arize": _arize_destination,
+            "weave_otel": _weave_destination,
+            "newrelic": _newrelic_destination,
+        }
+    )
 )
 
 #: Headers a destination must carry to authenticate. Several dynamic-header builders
@@ -114,7 +115,7 @@ def destination_capable_backends() -> frozenset[str]:
     """Backends a key or team can point at its own account."""
     from litellm.integrations.otel.presets import DYNAMIC_HEADERS_BY_CALLBACK
 
-    return frozenset(_ENDPOINT_BY_CALLBACK) & frozenset(DYNAMIC_HEADERS_BY_CALLBACK)
+    return frozenset(_DESTINATION_BY_CALLBACK) & frozenset(DYNAMIC_HEADERS_BY_CALLBACK)
 
 
 def destination_for(callback_name: str, params: StandardCallbackDynamicParams) -> OtelDestination | None:
@@ -126,20 +127,20 @@ def destination_for(callback_name: str, params: StandardCallbackDynamicParams) -
     from litellm.integrations.otel.presets import DYNAMIC_HEADERS_BY_CALLBACK
 
     header_builder: Final = DYNAMIC_HEADERS_BY_CALLBACK.get(callback_name)
-    endpoint_builder: Final = _ENDPOINT_BY_CALLBACK.get(callback_name)
-    if header_builder is None or endpoint_builder is None:
+    destination_builder: Final = _DESTINATION_BY_CALLBACK.get(callback_name)
+    if header_builder is None or destination_builder is None:
         return None
     headers: Final = header_builder(params)
-    if not _REQUIRED_HEADERS_BY_CALLBACK.get(callback_name, frozenset()) <= frozenset(headers):
+    if not headers or not _REQUIRED_HEADERS_BY_CALLBACK[callback_name] <= frozenset(headers):
         return None
-    endpoint: Final = endpoint_builder(params)
-    if not endpoint:
+    resolved: Final = destination_builder(params)
+    if resolved is None:
         return None
-    protocol_builder: Final = _PROTOCOL_BY_CALLBACK.get(callback_name)
+    endpoint, protocol = resolved
     return OtelDestination(
         endpoint=endpoint,
         headers=MappingProxyType(dict(headers)),  # mutable-ok: MappingProxyType needs a concrete mapping to wrap
         resource_attributes=_NO_ATTRS,
         callback_name=callback_name,
-        protocol=protocol_builder(params) if protocol_builder is not None else None,
+        protocol=protocol,
     )
