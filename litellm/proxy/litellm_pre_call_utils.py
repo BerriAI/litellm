@@ -16,6 +16,7 @@ from starlette.datastructures import Headers
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
+from litellm._uuid import uuid
 from litellm.constants import (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
@@ -23,6 +24,7 @@ from litellm.constants import (
     OTEL_SERVICE_NAME_METADATA_KEYS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+    SESSION_ID_GENERATED_METADATA_KEY,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
@@ -40,6 +42,7 @@ from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
     LitellmDataForBackendLLMCall,
+    LiteLLMRoutes,
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
@@ -47,6 +50,8 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import get_request_route
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     get_metadata_variable_name_from_kwargs,
@@ -713,6 +718,50 @@ def _get_anthropic_session_id_from_metadata(metadata: object) -> str | None:
     if not session_id or not _ANTHROPIC_SESSION_ID_VALUE_RE.fullmatch(session_id):
         return None
     return session_id
+
+
+def _is_llm_inference_route(request: Request) -> bool:
+    route: Final = get_request_route(request)
+    return RouteChecks.is_llm_api_route(route=route) and not RouteChecks.check_route_access(
+        route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
+    )
+
+
+def apply_missing_session_id_policy(
+    data: dict[str, object],  # mutable-ok: stamps session ids in place on the request body the pipeline threads through
+    _metadata_variable_name: str,
+    general_settings: Mapping[str, object] | None,
+    request: Request,
+) -> None:
+    policy: Final = general_settings.get("missing_session_id") if general_settings else None
+    if policy is None or not _is_llm_inference_route(request):
+        return
+    metadata: Final = data.get(_metadata_variable_name)
+    if not isinstance(metadata, dict):
+        return
+    if data.get("litellm_session_id") or metadata.get("session_id"):
+        return
+    match policy:
+        case "generate":
+            session_id: Final = str(data.get("litellm_trace_id") or metadata.get("trace_id") or uuid.uuid4())
+            data["litellm_session_id"] = session_id  # rebind-ok: data is an out-param
+            data.setdefault("litellm_trace_id", session_id)
+            metadata["session_id"] = session_id
+            metadata[SESSION_ID_GENERATED_METADATA_KEY] = True
+        case "reject":
+            raise ProxyException(
+                message=(
+                    "Request has no session id. Send an `x-litellm-session-id` header or `metadata.session_id`. "
+                    "Required by `general_settings.missing_session_id: reject`."
+                ),
+                type=ProxyErrorTypes.bad_request_error,
+                param="session_id",
+                code=400,
+            )
+        case _:
+            verbose_proxy_logger.warning(
+                "Ignoring unknown general_settings.missing_session_id=%r; expected 'generate' or 'reject'", policy
+            )
 
 
 def is_claude_code_user_agent(user_agent: str) -> bool:
@@ -1817,6 +1866,12 @@ async def add_litellm_data_to_request(
         headers=_headers,
         data=data,
         _metadata_variable_name=_metadata_variable_name,
+    )
+    apply_missing_session_id_policy(
+        data=data,
+        _metadata_variable_name=_metadata_variable_name,
+        general_settings=general_settings,
+        request=request,
     )
 
     # Expose request headers under the metadata field for guardrails (fixes #17477)
