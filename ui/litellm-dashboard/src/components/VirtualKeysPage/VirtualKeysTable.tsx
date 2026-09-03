@@ -118,7 +118,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const keyListOptions = {
     teamID: appliedFilters.team_id || undefined,
     organizationID: appliedFilters.org_id || undefined,
-    selectedKeyAlias: searchQuery.trim() || undefined,
+    search: searchQuery.trim() || undefined,
     userID: appliedFilters.user_id || undefined,
     keyHash: appliedFilters.key_hash || undefined,
     sortBy,
@@ -291,7 +291,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
               table={table}
               searchValue={searchInput}
               onSearchChange={handleSearchChange}
-              searchPlaceholder="Search by key alias…"
+              searchPlaceholder="Search by key alias or ID…"
               onRefresh={() => refetch?.()}
               isRefreshing={isFetching}
               onOpenFilters={() => setFiltersOpen(true)}
