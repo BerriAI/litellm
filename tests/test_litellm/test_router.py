@@ -12553,3 +12553,33 @@ async def test_prompt_management_factory_marks_injection_for_every_deployment(mo
     bucket = captured.get("litellm_metadata") or captured["metadata"]
     assert captured["model_info"]["id"] == "provisional-dep"
     assert bucket["litellm_gateway_injected_cache"] == ""
+
+
+def test_get_configured_mode_reads_deployment_model_info():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "my-tts",
+                "litellm_params": {"model": "openai/tts-1", "api_key": "fake-key"},
+                "model_info": {"mode": "audio_speech"},
+            }
+        ]
+    )
+
+    assert router.get_configured_mode("my-tts") == "audio_speech"
+
+
+@pytest.mark.parametrize("model_info", [{}, {"mode": ""}, {"mode": "   "}, {"mode": 123}])
+def test_get_configured_mode_returns_none_for_unset_blank_or_unknown(model_info):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "plain-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"},
+                "model_info": model_info,
+            }
+        ]
+    )
+
+    assert router.get_configured_mode("plain-model") is None
+    assert router.get_configured_mode("unknown-model") is None
