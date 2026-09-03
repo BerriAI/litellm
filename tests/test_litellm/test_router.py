@@ -10088,7 +10088,7 @@ def _anthropic_messages_make_wrapper() -> FallbackAwareAnthropicMessagesStream:
     return FallbackAwareAnthropicMessagesStream(_anthropic_messages_empty_generator(), object())
 
 
-def _anthropic_messages_make_router() -> Router:
+def _anthropic_messages_make_router(*, with_fallbacks: bool = True) -> Router:
     return Router(
         model_list=[
             {
@@ -10104,7 +10104,8 @@ def _anthropic_messages_make_router() -> Router:
                     "model": "bedrock/anthropic.claude-sonnet-4-5",
                 },
             },
-        ]
+        ],
+        fallbacks=[{"primary": ["fallback"]}] if with_fallbacks else None,
     )
 
 
@@ -10222,6 +10223,33 @@ async def test_anthropic_messages_streaming_iterator_passthrough():
     collected = [chunk async for chunk in wrapped]
     assert collected == [_anthropic_messages_content_chunk("hi"), _anthropic_messages_content_chunk(" there")]
     assert wrapped._hidden_params["additional_headers"]["x-amzn-requestid"] == "req-1"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_streaming_iterator_no_fallbacks_forwards_lifecycle_immediately():
+    """Regression for #39431: with no fallbacks configured, lifecycle frames
+    (message_start, content_block_start) must be forwarded live instead of
+    buffered until the first content_block_delta.  The buffering exists to
+    protect mid-stream fallback retries; without a fallback destination it
+    only adds latency."""
+    router = _anthropic_messages_make_router(with_fallbacks=False)
+    content_block_start = b'event: content_block_start\ndata: {"type": "content_block_start", "index": 0}\n\n'
+    source = _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_message_start_chunk(), content_block_start, _anthropic_messages_content_chunk("hi")]
+    )
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(
+        response=source, initial_kwargs={"model": "primary"}
+    )
+
+    # Drain one chunk at a time to verify ordering — lifecycle frames must
+    # arrive before the content chunk, proving they were not held back.
+    collected = [chunk async for chunk in wrapped]
+    assert collected == [
+        _anthropic_messages_message_start_chunk(),
+        content_block_start,
+        _anthropic_messages_content_chunk("hi"),
+    ]
 
 
 @pytest.mark.asyncio
