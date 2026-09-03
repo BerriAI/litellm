@@ -78,8 +78,7 @@ async def _await_lock_contention(watcher, lock_key: tuple[int, int], task, what:
     while time.monotonic() < deadline:
         if task.done():
             raise AssertionError(f"{what} returned without waiting on the team's advisory lock") from task.exception()
-        rows = await watcher.query_raw(_LOCK_WAITER_SQL, classid, objid)
-        if rows[0]["waiters"]:
+        if (await watcher.query_raw(_LOCK_WAITER_SQL, classid, objid))[0]["waiters"]:
             return
         await asyncio.sleep(_LOCK_POLL_SECONDS)
     raise AssertionError(f"{what} never queued on the team's advisory lock within {_LOCK_WAIT_TIMEOUT_SECONDS}s")
