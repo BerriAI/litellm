@@ -32869,6 +32869,8 @@ export interface components {
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organizations */
             organizations?: string[] | null;
+            /** Password */
+            password?: string | null;
             /**
              * Permissions
              * @default {}
