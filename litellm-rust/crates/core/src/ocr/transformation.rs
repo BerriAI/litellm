@@ -1,7 +1,13 @@
+use std::future::Future;
+use std::pin::Pin;
+
 use crate::Error;
 use serde_json::{Map, Value};
 
 use super::types::{OcrRequestData, OcrResponseData};
+
+pub type OcrResponseFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<OcrResponseData, Error>> + Send + 'a>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OcrAuthStrategy {
@@ -60,6 +66,25 @@ pub trait OcrProviderConfig: Sync {
         _optional_params: &Map<String, Value>,
     ) -> Result<OcrResponseData, Error> {
         self.transform_ocr_response(model, response_json)
+    }
+
+    fn async_transform_ocr_response<'a>(
+        &'a self,
+        model: &'a str,
+        response_json: Value,
+    ) -> OcrResponseFuture<'a> {
+        Box::pin(async move { self.transform_ocr_response(model, response_json) })
+    }
+
+    fn async_transform_ocr_response_with_params<'a>(
+        &'a self,
+        model: &'a str,
+        response_json: Value,
+        optional_params: &'a Map<String, Value>,
+    ) -> OcrResponseFuture<'a> {
+        Box::pin(async move {
+            self.transform_ocr_response_with_params(model, response_json, optional_params)
+        })
     }
 
     fn complete_url(
