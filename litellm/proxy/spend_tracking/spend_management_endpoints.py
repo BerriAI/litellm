@@ -4306,21 +4306,22 @@ async def _assert_user_can_view_request_id(
     Allowed when the log belongs to the user directly, or to one of their
     permitted teams (admin or ``/spend/logs`` permission).
     Raises HTTP 403 if not.
+
+    If the row is missing (expired, never written, or unknown request_id) we
+    cannot establish ownership, so we must deny — the caller goes on to query
+    custom loggers (S3, GCS, …) by request_id, and silently allowing here
+    would let any non-admin read another user's request/response payload.
     """
     row: Final = await _find_spend_log_row(prisma_client, request_id)
-    if row is None:
-        return
+    if row is not None:
+        if row.user is not None and row.user == user_api_key_dict.user_id:
+            return
 
-    if row.user is not None and row.user == user_api_key_dict.user_id:
-        return
-
-    if row.team_id:
-        can_view: Final = await _can_team_member_view_log(
+        if row.team_id and await _can_team_member_view_log(
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,
             team_id=row.team_id,
-        )
-        if can_view:
+        ):
             return
 
     raise HTTPException(
