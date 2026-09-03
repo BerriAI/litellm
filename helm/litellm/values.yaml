@@ -11,7 +11,8 @@ ingress:
   enabled: false
   className: ""
   # Which ingress controller serves this Ingress. Controllers disagree on the
-  # pathTypes they accept, so this picks the pathType of a few built-in paths:
+  # pathTypes they accept, so this picks the pathType of the dotted paths, the
+  # built-in ones and any dotted extraPaths entry alike:
   #   alb    AWS Load Balancer Controller (default): Exact and Prefix paths plus
   #          the /*.txt wildcard that routes the UI's RSC payloads.
   #   nginx  ingress-nginx: its admission webhook rejects a dot in an Exact or
@@ -37,7 +38,8 @@ ingress:
   #
   #   path      required; the HTTP path to route
   #   service   which component serves it: gateway (default), backend, or ui
-  #   pathType  Prefix (default), Exact, or ImplementationSpecific
+  #   pathType  Prefix (default), Exact, or ImplementationSpecific; a dotted
+  #             path renders as ImplementationSpecific when controller is nginx
   #
   # The target component only answers paths its own route allowlist keeps, so
   # a path here still has to be one that component serves.
