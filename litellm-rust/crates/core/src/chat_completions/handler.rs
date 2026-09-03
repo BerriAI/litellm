@@ -1,17 +1,21 @@
 use serde_json::Value;
 
 use crate::error::Error;
-use crate::http_utils::truncate_error_body;
+use crate::http_utils::{http_request, truncate_error_body};
 
 use super::client::http_client;
+use super::prepare::prepare_provider_request;
 use super::transformation::ChatCompletionsAuth;
 use super::types::{
     ChatCompletionsResponse, ProviderChatCompletionsRequest, ProviderChatResponseData,
+    ResolvedChatCompletionsRequest,
 };
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) async fn execute_chat_completions_provider_call(
-    request: ProviderChatCompletionsRequest,
+    request: ResolvedChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
+    let request = prepare_provider_request(request)?;
     let body = serde_json::to_vec(&request.body).map_err(|err| {
         Error::InvalidRequest(format!(
             "failed to serialize chat completions request: {err}"
@@ -27,7 +31,7 @@ pub(super) async fn execute_chat_completions_provider_call(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = request_builder.send().await.map_err(|err| {
+    let response = http_request(request_builder).await.map_err(|err| {
         // Failing to establish the connection means the request never went out,
         // so the host can still serve it. Everything else here, a timeout
         // above all, may have reached the provider and been answered.

@@ -419,7 +419,6 @@ class WebSearchInterceptionLogger(CustomLogger):
         if call_type in (CallTypes.responses, CallTypes.aresponses):
             return self._convert_responses_tools(kwargs=kwargs, tools=tools)
 
-        # Check if any tool is a web search tool (native or already LiteLLM standard)
         has_websearch: Final = any(is_web_search_tool(t) for t in tools)
 
         if not has_websearch:

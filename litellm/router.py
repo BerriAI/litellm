@@ -354,6 +354,8 @@ _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 
 _ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset({"model", "api_base", "api_key", "api_version"})
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
+_CLAUDE_CODE_SESSION_ID_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
+_CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS: Final = 3600
 
 _RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS: Final[Mapping[str, type[CustomLogger]]] = MappingProxyType(
     {
@@ -810,6 +812,10 @@ class Router:
         self.cache = DualCache(
             redis_cache=redis_cache, in_memory_cache=InMemoryCache()
         )  # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
+        self._claude_code_session_router_cache: DualCache = DualCache(
+            redis_cache=redis_cache,
+            in_memory_cache=InMemoryCache(),
+        )
 
         ### SCHEDULER ###
         self.scheduler = Scheduler(polling_interval=polling_interval, redis_cache=redis_cache)
@@ -1131,8 +1137,8 @@ class Router:
         ```
         and caching to just work.
         """
-        if self.cache.redis_cache is None:
-            self.cache.redis_cache = cache
+        self.cache.attach_redis_cache(cache)
+        self._claude_code_session_router_cache.attach_redis_cache(cache)
 
     # Maps a routing strategy string to the attribute on `self` that holds
     # the default group's strategy selector for that strategy. (The selectors
@@ -12651,6 +12657,100 @@ class Router:
             return None
         return candidates[0]
 
+    @staticmethod
+    def _request_header(request_kwargs: Mapping[str, object], header_name: str) -> str | None:
+        proxy_server_request: Final = request_kwargs.get("proxy_server_request")
+        if not isinstance(proxy_server_request, Mapping):
+            return None
+        headers: Final = proxy_server_request.get("headers")
+        if not isinstance(headers, Mapping):
+            return None
+        return next(
+            (
+                value
+                for key, value in headers.items()
+                if isinstance(key, str) and key.lower() == header_name and isinstance(value, str)
+            ),
+            None,
+        )
+
+    def _claude_code_session_router_cache_key(self, request_kwargs: Mapping[str, object]) -> str | None:
+        session_id: Final = self._request_header(request_kwargs, "x-claude-code-session-id")
+        if session_id is None or _CLAUDE_CODE_SESSION_ID_RE.fullmatch(session_id) is None:
+            return None
+        metadata_name: Final = "litellm_metadata" if "litellm_metadata" in request_kwargs else "metadata"
+        metadata: Final = request_kwargs.get(metadata_name)
+        if not isinstance(metadata, Mapping):
+            return None
+        caller_scope: Final = metadata.get("user_api_key_hash")
+        if not isinstance(caller_scope, str) or not caller_scope:
+            return None
+        return f"claude_code_session_router:v1:{caller_scope}:{session_id}"
+
+    async def _delete_claude_code_session_router_binding(self, cache_key: str) -> None:
+        try:
+            await self._claude_code_session_router_cache.async_delete_cache(key=cache_key)
+        except Exception as e:  # noqa: BLE001  # cache cleanup must not fail an otherwise routable request
+            verbose_router_logger.warning(
+                "Failed to delete Claude Code session router binding; the binding may remain until its TTL expires: %s",
+                e,
+            )
+
+    async def _get_claude_code_session_router_binding(self, cache_key: str) -> object:
+        session_cache: Final = self._claude_code_session_router_cache
+        try:
+            if session_cache.redis_cache is None:
+                return await session_cache.async_get_cache(key=cache_key)
+            return await session_cache.redis_cache.async_get_cache(key=cache_key)
+        except Exception as e:  # noqa: BLE001  # an optional binding must not make routing depend on Redis
+            verbose_router_logger.warning(
+                "Failed to read Claude Code session router binding; using the requested model: %s",
+                e,
+            )
+            return None
+
+    async def _resolve_claude_code_session_router(
+        self,
+        model: str,
+        registered_model_name: str,
+        request_kwargs: Mapping[str, object],
+    ) -> str:
+        if not any((self.auto_routers, self.complexity_routers, self.adaptive_routers, self.quality_routers)):
+            return registered_model_name
+        cache_key: Final = self._claude_code_session_router_cache_key(request_kwargs)
+        if cache_key is None or not isinstance(request_kwargs, dict):
+            return registered_model_name
+        if request_kwargs.get("fallback_depth") not in (None, 0):
+            return registered_model_name
+
+        agent_id: Final = self._request_header(request_kwargs, "x-claude-code-agent-id")
+        if agent_id is not None:
+            bound_model: Final = await self._get_claude_code_session_router_binding(cache_key)
+            if not isinstance(bound_model, str):
+                return registered_model_name
+            bound_registered_model: Final = self._get_model_from_alias(model=bound_model) or bound_model
+            if self._select_pre_routing_strategy(bound_registered_model, request_kwargs) is None:
+                await self._delete_claude_code_session_router_binding(cache_key)
+                return registered_model_name
+            await self._claude_code_session_router_cache.async_set_cache(
+                key=cache_key,
+                value=bound_model,
+                ttl=_CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS,
+            )
+            self._stamp_or_clear_metadata_key(request_kwargs, "model_group", bound_model)
+            return bound_registered_model
+
+        if self._request_header(request_kwargs, "x-app") != "cli":
+            return registered_model_name
+        if self._select_pre_routing_strategy(registered_model_name, request_kwargs) is None:
+            return registered_model_name
+        await self._claude_code_session_router_cache.async_set_cache(
+            key=cache_key,
+            value=model,
+            ttl=_CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS,
+        )
+        return registered_model_name
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -12670,7 +12770,12 @@ class Router:
         the alias, since spend metadata is stamped before routing and the response carries the tier
         group the strategy picked.
         """
-        registered_model_name: Final = self._get_model_from_alias(model=model) or model
+        requested_registered_model_name: Final = self._get_model_from_alias(model=model) or model
+        registered_model_name: Final = await self._resolve_claude_code_session_router(
+            model=model,
+            registered_model_name=requested_registered_model_name,
+            request_kwargs=request_kwargs,
+        )
 
         #########################################################
         # Run the routing-plugin pipeline, if any plugins are configured.
@@ -13467,6 +13572,9 @@ class Router:
     def flush_cache(self):
         litellm.cache = None
         self.cache.flush_cache()
+        session_in_memory_cache: Final = self._claude_code_session_router_cache.in_memory_cache
+        if session_in_memory_cache is not None:
+            session_in_memory_cache.flush_cache()
 
     def reset(self):
         ## clean up on close
