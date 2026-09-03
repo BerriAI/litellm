@@ -173,6 +173,9 @@ async def list_containers(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    after: str | None = None,
+    limit: int | None = None,
+    order: str | None = None,
 ):
     """
     Container list endpoint for retrieving a list of containers.
@@ -208,7 +211,13 @@ async def list_containers(
 
     # Read query parameters
     query_params: Final = dict(request.query_params)
-    data: Final[dict[str, Any]] = {"query_params": query_params, "model": query_params.get("model")}
+    data: Final[dict[str, Any]] = {
+        "query_params": query_params,
+        "model": query_params.get("model"),
+        "after": after,
+        "limit": limit,
+        "order": order,
+    }
 
     # Extract custom_llm_provider using priority chain
     custom_llm_provider: Final = (
