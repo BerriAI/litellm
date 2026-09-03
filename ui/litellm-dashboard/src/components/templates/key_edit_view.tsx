@@ -28,7 +28,6 @@ import { routerSettingsEditorValue, routerSettingsUpdate } from "../common_compo
 import { estimateTooltips, withNormalizedEstimates } from "./estimatedOutputTokens";
 import {
   currentValuePlaceholder,
-  keyOrganizationId,
   keyTypeFromRoutes,
   modelSentinelOptions,
   parseAllowedRoutes,
@@ -106,7 +105,6 @@ export function KeyEditView({
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
       : [],
   );
-  const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(keyOrganizationId(keyData));
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(keyData.auto_rotate || false);
   const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "");
   const [neverExpire, setNeverExpire] = useState<boolean>(!keyData.expires);
@@ -135,6 +133,7 @@ export function KeyEditView({
     return project?.project_alias ? `${project.project_alias} (${keyData.project_id})` : keyData.project_id;
   })();
 
+  const selectedOrganizationId = form.watch("organization_id") ?? null;
   const allowedRoutesValue = form.watch("allowed_routes");
   const selectedModels = (form.watch("models") as string[] | undefined) ?? [];
   const allowedRoutes = parseAllowedRoutes(allowedRoutesValue);
@@ -306,7 +305,6 @@ export function KeyEditView({
 
   const handleOrganizationChange = (setField: (value: string | undefined) => void, orgId: string | undefined) => {
     setField(orgId);
-    setSelectedOrganizationId(orgId || null);
     form.setValue("team_id", undefined);
   };
 
