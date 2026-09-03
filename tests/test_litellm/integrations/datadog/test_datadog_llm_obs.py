@@ -514,9 +514,9 @@ def test_an_explicit_redaction_setting_survives_the_global_params(logger: DataDo
     """Global params carry defaults for keys the operator never set, and those must not win."""
     with patch.dict(os.environ, {"DD_API_KEY": "k", "DD_SITE": "us5.datadoghq.com"}, clear=True):
         with patch("asyncio.create_task"):
-            with patch.object(
+            with patch.object(  # test-quality-ok: the ctor reads this module global with no injection seam
                 litellm, "datadog_llm_observability_params", {}
-            ):  # test-quality-ok: verifies global init precedence
+            ):
                 configured_logger = DataDogLLMObsLogger(
                     turn_off_message_logging=True
                 )  # test-quality-ok: verifies ctor setting
