@@ -1442,6 +1442,53 @@ async def test_fastest_response_batch_also_reserves_one_unit_per_branch(time_con
 
 
 @pytest.mark.asyncio
+async def test_fastest_response_winner_releases_every_unit_the_race_reserved(time_controller, monkeypatch):
+    """abatch_completion_fastest_response's cancelled losers never fire a
+    terminal event, but the one winner's own event must still release every
+    unit the whole race reserved, not just its own share -- this used to be
+    an accepted undercount (reserving only 1 unit for the whole race); now
+    that admission reserves one per real branch, release must give all of
+    it back together, or the fix here would trade an undercount for a
+    leak."""
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "concurrency_limits": {
+                "limits": [{"name": "conc", "tag_id": "end_user_id", "limit": 2, "period_seconds": 60}]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={
+            **_data(["end_user_id:u1"], call_id="call-1"),
+            "model": "model-a,model-b",
+            "fastest_response": True,
+        },
+        call_type="acompletion",
+    )
+    kwargs = {"litellm_call_id": "call-1", "metadata": {"tags": ["end_user_id:u1"]}}
+    await hook.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={
+            **_data(["end_user_id:u1"], call_id="call-2"),
+            "model": "model-c,model-d",
+            "fastest_response": True,
+        },
+        call_type="acompletion",
+    )
+    assert result is not None
+
+
+@pytest.mark.asyncio
 async def test_batch_dispatch_release_is_safe_across_both_real_terminal_events(time_controller, monkeypatch):
     """has_logged_async_success and has_logged_async_failure gate
     independently, so a mixed-outcome dispatch (one branch succeeds,
