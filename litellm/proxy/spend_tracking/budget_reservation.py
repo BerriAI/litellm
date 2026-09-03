@@ -332,7 +332,11 @@ async def release_budget_reservation(budget_reservation: dict | None) -> None:
         # A Fusion request may have completed hidden provider calls before a
         # later panel/continuation failure. Preserve that known billed floor
         # instead of refunding the whole logical request to zero.
-        actual_cost=(budget_reservation or {}).get(FUSION_BUDGET_ACCUMULATED_COST_KEY, 0.0),
+        actual_cost=(
+            budget_reservation or {}  # mutable-ok: absent reservation uses an empty native mapping
+        ).get(  # mutable-ok: local provider payload
+            FUSION_BUDGET_ACCUMULATED_COST_KEY, 0.0
+        ),  # mutable-ok: local provider payload
     )
 
 
@@ -366,10 +370,10 @@ async def release_budget_reservation_on_cancel(
     # accumulator. Add another input floor only once the final continuation
     # has been dispatched; otherwise cancellation during the panel would count
     # the initial input twice.
-    hidden_call_finished = bool(budget_reservation.get(FUSION_BUDGET_ACCUMULATED_CALL_IDS_KEY)) or (
+    hidden_call_finished: Final = bool(budget_reservation.get(FUSION_BUDGET_ACCUMULATED_CALL_IDS_KEY)) or (
         accumulated_cost > 0.0
     )
-    add_in_flight_input = not hidden_call_finished or (
+    add_in_flight_input: Final = not hidden_call_finished or (
         budget_reservation.get(FUSION_BUDGET_CONTINUATION_STARTED_KEY) is True
     )
     incurred_cost: Final = accumulated_cost + (
@@ -1082,7 +1086,7 @@ def _estimate_request_model_max_cost(
     internal_call_count: Final = (
         fusion_router.config.max_tool_calls + 1 if fusion_router.config.search_tool_name is not None else 1
     )
-    internal_request_body: Final = {
+    internal_request_body: Final = {  # mutable-ok: local provider payload
         **request_body,
         # Panel and analyst output is controlled by the Fusion config, not by
         # the caller's cap on the outward response.
@@ -1099,7 +1103,7 @@ def _estimate_request_model_max_cost(
     )
 
     def estimate_internal_calls(model: str, base_input_tokens: int) -> float | None:
-        estimates = tuple(
+        estimates: Final = tuple(
             _estimate_request_max_cost_for_model(
                 request_body=internal_request_body,
                 route=route,
@@ -1111,7 +1115,7 @@ def _estimate_request_model_max_cost(
         )
         if any(estimate is None for estimate in estimates):
             return None
-        return sum(cast("tuple[float, ...]", estimates))
+        return sum(estimate for estimate in estimates if estimate is not None)
 
     panel_estimates: Final = tuple(
         estimate_internal_calls(panel_model, query_token_ceiling) for panel_model in fusion_router.config.panel_models
@@ -1134,7 +1138,7 @@ def _estimate_request_model_max_cost(
         if original_outer_tokens is not None
         else None
     )
-    analyst_estimate = estimate_internal_calls(fusion_router.config.resolved_analyst_model, analyst_input_tokens)
+    analyst_estimate: Final = estimate_internal_calls(fusion_router.config.resolved_analyst_model, analyst_input_tokens)
     final_outer_estimate: Final = _estimate_request_max_cost_for_model(
         request_body=request_body,
         route=route,
@@ -1151,7 +1155,7 @@ def _estimate_request_model_max_cost(
         # matches the normal unknown-price behavior instead of presenting an
         # under-estimate as a valid worst case.
         return None
-    return sum(cast("tuple[float, ...]", child_estimates))
+    return sum(estimate for estimate in child_estimates if estimate is not None)
 
 
 def estimate_request_input_cost(

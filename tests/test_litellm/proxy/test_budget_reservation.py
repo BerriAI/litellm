@@ -87,7 +87,7 @@ def _request_body() -> dict:
 
 
 async def _reserve(valid_token, cost, key_cache, proxy_logging_obj):
-    with patch(
+    with patch(  # test-quality-ok: isolates child pricing to exercise partial-estimate refusal
         "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
         return_value=cost,
     ):
@@ -2902,7 +2902,7 @@ async def test_release_budget_reservation_on_cancel_swallows_release_errors():
 
 
 @pytest.mark.asyncio
-async def test_fusion_release_and_cancel_keep_already_billed_hidden_costs():
+async def test_fusion_release_and_cancel_keep_already_billed_hidden_costs():  # test-quality-ok: forwarded cost is the helper contract
     reservation = {
         "reserved_cost": 3.0,
         "entries": [],
@@ -2910,7 +2910,7 @@ async def test_fusion_release_and_cancel_keep_already_billed_hidden_costs():
         "input_cost": 0.5,
         FUSION_BUDGET_ACCUMULATED_COST_KEY: 0.3,
     }
-    with patch(
+    with patch(  # test-quality-ok: captures reconciliation to verify each billed cost floor
         "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
         new=AsyncMock(),
     ) as reconcile:

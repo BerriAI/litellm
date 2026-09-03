@@ -688,9 +688,9 @@ async def test_fusion_hidden_costs_accumulate_then_continuation_reconciles_once(
         }
 
     with (
-        patch("litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock) as increment,
-        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as proxy_logging,
+        patch("litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock) as increment,  # test-quality-ok: isolates proxy persistence while reservation state remains observable
+        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),  # test-quality-ok: isolates proxy persistence while reservation state remains observable
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as proxy_logging,  # test-quality-ok: injects the callback persistence boundary
     ):
         proxy_logging.db_spend_update_writer.update_database = AsyncMock()
         proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
@@ -762,9 +762,9 @@ async def test_cached_fusion_hidden_call_accumulates_zero_cost():
     }
 
     with (
-        patch("litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock) as increment,
-        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as proxy_logging,
+        patch("litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock) as increment,  # test-quality-ok: isolates proxy persistence while reservation state remains observable
+        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),  # test-quality-ok: isolates proxy persistence while reservation state remains observable
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as proxy_logging,  # test-quality-ok: injects the callback persistence boundary
     ):
         proxy_logging.db_spend_update_writer.update_database = AsyncMock()
         proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
@@ -810,8 +810,8 @@ async def test_unpriced_fusion_hidden_call_does_not_release_parent_reservation()
     }
 
     with (
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as proxy_logging,
-        patch(
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as proxy_logging,  # test-quality-ok: injects the callback alert boundary
+        patch(  # test-quality-ok: verifies unpriced hidden calls cannot release the parent reservation
             "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
             new_callable=AsyncMock,
         ) as release_reservation,

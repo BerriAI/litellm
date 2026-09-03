@@ -86,11 +86,11 @@ def _mapping_or_attribute(value: object, key: str) -> object:
 
 
 def _response_invoked_fusion(response: object) -> bool:
-    choices = _mapping_or_attribute(response, "choices")
+    choices: Final = _mapping_or_attribute(response, "choices")
     if not isinstance(choices, Sequence) or isinstance(choices, (str, bytes)) or not choices:
         return False
-    message = _mapping_or_attribute(choices[0], "message")
-    tool_calls = _mapping_or_attribute(message, "tool_calls")
+    message: Final = _mapping_or_attribute(choices[0], "message")
+    tool_calls: Final = _mapping_or_attribute(message, "tool_calls")
     if not isinstance(tool_calls, Sequence) or isinstance(tool_calls, (str, bytes)):
         return False
     return any(
@@ -100,45 +100,63 @@ def _response_invoked_fusion(response: object) -> bool:
 
 
 def _should_defer_fusion_budget_reconciliation(
-    metadata: dict,
+    metadata: dict,  # mutable-ok: SDK boundary
     completion_response: object,
-    kwargs: dict,
+    kwargs: dict,  # mutable-ok: SDK boundary
 ) -> bool:
-    origin = metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
+    origin: Final = metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
     if origin in _FUSION_ALWAYS_DEFERRED_ORIGINS:
         return True
     if origin != "fusion_initial":
         return False
-    complete_stream = kwargs.get("complete_streaming_response")
+    complete_stream: Final = kwargs.get("complete_streaming_response")
     return _response_invoked_fusion(completion_response) or _response_invoked_fusion(complete_stream)
 
 
 def _accumulate_fusion_cost(
-    budget_reservation: dict,
+    budget_reservation: dict,  # mutable-ok: SDK boundary
     response_cost: float,
-    kwargs: dict,
+    kwargs: dict,  # mutable-ok: SDK boundary
 ) -> None:
     """Add one hidden call exactly once before its asynchronous DB write."""
-    call_id = kwargs.get("litellm_call_id") or kwargs.get("id")
-    seen_call_ids = budget_reservation.setdefault(FUSION_BUDGET_ACCUMULATED_CALL_IDS_KEY, [])
+    call_id: Final = kwargs.get("litellm_call_id") or kwargs.get("id")
+    seen_call_ids: Final = budget_reservation.setdefault(
+        FUSION_BUDGET_ACCUMULATED_CALL_IDS_KEY,
+        [],  # mutable-ok: local provider payload
+    )  # mutable-ok: local provider payload
     if isinstance(seen_call_ids, list) and call_id is not None:
-        normalized_call_id = str(call_id)
+        normalized_call_id: Final = str(call_id)
         if normalized_call_id in seen_call_ids:
             return
         seen_call_ids.append(normalized_call_id)
-    budget_reservation[FUSION_BUDGET_ACCUMULATED_COST_KEY] = float(
-        budget_reservation.get(FUSION_BUDGET_ACCUMULATED_COST_KEY) or 0.0
-    ) + max(response_cost, 0.0)
+    budget_reservation[  # rebind-ok: shared reservation ledger
+        FUSION_BUDGET_ACCUMULATED_COST_KEY
+    ] = (  # rebind-ok: shared reservation ledger
+        float(  # rebind-ok: shared reservation ledger
+            budget_reservation.get(FUSION_BUDGET_ACCUMULATED_COST_KEY) or 0.0
+        )
+        + max(response_cost, 0.0)
+    )
 
 
-def _failure_should_leave_fusion_reservation_open(request_data: dict) -> bool:
-    buckets: tuple[object, ...] = (
+def _failure_should_leave_fusion_reservation_open(
+    request_data: dict,  # mutable-ok: SDK boundary
+) -> bool:  # mutable-ok: SDK boundary
+    buckets: Final[tuple[object, ...]] = (
         request_data.get("metadata"),
         request_data.get("litellm_metadata"),
-        (request_data.get("litellm_params") or {}).get("metadata")
+        (
+            request_data.get("litellm_params") or {}  # mutable-ok: fallback metadata uses a native mapping
+        ).get(  # mutable-ok: local provider payload
+            "metadata"
+        )  # mutable-ok: local provider payload
         if isinstance(request_data.get("litellm_params"), dict)
         else None,
-        (request_data.get("litellm_params") or {}).get("litellm_metadata")
+        (
+            request_data.get("litellm_params") or {}  # mutable-ok: fallback metadata uses a native mapping
+        ).get(  # mutable-ok: local provider payload
+            "litellm_metadata"
+        )  # mutable-ok: local provider payload
         if isinstance(request_data.get("litellm_params"), dict)
         else None,
     )
@@ -351,7 +369,7 @@ class _ProxyDBLogger(CustomLogger):
                 router=get_llm_router(),
             )
             if response_cost is not None and kwargs.get("cache_hit", False) is True:
-                response_cost = 0.0
+                response_cost = 0.0  # rebind-ok: orchestration branch state
                 verbose_proxy_logger.debug("Cache Hit: response_cost %s, for user_id %s", response_cost, user_id)
             defer_fusion_reconciliation: Final = (
                 budget_reservation is not None

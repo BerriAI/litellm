@@ -9464,7 +9464,11 @@ class Router:
         )
 
     async def _fusion_asearch(  # kwargs-ok: bridge preserves the Router.asearch keyword surface
-        self, *, model: str, query: str, **kwargs: object
+        self,
+        *,
+        model: str,
+        query: str,
+        **kwargs: object,  # kwargs-ok: SDK passthrough
     ) -> object:
         """Late-bound Search API bridge with the originating caller's permissions."""
         metadata_values: Final = tuple(kwargs.get(key) for key in ("litellm_metadata", "metadata"))
@@ -9486,7 +9490,7 @@ class Router:
             )
 
             try:
-                user_api_key_auth = (
+                user_api_key_auth: Final = (
                     raw_user_api_key_auth
                     if isinstance(raw_user_api_key_auth, UserAPIKeyAuth)
                     else UserAPIKeyAuth.model_validate(raw_user_api_key_auth)
@@ -9502,7 +9506,11 @@ class Router:
                 search_tool_name=model,
                 user_api_key_dict=user_api_key_auth,
             )
-        return await self.asearch(model=model, query=query, **kwargs)
+        return await self.asearch(
+            model=model,
+            query=query,
+            **kwargs,  # pyright: ignore[reportArgumentType]  # bridge forwards provider-specific search kwargs
+        )
 
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
         """
