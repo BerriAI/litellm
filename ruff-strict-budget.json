@@ -144,7 +144,7 @@
     "limit": 1
   },
   "PLR1704": {
-    "limit": 3
+    "limit": 2
   },
   "PLR1714": {
     "limit": 253
@@ -240,13 +240,13 @@
     "limit": 96
   },
   "TRY201": {
-    "limit": 403
+    "limit": 402
   },
   "TRY203": {
-    "limit": 111
+    "limit": 110
   },
   "TRY300": {
-    "limit": 854
+    "limit": 853
   },
   "UP028": {
     "limit": 2
