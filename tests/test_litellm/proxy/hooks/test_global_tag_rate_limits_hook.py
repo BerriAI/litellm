@@ -7,18 +7,26 @@ import os
 import time
 import uuid
 from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import ValidationError
+from starlette.requests import Request
 
 import litellm
+import litellm.proxy.common_request_processing
 from litellm.caching.dual_cache import DualCache
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.global_tag_rate_limits_hook import (
     _bucket_key,
     _PROXY_GlobalTagRateLimitsHook,
 )
+from litellm.proxy.proxy_server import ProxyConfig
+from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.router import TagRateLimitEntry
 
@@ -1542,6 +1550,98 @@ async def test_real_abatch_completion_with_a_shared_logging_obj_does_not_leak(ti
         call_type="completion",
     )
     assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_real_proxy_pipeline_batch_dispatch_fires_one_terminal_event_not_one_per_branch(
+    time_controller, monkeypatch
+):
+    """Goes through the actual proxy request pipeline this hook runs inside
+    -- ProxyBaseLLMRequestProcessing.common_processing_pre_call_logic, then
+    route_request, exactly like a real incoming HTTP request -- rather than
+    reconstructing the shared litellm_logging_obj by hand. Settles a live
+    disagreement about whether Router.abatch_completion(models=[...], **data)
+    fires one terminal callback per branch or one for the whole dispatch:
+    calling that same function directly, with a bare kwargs dict that skips
+    common_processing_pre_call_logic entirely, gives each branch its own
+    fresh litellm_call_id and its own fresh Logging instance (no
+    should_run_logging suppression is possible without a shared one) --
+    but that is not what a real request goes through. common_processing_pre_call_logic
+    always attaches one litellm_logging_obj (and one litellm_call_id) to
+    `data` before route_request ever dispatches into Router, and every
+    branch's own acompletion() call receives that same object via **data,
+    so should_run_logging suppresses every callback after the first for the
+    whole call_id -- confirmed here by asserting on litellm_call_id/kwargs
+    identity, not just a fire count.
+    """
+    fire_log: list[
+        tuple[str, str | None]
+    ] = []  # mutable-ok: appended by the probe callback below, read once at the end
+
+    class _ProbeLogger(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            fire_log.append(("success", kwargs.get("litellm_call_id")))  # mutable-ok: see fire_log's own comment
+
+    monkeypatch.setattr(litellm, "callbacks", [_ProbeLogger()])
+
+    router = Router(
+        model_list=[
+            {"model_name": "m1", "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "ok1"}},
+            {"model_name": "m2", "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "ok2"}},
+            {"model_name": "m3", "litellm_params": {"model": "gpt-3.5-turbo", "mock_response": "ok3"}},
+        ]
+    )
+
+    processing_obj = ProxyBaseLLMRequestProcessing(
+        data={"model": "m1,m2,m3", "messages": [{"role": "user", "content": "hi"}]}
+    )
+    mock_request = MagicMock(spec=Request)
+    mock_request.headers = {}
+
+    async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+        return data
+
+    async def passthrough_add_litellm_data_to_request(*args, **kwargs):
+        return kwargs.get("data", {})
+
+    monkeypatch.setattr(
+        litellm.proxy.common_request_processing,
+        "add_litellm_data_to_request",
+        passthrough_add_litellm_data_to_request,
+    )
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=passthrough_pre_call_hook)
+    mock_proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+    mock_proxy_config = MagicMock(spec=ProxyConfig)
+    mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value={})
+
+    returned_data, logging_obj = await processing_obj.common_processing_pre_call_logic(
+        request=mock_request,
+        general_settings={},
+        user_api_key_dict=_key(),
+        proxy_logging_obj=mock_proxy_logging_obj,
+        proxy_config=mock_proxy_config,
+        route_type="acompletion",
+        llm_router=router,
+    )
+    # This is the exact mechanism the module docstring and this hook's own
+    # admission rely on: one shared object, attached before Router ever
+    # sees the request.
+    assert returned_data.get("litellm_logging_obj") is logging_obj
+
+    llm_call = await route_request(
+        data=returned_data,
+        llm_router=router,
+        user_model=None,
+        route_type="acompletion",
+        user_api_key_dict=_key(),
+    )
+    responses = await llm_call
+    await asyncio.sleep(0.1)
+
+    assert [r.choices[0].message.content for r in responses] == ["ok1", "ok2", "ok3"]
+    assert len(fire_log) == 1
+    assert fire_log[0][1] == returned_data.get("litellm_call_id")
 
 
 # ---------------------------------------------------------------------------
