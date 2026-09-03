@@ -5,11 +5,13 @@ import contextlib
 import copy
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from types import MappingProxyType
 from dataclasses import dataclass
 from typing import Final
 
 import httpx
+import openai
 import pytest
 import respx
 from fastapi.testclient import TestClient
@@ -20,6 +22,7 @@ from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm import main as litellm_main
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -3259,3 +3262,161 @@ def test_stream_chunk_builder_leaves_xai_reported_cost_to_the_calculator(monkeyp
     assert getattr(response.usage, "cost", None) == pytest.approx(0.42)
     assert response._hidden_params.get("response_cost") is None
     assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.63)
+
+
+_TRANSPORT_TIMEOUT_SECONDS: Final = 0.5
+_TRANSPORT_TIMEOUT_MESSAGES: Final = [{"role": "user", "content": "hello"}]
+_FAKE_AWS_PARAMS: Final = MappingProxyType(
+    {
+        "aws_access_key_id": "fake-access-key",
+        "aws_secret_access_key": "fake-secret-key",
+        "aws_region_name": "us-east-1",
+    }
+)
+
+
+def _timing_out_transport(seen_timeouts: list[object]) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_timeouts.append(request.extensions.get("timeout"))
+        raise httpx.ReadTimeout("mock transport deadline", request=request)
+
+    return httpx.MockTransport(handler)
+
+
+def _assert_deadline_reached_transport(seen_timeouts: list[object]) -> None:
+    assert seen_timeouts, "the request never reached the transport"
+    read_timeouts: Final = [t["read"] for t in seen_timeouts if isinstance(t, dict)]
+    assert read_timeouts == [_TRANSPORT_TIMEOUT_SECONDS] * len(seen_timeouts)
+
+
+@dataclass(frozen=True, slots=True)
+class _TransportTimeoutCase:
+    name: str
+    model: str
+    make_client: Callable[[httpx.MockTransport], object]
+    extra_kwargs: Mapping[str, object] = MappingProxyType({})
+    stream: bool = False
+    embedding: bool = False
+
+
+def _openai_client(transport: httpx.MockTransport) -> openai.OpenAI:
+    return openai.OpenAI(api_key="sk-test", http_client=httpx.Client(transport=transport))
+
+
+def _azure_client(transport: httpx.MockTransport) -> openai.AzureOpenAI:
+    return openai.AzureOpenAI(
+        api_key="sk-test",
+        api_version="2024-10-21",
+        azure_endpoint="http://azure.invalid",
+        http_client=httpx.Client(transport=transport),
+    )
+
+
+def _http_handler(transport: httpx.MockTransport) -> HTTPHandler:
+    return HTTPHandler(client=httpx.Client(transport=transport))
+
+
+_SYNC_TRANSPORT_TIMEOUT_CASES: Final = (
+    _TransportTimeoutCase("openai", "openai/gpt-4.1-mini", _openai_client),
+    _TransportTimeoutCase("openai-stream", "openai/gpt-4.1-mini", _openai_client, stream=True),
+    _TransportTimeoutCase("openai-embedding", "openai/text-embedding-3-small", _openai_client, embedding=True),
+    _TransportTimeoutCase("azure", "azure/gpt-4.1-mini", _azure_client),
+    _TransportTimeoutCase("anthropic", "anthropic/claude-sonnet-4-5-20250929", _http_handler),
+    _TransportTimeoutCase("anthropic-stream", "anthropic/claude-sonnet-4-5-20250929", _http_handler, stream=True),
+    _TransportTimeoutCase(
+        "bedrock",
+        "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+        _http_handler,
+        extra_kwargs=_FAKE_AWS_PARAMS,
+    ),
+)
+
+
+@pytest.mark.parametrize("case", _SYNC_TRANSPORT_TIMEOUT_CASES, ids=lambda case: case.name)
+def test_completion_timeout_reaches_the_transport_and_maps_to_timeout(case: _TransportTimeoutCase):
+    seen_timeouts: list[object] = []
+    client: Final = case.make_client(_timing_out_transport(seen_timeouts))
+    with pytest.raises(litellm.Timeout):
+        if case.embedding:
+            litellm.embedding(
+                model=case.model,
+                input="hello",
+                api_key="sk-test",
+                client=client,
+                timeout=_TRANSPORT_TIMEOUT_SECONDS,
+                max_retries=0,
+                **case.extra_kwargs,
+            )
+        else:
+            response = litellm.completion(
+                model=case.model,
+                messages=_TRANSPORT_TIMEOUT_MESSAGES,
+                api_key="sk-test",
+                client=client,
+                timeout=_TRANSPORT_TIMEOUT_SECONDS,
+                max_retries=0,
+                stream=case.stream,
+                **case.extra_kwargs,
+            )
+            if isinstance(response, litellm.CustomStreamWrapper):
+                for _ in response:
+                    pass
+    _assert_deadline_reached_transport(seen_timeouts)
+
+
+async def _async_openai_client(transport: httpx.MockTransport) -> openai.AsyncOpenAI:
+    return openai.AsyncOpenAI(api_key="sk-test", http_client=httpx.AsyncClient(transport=transport))
+
+
+async def _async_http_handler(transport: httpx.MockTransport) -> AsyncHTTPHandler:
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=transport)
+    return handler
+
+
+@dataclass(frozen=True, slots=True)
+class _AsyncTransportTimeoutCase:
+    name: str
+    model: str
+    make_client: Callable[[httpx.MockTransport], Awaitable[object]]
+    extra_kwargs: Mapping[str, object] = MappingProxyType({})
+    stream: bool = False
+
+
+_ASYNC_TRANSPORT_TIMEOUT_CASES: Final = (
+    _AsyncTransportTimeoutCase("openai", "openai/gpt-4.1-mini", _async_openai_client),
+    _AsyncTransportTimeoutCase("openai-stream", "openai/gpt-4.1-mini", _async_openai_client, stream=True),
+    _AsyncTransportTimeoutCase("anthropic", "anthropic/claude-sonnet-4-5-20250929", _async_http_handler),
+    _AsyncTransportTimeoutCase(
+        "anthropic-stream", "anthropic/claude-sonnet-4-5-20250929", _async_http_handler, stream=True
+    ),
+    _AsyncTransportTimeoutCase(
+        "bedrock",
+        "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+        _async_http_handler,
+        extra_kwargs=_FAKE_AWS_PARAMS,
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", _ASYNC_TRANSPORT_TIMEOUT_CASES, ids=lambda case: case.name)
+async def test_acompletion_timeout_reaches_the_transport_and_maps_to_timeout(case: _AsyncTransportTimeoutCase):
+    seen_timeouts: list[object] = []
+    client: Final = await case.make_client(_timing_out_transport(seen_timeouts))
+    with pytest.raises(litellm.Timeout):
+        response = await litellm.acompletion(
+            model=case.model,
+            messages=_TRANSPORT_TIMEOUT_MESSAGES,
+            api_key="sk-test",
+            client=client,
+            timeout=_TRANSPORT_TIMEOUT_SECONDS,
+            max_retries=0,
+            stream=case.stream,
+            **case.extra_kwargs,
+        )
+        if isinstance(response, litellm.CustomStreamWrapper):
+            async for _ in response:
+                pass
+    _assert_deadline_reached_transport(seen_timeouts)

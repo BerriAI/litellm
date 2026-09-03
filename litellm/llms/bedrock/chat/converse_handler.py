@@ -242,6 +242,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 url=api_base,
                 headers=headers,
                 data=data,
+                timeout=timeout,
                 logging_obj=logging_obj,
             )
             response.raise_for_status()
@@ -585,6 +586,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 url=proxy_endpoint_url,
                 headers=prepped.headers,
                 data=data,
+                timeout=timeout,
                 logging_obj=logging_obj,
             )
             response.raise_for_status()
