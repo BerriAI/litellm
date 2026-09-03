@@ -5,6 +5,7 @@ import math
 import statistics
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
+from types import MappingProxyType
 from typing import Final, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -28,7 +29,7 @@ class ResponseLatencyCache(Protocol):
         key: str,
         parent_otel_span: object | None = None,
         local_only: bool = False,
-        **kwargs: object,
+        **kwargs: object,  # kwargs-ok: matches the shared cache interface's optional transport parameters
     ) -> object: ...
 
     async def async_set_cache(
@@ -36,7 +37,7 @@ class ResponseLatencyCache(Protocol):
         key: str,
         value: object,
         local_only: bool = False,
-        **kwargs: object,
+        **kwargs: object,  # kwargs-ok: matches the shared cache interface's optional transport parameters
     ) -> None: ...
 
 
@@ -48,10 +49,12 @@ class ResponseLatencySample(BaseModel):
 
 
 class ResponseLatencyState(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
-    samples_by_model: dict[str, list[ResponseLatencySample]] = Field(default_factory=dict)
-    visible_output_tokens: list[int] = Field(default_factory=list)
+    samples_by_model: Mapping[str, tuple[ResponseLatencySample, ...]] = Field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    visible_output_tokens: tuple[int, ...] = ()
 
 
 def _cache_key(router_model_name: str, tier: str) -> str:
@@ -61,7 +64,7 @@ def _cache_key(router_model_name: str, tier: str) -> str:
 
 def _state(value: object) -> ResponseLatencyState:
     try:
-        return ResponseLatencyState.model_validate(value or {})
+        return ResponseLatencyState.model_validate(value or MappingProxyType({}))
     except ValidationError:
         return ResponseLatencyState()
 
@@ -102,16 +105,20 @@ def _best_observed_model(
     objective: AutoSetupObjective,
 ) -> str:
     expected_tokens: Final = statistics.median(state.visible_output_tokens) if state.visible_output_tokens else 1.0
-    latencies: Final = {
-        model: _median_prediction_ms(state.samples_by_model[model], expected_tokens) for model in ordered_models
-    }
+    latencies: Final[Mapping[str, float]] = MappingProxyType(
+        {model: _median_prediction_ms(state.samples_by_model[model], expected_tokens) for model in ordered_models}
+    )
     if objective == "task_completion_speed":
         return min(ordered_models, key=lambda model: (latencies[model], ordered_models.index(model)))
 
-    configured_costs: Final = {candidate.model_name: candidate.cost_per_completed_task_usd for candidate in candidates}
+    configured_costs: Final[Mapping[str, float]] = MappingProxyType(
+        {candidate.model_name: candidate.cost_per_completed_task_usd for candidate in candidates}
+    )
     known_costs: Final = tuple(configured_costs.values())
     conservative_unknown_cost: Final = max(known_costs) if known_costs else 1.0
-    costs: Final = {model: configured_costs.get(model, conservative_unknown_cost) for model in ordered_models}
+    costs: Final[Mapping[str, float]] = MappingProxyType(
+        {model: configured_costs.get(model, conservative_unknown_cost) for model in ordered_models}
+    )
     latency_values: Final = tuple(latencies.values())
     cost_values: Final = tuple(costs.values())
     return min(
@@ -148,7 +155,9 @@ async def select_runtime_response_model(
         verbose_router_logger.warning("Auto setup response-latency cache read failed: %s", exc)
         return ordered[0]
 
-    counts: Final = {model: len(state.samples_by_model.get(model, ())) for model in ordered}
+    counts: Final[Mapping[str, int]] = MappingProxyType(
+        {model: len(state.samples_by_model.get(model, ())) for model in ordered}
+    )
     least_observed: Final = min(counts.values())
     if least_observed < _MIN_SAMPLES_PER_MODEL:
         return next(model for model in ordered if counts[model] == least_observed)
@@ -231,7 +240,9 @@ async def record_runtime_response_latency(
     sample, visible_tokens = measured
     key: Final = _cache_key(router_model_name, tier)
     state: Final = _state(await router_cache.async_get_cache(key=key))
-    samples: Final = [*state.samples_by_model.get(routed_model, ()), sample][-_MAX_SAMPLES_PER_MODEL:]
-    state.samples_by_model[routed_model] = samples
-    state.visible_output_tokens = [*state.visible_output_tokens, visible_tokens][-_MAX_EXPECTED_OUTPUT_SAMPLES:]
-    await router_cache.async_set_cache(key=key, value=state.model_dump(mode="json"), ttl=_CACHE_TTL_SECONDS)
+    samples: Final = (*state.samples_by_model.get(routed_model, ()), sample)[-_MAX_SAMPLES_PER_MODEL:]
+    updated_state: Final = ResponseLatencyState(
+        samples_by_model=MappingProxyType({**state.samples_by_model, routed_model: samples}),
+        visible_output_tokens=(*state.visible_output_tokens, visible_tokens)[-_MAX_EXPECTED_OUTPUT_SAMPLES:],
+    )
+    await router_cache.async_set_cache(key=key, value=updated_state.model_dump(mode="json"), ttl=_CACHE_TTL_SECONDS)

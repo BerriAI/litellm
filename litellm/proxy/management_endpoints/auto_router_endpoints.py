@@ -337,27 +337,46 @@ async def validate_complexity_router_config(
 
 
 _MODEL_REFERENCE_MAPPING: Final = TypeAdapter(dict[str, object])
+_EMPTY_MODEL_REFERENCE: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _deployment_model_refs(raw_deployment: object) -> tuple[str, ...]:
+    deployment: Final = _MODEL_REFERENCE_MAPPING.validate_python(raw_deployment)
+    litellm_params: Final = _MODEL_REFERENCE_MAPPING.validate_python(
+        deployment.get("litellm_params", _EMPTY_MODEL_REFERENCE)
+    )
+    model_info: Final = _MODEL_REFERENCE_MAPPING.validate_python(deployment.get("model_info", _EMPTY_MODEL_REFERENCE))
+    return tuple(
+        value
+        for value in (
+            litellm_params.get("model"),
+            litellm_params.get("base_model"),
+            model_info.get("base_model"),
+        )
+        if isinstance(value, str) and value
+    )
 
 
 def _available_model_refs(
     llm_router: "Router", model_names: Sequence[str], team_id: str | None
 ) -> Mapping[str, tuple[str, ...]]:
-    refs: Final[dict[str, tuple[str, ...]]] = {}
-    for model_name in model_names:
-        deployments = llm_router.get_model_list(model_name=model_name, team_id=team_id) or ()
-        resolved: list[str] = [model_name]
-        for raw_deployment in deployments:
-            deployment = _MODEL_REFERENCE_MAPPING.validate_python(raw_deployment)
-            litellm_params = _MODEL_REFERENCE_MAPPING.validate_python(deployment.get("litellm_params", {}))
-            model_info = _MODEL_REFERENCE_MAPPING.validate_python(deployment.get("model_info", {}))
-            resolved.extend(
-                value for key in ("model", "base_model") if isinstance(value := litellm_params.get(key), str) and value
+    return MappingProxyType(
+        {
+            model_name: tuple(
+                dict.fromkeys(
+                    (
+                        model_name,
+                        *(
+                            ref
+                            for deployment in (llm_router.get_model_list(model_name=model_name, team_id=team_id) or ())
+                            for ref in _deployment_model_refs(deployment)
+                        ),
+                    )
+                )
             )
-            base_model = model_info.get("base_model")
-            if isinstance(base_model, str) and base_model:
-                resolved.append(base_model)
-        refs[model_name] = tuple(dict.fromkeys(resolved))
-    return MappingProxyType(refs)
+            for model_name in model_names
+        }
+    )
 
 
 @router.get(
@@ -422,9 +441,9 @@ async def get_auto_router_recommendation(
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
-            detail={
+            detail={  # mutable-ok: HTTPException detail is a JSON-shaped error payload
                 "error": f"Could not build an Auto setup: {exc}"
-            },  # mutable-ok: HTTPException detail is JSON-shaped
+            },
         ) from exc
     matched: Final = tuple(
         dict.fromkeys(

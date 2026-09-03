@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib.resources import files
+from types import MappingProxyType
 from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
@@ -24,12 +25,14 @@ from .config import (
 SnapshotComplexity = Literal["trivial", "simple", "standard", "complex"]
 
 _SNAPSHOT_FILENAME: Final = "auto_router_snapshot_v0.json"
-_TIER_COMPLEXITIES: Final[Mapping[str, SnapshotComplexity]] = {
-    "SIMPLE": "trivial",
-    "MEDIUM": "simple",
-    "COMPLEX": "standard",
-    "REASONING": "complex",
-}
+_TIER_COMPLEXITIES: Final[Mapping[str, SnapshotComplexity]] = MappingProxyType(
+    {
+        "SIMPLE": "trivial",
+        "MEDIUM": "simple",
+        "COMPLEX": "standard",
+        "REASONING": "complex",
+    }
+)
 _EASY_COMPLEXITIES: Final = frozenset(("trivial", "simple"))
 _VERSION_SEPARATOR: Final = re.compile(r"(?<=\d)\.(?=\d)")
 _SNAPSHOT_PAYLOAD_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -145,7 +148,9 @@ def load_auto_router_snapshot() -> AutoRouterSnapshot:
     expected = raw.get("artifact_sha256")
     if not isinstance(expected, str):
         raise TypeError("Auto Router snapshot must carry an artifact_sha256")
-    unsigned: Final = {key: value for key, value in raw.items() if key != "artifact_sha256"}
+    unsigned: Final = {  # mutable-ok: json.dumps requires a transient concrete JSON object
+        key: value for key, value in raw.items() if key != "artifact_sha256"
+    }
     actual: Final = hashlib.sha256(_canonical_json(unsigned).encode("utf-8")).hexdigest()
     if expected != actual:
         raise ValueError(f"Auto Router snapshot hash mismatch: expected {expected}, calculated {actual}")
@@ -171,7 +176,7 @@ def _available_profiles(
     available_model_refs: Mapping[str, Sequence[str]],
     complexity: SnapshotComplexity,
 ) -> tuple[_AvailableProfile, ...]:
-    profiles: Final[list[_AvailableProfile]] = []
+    profiles: Final[list[_AvailableProfile]] = []  # mutable-ok: local accumulator is frozen into the returned tuple
     for model_name, refs in available_model_refs.items():
         matches = _matching_snapshot_models(snapshot, (model_name, *refs))
         if not matches:
@@ -230,13 +235,22 @@ def _hard_task_rank(
     )
     if not speed_profiles:
         return cost_ranked, "fallback_no_speed_evidence"
-    cohorts: dict[str, dict[str, tuple[_AvailableProfile, SnapshotSpeedProfile]]] = {}
+    cohorts: dict[  # mutable-ok: local cohort index never escapes
+        str, dict[str, tuple[_AvailableProfile, SnapshotSpeedProfile]]
+    ] = {}  # mutable-ok: local cohort index is populated before selection
     for profile, speed in speed_profiles:
-        by_model = cohorts.setdefault(speed.cohort_id, {})
+        by_model = cohorts.setdefault(
+            speed.cohort_id,
+            {},  # mutable-ok: local cohort index needs an empty per-cohort bucket
+        )
         current = by_model.get(profile.model_name)
         if current is None or speed.attempt_count > current[1].attempt_count:
             by_model[profile.model_name] = (profile, speed)
-    measured_profiles: Final = tuple({profile.model_name: profile for profile, _ in speed_profiles}.values())
+    measured_profiles: Final = tuple(
+        {  # mutable-ok: transient dict provides deterministic model-name deduplication
+            profile.model_name: profile for profile, _ in speed_profiles
+        }.values()
+    )
     anchor: Final = max(
         measured_profiles,
         key=lambda profile: (profile.quality.quality_lower_bound, -profile.quality.cost_per_completed_task_usd),
@@ -263,7 +277,9 @@ def _hard_task_rank(
                 ),
             )
         ), "cohort_scoped"
-    balanced_comparable: list[tuple[_AvailableProfile, float, float]] = []
+    balanced_comparable: list[  # mutable-ok: local typed accumulator is consumed immediately
+        tuple[_AvailableProfile, float, float]
+    ] = []  # mutable-ok: local typed accumulator is frozen by the return expression
     for profile, speed in comparable:
         cost = speed.cost_per_completed_task_usd
         completion_ms = speed.retry_adjusted_completion_ms
@@ -335,9 +351,13 @@ def build_auto_setup_config(
     """Recompute quality gates and rankings over only the caller's available groups."""
 
     maximum_regret: Final = snapshot.quality_tiers[quality_level].maximum_quality_regret
-    policies: Final[dict[str, AutoSetupTierPolicy]] = {}
-    tiers: Final[dict[str, list[str]]] = {}
-    tier_model_configs: Final[dict[str, list[dict[str, object]]]] = {}
+    policies: Final[  # mutable-ok: Pydantic config assembly is local to this builder
+        dict[str, AutoSetupTierPolicy]
+    ] = {}  # mutable-ok: Pydantic config assembly is local to this builder
+    tiers: Final[dict[str, list[str]]] = {}  # mutable-ok: Pydantic config assembly is local to this builder
+    tier_model_configs: Final[  # mutable-ok: Pydantic config assembly is local to this builder
+        dict[str, list[dict[str, object]]]
+    ] = {}  # mutable-ok: Pydantic config assembly is local to this builder
     for tier_name, complexity in _TIER_COMPLEXITIES.items():
         profiles = _available_profiles(snapshot, available_model_refs, complexity)
         if not profiles:
@@ -347,11 +367,15 @@ def build_auto_setup_config(
         admitted = tuple(profile for profile in profiles if profile.quality.quality_lower_bound >= floor)
         policy = _tier_policy(admitted, complexity, optimize_for)
         policies[tier_name] = policy
-        tiers[tier_name] = [candidate.model_name for candidate in policy.candidates]
-        parameterized: list[dict[str, object]] = [
-            {
+        tiers[tier_name] = [  # mutable-ok: ComplexityRouterConfig owns this JSON-shaped tier list
+            candidate.model_name for candidate in policy.candidates
+        ]
+        parameterized: list[dict[str, object]] = [  # mutable-ok: Pydantic validates and owns these JSON-shaped rows
+            {  # mutable-ok: each row is a Pydantic input payload
                 "model_name": profile.model_name,
-                "litellm_params": dict(profile.required_parameters),
+                "litellm_params": dict(  # mutable-ok: Pydantic needs a concrete JSON-shaped params object
+                    profile.required_parameters
+                ),
             }
             for profile in admitted
             if profile.model_name in frozenset(tiers[tier_name]) and profile.required_parameters
@@ -360,7 +384,7 @@ def build_auto_setup_config(
             tier_model_configs[tier_name] = parameterized
 
     return ComplexityRouterConfig.model_validate(
-        {
+        {  # mutable-ok: top-level Pydantic input must be a JSON-shaped mapping
             "tiers": tiers,
             "tier_model_configs": tier_model_configs,
             "classifier_type": "heuristic_v2",

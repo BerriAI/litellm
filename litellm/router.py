@@ -7990,14 +7990,15 @@ class Router:
         start_time: object,
         end_time: object,
     ) -> None:
-        raw_metadata = cast(object, get_litellm_metadata_from_kwargs(dict(kwargs)))
-        if not isinstance(raw_metadata, Mapping):
+        try:
+            metadata: Final = _SESSION_ADAPTER.validate_python(
+                get_litellm_metadata_from_kwargs(
+                    dict(kwargs)  # mutable-ok: legacy metadata helper requires a concrete dict copy
+                )
+            )
+            decision: Final = _SESSION_ADAPTER.validate_python(metadata.get("routing_decision"))
+        except ValidationError:
             return
-        metadata = cast(Mapping[str, object], raw_metadata)
-        raw_decision = metadata.get("routing_decision")
-        if not isinstance(raw_decision, Mapping):
-            return
-        decision = cast(Mapping[str, object], raw_decision)
         if decision.get("auto_setup_selection_mode") != "runtime_response_latency":
             return
         router_model_name = decision.get("router_model_name")
