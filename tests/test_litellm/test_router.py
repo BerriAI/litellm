@@ -12278,6 +12278,40 @@ async def test_router_aspeech_without_voice_dispatches_ref_audio_cloning(respx_m
     assert response.content == audio_bytes
 
 
+@pytest.mark.asyncio
+async def test_router_aspeech_without_voice_preserves_deployment_default_voice(respx_mock, monkeypatch):
+    """Omitting `voice` on the request must fall back to the deployment default,
+    not overwrite it with None. Regression for LOGIC_BUG 9d91e7b3."""
+    import base64
+
+    monkeypatch.setenv("MISTRAL_API_KEY", "sk-mistral-test")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    audio_bytes = b"RIFFfake-wav-bytes"
+    respx_mock.post("https://api.mistral.ai/v1/audio/speech").respond(
+        json={"audio_data": base64.b64encode(audio_bytes).decode()}
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "voxtral-tts",
+                "litellm_params": {
+                    "model": "mistral/voxtral-mini-tts-2603",
+                    "voice": "en_paul_neutral",
+                },
+            }
+        ]
+    )
+
+    await router.aspeech(model="voxtral-tts", input="hello")
+
+    request_body = json.loads(respx_mock.calls.last.request.content)
+    assert request_body == {
+        "model": "voxtral-mini-tts-2603",
+        "input": "hello",
+        "voice_id": "en_paul_neutral",
+    }
+
+
 class TestPreRoutingTierDrivesFallbacks:
     """#38832: a complexity/auto router picks a tier behind the router name, but fallback
     lookup stayed on the router name, so the tier's configured chain never ran and a

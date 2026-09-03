@@ -807,6 +807,43 @@ class TestMistralStripsOutputOnlyFields:
         assert "reasoning_content" not in result[-1]
 
 
+class TestMistralApiBaseResolution:
+    """`_get_openai_compatible_provider_info` must honor `MISTRAL_API_BASE`.
+
+    Without it, a custom gateway configured only via the env var never reaches
+    downstream code (chat or TTS via `get_llm_provider`) and traffic still hits
+    the public api.mistral.ai host. Regression guard.
+    """
+
+    def test_mistral_api_base_env_var_is_used(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("MISTRAL_AZURE_API_BASE", raising=False)
+        monkeypatch.setenv("MISTRAL_API_BASE", "https://gateway.example.com")
+
+        api_base, _ = MistralConfig()._get_openai_compatible_provider_info(
+            api_base=None, api_key="sk-test"
+        )
+        assert api_base == "https://gateway.example.com/v1"
+
+    def test_explicit_api_base_wins_over_env_var(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("MISTRAL_API_BASE", "https://gateway.example.com")
+
+        api_base, _ = MistralConfig()._get_openai_compatible_provider_info(
+            api_base="https://explicit.example.com/v1", api_key="sk-test"
+        )
+        assert api_base == "https://explicit.example.com/v1"
+
+    def test_azure_env_var_still_takes_priority_over_mistral_api_base(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("MISTRAL_AZURE_API_BASE", "https://azure.example.com/v1")
+        monkeypatch.setenv("MISTRAL_API_BASE", "https://gateway.example.com/v1")
+
+        api_base, _ = MistralConfig()._get_openai_compatible_provider_info(
+            api_base=None, api_key="sk-test"
+        )
+        assert api_base == "https://azure.example.com/v1"
+
+
 def test_mistral_transform_request_hoists_tool_message_image():
     """Images inside role:"tool" messages must be moved to a following user
     message (Mistral rejects/ignores non-text tool content), including when

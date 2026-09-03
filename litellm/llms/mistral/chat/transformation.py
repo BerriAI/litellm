@@ -186,6 +186,7 @@ class MistralConfig(OpenAIGPTConfig):
         api_base = (
             api_base
             or get_secret_str("MISTRAL_AZURE_API_BASE")  # for Azure AI Mistral
+            or get_secret_str("MISTRAL_API_BASE")
             or "https://api.mistral.ai/v1"
         )
 
