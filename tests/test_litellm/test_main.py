@@ -1,6 +1,9 @@
 import asyncio
 import base64
+import queue
+import threading
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import contextlib
 import copy
 import json
@@ -3259,3 +3262,93 @@ def test_stream_chunk_builder_leaves_xai_reported_cost_to_the_calculator(monkeyp
     assert getattr(response.usage, "cost", None) == pytest.approx(0.42)
     assert response._hidden_params.get("response_cost") is None
     assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.63)
+
+
+@contextlib.contextmanager
+def _recording_tts_server():
+    received: Final[queue.Queue[Mapping[str, str]]] = queue.Queue()
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            received.put({key.lower(): value for key, value in self.headers.items()})
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            body = b"ID3\x04\x00\x00\x00fake-mp3-payload"
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/mpeg")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            return
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", received
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_speech_openai_compatible_sends_the_provider_scoped_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setenv("HOSTED_VLLM_API_KEY", "hosted-vllm-scoped-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "generic-openai-key")
+
+    with _recording_tts_server() as (api_base, received):
+        response: Final = litellm.speech(
+            model="hosted_vllm/tts-1",
+            input="which key goes out",
+            voice="alloy",
+            api_base=api_base,
+        )
+
+    assert response.content == b"ID3\x04\x00\x00\x00fake-mp3-payload"
+    assert received.get(timeout=5)["authorization"] == "Bearer hosted-vllm-scoped-key"
+    assert received.empty()
+
+
+def test_speech_azure_sends_the_provider_scoped_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "azure_key", None)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "azure-ai-scoped-key")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "legacy-azure-openai-key")
+    monkeypatch.setenv("AZURE_API_KEY", "legacy-azure-key")
+
+    with _recording_tts_server() as (api_base, received):
+        response: Final = litellm.speech(
+            model="azure_ai/tts-1",
+            input="which key goes out",
+            voice="alloy",
+            api_base=api_base,
+            api_version="2024-05-01-preview",
+        )
+
+    assert response.content == b"ID3\x04\x00\x00\x00fake-mp3-payload"
+    assert received.get(timeout=5)["api-key"] == "azure-ai-scoped-key"
+    assert received.empty()
+
+
+def test_speech_keeps_an_explicitly_passed_api_key_over_the_provider_scoped_one(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setenv("HOSTED_VLLM_API_KEY", "hosted-vllm-scoped-key")
+
+    with _recording_tts_server() as (api_base, received):
+        litellm.speech(
+            model="hosted_vllm/tts-1",
+            input="which key goes out",
+            voice="alloy",
+            api_base=api_base,
+            api_key="caller-supplied-key",
+        )
+
+    assert received.get(timeout=5)["authorization"] == "Bearer caller-supplied-key"
+    assert received.empty()
