@@ -974,6 +974,30 @@ def _wrap_entries(openai_jsonl_content):
     ]
 
 
+def test_vertex_batch_text_model_tail_appends_user_placeholder() -> None:
+    vertex_rows = _wrap_entries(
+        [
+            {
+                "custom_id": "request-model-tail",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "gemini-3.7-flash",
+                    "messages": [
+                        {"role": "user", "content": "Remember cobalt"},
+                        {"role": "assistant", "content": "stored"},
+                    ],
+                },
+            }
+        ]
+    )
+
+    assert vertex_rows[0]["request"]["contents"][-1] == {
+        "role": "user",
+        "parts": [{"text": "."}],
+    }
+
+
 class TestVertexBatchCustomIdLabels:
     """Test custom_id handling in batch transformations"""
 
