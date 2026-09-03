@@ -1,40 +1,72 @@
+from collections.abc import Mapping
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
 
+from litellm.llms.base_llm.vector_store.transformation import (
+    RouterVectorStoreEmbeddingExecutor,
+)
 from litellm.llms.s3_vectors.vector_stores.transformation import (
     S3VectorsVectorStoreConfig,
 )
+from litellm.types.utils import EmbeddingResponse
 from litellm.types.vector_stores import VectorStoreSearchResponse
 
+QUERY_VECTOR = [0.1, 0.2, 0.3]
 
-def _mock_router(model_names, sync=False):
-    """Router mock serving the given embedding model names."""
-    router = MagicMock()
-    router.get_model_list.return_value = [{"model_name": name} for name in model_names]
-    embedding_response = Mock(data=[{"embedding": [0.1, 0.2, 0.3]}])
-    if sync:
-        router.embedding = MagicMock(return_value=embedding_response)
-    else:
-        router.aembedding = AsyncMock(return_value=embedding_response)
-    return router
+
+def _embedding_response(vector):
+    return EmbeddingResponse(data=[{"embedding": vector, "index": 0, "object": "embedding"}])
+
+
+class _RecordingExecutor:
+    """Executor double recording every (model, query, configuration) it was asked to embed."""
+
+    def __init__(self, vector=QUERY_VECTOR):
+        self.vector = vector
+        self.calls = []
+
+    def embed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        self.calls.append((model, query, dict(configuration)))
+        return _embedding_response(self.vector)
+
+    async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        self.calls.append((model, query, dict(configuration)))
+        return _embedding_response(self.vector)
+
+
+def _logging_obj():
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+    return logging_obj
+
+
+def _search_kwargs(**overrides):
+    kwargs = {
+        "vector_store_id": "test-bucket:test-index",
+        "query": "test query",
+        "vector_store_search_optional_params": {},
+        "api_base": "https://s3vectors.us-west-2.api.aws",
+        "litellm_logging_obj": _logging_obj(),
+        "litellm_params": {},
+        "extra_body": None,
+    }
+    kwargs.update(overrides)
+    return kwargs
 
 
 class TestS3VectorsVectorStoreConfig:
     def test_init(self):
-        """Test that S3VectorsVectorStoreConfig initializes correctly"""
         config = S3VectorsVectorStoreConfig()
         assert config is not None
 
     def test_get_supported_openai_params(self):
-        """Test that supported OpenAI params are returned"""
         config = S3VectorsVectorStoreConfig()
         params = config.get_supported_openai_params("test-model")
         assert "max_num_results" in params
 
     def test_get_complete_url(self):
-        """Test URL generation for S3 Vectors"""
         config = S3VectorsVectorStoreConfig()
         litellm_params = {"aws_region_name": "us-west-2"}
         url = config.get_complete_url(None, litellm_params)
@@ -57,180 +89,149 @@ class TestS3VectorsVectorStoreConfig:
         assert url == "https://s3vectors.eu-west-1.api.aws"
 
     def test_get_complete_url_invalid_region_format(self):
-        """Invalid region format raises"""
         config = S3VectorsVectorStoreConfig()
         with pytest.raises(ValueError, match="Invalid AWS region format"):
             config.get_complete_url(None, {"aws_region_name": "Bad_Region!"})
 
     def test_transform_search_request(self):
-        """Full request-body transformation with a router-injected embedding"""
+        """Full request-body transformation with the query embedded through the injected executor"""
         config = S3VectorsVectorStoreConfig()
-        mock_logging_obj = Mock()
-        mock_logging_obj.model_call_details = {}
-        router = _mock_router(["text-embedding-3-small"], sync=True)
+        logging_obj = _logging_obj()
+        executor = _RecordingExecutor()
 
         url, request_body = config.transform_search_vector_store_request(
-            vector_store_id="test-bucket:test-index",
-            query="test query",
-            vector_store_search_optional_params={"max_num_results": 7},
-            api_base="https://s3vectors.us-west-2.api.aws",
-            litellm_logging_obj=mock_logging_obj,
-            litellm_params={},
-            extra_body=None,
-            router=router,
+            **_search_kwargs(
+                vector_store_search_optional_params={"max_num_results": 7},
+                litellm_logging_obj=logging_obj,
+                embedding_executor=executor,
+            )
         )
 
         assert url == "https://s3vectors.us-west-2.api.aws/QueryVectors"
         assert request_body == {
             "vectorBucketName": "test-bucket",
             "indexName": "test-index",
-            "queryVector": {"float32": [0.1, 0.2, 0.3]},
+            "queryVector": {"float32": QUERY_VECTOR},
             "topK": 7,
             "returnDistance": True,
             "returnMetadata": True,
         }
-        assert mock_logging_obj.model_call_details["query"] == "test query"
+        assert executor.calls == [("text-embedding-3-small", "test query", {})]
+        assert logging_obj.model_call_details["query"] == "test query"
+
+    @pytest.mark.parametrize(
+        ("litellm_params", "expected_model"),
+        [
+            ({}, "text-embedding-3-small"),
+            ({"embedding_model": ""}, "text-embedding-3-small"),
+            ({"embedding_model": "my-embedding-model"}, "my-embedding-model"),
+            ({"litellm_embedding_model": "shared-key-model"}, "shared-key-model"),
+            (
+                {"litellm_embedding_model": "shared-key-model", "embedding_model": "legacy-alias"},
+                "shared-key-model",
+            ),
+        ],
+    )
+    def test_query_embedding_model_accepts_embedding_model_alias(self, litellm_params, expected_model):
+        assert S3VectorsVectorStoreConfig.query_embedding_model(litellm_params) == expected_model
 
     @pytest.mark.asyncio
-    async def test_atransform_search_uses_router_for_virtual_model(self):
-        """Regression: router-served embedding models must resolve via the router,
-        not a bare litellm.aembedding call (which has no deployment credentials)."""
+    async def test_atransform_search_embeds_alias_and_store_config_through_executor(self):
+        """The store's embedding_model alias and litellm_embedding_config reach the executor unchanged"""
         config = S3VectorsVectorStoreConfig()
-        mock_logging_obj = Mock()
-        mock_logging_obj.model_call_details = {}
-        router = _mock_router(["my-embedding-model"])
+        executor = _RecordingExecutor(vector=[0.4, 0.5])
 
-        with patch("litellm.aembedding", new=AsyncMock()) as mock_bare_aembedding:  # test-quality-ok: guards that the bare-embedding path is not taken; dispatch seam is the behavior under test
-            url, request_body = await config.atransform_search_vector_store_request(
-                vector_store_id="test-bucket:test-index",
-                query="test query",
-                vector_store_search_optional_params={},
-                api_base="https://s3vectors.us-west-2.api.aws",
-                litellm_logging_obj=mock_logging_obj,
-                litellm_params={"embedding_model": "my-embedding-model"},
-                extra_body=None,
-                router=router,
+        _, request_body = await config.atransform_search_vector_store_request(
+            **_search_kwargs(
+                query=["test", "query"],
+                litellm_params={
+                    "embedding_model": "my-embedding-model",
+                    "litellm_embedding_config": {"api_key": "store-key"},
+                },
+                embedding_executor=executor,
             )
+        )
 
-        router.aembedding.assert_awaited_once_with(model="my-embedding-model", input=["test query"])
-        mock_bare_aembedding.assert_not_awaited()
-        assert request_body["queryVector"]["float32"] == [0.1, 0.2, 0.3]
-        assert request_body["topK"] == 5  # default
-
-    @pytest.mark.asyncio
-    async def test_atransform_search_falls_back_when_router_does_not_serve_model(self):
-        """Router present but embedding_model is not a router deployment ->
-        bare litellm.aembedding keeps working (provider-prefixed + env creds stores)."""
-        config = S3VectorsVectorStoreConfig()
-        mock_logging_obj = Mock()
-        mock_logging_obj.model_call_details = {}
-        router = _mock_router(["some-other-model"])
-
-        mock_bare = AsyncMock(return_value=Mock(data=[{"embedding": [0.4, 0.5]}]))
-        with patch("litellm.aembedding", new=mock_bare):  # test-quality-ok: stubs the bare-embedding fallback whose request body the test asserts on
-            _, request_body = await config.atransform_search_vector_store_request(
-                vector_store_id="test-bucket:test-index",
-                query="test query",
-                vector_store_search_optional_params={},
-                api_base="https://s3vectors.us-west-2.api.aws",
-                litellm_logging_obj=mock_logging_obj,
-                litellm_params={"embedding_model": "azure/text-embedding-3-small"},
-                extra_body=None,
-                router=router,
-            )
-
-        mock_bare.assert_awaited_once_with(model="azure/text-embedding-3-small", input=["test query"])
-        router.aembedding.assert_not_awaited()
+        assert executor.calls == [("my-embedding-model", "test query", {"api_key": "store-key"})]
         assert request_body["queryVector"]["float32"] == [0.4, 0.5]
+        assert request_body["topK"] == 5
 
     @pytest.mark.asyncio
-    async def test_atransform_search_without_router_uses_bare_embedding(self):
-        """Backward compat: no router -> bare litellm.aembedding as before"""
+    async def test_atransform_search_router_executor_carries_request_metadata(self):
+        """Regression (LIT-6750): a bare Router alias resolves through the Router with the request's
+        team metadata on the embedding call, so the embedding is attributed to the calling key and team."""
         config = S3VectorsVectorStoreConfig()
-        mock_logging_obj = Mock()
-        mock_logging_obj.model_call_details = {}
+        router = MagicMock()
+        router.aembedding = AsyncMock(return_value=_embedding_response(QUERY_VECTOR))
+        request_metadata = {"user_api_key_team_id": "team-a", "user_api_key": "hashed-key"}
 
-        mock_bare = AsyncMock(return_value=Mock(data=[{"embedding": [0.6, 0.7]}]))
-        with patch("litellm.aembedding", new=mock_bare):  # test-quality-ok: stubs the bare-embedding fallback whose request body the test asserts on
-            _, request_body = await config.atransform_search_vector_store_request(
-                vector_store_id="test-bucket:test-index",
-                query="test query",
-                vector_store_search_optional_params={},
-                api_base="https://s3vectors.us-west-2.api.aws",
-                litellm_logging_obj=mock_logging_obj,
-                litellm_params={},
-                extra_body=None,
+        _, request_body = await config.atransform_search_vector_store_request(
+            **_search_kwargs(
+                litellm_params={"embedding_model": "team-embeddings"},
+                embedding_executor=RouterVectorStoreEmbeddingExecutor(router=router, metadata=request_metadata),
             )
+        )
+
+        router.aembedding.assert_awaited_once_with(
+            model="team-embeddings", input=["test query"], metadata=request_metadata
+        )
+        assert request_body["queryVector"]["float32"] == QUERY_VECTOR
+
+    @pytest.mark.asyncio
+    async def test_atransform_search_without_executor_uses_bare_embedding(self):
+        """Backward compat: SDK callers without an executor keep embedding through litellm.aembedding"""
+        config = S3VectorsVectorStoreConfig()
+
+        mock_bare = AsyncMock(return_value=_embedding_response([0.6, 0.7]))
+        with patch("litellm.aembedding", new=mock_bare):  # test-quality-ok: stubs the bare-embedding fallback whose request body the test asserts on
+            _, request_body = await config.atransform_search_vector_store_request(**_search_kwargs())
 
         mock_bare.assert_awaited_once_with(model="text-embedding-3-small", input=["test query"])
         assert request_body["queryVector"]["float32"] == [0.6, 0.7]
 
-    def test_transform_search_uses_router_for_virtual_model_sync(self):
-        """Sync twin: router-served embedding model resolves via router.embedding"""
+    def test_transform_search_without_executor_uses_bare_embedding_sync(self):
+        """Sync twin: no executor -> bare litellm.embedding as before"""
         config = S3VectorsVectorStoreConfig()
-        mock_logging_obj = Mock()
-        mock_logging_obj.model_call_details = {}
-        router = _mock_router(["my-embedding-model"], sync=True)
 
-        with patch("litellm.embedding", new=MagicMock()) as mock_bare_embedding:  # test-quality-ok: guards that the bare-embedding path is not taken; dispatch seam is the behavior under test
-            _, request_body = config.transform_search_vector_store_request(
-                vector_store_id="test-bucket:test-index",
-                query="test query",
-                vector_store_search_optional_params={},
-                api_base="https://s3vectors.us-west-2.api.aws",
-                litellm_logging_obj=mock_logging_obj,
-                litellm_params={"embedding_model": "my-embedding-model"},
-                extra_body=None,
-                router=router,
-            )
-
-        router.embedding.assert_called_once_with(model="my-embedding-model", input=["test query"])
-        mock_bare_embedding.assert_not_called()
-        assert request_body["queryVector"]["float32"] == [0.1, 0.2, 0.3]
-
-    def test_transform_search_without_router_uses_bare_embedding_sync(self):
-        """Sync twin: no router -> bare litellm.embedding as before"""
-        config = S3VectorsVectorStoreConfig()
-        mock_logging_obj = Mock()
-        mock_logging_obj.model_call_details = {}
-
-        mock_bare = MagicMock(return_value=Mock(data=[{"embedding": [0.8, 0.9]}]))
+        mock_bare = MagicMock(return_value=_embedding_response([0.8, 0.9]))
         with patch("litellm.embedding", new=mock_bare):  # test-quality-ok: stubs the bare-embedding fallback whose request body the test asserts on
             _, request_body = config.transform_search_vector_store_request(
-                vector_store_id="test-bucket:test-index",
-                query="test query",
-                vector_store_search_optional_params={},
-                api_base="https://s3vectors.us-west-2.api.aws",
-                litellm_logging_obj=mock_logging_obj,
-                litellm_params={},
-                extra_body=None,
+                **_search_kwargs(litellm_params={"embedding_model": "my-embedding-model"})
             )
 
-        mock_bare.assert_called_once_with(model="text-embedding-3-small", input=["test query"])
+        mock_bare.assert_called_once_with(model="my-embedding-model", input=["test query"])
         assert request_body["queryVector"]["float32"] == [0.8, 0.9]
 
     def test_transform_search_request_invalid_vector_store_id(self):
-        """Test that invalid vector_store_id format raises error"""
+        """An unparseable vector_store_id raises before any embedding is generated"""
         config = S3VectorsVectorStoreConfig()
-        mock_logging_obj = Mock()
-        mock_logging_obj.model_call_details = {}
+        executor = _RecordingExecutor()
 
         with pytest.raises(
             ValueError,
             match="vector_store_id must be in format 'bucket_name:index_name'",
         ):
             config.transform_search_vector_store_request(
-                vector_store_id="invalid-format",
-                query="test query",
-                vector_store_search_optional_params={},
-                api_base="https://s3vectors.us-west-2.api.aws",
-                litellm_logging_obj=mock_logging_obj,
-                litellm_params={},
-                extra_body=None,
+                **_search_kwargs(vector_store_id="invalid-format", embedding_executor=executor)
             )
 
+        assert executor.calls == []
+
+    def test_transform_search_request_bucket_from_litellm_params(self):
+        config = S3VectorsVectorStoreConfig()
+
+        _, request_body = config.transform_search_vector_store_request(
+            **_search_kwargs(
+                vector_store_id="only-index",
+                litellm_params={"vector_bucket_name": "params-bucket"},
+                embedding_executor=_RecordingExecutor(),
+            )
+        )
+
+        assert request_body["vectorBucketName"] == "params-bucket"
+        assert request_body["indexName"] == "only-index"
+
     def test_transform_search_response(self):
-        """Test search response transformation"""
         config = S3VectorsVectorStoreConfig()
         mock_logging_obj = Mock()
         mock_logging_obj.model_call_details = {"query": "test query"}
@@ -239,7 +240,7 @@ class TestS3VectorsVectorStoreConfig:
         mock_response.json.return_value = {
             "vectors": [
                 {
-                    "distance": 0.05,  # S3 Vectors returns distance, not score
+                    "distance": 0.05,
                     "metadata": {
                         "source_text": "This is test content",
                         "chunk_index": "0",
@@ -258,23 +259,18 @@ class TestS3VectorsVectorStoreConfig:
         mock_response.status_code = 200
         mock_response.headers = {}
 
-        result = config.transform_search_vector_store_response(
-            mock_response, mock_logging_obj
-        )
+        result = config.transform_search_vector_store_response(mock_response, mock_logging_obj)
 
-        # VectorStoreSearchResponse is a TypedDict, so check structure instead of isinstance
         assert result["object"] == "vector_store.search_results.page"
         assert result["search_query"] == "test query"
         assert len(result["data"]) == 2
-        # Score should be 1 - distance (cosine similarity)
-        assert result["data"][0]["score"] == 0.95  # 1 - 0.05
+        assert result["data"][0]["score"] == 0.95
         assert result["data"][0]["content"][0]["text"] == "This is test content"
         assert result["data"][0]["filename"] == "test.pdf"
-        assert result["data"][1]["score"] == 0.85  # 1 - 0.15
+        assert result["data"][1]["score"] == 0.85
         assert result["data"][1]["content"][0]["text"] == "More test content"
 
     def test_map_openai_params(self):
-        """Test OpenAI parameter mapping"""
         config = S3VectorsVectorStoreConfig()
         non_default_params = {"max_num_results": 5}
         optional_params = {}
