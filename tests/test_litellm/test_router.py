@@ -8579,6 +8579,398 @@ class TestConsumedRequestTagsStamp:
         assert CONSUMED_REQUEST_TAGS_METADATA_KEY not in request_kwargs["metadata"]
 
 
+class TestClaudeCodeSubagentSessionRouterBinding:
+    class _RewriteStrategy:
+        def __init__(self, routed_model: str = "cheap-model") -> None:
+            self.routed_model = routed_model
+
+        async def async_pre_routing_hook(
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+        ):
+            from litellm.types.router import PreRoutingHookResponse
+
+            return PreRoutingHookResponse(
+                model=self.routed_model,
+                messages=messages,
+                routing_decision={
+                    "router_model_name": "smart-router",
+                    "router_type": "complexity",
+                    "routed_model": self.routed_model,
+                    "cause": "heuristic_scorer",
+                },
+            )
+
+    @classmethod
+    def _router(
+        cls,
+        cheap_response: str = "cheap response",
+        fallbacks: list[dict[str, list[str]]] | None = None,
+    ) -> "litellm.Router":
+        from litellm.types.router import TaggedPreRoutingStrategy
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "cheap-model",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "mock_response": cheap_response},
+                },
+                {
+                    "model_name": "expensive-model",
+                    "litellm_params": {"model": "openai/gpt-4o", "mock_response": "expensive response"},
+                },
+            ],
+            fallbacks=fallbacks,
+            num_retries=0,
+        )
+        router.complexity_routers = {
+            "smart-router": (TaggedPreRoutingStrategy(tags=(), strategy=cls._RewriteStrategy()),),
+            "premium-router": (TaggedPreRoutingStrategy(tags=(), strategy=cls._RewriteStrategy("expensive-model")),),
+        }
+        return router
+
+    @staticmethod
+    def _request_kwargs(
+        *,
+        key_hash: str = "key-hash-a",
+        app: str = "cli",
+        agent_id: str | None = None,
+        fallback_depth: int | None = None,
+    ) -> dict:
+        headers = {
+            "X-Claude-Code-Session-Id": "session-1234",
+            "x-app": app,
+            **({"x-claude-code-agent-id": agent_id} if agent_id is not None else {}),
+        }
+        return {
+            "metadata": {"user_api_key_hash": key_hash},
+            "proxy_server_request": {"headers": headers},
+            **({"fallback_depth": fallback_depth} if fallback_depth is not None else {}),
+        }
+
+    @pytest.mark.asyncio
+    async def test_subagent_concrete_model_uses_the_main_sessions_router(self):
+        router = self._router()
+
+        await router.acompletion(
+            model="smart-router",
+            messages=[{"role": "user", "content": "main turn"}],
+            **self._request_kwargs(),
+        )
+        subagent_kwargs = self._request_kwargs(agent_id="agent-1234")
+
+        response = await router.acompletion(
+            model="expensive-model",
+            messages=[{"role": "user", "content": "subagent turn"}],
+            **subagent_kwargs,
+        )
+
+        assert response.choices[0].message.content == "cheap response"
+        assert subagent_kwargs["metadata"]["model_group"] == "smart-router"
+        assert subagent_kwargs["metadata"]["routing_decision"]["router_model_name"] == "smart-router"
+
+    @pytest.mark.asyncio
+    async def test_main_thread_side_calls_to_a_plain_model_keep_the_session_router(self):
+        router = self._router()
+
+        await router.async_pre_routing_hook(model="smart-router", request_kwargs=self._request_kwargs())
+        await router.async_pre_routing_hook(model="expensive-model", request_kwargs=self._request_kwargs())
+
+        response = await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(agent_id="agent-1234"),
+        )
+
+        assert response is not None
+        assert response.model == "cheap-model"
+
+    @pytest.mark.asyncio
+    async def test_redis_cleanup_failure_does_not_reject_a_subagent_request(self):
+        from litellm.caching.caching import RedisCache
+
+        router = self._router()
+        del router.complexity_routers["smart-router"]
+        redis_cache = MagicMock(spec=RedisCache)
+        redis_cache.async_get_cache = AsyncMock(return_value="smart-router")
+        redis_cache.async_delete_cache = AsyncMock(side_effect=ConnectionError("redis unavailable"))
+        router._update_redis_cache(cache=redis_cache)
+
+        response = await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(agent_id="agent-1234"),
+        )
+
+        assert response is None
+        redis_cache.async_delete_cache.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_redis_read_failure_does_not_reject_a_subagent_request(self):
+        from litellm.caching.caching import RedisCache
+
+        router = self._router()
+        request_kwargs = self._request_kwargs(agent_id="agent-1234")
+        cache_key = router._claude_code_session_router_cache_key(request_kwargs)
+        assert cache_key is not None
+        await router._claude_code_session_router_cache.in_memory_cache.async_set_cache(
+            cache_key,
+            "smart-router",
+        )
+        redis_cache = MagicMock(spec=RedisCache)
+        redis_cache.async_get_cache = AsyncMock(side_effect=Exception("Redis circuit breaker is open"))
+        router._update_redis_cache(cache=redis_cache)
+
+        response = await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=request_kwargs,
+        )
+
+        assert response is None
+        assert "model_group" not in request_kwargs["metadata"]
+        redis_cache.async_get_cache.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_redis_write_failures_do_not_reject_main_or_subagent_requests(self):
+        from litellm.caching.caching import RedisCache
+
+        router = self._router()
+        redis_cache = MagicMock(spec=RedisCache)
+        redis_cache.async_get_cache = AsyncMock(return_value="smart-router")
+        redis_cache.async_set_cache = AsyncMock(side_effect=Exception("redis unavailable"))
+        router._update_redis_cache(cache=redis_cache)
+
+        main_response = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs=self._request_kwargs(),
+        )
+        subagent_response = await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(agent_id="agent-1234"),
+        )
+
+        assert main_response is not None
+        assert main_response.model == "cheap-model"
+        assert subagent_response is not None
+        assert subagent_response.model == "cheap-model"
+        assert redis_cache.async_set_cache.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_subagents_follow_the_main_threads_latest_router_across_workers(self):
+        from types import SimpleNamespace
+
+        from litellm.caching.caching import RedisCache
+
+        shared_binding = SimpleNamespace(value=None)
+        shared_redis = MagicMock(spec=RedisCache)
+        shared_redis.async_get_cache = AsyncMock(side_effect=lambda key, **_: shared_binding.value)
+        shared_redis.async_set_cache = AsyncMock(
+            side_effect=lambda key, value, **_: setattr(shared_binding, "value", value)
+        )
+        main_worker, subagent_worker = self._router(), self._router()
+        main_worker._update_redis_cache(cache=shared_redis)
+        subagent_worker._update_redis_cache(cache=shared_redis)
+
+        await main_worker.async_pre_routing_hook(model="smart-router", request_kwargs=self._request_kwargs())
+        first = await subagent_worker.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(agent_id="agent-1234"),
+        )
+        await main_worker.async_pre_routing_hook(model="premium-router", request_kwargs=self._request_kwargs())
+        second = await subagent_worker.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(agent_id="agent-1234"),
+        )
+
+        assert first is not None
+        assert first.model == "cheap-model"
+        assert second is not None
+        assert second.model == "expensive-model"
+        assert shared_binding.value == "premium-router"
+
+    @pytest.mark.asyncio
+    async def test_no_pre_routing_strategies_means_no_session_cache_traffic(self):
+        from litellm.caching.caching import RedisCache
+
+        router = self._router()
+        router.complexity_routers.clear()
+        redis_cache = MagicMock(spec=RedisCache)
+        redis_cache.async_get_cache = AsyncMock(return_value=None)
+        redis_cache.async_set_cache = AsyncMock()
+        redis_cache.async_delete_cache = AsyncMock()
+        router._update_redis_cache(cache=redis_cache)
+
+        for request_kwargs in (self._request_kwargs(), self._request_kwargs(agent_id="agent-1234")):
+            response = await router.async_pre_routing_hook(model="expensive-model", request_kwargs=request_kwargs)
+            assert response is None
+
+        redis_cache.async_get_cache.assert_not_awaited()
+        redis_cache.async_set_cache.assert_not_awaited()
+        redis_cache.async_delete_cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_session_bindings_do_not_evict_router_rate_limit_state(self):
+        router = self._router()
+        assert router._update_usage(deployment_id="deployment-id", parent_otel_span=None) == 1
+
+        for session_index in range(201):
+            request_kwargs = self._request_kwargs()
+            request_kwargs["proxy_server_request"]["headers"]["X-Claude-Code-Session-Id"] = (
+                f"session-{session_index:04d}"
+            )
+            await router.async_pre_routing_hook(model="smart-router", request_kwargs=request_kwargs)
+
+        assert router._update_usage(deployment_id="deployment-id", parent_otel_span=None) == 2
+
+    @pytest.mark.asyncio
+    async def test_background_and_fallback_requests_do_not_clear_the_session_router(self):
+        router = self._router()
+
+        await router.async_pre_routing_hook(model="smart-router", request_kwargs=self._request_kwargs())
+        await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(app="cli-bg"),
+        )
+        await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(fallback_depth=1),
+        )
+
+        response = await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(agent_id="agent-1234"),
+        )
+
+        assert response is not None
+        assert response.model == "cheap-model"
+
+    @pytest.mark.asyncio
+    async def test_subagent_fallback_does_not_reapply_the_session_router(self):
+        router = self._router()
+
+        await router.async_pre_routing_hook(model="smart-router", request_kwargs=self._request_kwargs())
+
+        response = await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(agent_id="agent-1234", fallback_depth=1),
+        )
+
+        assert response is None
+
+    @pytest.mark.asyncio
+    async def test_subagent_can_fallback_to_its_original_requested_model(self):
+        router = self._router(
+            cheap_response="litellm.RateLimitError",
+            fallbacks=[{"cheap-model": ["expensive-model"]}],
+        )
+
+        await router.acompletion(
+            model="smart-router",
+            messages=[{"role": "user", "content": "main turn"}],
+            **self._request_kwargs(),
+        )
+        subagent_kwargs = self._request_kwargs(agent_id="agent-1234")
+
+        response = await router.acompletion(
+            model="expensive-model",
+            messages=[{"role": "user", "content": "subagent turn"}],
+            **subagent_kwargs,
+        )
+
+        assert response.choices[0].message.content == "expensive response"
+        assert subagent_kwargs["metadata"]["routing_decision"]["routed_model"] == "cheap-model"
+
+    @pytest.mark.asyncio
+    async def test_subagent_can_use_the_bound_router_name_fallback(self):
+        router = self._router(
+            cheap_response="litellm.RateLimitError",
+            fallbacks=[{"smart-router": ["expensive-model"]}],
+        )
+
+        await router.acompletion(
+            model="smart-router",
+            messages=[{"role": "user", "content": "main turn"}],
+            **self._request_kwargs(),
+        )
+
+        response = await router.acompletion(
+            model="expensive-model",
+            messages=[{"role": "user", "content": "subagent turn"}],
+            **self._request_kwargs(agent_id="agent-1234"),
+        )
+
+        assert response.choices[0].message.content == "expensive response"
+
+    @pytest.mark.asyncio
+    async def test_anthropic_subagent_four_fallback_hops_use_each_current_model_chain(self):
+        from litellm.types.router import TaggedPreRoutingStrategy
+
+        failing_groups = ("cheap-model", "fallback-1", "fallback-2", "fallback-3")
+        router = litellm.Router(
+            model_list=[
+                *(
+                    {
+                        "model_name": group,
+                        "litellm_params": {
+                            "model": "anthropic/claude-3-haiku-20240307",
+                            "mock_response": "litellm.RateLimitError",
+                        },
+                    }
+                    for group in failing_groups
+                ),
+                {
+                    "model_name": "requested-model",
+                    "litellm_params": {
+                        "model": "anthropic/claude-3-haiku-20240307",
+                        "mock_response": "requested response",
+                    },
+                },
+                {
+                    "model_name": "fallback-4",
+                    "litellm_params": {
+                        "model": "anthropic/claude-3-haiku-20240307",
+                        "mock_response": "fourth fallback response",
+                    },
+                },
+            ],
+            fallbacks=[
+                {"smart-router": ["fallback-1"]},
+                {"fallback-1": ["fallback-2"]},
+                {"fallback-2": ["fallback-3"]},
+                {"fallback-3": ["fallback-4"]},
+            ],
+            num_retries=0,
+            max_fallbacks=4,
+        )
+        router.complexity_routers = {
+            "smart-router": (TaggedPreRoutingStrategy(tags=(), strategy=self._RewriteStrategy()),)
+        }
+        main_kwargs = self._request_kwargs()
+        main_kwargs["litellm_metadata"] = main_kwargs.pop("metadata")
+        await router.async_pre_routing_hook(model="smart-router", request_kwargs=main_kwargs)
+        subagent_kwargs = self._request_kwargs(agent_id="agent-1234")
+        subagent_kwargs["litellm_metadata"] = subagent_kwargs.pop("metadata")
+
+        response = await router.aanthropic_messages(
+            model="requested-model",
+            messages=[{"role": "user", "content": "subagent turn"}],
+            max_tokens=64,
+            **subagent_kwargs,
+        )
+
+        assert response["content"][0]["text"] == "fourth fallback response"
+
+    @pytest.mark.asyncio
+    async def test_session_router_binding_is_scoped_to_the_authenticated_key(self):
+        router = self._router()
+
+        await router.async_pre_routing_hook(model="smart-router", request_kwargs=self._request_kwargs())
+
+        response = await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(key_hash="key-hash-b", agent_id="agent-1234"),
+        )
+
+        assert response is None
+
+
 class TestAutoRouterMaxInputCharsWiring:
     """`auto_router_max_input_chars` on the deployment has to reach the AutoRouter that embeds prompts.
 
@@ -11993,3 +12385,55 @@ class TestPreRoutingTierDrivesFallbacks:
         response = await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
 
         assert response.choices[0].message.content == "from backup-b"
+
+
+@pytest.mark.asyncio
+async def test_prompt_management_factory_marks_injection_for_every_deployment(monkeypatch):
+    """The factory stamps a provisional deployment's model_info into kwargs before the
+    prompt pass runs, then routes on the returned model, so any deployment can end up
+    billed. An injection recorded there must carry the every-deployment sentinel, never
+    the provisional deployment's id, or a differently-billed deployment loses the credit."""
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "cached-claude",
+                "litellm_params": {
+                    "model": "anthropic_cache_control_hook/claude-sonnet-5",
+                    "prompt_id": "cache-points",
+                },
+                "model_info": {"id": "provisional-dep"},
+            }
+        ]
+    )
+    captured: dict = {}
+
+    async def _capture_acompletion(**kwargs):
+        captured.update(kwargs)
+        return litellm.ModelResponse()
+
+    monkeypatch.setattr(litellm, "acompletion", _capture_acompletion)
+    logging_obj = LiteLLMLogging(
+        model="cached-claude",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="lit-6445",
+        function_id="f",
+    )
+    await router.acompletion(
+        model="cached-claude",
+        messages=[
+            {"role": "system", "content": "a static system prompt"},
+            {"role": "user", "content": "hi"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        litellm_logging_obj=logging_obj,
+    )
+    bucket = captured.get("litellm_metadata") or captured["metadata"]
+    assert captured["model_info"]["id"] == "provisional-dep"
+    assert bucket["litellm_gateway_injected_cache"] == ""

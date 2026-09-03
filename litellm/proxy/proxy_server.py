@@ -4744,6 +4744,63 @@ class ProxyConfig:
         )
         return coordination_redis_cache
 
+    @staticmethod
+    async def _init_coordination_redis_env_fallback(litellm_settings: Mapping[str, object]) -> RedisCache | None:
+        """
+        Last-resort coordination Redis, tried after an explicit
+        `general_settings.coordination_redis` block and `litellm_settings.cache`
+        have both had a chance to resolve one. Without this, a deployment that
+        only exports REDIS_HOST/REDIS_PORT (no cache block, no coordination_redis
+        block) gets NO cross-pod coordination at all: spend counters, budget-window
+        enforcement, and the reset_spend cache-eviction broadcast all silently stay
+        per-pod local, so a key reset on one pod never clears another pod's stale
+        enforcement.
+
+        Unlike the explicit block and cache-backend paths (a deliberate opt-in, so a
+        bad connection target or a malformed REDIS_CLUSTER_NODES/REDIS_SENTINEL_NODES
+        value should fail loudly), this one is inferred from bare env vars that may be
+        set for an unrelated reason -- e.g. a REDIS_HOST left over from a different
+        job/service, or a REDIS_CLUSTER_NODES value nothing here ever asked to be
+        parsed. Wrongly guessing "coordination available" must not turn a previously
+        harmless in-memory-only proxy into one that fails to boot or raises on every
+        cache write, so a malformed value or a failed/slow ping are both treated the
+        same as no REDIS_* vars at all.
+        """
+        try:
+            env_coordination_redis_cache: Final = _build_redis_usage_cache_from_environment()
+        except Exception as e:  # noqa: BLE001  # a malformed inferred Redis env var must not block startup
+            verbose_proxy_logger.warning(
+                "coordination_redis: could not build a Redis client from REDIS_* environment variables "
+                "(%s); cross-pod coordination stays in-memory. Set general_settings.coordination_redis "
+                "explicitly to require it.",
+                e,
+            )
+            return None
+        if env_coordination_redis_cache is None:
+            return None
+        try:
+            reachable: Final = await asyncio.wait_for(env_coordination_redis_cache.ping(), timeout=2.0)
+        except Exception as e:  # noqa: BLE001  # an unreachable inferred Redis must not block startup or writes
+            verbose_proxy_logger.warning(
+                "coordination_redis: REDIS_* environment variables named a Redis that is not reachable "
+                "(%s); cross-pod coordination stays in-memory. Set general_settings.coordination_redis "
+                "explicitly to require it.",
+                e,
+            )
+            return None
+        if not reachable:
+            return None
+        _attach_redis_usage_cache(
+            env_coordination_redis_cache,
+            enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
+        )
+        verbose_proxy_logger.info(
+            "coordination_redis: using a standalone Redis built from REDIS_* "
+            "environment variables for usage tracking, rate limiting, and "
+            "cross-pod coordination."
+        )
+        return env_coordination_redis_cache
+
     def _init_cache(
         self,
         cache_params: dict,
@@ -5411,6 +5468,13 @@ class ProxyConfig:
 
                         reset_audit_log_callback_cache()
                         _in_memory_loggers[:] = [cb for cb in _in_memory_loggers if not isinstance(cb, S3V2Logger)]
+
+        if redis_usage_cache is None:
+            env_coordination_redis_cache: Final = await self._init_coordination_redis_env_fallback(
+                litellm_settings=litellm_settings
+            )
+            if env_coordination_redis_cache is not None:
+                _set_redis_usage_cache(env_coordination_redis_cache)
 
         ## GENERAL SERVER SETTINGS (e.g. master key,..) # do this after initializing litellm, to ensure sentry logging works for proxylogging
         general_settings = config.get("general_settings", {})
@@ -15265,7 +15329,10 @@ async def login(request: Request):
     # authorize round-trip), mirroring the SSO callback; otherwise land on the dashboard. Gated by
     # _is_same_origin_return_path (strictly relative path) so it can never be an open redirect, and the
     # one-shot cookie is cleared after use.
-    from litellm.proxy.management_endpoints.ui_sso import _sso_return_to_redirect
+    from litellm.proxy.management_endpoints.ui_sso import (
+        _sso_return_to_redirect,
+        set_session_token_cookie,
+    )
 
     # Resume through the SAME resumer the SSO callback uses, rather than a second, narrower arm.
     # _persist_return_to_cookie stores both shapes it accepts (a relative same-origin path AND a
@@ -15282,6 +15349,7 @@ async def login(request: Request):
                 jwt_token=jwt_token,
                 redis_usage_cache=redis_usage_cache,
                 user_api_key_cache=user_api_key_cache,
+                request=request,
             )
         except Exception:  # noqa: BLE001  # resuming must NEVER block a completed sign-in
             # The symmetric half of _persist_return_to_cookie's "never raises" contract. The resumer
@@ -15296,7 +15364,7 @@ async def login(request: Request):
 
     # Create redirect response with cookie
     redirect_response: Final = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-    redirect_response.set_cookie(key="token", value=jwt_token)
+    set_session_token_cookie(redirect_response, request, jwt_token)
     if cp_return_to:
         redirect_response.delete_cookie(key="litellm_cp_return_to")
     return redirect_response
@@ -15306,6 +15374,7 @@ async def login(request: Request):
 async def login_v2(request: Request):
     global premium_user, general_settings, master_key
     from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object, encode_ui_session_jwt
+    from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
     from litellm.proxy.utils import get_custom_url
 
     try:
@@ -15340,7 +15409,7 @@ async def login_v2(request: Request):
             content={"redirect_url": litellm_dashboard_ui, "token": jwt_token},
             status_code=status.HTTP_200_OK,
         )
-        json_response.set_cookie(key="token", value=jwt_token)
+        set_session_token_cookie(json_response, request, jwt_token)
         return json_response
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.login_v2(): Exception occurred - %s", e)
@@ -15440,6 +15509,8 @@ async def login_v3(request: Request):
 
 @router.post("/v3/login/exchange", include_in_schema=False)  # exchange single-use opaque code for JWT
 async def login_v3_exchange(request: Request):
+    from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
+
     try:
         if not general_settings.get("control_plane_url"):
             raise ProxyException(
@@ -15486,7 +15557,7 @@ async def login_v3_exchange(request: Request):
             },
             status_code=status.HTTP_200_OK,
         )
-        json_response.set_cookie(key="token", value=cached_data["token"])
+        set_session_token_cookie(json_response, request, cached_data["token"])
         return json_response
     except ProxyException:
         raise

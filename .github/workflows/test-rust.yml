@@ -9,6 +9,7 @@ on:
       - "rust-toolchain.toml"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
+      - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
       - ".github/workflows/test-rust.yml"
   pull_request:
     branches:
@@ -23,6 +24,7 @@ on:
       - "rust-toolchain.toml"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
+      - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
       - ".github/workflows/test-rust.yml"
 
 permissions:
@@ -121,3 +123,6 @@ jobs:
         env:
           RELEASE_WHEEL_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python .github/scripts/verify_linux_native_wheel.py dist/*.whl
+
+      - name: Test native route wheel
+        run: python tests/test_litellm/rust_bridge/native_route_wheel_test.py dist/*.whl
