@@ -5980,3 +5980,25 @@ def test_scoped_spend_report_range_at_max_allowed(client, monkeypatch):
         mock_prisma.db.query_raw.assert_awaited_once()
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_spend_calculate_rejection_body_is_openai_shaped(client):
+    """A /spend/calculate rejection must answer with an OpenAI error object: a real
+    `type` string and a JSON null `param`, never the literal string "None"."""
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user", api_key="hashed-k"
+    )
+    try:
+        response = client.post(
+            "/spend/calculate",
+            json={},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] is None
+    assert error["code"] == "400"
