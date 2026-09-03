@@ -68,10 +68,17 @@ class TestChatGPTAuthenticator:
             mock_write.assert_called_once()
             assert mock_write.call_args[0][0]["account_id"] == "acct-123"
 
-    def test_headless_environment_refuses_interactive_device_login(self, authenticator):
+    def test_can_run_interactive_device_login(self, authenticator):
+        with patch("sys.stdin.isatty", return_value=True):
+            assert authenticator._can_run_interactive_device_login() is True
+
+        with patch("sys.stdin.isatty", return_value=False):
+            assert authenticator._can_run_interactive_device_login() is False
+
+    def test_get_access_token_headless_environment_raises_promptly(self, authenticator):
         with (
             patch("builtins.open", side_effect=FileNotFoundError),
-            patch.object(authenticator, "_can_run_interactive_device_login", return_value=False),
+            patch("sys.stdin.isatty", return_value=False),
             pytest.raises(GetAccessTokenError) as exc_info,
         ):
             authenticator.get_access_token()
@@ -80,32 +87,5 @@ class TestChatGPTAuthenticator:
         assert "cannot run in a non-interactive/headless environment" in str(exc_info.value)
 
     def test_headless_wait_for_access_token_returns_none_immediately(self, authenticator):
-        with patch.object(authenticator, "_can_run_interactive_device_login", return_value=False):
+        with patch("sys.stdin.isatty", return_value=False):
             assert authenticator._wait_for_access_token(timeout_seconds=900) is None
-
-    def test_can_run_interactive_device_login_env_branches(self, authenticator, monkeypatch):
-        monkeypatch.setenv("LITELLM_ALLOW_INTERACTIVE_AUTH", "true")
-        assert authenticator._can_run_interactive_device_login() is True
-
-        monkeypatch.delenv("LITELLM_ALLOW_INTERACTIVE_AUTH", raising=False)
-        monkeypatch.setenv("LITELLM_PROXY", "1")
-        assert authenticator._can_run_interactive_device_login() is False
-
-        monkeypatch.delenv("LITELLM_PROXY", raising=False)
-        monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
-        assert authenticator._can_run_interactive_device_login() is False
-
-        monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
-        monkeypatch.setenv("PORT", "8000")
-        assert authenticator._can_run_interactive_device_login() is False
-
-    def test_get_access_token_in_proxy_environment_raises_promptly(self, authenticator, monkeypatch):
-        monkeypatch.setenv("LITELLM_PROXY", "1")
-        with (
-            patch("builtins.open", side_effect=FileNotFoundError),
-            pytest.raises(GetAccessTokenError) as exc_info,
-        ):
-            authenticator.get_access_token()
-
-        assert exc_info.value.status_code == 401
-        assert "cannot run in a non-interactive/headless environment" in str(exc_info.value)

@@ -335,18 +335,7 @@ class Authenticator:
         In headless or proxy environments (e.g. LiteLLM Proxy, Kubernetes, Docker),
         synchronous device code polling must never block the event loop.
         """
-        if os.getenv("LITELLM_ALLOW_INTERACTIVE_AUTH", "").lower() in ("true", "1"):
-            return True
-        if (
-            os.getenv("LITELLM_PROXY") is not None
-            or os.getenv("PORT") is not None
-            or os.getenv("KUBERNETES_SERVICE_HOST") is not None
-        ):
-            return False
         import sys
-
-        if "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST") is not None:
-            return True
 
         return bool(sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty())
 
