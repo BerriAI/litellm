@@ -13,6 +13,7 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (
     _failure_should_leave_fusion_reservation_open,
     _get_budget_reservation_from_metadata,
     _ProxyDBLogger,
+    _should_defer_fusion_budget_reconciliation,
     _should_track_cost_callback,
     _update_database_and_spend_counters,
 )
@@ -730,6 +731,42 @@ async def test_fusion_hidden_costs_accumulate_then_continuation_reconciles_once(
         increment.assert_awaited_once()
         assert increment.await_args.kwargs["response_cost"] == pytest.approx(0.7)
         assert increment.await_args.kwargs["budget_reservation"] is reservation
+
+
+def test_mixed_fusion_and_client_tool_calls_reconcile_on_the_initial_response():
+    def response_with_tools(*tool_names: str) -> litellm.ModelResponse:
+        return litellm.ModelResponse(
+            choices=[
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": f"call-{index}",
+                                "type": "function",
+                                "function": {"name": name, "arguments": "{}"},
+                            }
+                            for index, name in enumerate(tool_names)
+                        ],
+                    },
+                }
+            ]
+        )
+
+    pure_fusion_response = response_with_tools("litellm_fusion")
+    mixed_response = response_with_tools("litellm_fusion", "send_email")
+    metadata = {"internal_call_origin": "fusion_initial"}
+
+    assert _should_defer_fusion_budget_reconciliation(metadata, pure_fusion_response, {})
+    assert not _should_defer_fusion_budget_reconciliation(metadata, mixed_response, {})
+    # Streaming callbacks may expose a partial chunk separately. The complete
+    # response is authoritative for whether Fusion will actually continue.
+    assert not _should_defer_fusion_budget_reconciliation(
+        metadata,
+        pure_fusion_response,
+        {"complete_streaming_response": mixed_response},
+    )
 
 
 @pytest.mark.asyncio

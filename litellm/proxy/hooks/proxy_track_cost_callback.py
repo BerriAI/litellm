@@ -85,18 +85,21 @@ def _mapping_or_attribute(value: object, key: str) -> object:
     return getattr(value, key, None)
 
 
-def _response_invoked_fusion(response: object) -> bool:
+def _response_requires_fusion_continuation(response: object) -> bool:
     choices: Final = _mapping_or_attribute(response, "choices")
     if not isinstance(choices, Sequence) or isinstance(choices, (str, bytes)) or not choices:
         return False
     message: Final = _mapping_or_attribute(choices[0], "message")
     tool_calls: Final = _mapping_or_attribute(message, "tool_calls")
-    if not isinstance(tool_calls, Sequence) or isinstance(tool_calls, (str, bytes)):
+    if not isinstance(tool_calls, Sequence) or isinstance(tool_calls, (str, bytes)) or not tool_calls:
         return False
-    return any(
-        _mapping_or_attribute(_mapping_or_attribute(tool_call, "function"), "name") == _FUSION_TOOL_NAME
-        for tool_call in tool_calls
+    tool_names: Final = tuple(
+        _mapping_or_attribute(_mapping_or_attribute(tool_call, "function"), "name") for tool_call in tool_calls
     )
+    # Fusion drops its private call and immediately returns any client tool call
+    # emitted alongside it. Only a Fusion-only response has a continuation whose
+    # cost callback can safely reconcile the shared reservation later.
+    return _FUSION_TOOL_NAME in tool_names and all(name == _FUSION_TOOL_NAME for name in tool_names)
 
 
 def _should_defer_fusion_budget_reconciliation(
@@ -110,7 +113,9 @@ def _should_defer_fusion_budget_reconciliation(
     if origin != "fusion_initial":
         return False
     complete_stream: Final = kwargs.get("complete_streaming_response")
-    return _response_invoked_fusion(completion_response) or _response_invoked_fusion(complete_stream)
+    return _response_requires_fusion_continuation(
+        complete_stream if complete_stream is not None else completion_response
+    )
 
 
 def _accumulate_fusion_cost(
