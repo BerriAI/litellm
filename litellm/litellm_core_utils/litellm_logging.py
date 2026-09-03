@@ -4815,11 +4815,16 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
         if isinstance(callback, OpenTelemetryV2) and getattr(callback, "callback_name", None) == callback_name:
             return callback
     try:
-        config: Final = preset_fn()
+        config: Final = preset_fn(allow_missing_credentials=True)
     except Exception:
         # If env vars are missing or the preset raises, defer to the legacy path
         # so customers get the same error story they had before V2 landed.
         return None
+    if all(spec.requires_headers and not spec.headers for spec in config.exporters):
+        verbose_logger.warning(
+            "OTel V2: no operator credentials for '%s'; only key/team destinations will receive its traces",
+            callback_name,
+        )
     v2_logger: Final = build_otel_v2_logger(config=config, callback_name=callback_name)
     _in_memory_loggers.append(v2_logger)
     return v2_logger

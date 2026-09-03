@@ -1,5 +1,7 @@
 """Provider / exporter factory + the Baggage span processor."""
 
+import threading
+from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -20,6 +22,7 @@ from opentelemetry.sdk._logs.export import (
 from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace import Span as SDKSpan
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
     ConsoleSpanExporter,
@@ -32,14 +35,21 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from opentelemetry.trace import Span, SpanKind, Tracer
 from opentelemetry.util.re import parse_env_headers
 
+from litellm._logging import verbose_logger
 from litellm._version import version as litellm_version
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.model.semconv import LiteLLM
 from litellm.integrations.otel.model.spans import LiteLLMSpanKind
+from litellm.integrations.otel.plumbing.context import (
+    overridden_backends,
+    request_destinations,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.metrics import Meter
     from opentelemetry.sdk.metrics.export import MetricReader
+
+    from litellm.integrations.otel.model.destination import OtelDestination
 
 _SPAN_KIND_BY_ROLE_KIND: Final[dict[LiteLLMSpanKind, SpanKind]] = {
     LiteLLMSpanKind.SERVER: SpanKind.SERVER,
@@ -192,6 +202,178 @@ def _processor_for(exporter: SpanExporter, use_simple: bool | None) -> SpanProce
     if use_simple is None:
         use_simple = isinstance(exporter, (ConsoleSpanExporter, InMemorySpanExporter))
     return SimpleSpanProcessor(exporter) if use_simple else BatchSpanProcessor(exporter)
+
+
+#: Distinct tenant destinations whose exporters stay alive. Each holds a connection
+#: pool and a batch thread, so the cache is bounded and evicts least-recently-used.
+_MAX_CACHED_DESTINATION_PROCESSORS: Final = 32
+
+
+class _ResourceWrappedReadableSpan(ReadableSpan):
+    """A ``ReadableSpan`` view with an overridden Resource, leaving the original alone."""
+
+    def __init__(self, inner: ReadableSpan, resource: Resource) -> None:
+        super().__init__(
+            name=inner.name,
+            context=inner.context,
+            parent=inner.parent,
+            resource=resource,
+            attributes=inner.attributes,
+            events=inner.events,
+            links=inner.links,
+            kind=inner.kind,
+            status=inner.status,
+            start_time=inner.start_time,
+            end_time=inner.end_time,
+            instrumentation_scope=inner.instrumentation_scope,
+        )
+
+
+def _with_destination_resource(span: ReadableSpan, destination: "OtelDestination") -> ReadableSpan:
+    extra: Final = destination.resource_attributes
+    if not extra:
+        return span
+    merged: Final = Resource.create(
+        {**dict(span.resource.attributes), **dict(extra)}  # mutable-ok: the OTel SDK takes a concrete attribute mapping
+    )
+    return _ResourceWrappedReadableSpan(span, merged)
+
+
+class TenantFanOutSpanProcessor(SpanProcessor):
+    """Export every finished span to each destination this request resolved.
+
+    Destinations ride a request-scoped ``ContextVar`` set during auth, so the
+    processor keeps no per-request state and concurrent requests stay isolated.
+    Every span is forwarded, the gen-AI span included: the tenant's account gets the
+    tree the operator's would have received, still parented, because the forwarded
+    view keeps the original span's trace and parent ids.
+    """
+
+    def __init__(
+        self,
+        processor_factory: 'Callable[["OtelDestination"], SpanProcessor | None] | None' = None,
+    ) -> None:
+        self._lock: Final = threading.Lock()
+        self._build: Final = processor_factory if processor_factory is not None else _destination_processor
+        self._processors: OrderedDict[object, SpanProcessor] = OrderedDict()  # mutable-ok: bounded LRU
+
+    def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
+        return None
+
+    def on_end(self, span: ReadableSpan) -> None:
+        for destination in request_destinations():
+            processor = self._processor_for(destination)  # rebind-ok: loop variable; pyright forbids Final in a loop
+            if processor is None:
+                continue
+            try:
+                processor.on_end(_with_destination_resource(span, destination))
+            except Exception as exc:  # noqa: BLE001  # one destination's failure must not cost the others their span
+                verbose_logger.debug("OTel V2 fan-out: forwarding to %s failed: %s", destination.endpoint, exc)
+
+    def shutdown(self) -> None:
+        # Snapshot first: ``on_end`` mutates the cache on whichever thread ends a span
+        # and can run concurrently with this SDK-driven shutdown, so iterating the live
+        # mapping risks a "mutated during iteration" the per-item except cannot catch.
+        for processor in self._snapshot():
+            try:
+                processor.shutdown()
+            except Exception as exc:  # noqa: BLE001  # one processor's shutdown must not abort the rest
+                verbose_logger.debug("OTel V2 fan-out: processor shutdown failed: %s", exc)
+        with self._lock:
+            self._processors.clear()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        results: Final = tuple(self._flush_one(processor, timeout_millis) for processor in self._snapshot())
+        return all(results)
+
+    def _snapshot(self) -> tuple[SpanProcessor, ...]:
+        with self._lock:
+            return tuple(self._processors.values())
+
+    @staticmethod
+    def _flush_one(processor: SpanProcessor, timeout_millis: int) -> bool:
+        try:
+            return processor.force_flush(timeout_millis)
+        except Exception:  # noqa: BLE001  # one exporter's flush failure must not fail the whole flush
+            return False
+
+    def _processor_for(self, destination: "OtelDestination") -> SpanProcessor | None:
+        key: Final = destination.cache_key()
+        with self._lock:
+            cached: Final = self._processors.get(key)
+            if cached is not None:
+                self._processors.move_to_end(key)
+                return cached
+        built: Final = self._build(destination)
+        if built is None:
+            return None
+        with self._lock:
+            existing: Final = self._processors.get(key)
+            if existing is not None:
+                # Another thread won the race; drop ours rather than leak its thread.
+                _shutdown_quietly(built)
+                return existing
+            self._processors[key] = built
+            evicted: Final = (
+                self._processors.popitem(last=False)[1]
+                if len(self._processors) > _MAX_CACHED_DESTINATION_PROCESSORS
+                else None
+            )
+        if evicted is not None:
+            _shutdown_quietly(evicted)
+        return built
+
+
+def _destination_processor(destination: "OtelDestination") -> SpanProcessor | None:
+    """A batching OTLP processor aimed at ``destination``, or ``None`` if unbuildable."""
+    try:
+        spec: Final = ExporterSpec(
+            kind=destination.protocol or "otlp_http",
+            endpoint=destination.endpoint,
+            headers=destination.header_string(),
+            owner=None,
+        )
+        return _processor_for(_exporter_from_spec(spec), use_simple=False)
+    except Exception as exc:  # noqa: BLE001  # a malformed destination must not break the request or the other destinations
+        verbose_logger.debug("OTel V2 fan-out: no processor for %s: %s", destination.endpoint, exc)
+        return None
+
+
+def _shutdown_quietly(processor: SpanProcessor) -> None:
+    try:
+        processor.shutdown()
+    except Exception as exc:  # noqa: BLE001  # defensive: shedding a spare processor must not raise
+        verbose_logger.debug("OTel V2 fan-out: discarding processor failed: %s", exc)
+
+
+class _OverriddenBackendFilter(SpanProcessor):
+    """Hold a span back from ``owner``'s operator-level exporter when the request
+    pointed ``owner`` at a tenant's own account.
+
+    A team destination is an override rather than an addition, and a ``SpanProcessor``
+    cannot veto its siblings (``SynchronousMultiSpanProcessor.on_end`` ignores return
+    values), so suppression has to wrap the exporter's own processor. Dropping here
+    also keeps the span out of ``BatchSpanProcessor``'s bounded queue instead of
+    filling it with spans that will never ship.
+    """
+
+    def __init__(self, inner: SpanProcessor, owner: str) -> None:
+        self._inner: Final = inner
+        self._owner: Final = owner
+
+    def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
+        self._inner.on_start(span, parent_context)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        if self._owner in overridden_backends():
+            return
+        self._inner.on_end(span)
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._inner.force_flush(timeout_millis)
 
 
 def build_span_exporter(config: OpenTelemetryV2Config) -> SpanExporter:
@@ -437,6 +619,7 @@ def build_tracer_provider(
     exporter: SpanExporter | None = None,
     baggage_processor: SpanProcessor | None = None,
     use_simple_processor: bool | None = None,
+    tenant_overrides: bool = False,
 ) -> TracerProvider:
     """Build the shared :class:`TracerProvider`.
 
@@ -445,6 +628,12 @@ def build_tracer_provider(
     ``config.exporters`` entry — this is what fans spans out to multiple
     backends. ``exporter`` and ``use_simple_processor`` are explicit overrides:
     pass a single exporter to attach exactly that one (used by tests).
+
+    ``tenant_overrides`` belongs to the operator-level provider alone: it wraps each
+    owned exporter so a request that pointed that backend at a key's or team's own
+    account skips it, and adds the fan-out processor that delivers to that account
+    instead. The per-tenant providers this same function builds must leave it off,
+    or they would filter out the very spans they exist to carry.
     """
     provider: Final = TracerProvider(resource=build_resource(config))
     if baggage_processor is None:
@@ -461,12 +650,16 @@ def build_tracer_provider(
         if spec.requires_headers and not spec.headers:
             continue
         exp = _exporter_from_spec(spec)
-        provider.add_span_processor(
-            _processor_for(
-                exp,
-                (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
-            )
+        processor = _processor_for(
+            exp,
+            (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
         )
+        owner = spec.owner.value if spec.owner is not None else None
+        provider.add_span_processor(
+            _OverriddenBackendFilter(processor, owner) if tenant_overrides and owner is not None else processor
+        )
+    if tenant_overrides:
+        provider.add_span_processor(TenantFanOutSpanProcessor())
     return provider
 
 

@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from contextvars import ContextVar, Token
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from opentelemetry import baggage
 from opentelemetry.context import Context, get_current
@@ -20,6 +20,9 @@ from opentelemetry.trace.propagation.tracecontext import (
 )
 
 from litellm.integrations.otel.model.semconv import HTTP
+
+if TYPE_CHECKING:
+    from litellm.integrations.otel.model.destination import OtelDestination
 
 _PROPAGATOR: Final = TraceContextTextMapPropagator()
 
@@ -304,3 +307,34 @@ def extract_traceparent(headers: Mapping[str, str]) -> Context | None:
         return None
     carrier: Final = {str(key).lower(): value for key, value in headers.items()}
     return _PROPAGATOR.extract(carrier)
+
+
+# The OTLP destinations this request's key or team pointed its traces at, resolved
+# once during auth. A ``ContextVar`` for the same reason the root span above is one:
+# it rides the request task's context into the ``asyncio.create_task`` children that
+# close the LLM span, and it is visible to every ``SpanProcessor.on_end`` that fires
+# on the request task. Never reset -- it dies with the task.
+_request_destinations: Final['ContextVar[tuple["OtelDestination", ...]]'] = ContextVar(
+    "litellm_otel_request_destinations", default=()
+)
+
+
+def set_request_destinations(destinations: 'tuple["OtelDestination", ...]') -> None:
+    """Anchor the destinations this request exports to."""
+    _request_destinations.set(destinations)
+
+
+def request_destinations() -> 'tuple["OtelDestination", ...]':
+    """The destinations resolved for this request, empty outside a proxy request."""
+    return _request_destinations.get()
+
+
+def overridden_backends() -> frozenset[str]:
+    """Backends whose global exporters this request must NOT reach.
+
+    A team destination is an override, not an addition: once the request resolved a
+    destination for a backend, that backend's operator-level exporters are suppressed
+    for every span of the request, so the tenant's traffic reaches the tenant's
+    account and nowhere else.
+    """
+    return frozenset(d.callback_name for d in _request_destinations.get() if d.callback_name)
