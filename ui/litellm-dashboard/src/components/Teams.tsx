@@ -698,6 +698,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                   {(() => {
                     const isSingleOrg = adminOrgs.length === 1;
                     const hasNoOrgs = adminOrgs.length === 0;
+                    const soleOrganizationId = isSingleOrg ? adminOrgs[0].organization_id ?? null : null;
 
                     return (
                       <>
@@ -727,7 +728,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                                 label: org.organization_alias ?? "",
                                 sublabel: org.organization_id ?? "",
                               }))}
-                              disabled={isOrgAdmin && isSingleOrg && (value ?? "") !== ""}
+                              disabled={isOrgAdmin && soleOrganizationId !== null && value === soleOrganizationId}
                               allowClear={!isOrgAdmin}
                               placeholder={
                                 hasNoOrgs ? "No organizations available" : "Search or select an Organization"

@@ -1639,6 +1639,41 @@ describe("Teams - the create form keeps the organization and models picks while 
     expect(teamCreateCall).not.toHaveBeenCalled();
   });
 
+  it("lets the admin switch to the one organization left after losing access to their pick", async () => {
+    const user = userEvent.setup();
+    const orgAdminOrgs = ORGS.map((org) => ({ ...org, members: [{ user_id: "user-123", user_role: "org_admin" }] }));
+    mockUseOrganizations.mockReturnValue({ data: orgAdminOrgs });
+    vi.mocked(teamCreateCall).mockResolvedValue({
+      team_id: "new-team-1",
+      team_alias: "Recovered Team",
+      models: [],
+      organization_id: "org-2",
+      keys: [],
+      members_with_roles: [],
+      spend: 0,
+    });
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Internal User" />);
+    await openCreateModal();
+
+    fireEvent.change(screen.getByTestId("team-name-input"), { target: { value: "Recovered Team" } });
+    await chooseSelectOption(user, orgField(), /Org 1/);
+
+    mockUseOrganizations.mockReturnValue({ data: [orgAdminOrgs[1]] });
+    fireEvent.click(screen.getByText("Additional Settings"));
+
+    expect(orgField()).toBeEnabled();
+    await chooseSelectOption(user, orgField(), /Org 2/);
+    const submitButtons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(submitButtons[submitButtons.length - 1]);
+
+    await waitFor(() =>
+      expect(teamCreateCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({ team_alias: "Recovered Team", organization_id: "org-2" }),
+      ),
+    );
+  });
+
   it("starts the form clean again when the modal is closed and reopened", async () => {
     const user = userEvent.setup();
     renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
