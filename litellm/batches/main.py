@@ -301,21 +301,6 @@ def create_batch(
                 litellm_params=litellm_params,
             )
         elif custom_llm_provider == "vertex_ai":
-            if optional_params.get("custom_endpoint"):
-                raise litellm.exceptions.BadRequestError(
-                    message=(
-                        "Vertex AI batch prediction is not supported for `custom_endpoint` deployments. "
-                        "The OpenAI-compatible custom endpoint path has no batch surface in LiteLLM; "
-                        "use a publisher model or fine-tuned Gemini endpoint deployment instead."
-                    ),
-                    model=model or "n/a",
-                    llm_provider=custom_llm_provider,
-                    response=httpx.Response(
-                        status_code=400,
-                        content="custom_endpoint deployments do not support vertex_ai batches",
-                        request=httpx.Request(method="create_batch", url="https://github.com/BerriAI/litellm"),
-                    ),
-                )
             api_base = optional_params.api_base or ""
             vertex_ai_project: Final = (
                 optional_params.vertex_project or litellm.vertex_project or get_secret_str("VERTEXAI_PROJECT")
@@ -334,6 +319,7 @@ def create_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 create_batch_data=_create_batch_request,
+                custom_endpoint=optional_params.get("custom_endpoint"),
             )
         else:
             raise litellm.exceptions.BadRequestError(

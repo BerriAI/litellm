@@ -367,6 +367,20 @@ def test_get_model_from_gcs_file_fine_tuned_endpoint():
     assert T._get_model_from_gcs_file(ENDPOINT_INPUT_FILE) == f"endpoints/{ENDPOINT_ID}"
 
 
+def test_get_model_from_gcs_file_publisher_path_wins_over_endpoints_prefix():
+    """A bucket prefix containing endpoints/<digits> must not override the publisher model path
+    LiteLLM appended after it."""
+    uri = "gs://bucket/team-endpoints/999/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/uuid"
+    assert T._get_model_from_gcs_file(uri) == "publishers/google/models/gemini-1.5-flash-001"
+
+
+def test_get_model_from_gcs_file_last_endpoints_segment_wins():
+    """With no publisher path, the endpoint id closest to the file (last occurrence) is the one
+    LiteLLM stored; an earlier prefix segment must not shadow it."""
+    uri = f"gs://bucket/endpoints/999/litellm-vertex-files/endpoints/{ENDPOINT_ID}/uuid"
+    assert T._get_model_from_gcs_file(uri) == f"endpoints/{ENDPOINT_ID}"
+
+
 def test_get_model_from_gcs_file_non_numeric_endpoints_segment_raises_400():
     with pytest.raises(VertexAIError) as exc_info:
         T._get_model_from_gcs_file("gs://bucket/endpoints/not-a-number/file-uuid")
