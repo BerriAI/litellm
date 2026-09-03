@@ -400,17 +400,26 @@ class TestBedrockMantleResponsesWebSearch:
         )
         assert body["tools"] == [self._WEB_SEARCH_TOOL, function_tool]
 
-    def test_web_search_is_not_logged_as_dropped(self):
-        from unittest.mock import patch
-
+    def test_web_search_is_not_logged_as_dropped(self, caplog):
         cfg = BedrockMantleResponsesAPIConfig()
-        with patch("litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning") as mock_warning:
+
+        def drop_warnings() -> list[str]:
+            return [r.getMessage() for r in caplog.records if "dropping unsupported tool type" in r.getMessage()]
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            cfg.map_openai_params(
+                response_api_optional_params={"tools": [{"type": "file_search"}]},
+                model="openai.gpt-5.6-sol",
+                drop_params=False,
+            )
+            assert len(drop_warnings()) == 1
+            caplog.clear()
             cfg.map_openai_params(
                 response_api_optional_params={"tools": [self._WEB_SEARCH_TOOL]},
                 model="openai.gpt-5.6-sol",
                 drop_params=False,
             )
-        assert mock_warning.call_count == 0
+        assert drop_warnings() == []
 
     def test_hoisted_web_search_tool_survives(self):
         cfg = BedrockMantleResponsesAPIConfig()
