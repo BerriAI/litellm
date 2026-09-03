@@ -57,7 +57,7 @@ _EMPTY_MAPPING: Final[Mapping[str, Any]] = MappingProxyType({})
 _EMPTY_MESSAGE: Final[Message] = {"role": "", "content": ""}
 _MAX_PARSED_TOOL_ARGUMENT_CHARS: Final = 256 * 1024
 _SAFE_REDACTED_MESSAGE_ROLES: Final = frozenset(
-    {"assistant", "developer", "function", "model", "system", "tool", "user"}
+    {"agent", "assistant", "developer", "function", "model", "system", "tool", "user"}
 )
 
 _PROMPT_CARRYING_METADATA_FIELDS: Final = frozenset(
@@ -127,7 +127,7 @@ def _redact_messages(messages: Sequence[Message]) -> tuple[Message, ...]:
             "content": REDACTED_BY_LITELLM,
         }
         for message in messages
-        for role in [message.get("role", "")]
+        for role in (message.get("role", ""),)
     )
 
 
