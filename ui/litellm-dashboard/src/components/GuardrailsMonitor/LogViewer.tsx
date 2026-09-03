@@ -92,7 +92,8 @@ export function LogViewer({
     enabled: Boolean(accessToken && selectedRequestId && drawerOpen),
   });
 
-  const selectedLog: ViewLogsLogEntry | null = fullLogResponse?.data?.[0] ?? null;
+  const selectedLog: ViewLogsLogEntry | null =
+    fullLogResponse?.data?.find((log) => log.request_id === selectedRequestId) ?? fullLogResponse?.data?.[0] ?? null;
 
   const handleLogClick = (log: LogEntry) => {
     setSelectedRequestId(log.id);

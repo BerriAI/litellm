@@ -3,6 +3,7 @@ import collections
 import json
 import os
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
@@ -73,9 +74,9 @@ class _SupportsModelDump(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
 
 
-class _SpendLogOwnershipRow(Protocol):
-    user: str | None
-    team_id: str | None
+class _SpendLogOwnerRow(TypedDict):
+    user: ReadOnly[str | None]
+    team_id: ReadOnly[str | None]
 
 
 class _ActivityRow(TypedDict):
@@ -250,12 +251,37 @@ async def _find_spend_logs(
     return rows
 
 
-async def _find_spend_log_row(prisma_client: PrismaClient, request_id: str) -> _SpendLogOwnershipRow | None:
-    """Read the single spend log row identified by ``request_id``."""
-    return await _spend_logs_table(prisma_client).find_unique(
-        where={"request_id": request_id},
-        include=None,
-    )
+class _RequestIdEquals(TypedDict):
+    request_id: ReadOnly[str]
+
+
+class _LitellmCallIdEquals(TypedDict):
+    litellm_call_id: ReadOnly[str]
+
+
+def _request_id_or_call_id_clause(request_id: str) -> tuple[_RequestIdEquals, _LitellmCallIdEquals]:
+    request_id_clause: Final[_RequestIdEquals] = {"request_id": request_id}
+    call_id_clause: Final[_LitellmCallIdEquals] = {"litellm_call_id": request_id}
+    return (request_id_clause, call_id_clause)
+
+
+async def _find_spend_log_owners(prisma_client: PrismaClient, request_id: str) -> Sequence[_SpendLogOwnerRow]:
+    """Read the distinct ``(user, team_id)`` owner pairs across every spend log row
+    identified by ``request_id`` or ``litellm_call_id``.
+
+    ``litellm_call_id`` is populated from the client-settable ``x-litellm-call-id``
+    request header, so it is not guaranteed unique to one tenant: any number of rows
+    can match one id. The read is uncapped because a flood of another tenant's rows
+    carrying the caller's id could otherwise push the caller's own owner pair past a
+    row-sample cap and lock them out of their own lookup.
+    """
+    sql_query: Final = """
+        SELECT DISTINCT "user", team_id
+        FROM "LiteLLM_SpendLogs"
+        WHERE request_id = $1 OR litellm_call_id = $1
+    """
+    owners: Final[Sequence[_SpendLogOwnerRow] | None] = await _query_raw_or_none(prisma_client, sql_query, request_id)
+    return owners if owners is not None else ()
 
 
 async def _count_spend_logs(prisma_client: PrismaClient, where: Mapping[str, object]) -> int:
@@ -2477,10 +2503,11 @@ async def ui_view_spend_logs(
             if max_spend is not None:
                 where_conditions["spend"]["lte"] = max_spend
         # A request_id lookup drops the date window, so a non-admin could otherwise
-        # reach any single row by id; require they own it, mirroring the detail
-        # endpoint. That ownership check fully authorizes the one row, so the
-        # general scoping below is skipped for id lookups. Scoped to the UI route
-        # so the public v2 contract is unchanged.
+        # reach any single row by id; require they own one of the matches, mirroring
+        # the detail endpoint, and keep the general scoping below so a colliding
+        # foreign row is filtered out rather than served or allowed to deny the
+        # caller their own row. Scoped to the UI route so the public v2 contract is
+        # unchanged.
         if request_id is not None and not is_v2 and not is_admin_view:
             await _assert_user_can_view_request_id(
                 prisma_client=prisma_client,
@@ -2488,10 +2515,9 @@ async def ui_view_spend_logs(
                 request_id=request_id,
             )
         user_scope_applies: Final = (
-            not is_request_id_lookup
-            and not is_admin_view
+            not is_admin_view
             and team_id is None
-            and _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
+            and (is_request_id_lookup or _can_user_view_spend_log(user_api_key_dict=user_api_key_dict))
         )
         permitted_team_ids: Final = (
             await _get_permitted_team_ids_for_spend_logs_or_empty(
@@ -2504,7 +2530,7 @@ async def ui_view_spend_logs(
         explicit_user_requires_caller_scope: Final = (
             user_scope_applies and not permitted_team_ids and user_id is not None
         )
-        if not is_request_id_lookup and not is_admin_view:
+        if not is_admin_view:
             if team_id is not None:
                 can_view_team: Final = await _can_team_member_view_log(
                     prisma_client=prisma_client,
@@ -2563,7 +2589,6 @@ async def ui_view_spend_logs(
             ("team_id", "team_id"),
             ('"user"', "user"),
             ("api_key", "api_key"),
-            ("request_id", "request_id"),
             ("model", "model"),
             ("model_id", "model_id"),
             ("model_group", "model_group"),
@@ -2574,6 +2599,13 @@ async def ui_view_spend_logs(
                 sql_conditions.append(f"{sql_col} = ${p}")
                 sql_params.append(val)
                 p += 1
+
+        request_id_filter: Final = where_conditions.get("request_id")
+        exact_request_id_first: Final = f"(request_id = ${p}) DESC, " if isinstance(request_id_filter, str) else ""
+        if isinstance(request_id_filter, str):
+            sql_conditions.append(f"(request_id = ${p} OR litellm_call_id = ${p})")
+            sql_params.append(request_id_filter)
+            p += 1
 
         # Multi-team OR filter: (user = $X OR team_id = ANY($Y))
         if permitted_team_ids:
@@ -2684,6 +2716,7 @@ async def ui_view_spend_logs(
                 cache_hit, cache_key, request_tags, team_id,
                 organization_id, end_user, requester_ip_address,
                 session_id, status, mcp_namespaced_tool_name, agent_id,
+                litellm_call_id,
                 COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms"""
         sql_query: Final = (
             f"""
@@ -2694,7 +2727,7 @@ async def ui_view_spend_logs(
                     WHERE {joined_conditions}
                     ORDER BY {_SESSION_GROUP_KEY_SQL}, call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC
                 ) AS session_representatives
-                ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}, request_id
+                ORDER BY {exact_request_id_first}{_order_expr} {_sql_dir}{_nulls_clause}, request_id
                 LIMIT ${p} OFFSET ${p + 1}
             """
             if session_grouping
@@ -2703,13 +2736,21 @@ async def ui_view_spend_logs(
                 {select_columns}
             FROM "LiteLLM_SpendLogs"
             WHERE {joined_conditions}
-            ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
+            ORDER BY {exact_request_id_first}{_order_expr} {_sql_dir}{_nulls_clause}
             LIMIT ${p} OFFSET ${p + 1}
         """
         )
         sql_params.extend([page_size, skip])
 
         data: Final = await prisma_client.db.query_raw(sql_query, *sql_params)
+
+        if request_id is not None and not is_v2 and not is_admin_view:
+            await _assert_user_owns_fetched_spend_rows(
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+                rows=data,
+                request_id=request_id,
+            )
 
         _hydrate_spend_log_metadata(data)
 
@@ -2774,7 +2815,7 @@ def _hydrate_spend_log_metadata(rows: Sequence[Mapping[str, object]]) -> None:
 
 
 def _cold_storage_object_key_from_metadata(
-    metadata: str | dict | None,
+    metadata: str | Mapping[str, object] | None,
 ) -> str | None:
     if isinstance(metadata, str):
         try:
@@ -2863,7 +2904,8 @@ async def ui_view_request_response_for_request_id(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    if not _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+    caller_is_admin: Final = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+    if not caller_is_admin:
         if prisma_client is None:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -2888,38 +2930,45 @@ async def ui_view_request_response_for_request_id(
     if end_date is not None:
         end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
 
+    spend_log_row: Final = (
+        None
+        if prisma_client is None
+        else await _resolve_spend_log_payload_row(
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            request_id=request_id,
+            caller_is_admin=caller_is_admin,
+        )
+    )
+    stored_request_id: Final = _stored_request_id(spend_log_row, request_id)
+
     for custom_logger in custom_loggers:
         payload = await custom_logger.get_request_response_payload(
-            request_id=request_id,
+            request_id=stored_request_id,
             start_time_utc=start_date_obj,
             end_time_utc=end_date_obj,
         )
         if payload is not None:
+            if not caller_is_admin and prisma_client is not None:
+                await _assert_user_owns_cold_storage_payload(
+                    prisma_client=prisma_client,
+                    user_api_key_dict=user_api_key_dict,
+                    payload=cast(Mapping[str, object], payload),  # cast-ok: custom-logger payload is untyped
+                    request_id=request_id,
+                )
             return payload
+
+    if spend_log_row is None:
+        return None
 
     # Fallback: the list endpoint omits the heavy columns for performance, so
     # serve them here. When prompts were offloaded to cold storage the DB holds
     # only placeholders, so _resolve_request_response_payload fetches the real
     # payload from the configured cold storage backend by object key.
-    if prisma_client is not None:
-        from litellm.proxy.spend_tracking.cold_storage_handler import (
-            ColdStorageHandler,
-        )
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 
-        sql_query: Final = """
-            SELECT messages, response, proxy_server_request, metadata
-            FROM "LiteLLM_SpendLogs"
-            WHERE request_id = $1
-            LIMIT 1
-        """
-        db_result: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_or_none(
-            prisma_client, sql_query, request_id
-        )
-        if db_result and len(db_result) > 0:
-            resolved = await _resolve_request_response_payload(db_result[0], cold_storage_handler=ColdStorageHandler())
-            return resolved._asdict()
-
-    return None
+    resolved: Final = await _resolve_request_response_payload(spend_log_row, cold_storage_handler=ColdStorageHandler())
+    return resolved._asdict()
 
 
 @router.get(
@@ -3028,7 +3077,7 @@ async def view_spend_logs(
             start_date_iso: Final = start_date_obj.isoformat()
             end_date_iso: Final = end_date_obj.isoformat()
 
-            filter_query: Final = {
+            filter_query: Final[dict[str, object]] = {
                 "startTime": {
                     "gte": start_date_iso,  # Greater than or equal to Start Date
                     "lte": end_date_iso,  # Less than or equal to End Date
@@ -3041,7 +3090,7 @@ async def view_spend_logs(
                 else:
                     filter_query["api_key"] = api_key
             if request_id is not None and isinstance(request_id, str):
-                filter_query["request_id"] = request_id
+                filter_query["OR"] = _request_id_or_call_id_clause(request_id)
             if user_id is not None and isinstance(user_id, str):
                 filter_query["user"] = user_id
 
@@ -3112,7 +3161,7 @@ async def view_spend_logs(
             return response
 
         else:
-            scoped_filter: Final[dict[str, str]] = {}
+            scoped_filter: Final[dict[str, object]] = {}
             if api_key is not None and isinstance(api_key, str):
                 if api_key.startswith("sk-"):
                     hashed_token = prisma_client.hash_token(token=api_key)
@@ -3120,7 +3169,7 @@ async def view_spend_logs(
                     hashed_token = api_key
                 scoped_filter["api_key"] = hashed_token
             if request_id is not None and isinstance(request_id, str):
-                scoped_filter["request_id"] = request_id
+                scoped_filter["OR"] = _request_id_or_call_id_clause(request_id)
             if user_id is not None and isinstance(user_id, str):
                 scoped_filter["user"] = user_id
 
@@ -4340,37 +4389,187 @@ def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
     )
 
 
+async def _user_can_view_spend_log_owner(
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    owner_user: str | None,
+    owner_team_id: str | None,
+) -> bool:
+    if owner_user is not None and owner_user == user_api_key_dict.user_id:
+        return True
+    if owner_team_id:
+        return await _can_team_member_view_log(
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            team_id=owner_team_id,
+        )
+    return False
+
+
+def _spend_log_forbidden(request_id: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"error": f"Not authorized to view spend log for request_id={request_id}"},
+    )
+
+
 async def _assert_user_can_view_request_id(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     request_id: str,
 ) -> None:
     """
-    Verify the requesting non-admin user is allowed to view this spend-log row.
-    Allowed when the log belongs to the user directly, or to one of their
-    permitted teams (admin or ``/spend/logs`` permission).
-    Raises HTTP 403 if not.
+    Verify the requesting non-admin user is allowed to view at least one spend-log
+    row identified by ``request_id`` or ``litellm_call_id``. The latter is
+    client-settable, so an id lookup can match rows across different tenants; the
+    data queries scope a non-admin's results to rows they own directly or via a
+    permitted team, so a colliding foreign row can neither be served nor deny the
+    caller their own. Raises HTTP 403 when rows match and none is theirs to view.
     """
-    row: Final = await _find_spend_log_row(prisma_client, request_id)
-    if row is None:
+    owners: Final = await _find_spend_log_owners(prisma_client, request_id)
+    if not owners:
         return
+    for owner in owners:
+        if await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, owner["user"], owner["team_id"]):
+            return
+    raise _spend_log_forbidden(request_id)
 
-    if row.user is not None and row.user == user_api_key_dict.user_id:
-        return
 
-    if row.team_id:
-        can_view: Final = await _can_team_member_view_log(
+@dataclass(frozen=True, slots=True)
+class _SpendLogViewer:
+    user_id: str | None
+    team_ids: tuple[str, ...]
+
+
+async def _spend_log_viewer(prisma_client: PrismaClient, user_api_key_dict: UserAPIKeyAuth) -> _SpendLogViewer:
+    return _SpendLogViewer(
+        user_id=user_api_key_dict.user_id,
+        team_ids=await _get_permitted_team_ids_for_spend_logs_or_empty(
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,
-            team_id=row.team_id,
-        )
-        if can_view:
-            return
-
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail={"error": f"Not authorized to view spend log for request_id={request_id}"},
+        ),
     )
+
+
+def _viewer_scope_clause(viewer: _SpendLogViewer | None) -> tuple[str, tuple[object, ...]]:
+    match viewer:
+        case None:
+            return ("", ())
+        case _SpendLogViewer(user_id=user_id, team_ids=()):
+            return (' AND "user" = $2', (user_id,))
+        case _SpendLogViewer(user_id=user_id, team_ids=team_ids):
+            return (' AND ("user" = $2 OR team_id = ANY($3::text[]))', (user_id, team_ids))
+
+
+def _spend_log_payload_query(request_id: str, viewer: _SpendLogViewer | None) -> tuple[str, tuple[object, ...]]:
+    """
+    Fetch the one row an id lookup resolves to, preferring the exact ``request_id``
+    match over rows that merely carry the id as their client-set ``litellm_call_id``.
+    A non-admin viewer only ever gets rows they own or rows of a team they may view.
+    """
+    scope, scope_params = _viewer_scope_clause(viewer)
+    return (
+        f"""
+            SELECT request_id, messages, response, proxy_server_request, metadata, "user", team_id
+            FROM "LiteLLM_SpendLogs"
+            WHERE (request_id = $1 OR litellm_call_id = $1){scope}
+            ORDER BY (request_id = $1) DESC
+            LIMIT 1
+        """,
+        (request_id, *scope_params),
+    )
+
+
+async def _resolve_spend_log_payload_row(
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_id: str,
+    caller_is_admin: bool,
+) -> Mapping[str, object] | None:
+    """
+    Resolve an id lookup to the caller's own spend-log row before any payload
+    store is consulted. Cold storage is keyed by the provider ``request_id``, so
+    asking it for the raw lookup id could hand back another tenant's payload when
+    that id is only the caller's ``litellm_call_id``; the row's stored
+    ``request_id`` is the key that names the caller's own request.
+    """
+    viewer: Final = None if caller_is_admin else await _spend_log_viewer(prisma_client, user_api_key_dict)
+    sql_query, sql_params = _spend_log_payload_query(request_id, viewer)
+    rows: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_or_none(prisma_client, sql_query, *sql_params)
+    if not rows:
+        return None
+    if not caller_is_admin:
+        await _assert_user_owns_fetched_spend_rows(
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            rows=rows,
+            request_id=request_id,
+        )
+    return rows[0]
+
+
+def _stored_request_id(row: Mapping[str, object] | None, lookup_id: str) -> str:
+    stored: Final = None if row is None else row.get("request_id")
+    return stored if isinstance(stored, str) else lookup_id
+
+
+def _fetched_row_owner(row: Mapping[str, object]) -> tuple[str | None, str | None]:
+    user: Final = row.get("user")
+    team_id: Final = row.get("team_id")
+    return (
+        user if isinstance(user, str) else None,
+        team_id if isinstance(team_id, str) else None,
+    )
+
+
+async def _assert_user_owns_fetched_spend_rows(
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    rows: Sequence[Mapping[str, object]],
+    request_id: str,
+) -> None:
+    """
+    Re-verify ownership on the rows an id lookup actually fetched.
+    ``_assert_user_can_view_request_id`` and the data query read the table at
+    different moments, so a foreign row inserted between them could otherwise be
+    returned even though the pre-check passed. Checking the fetched rows
+    themselves means no interleaving can return another tenant's row.
+    """
+    for user, team_id in frozenset(_fetched_row_owner(row) for row in rows):
+        if not await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, user, team_id):
+            raise _spend_log_forbidden(request_id)
+
+
+def _cold_storage_payload_owner(payload: Mapping[str, object]) -> tuple[str | None, str | None]:
+    metadata: Final = payload.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return (None, None)
+    owner: Final = cast(Mapping[str, object], metadata)  # cast-ok: cold-storage JSON is untyped
+    user: Final = owner.get("user_api_key_user_id")
+    team_id: Final = owner.get("user_api_key_team_id")
+    return (
+        user if isinstance(user, str) else None,
+        team_id if isinstance(team_id, str) else None,
+    )
+
+
+async def _assert_user_owns_cold_storage_payload(
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    payload: Mapping[str, object],
+    request_id: str,
+) -> None:
+    """
+    Authorize a cold-storage payload against the owner recorded inside it.
+    The custom logger reads the payload straight from cold storage, written
+    independently of the spend-log table and able to outlive its row, so a
+    request_id lookup could otherwise hand back another tenant's stored payload
+    when no row exists for the pre-check to catch. Verifying the payload's own
+    owner closes that gap, and a payload that records no owner fails closed.
+    """
+    owner_user, owner_team_id = _cold_storage_payload_owner(payload)
+    if not await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, owner_user, owner_team_id):
+        raise _spend_log_forbidden(request_id)
 
 
 async def _get_permitted_team_ids_for_spend_logs(
