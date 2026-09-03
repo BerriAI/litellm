@@ -43,12 +43,13 @@ async def test_httpx_timeout(model, provider, sync_mode):
     print(f"response: {response}")
 
 
-def test_timeout():
+def test_timeout(unroutable_api_base):
     # this Will Raise a timeout
     litellm.set_verbose = False
     try:
         response = litellm.completion(
             model="gpt-3.5-turbo",
+            api_base=unroutable_api_base,
             timeout=0.01,
             messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
         )
