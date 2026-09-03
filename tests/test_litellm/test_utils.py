@@ -2779,7 +2779,7 @@ def test_model_info_for_openrouter_kimi_k2_5():
 
     Model properties from OpenRouter API:
     - context_length: 262144
-    - pricing: prompt=$0.0000006, completion=$0.000003, input_cache_read=$0.0000001
+    - pricing: prompt=$0.00000045, completion=$0.00000225, input_cache_read=$0.00000007
     - modality: text+image->text (supports vision)
     - supports: tool_choice, tools (function calling)
     """
@@ -2804,9 +2804,9 @@ def test_model_info_for_openrouter_kimi_k2_5():
     assert model_info["max_tokens"] == 262144
 
     # Verify pricing
-    assert model_info["input_cost_per_token"] == 6e-07
-    assert model_info["output_cost_per_token"] == 3e-06
-    assert model_info["cache_read_input_token_cost"] == 1e-07
+    assert model_info["input_cost_per_token"] == 4.5e-07
+    assert model_info["output_cost_per_token"] == 2.25e-06
+    assert model_info["cache_read_input_token_cost"] == 7e-08
 
     # Verify capabilities
     assert model_info["supports_vision"] is True
