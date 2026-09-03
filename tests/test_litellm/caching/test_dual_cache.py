@@ -445,3 +445,93 @@ async def test_dual_cache_late_attach_redis_wires_writes_and_ttl_async():
     assert mock_redis.async_set_cache.call_args[0][:2] == (key_after, val_after)
 
     assert in_memory.get_cache(key_after) == val_after
+
+
+def _redis_ttl(mock_call):
+    return mock_call.kwargs.get("ttl")
+
+
+def test_default_redis_ttl_applies_to_sync_redis_write():
+    mock_redis = MagicMock(spec=RedisCache)
+    dual_cache = DualCache(
+        in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_ttl=600.0
+    )
+
+    dual_cache.set_cache("key", "value")
+
+    assert _redis_ttl(mock_redis.set_cache.call_args) == 600.0
+
+
+@pytest.mark.asyncio
+async def test_default_redis_ttl_applies_to_async_redis_writes():
+    mock_redis = MagicMock(spec=RedisCache)
+    mock_redis.async_set_cache = AsyncMock()
+    mock_redis.async_set_cache_pipeline = AsyncMock()
+    dual_cache = DualCache(
+        in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_ttl=600.0
+    )
+
+    await dual_cache.async_set_cache("key", "value")
+    await dual_cache.async_set_cache_pipeline([("key", "value")])
+
+    assert _redis_ttl(mock_redis.async_set_cache.call_args) == 600.0
+    assert _redis_ttl(mock_redis.async_set_cache_pipeline.call_args) == 600.0
+
+
+def test_update_cache_ttl_redis_only_applies_to_redis_write():
+    mock_redis = MagicMock(spec=RedisCache)
+    dual_cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=mock_redis)
+
+    dual_cache.update_cache_ttl(default_in_memory_ttl=None, default_redis_ttl=600.0)
+    dual_cache.set_cache("key", "value")
+
+    assert _redis_ttl(mock_redis.set_cache.call_args) == 600.0
+
+
+def test_attach_redis_cache_default_redis_ttl_applies_to_redis_write():
+    mock_redis = MagicMock(spec=RedisCache)
+    dual_cache = DualCache(in_memory_cache=InMemoryCache())
+
+    dual_cache.attach_redis_cache(mock_redis, default_redis_ttl=600.0)
+    dual_cache.set_cache("key", "value")
+
+    assert _redis_ttl(mock_redis.set_cache.call_args) == 600.0
+
+
+def test_explicit_ttl_overrides_default_redis_ttl():
+    mock_redis = MagicMock(spec=RedisCache)
+    dual_cache = DualCache(
+        in_memory_cache=InMemoryCache(),
+        redis_cache=mock_redis,
+        default_in_memory_ttl=300.0,
+        default_redis_ttl=600.0,
+    )
+
+    dual_cache.set_cache("key", "value", ttl=42)
+
+    assert _redis_ttl(mock_redis.set_cache.call_args) == 42
+
+
+def test_default_in_memory_ttl_still_propagates_to_redis_when_no_redis_ttl():
+    mock_redis = MagicMock(spec=RedisCache)
+    dual_cache = DualCache(
+        in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_in_memory_ttl=5.0
+    )
+
+    dual_cache.set_cache("key", "value")
+
+    assert _redis_ttl(mock_redis.set_cache.call_args) == 5.0
+
+
+def test_default_redis_ttl_does_not_leak_into_in_memory_write():
+    mock_in_memory = MagicMock(spec=InMemoryCache)
+    dual_cache = DualCache(
+        in_memory_cache=mock_in_memory,
+        redis_cache=MagicMock(spec=RedisCache),
+        default_in_memory_ttl=300.0,
+        default_redis_ttl=600.0,
+    )
+
+    dual_cache.set_cache("key", "value")
+
+    assert _redis_ttl(mock_in_memory.set_cache.call_args) == 300.0

@@ -111,21 +111,35 @@ class DualCache(BaseCache):
         without it, backfilled entries fall to ``InMemoryCache``'s own default
         TTL and can outlive the TTL this cache was configured with.
         """
-        if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
-            return {**kwargs, "ttl": self.default_in_memory_ttl}
-        return kwargs
+        return self._write_kwargs(kwargs, self.default_in_memory_ttl)
+
+    @property
+    def _redis_write_ttl(self) -> float | None:
+        """
+        Default TTL for a Redis write.
+
+        ``default_redis_ttl`` when set, else ``default_in_memory_ttl`` so callers that
+        configure only the in-memory tier keep the Redis TTL they have always had.
+        """
+        if self.default_redis_ttl is not None:
+            return self.default_redis_ttl
+        return self.default_in_memory_ttl
+
+    @staticmethod
+    def _write_kwargs(kwargs: "dict[str, object]", default_ttl: float | None) -> "dict[str, object]":
+        """Kwargs for one tier's write: apply ``default_ttl`` unless the caller passed an explicit ``ttl``."""
+        if "ttl" in kwargs or default_ttl is None:
+            return kwargs
+        return {**kwargs, "ttl": default_ttl}
 
     def set_cache(self, key, value, local_only: bool = False, **kwargs):
         # Update both Redis and in-memory cache
         try:
             if self.in_memory_cache is not None:
-                if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
-                    kwargs["ttl"] = self.default_in_memory_ttl
-
-                self.in_memory_cache.set_cache(key, value, **kwargs)
+                self.in_memory_cache.set_cache(key, value, **self._write_kwargs(kwargs, self.default_in_memory_ttl))
 
             if self.redis_cache is not None and local_only is False:
-                self.redis_cache.set_cache(key, value, **kwargs)
+                self.redis_cache.set_cache(key, value, **self._write_kwargs(kwargs, self._redis_write_ttl))
         except Exception as e:
             print_verbose(e)
 
@@ -340,12 +354,12 @@ class DualCache(BaseCache):
         print_verbose(f"async set cache: cache key: {key}; local_only: {local_only}; value: {value}")
         try:
             if self.in_memory_cache is not None:
-                if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
-                    kwargs["ttl"] = self.default_in_memory_ttl
-                await self.in_memory_cache.async_set_cache(key, value, **kwargs)
+                await self.in_memory_cache.async_set_cache(
+                    key, value, **self._write_kwargs(kwargs, self.default_in_memory_ttl)
+                )
 
             if self.redis_cache is not None and local_only is False:
-                await self.redis_cache.async_set_cache(key, value, **kwargs)
+                await self.redis_cache.async_set_cache(key, value, **self._write_kwargs(kwargs, self._redis_write_ttl))
         except Exception as e:
             verbose_logger.exception("LiteLLM Cache: Excepton async add_cache: %s", e)
 
@@ -357,13 +371,13 @@ class DualCache(BaseCache):
         print_verbose(f"async batch set cache: cache keys: {cache_list}; local_only: {local_only}")
         try:
             if self.in_memory_cache is not None:
-                if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
-                    kwargs["ttl"] = self.default_in_memory_ttl
-                await self.in_memory_cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
+                await self.in_memory_cache.async_set_cache_pipeline(
+                    cache_list=cache_list, **self._write_kwargs(kwargs, self.default_in_memory_ttl)
+                )
 
             if self.redis_cache is not None and local_only is False:
                 await self.redis_cache.async_set_cache_pipeline(
-                    cache_list=cache_list, ttl=kwargs.pop("ttl", None), **kwargs
+                    cache_list=cache_list, **self._write_kwargs(kwargs, self._redis_write_ttl)
                 )
         except Exception as e:
             verbose_logger.exception("LiteLLM Cache: Excepton async add_cache: %s", e)
