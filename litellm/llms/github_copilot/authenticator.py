@@ -329,6 +329,27 @@ class Authenticator:
             status_code=400,
         )
 
+    def _can_run_interactive_device_login(self) -> bool:
+        """Check if the process can run an interactive device-code login.
+
+        In headless or proxy environments (e.g. LiteLLM Proxy, Kubernetes, Docker),
+        synchronous device code polling must never block the event loop.
+        """
+        if os.getenv("LITELLM_ALLOW_INTERACTIVE_AUTH", "").lower() in ("true", "1"):
+            return True
+        if (
+            os.getenv("LITELLM_PROXY") is not None
+            or os.getenv("PORT") is not None
+            or os.getenv("KUBERNETES_SERVICE_HOST") is not None
+        ):
+            return False
+        import sys
+
+        if "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST") is not None:
+            return True
+
+        return bool(sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty())
+
     def _login(self) -> str:
         """
         Login to GitHub Copilot using device code flow.
@@ -340,6 +361,17 @@ class Authenticator:
             GetDeviceCodeError: If unable to get a device code.
             GetAccessTokenError: If unable to get an access token.
         """
+        if not self._can_run_interactive_device_login():
+            raise GetAccessTokenError(
+                message=(
+                    "GitHub Copilot authentication required, but interactive device-code login "
+                    "cannot run in a non-interactive/headless environment (such as the LiteLLM proxy). "
+                    "Please authenticate beforehand using the CLI or mount the token at "
+                    f"\x27{self.access_token_file}\x27."
+                ),
+                status_code=401,
+            )
+
         device_code_info: Final = self._get_device_code()
 
         device_code: Final = device_code_info["device_code"]
