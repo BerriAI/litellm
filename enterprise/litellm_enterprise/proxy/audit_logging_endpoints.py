@@ -18,6 +18,7 @@ from litellm_enterprise.types.proxy.audit_logging_endpoints import (
 
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.utils import _hash_token_if_needed
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import AuditLogRepository
 
@@ -45,6 +46,19 @@ def _build_json_field_or_condition(json_key: str, value: str) -> dict[str, objec
             {"before_value": {"path": [json_key], "string_contains": value}},
             {"updated_values": {"path": [json_key], "string_contains": value}},
         ]
+    }
+
+
+def _build_search_condition(search: str) -> dict[str, object]:
+    """Match any id column; a raw sk- key is hashed for the two columns that store key hashes."""
+    hashed: Final = _hash_token_if_needed(search)
+    return {
+        "OR": (
+            {"id": search},
+            {"changed_by": search},
+            {"object_id": hashed},
+            {"changed_by_api_key": hashed},
+        )
     }
 
 
@@ -83,6 +97,13 @@ async def get_audit_logs(
         None,
         description="Filter by token (key hash) present in before_value or updated_values JSON (PostgreSQL only)",
     ),
+    search: str | None = Query(
+        None,
+        description=(
+            "Match a row whose id, object_id, changed_by, or changed_by_api_key equals this value "
+            "(a raw sk- virtual key is hashed first)"
+        ),
+    ),
     # Sorting parameters
     sort_by: str | None = Query(
         None,
@@ -118,6 +139,11 @@ async def get_audit_logs(
         *([_build_json_field_or_condition("token", object_key_hash)] if object_key_hash else []),
     ]
 
+    and_conditions: Final[tuple[dict[str, object], ...]] = (
+        *json_field_conditions,
+        *((_build_search_condition(search),) if search else ()),
+    )
+
     # Build filter conditions
     where_conditions: Final[dict[str, object]] = {
         **({"changed_by": changed_by} if changed_by else {}),
@@ -126,7 +152,7 @@ async def get_audit_logs(
         **({"table_name": table_name} if table_name else {}),
         **({"object_id": object_id} if object_id else {}),
         **({"updated_at": date_filter} if start_date or end_date else {}),
-        **({"AND": json_field_conditions} if json_field_conditions else {}),
+        **({"AND": and_conditions} if and_conditions else {}),
     }
 
     order_by: Final[dict[str, str]] = (
