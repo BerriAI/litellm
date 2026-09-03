@@ -11,6 +11,7 @@ from starlette.datastructures import Headers
 
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
+    UnloadableEntitlementError,
     _is_mcp_admitted_user_subject,
 )
 from litellm.proxy._types import (
@@ -4357,6 +4358,147 @@ class TestAgentMCPPermissions:
                         user_api_key_auth=user_api_key_auth,
                     )
                     assert sorted(result) == ["tool_a", "tool_b"]
+
+    def _agent_object_permission(self, *, toolset_ids, servers=(), tool_permissions=None):
+        agent_object_permission = MagicMock()
+        agent_object_permission.mcp_servers = list(servers)
+        agent_object_permission.mcp_access_groups = []
+        agent_object_permission.mcp_tool_permissions = tool_permissions
+        agent_object_permission.mcp_toolsets = list(toolset_ids)
+        return agent_object_permission
+
+    def _mock_manager_with_toolsets(self, toolset_perms):
+        mock_manager = MagicMock()
+        mock_manager.expand_permission_list = MagicMock(side_effect=lambda servers: list(servers))
+        mock_manager.expand_tool_permissions = MagicMock(side_effect=lambda perms: perms or {})
+        mock_manager.resolve_toolset_tool_permissions = AsyncMock(return_value=toolset_perms)
+        return mock_manager
+
+    def _agent_toolset_patches(self, agent_object_permission, mock_manager):
+        return (
+            patch.object(  # test-quality-ok: stub the agent perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_agent_object_permission", AsyncMock(return_value=agent_object_permission)
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling toolset tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
+            ),
+        )
+
+    async def test_get_allowed_mcp_servers_for_agent_includes_toolset_servers(self):
+        """An agent granted only mcp_toolsets reaches the toolset's servers, exactly as a
+        key, team, or org granted only toolsets does"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", agent_id="agent-toolsets")
+        agent_object_permission = self._agent_object_permission(toolset_ids=["toolset-1"], servers=["server-direct"])
+        mock_manager = self._mock_manager_with_toolsets({"server-a": ["lookup_status"]})
+
+        with contextlib.ExitStack() as stack:
+            for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
+                stack.enter_context(patcher)
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_agent(user_api_key_auth)
+
+        assert sorted(result) == ["server-a", "server-direct"]
+        mock_manager.resolve_toolset_tool_permissions.assert_awaited_once_with(toolset_ids=["toolset-1"])
+
+    async def test_get_allowed_mcp_servers_toolset_only_agent_caps_key_servers(self):
+        """Regression: an agent whose only grant is a toolset used to resolve to [] and place
+        no ceiling at all, so a key bound to it kept every server the key itself granted"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", agent_id="agent-toolsets")
+        agent_object_permission = self._agent_object_permission(toolset_ids=["toolset-1"])
+        mock_manager = self._mock_manager_with_toolsets({"server-a": ["lookup_status"]})
+
+        with contextlib.ExitStack() as stack:
+            for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
+                stack.enter_context(patcher)
+            stack.enter_context(
+                patch.object(  # test-quality-ok: key resolution has its own tests; pin its grants here
+                    MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server-a", "server-b"])
+                )
+            )
+            stack.enter_context(
+                patch.object(  # test-quality-ok: team resolution has its own tests; pin it empty here
+                    MCPRequestHandler, "_get_allowed_mcp_servers_for_team", AsyncMock(return_value=[])
+                )
+            )
+            result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == ["server-a"]
+
+    async def test_get_allowed_mcp_servers_agent_dangling_toolset_denies(self):
+        """An agent toolset that resolves to nothing is a known restriction with unknown
+        contents: deny, never fall through to the key's own servers"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", agent_id="agent-toolsets")
+        agent_object_permission = self._agent_object_permission(toolset_ids=["toolset-gone"])
+        mock_manager = self._mock_manager_with_toolsets({})
+
+        with contextlib.ExitStack() as stack:
+            for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
+                stack.enter_context(patcher)
+            with pytest.raises(UnloadableEntitlementError):
+                await MCPRequestHandler._get_allowed_mcp_servers_for_agent(user_api_key_auth)
+            stack.enter_context(
+                patch.object(  # test-quality-ok: key resolution has its own tests; pin its grants here
+                    MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server-a", "server-b"])
+                )
+            )
+            stack.enter_context(
+                patch.object(  # test-quality-ok: team resolution has its own tests; pin it empty here
+                    MCPRequestHandler, "_get_allowed_mcp_servers_for_team", AsyncMock(return_value=[])
+                )
+            )
+            result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == []
+
+    async def test_get_agent_tool_permissions_for_server_unions_direct_and_toolset_tools(self):
+        """The agent's tool ceiling on a server is its direct tool grants plus the tools its
+        toolsets grant there, and None only when neither names the server"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", agent_id="agent-toolsets")
+        agent_object_permission = self._agent_object_permission(
+            toolset_ids=["toolset-1"], tool_permissions={"server-a": ["tool_direct"]}
+        )
+        mock_manager = self._mock_manager_with_toolsets({"server-a": ["tool_via_toolset"], "server-b": ["tool_b"]})
+
+        with contextlib.ExitStack() as stack:
+            for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
+                stack.enter_context(patcher)
+            server_a_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-a", user_api_key_auth)
+            server_b_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-b", user_api_key_auth)
+            server_c_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-c", user_api_key_auth)
+
+        assert sorted(server_a_tools) == ["tool_direct", "tool_via_toolset"]
+        assert server_b_tools == ["tool_b"]
+        assert server_c_tools is None
+
+    async def test_get_allowed_tools_for_server_toolset_only_agent_caps_key_tools(self):
+        """Regression: a key allowing [tool_a, tool_b] bound to an agent whose toolset grants
+        only tool_a on the server ends with [tool_a]; the toolset used to be ignored"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", agent_id="agent-toolsets")
+        agent_object_permission = self._agent_object_permission(toolset_ids=["toolset-1"])
+        mock_manager = self._mock_manager_with_toolsets({"server-a": ["tool_a"]})
+        key_perm = MagicMock()
+        key_perm.mcp_tool_permissions = {"server-a": ["tool_a", "tool_b"]}
+        key_perm.mcp_toolsets = []
+
+        with contextlib.ExitStack() as stack:
+            for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
+                stack.enter_context(patcher)
+            stack.enter_context(
+                patch.object(  # test-quality-ok: stub the key perm loader; the resolver reads module globals with no injection seam
+                    MCPRequestHandler, "_get_key_object_permission", return_value=key_perm
+                )
+            )
+            stack.enter_context(
+                patch.object(  # test-quality-ok: team resolution has its own tests; pin it absent here
+                    MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=None)
+                )
+            )
+            result = await MCPRequestHandler.get_allowed_tools_for_server("server-a", user_api_key_auth)
+
+        assert result == ["tool_a"]
 
     async def test_get_agent_object_permission_uses_shared_helper(self):
         """``_get_agent_object_permission`` must resolve the agent's

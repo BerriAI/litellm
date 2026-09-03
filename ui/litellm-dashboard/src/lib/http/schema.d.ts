@@ -22996,6 +22996,8 @@ export interface components {
             mcp_tool_permissions?: {
                 [key: string]: string[];
             } | null;
+            /** Mcp Toolsets */
+            mcp_toolsets?: string[] | null;
             /** Models */
             models?: string[] | null;
         };

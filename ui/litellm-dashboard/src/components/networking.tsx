@@ -6252,6 +6252,7 @@ export const patchAgentCall = async (
     agent_name?: string;
     litellm_params?: Record<string, any>;
     agent_card_params?: Record<string, any>;
+    object_permission?: Record<string, any>;
     tpm_limit?: number | null;
     rpm_limit?: number | null;
     session_tpm_limit?: number | null;
@@ -6886,13 +6887,14 @@ export const buildMcpOAuthAuthorizeUrl = ({
   const base = getProxyBaseUrl();
   const normalizedServerId = encodeURIComponent(serverId.trim());
   const url = `${base}/v1/mcp/server/oauth/${normalizedServerId}/authorize`;
-  const params = new URLSearchParams({
+  const authorizeParams = {
     redirect_uri: redirectUri,
     state,
     response_type: "code",
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
-  });
+  };
+  const params = new URLSearchParams(authorizeParams);
   if (clientId && clientId.trim().length > 0) {
     params.set("client_id", clientId);
   }

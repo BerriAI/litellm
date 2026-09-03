@@ -2576,6 +2576,20 @@
               ],
               "title": "Mcp Tool Permissions"
             },
+            "mcp_toolsets": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Toolsets"
+            },
             "models": {
               "anyOf": [
                 {

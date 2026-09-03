@@ -2190,3 +2190,26 @@ async def test_top_k_above_router_default_is_respected():
 
     assert len(filtered) == 6
     print("✅ Configured top_k above the semantic-router default of 5 is honored")
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_narrows_only_references_the_gateway_serves():
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    gateway_reference = {"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"}
+    external_tool = {
+        "type": "mcp",
+        "server_label": "zapier",
+        "server_url": "https://mcp.zapier.com/api/mcp/mcp",
+        "allowed_tools": ["zapier_send_email"],
+    }
+
+    async def served_names(names):
+        assert names == {"mcp"}
+        return frozenset()
+
+    narrowed = await SemanticToolFilterHook._narrow_mcp_references(
+        [gateway_reference, external_tool], ["srv-tool_1"], served_names=served_names
+    )
+
+    assert narrowed == [{**gateway_reference, "allowed_tools": ["srv-tool_1"]}, external_tool]

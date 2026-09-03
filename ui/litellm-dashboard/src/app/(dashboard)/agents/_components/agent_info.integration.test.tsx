@@ -1,4 +1,5 @@
 import React from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -10,6 +11,12 @@ vi.mock("@/components/networking", () => ({
   getAgentInfo: vi.fn(),
   patchAgentCall: vi.fn(),
   getAgentCreateMetadata: vi.fn(),
+  getProxyBaseUrl: vi.fn(() => ""),
+  getUiConfig: vi.fn(async () => ({})),
+  fetchMCPServers: vi.fn(async () => []),
+  fetchMCPAccessGroups: vi.fn(async () => []),
+  fetchMCPToolsets: vi.fn(async () => []),
+  listMCPTools: vi.fn(async () => ({ tools: [] })),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
@@ -111,7 +118,14 @@ const bedrockAgentcoreInfo: AgentCreateInfo = {
 
 const setup = () => userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
 
-const renderView = () => render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="tok" isAdmin={true} />);
+const renderView = () => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="tok" isAdmin={true} />
+    </QueryClientProvider>,
+  );
+};
 
 const openEditor = async (user: ReturnType<typeof setup>) => {
   await user.click(await screen.findByRole("tab", { name: "Settings" }));
@@ -161,6 +175,7 @@ describe("AgentInfoView update payload", () => {
       rpm_limit: 222,
       session_tpm_limit: 333,
       session_rpm_limit: 444,
+      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
     });
   });
 
@@ -201,6 +216,7 @@ describe("AgentInfoView update payload", () => {
       rpm_limit: 222,
       session_tpm_limit: 333,
       session_rpm_limit: 444,
+      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
     });
   });
 
@@ -278,7 +294,28 @@ describe("AgentInfoView update payload", () => {
         api_base: "https://other.example.com",
         model: "langgraph/asst_1",
       },
+      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
     });
+  });
+
+  it("keeps the agent's existing MCP grants in the update payload", async () => {
+    const existingMcpGrants = {
+      mcp_servers: ["srv-1"],
+      mcp_access_groups: ["grp-a"],
+      mcp_toolsets: ["toolset-1"],
+      mcp_tool_permissions: { "srv-1": ["tool_x"] },
+    };
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({
+      ...A2A_AGENT,
+      object_permission: existingMcpGrants,
+    } as never);
+    const user = setup();
+    renderView();
+    await openEditor(user);
+
+    await save(user);
+
+    expect(patchedPayload().object_permission).toEqual(existingMcpGrants);
   });
 
   it("preserves the full AgentCore runtime ARN (including the resource id after runtime/) across an unedited save", async () => {
