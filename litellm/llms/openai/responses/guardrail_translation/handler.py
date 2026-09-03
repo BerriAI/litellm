@@ -374,7 +374,9 @@ class OpenAIResponsesHandler(BaseTranslation):
             input_type="request",
             logging_obj=litellm_logging_obj,
         )
-        self._apply_guardrailed_tools_to_data(data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools"))
+        self._apply_guardrailed_tools_to_data(
+            data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools")
+        )
         written_back: Final = self._written_back_request_fields(data, structured_messages, guardrailed_inputs)
         if written_back is not None:
             data["input"] = list(written_back.input)  # mutable-ok: JSON body
