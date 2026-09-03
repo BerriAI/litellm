@@ -1,11 +1,8 @@
 import asyncio
-import os
-import sys
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import json
 
@@ -599,6 +596,45 @@ async def test_async_filter_deployments_falls_back_when_cached_deployment_is_unh
     )
 
     assert filtered == healthy_deployments
+
+
+@pytest.mark.asyncio
+async def test_async_filter_deployments_does_not_pin_when_target_order_is_set():
+    user_key = "user-key-order-fallback"
+    stable_model_map_key = "claude-sonnet-4-5@20250929"
+    cache = AsyncMock()
+    cache.async_get_cache = AsyncMock(return_value={"model_id": "deployment-1"})
+    callback = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=123,
+        enable_user_key_affinity=True,
+        enable_responses_api_affinity=False,
+    )
+    healthy_deployments = [
+        {
+            "model_name": stable_model_map_key,
+            "litellm_params": {"model": f"vertex_ai/{stable_model_map_key}"},
+            "model_info": {"id": "deployment-1"},
+        },
+        {
+            "model_name": stable_model_map_key,
+            "litellm_params": {
+                "model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"
+            },
+            "model_info": {"id": "deployment-2"},
+        },
+    ]
+
+    filtered = await callback.async_filter_deployments(
+        model="some-router-model-group",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={"_target_order": 2, "metadata": {"user_api_key_hash": user_key}},
+        parent_otel_span=None,
+    )
+
+    assert filtered == healthy_deployments
+    cache.async_get_cache.assert_not_called()
 
 
 @pytest.mark.asyncio

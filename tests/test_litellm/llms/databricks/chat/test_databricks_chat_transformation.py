@@ -1,11 +1,8 @@
 import json
-import os
-import sys
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
 from litellm.llms.databricks.chat.transformation import (
@@ -423,3 +420,97 @@ def test_databricks_config_probes_capabilities_under_databricks_namespace():
     without this override they probed the ``anthropic`` cost-map namespace and
     ignored the exact ``databricks/databricks-claude-*`` entries."""
     assert DatabricksConfig().custom_llm_provider == "databricks"
+
+
+@pytest.mark.parametrize(
+    "model, expected_thinking, expected_output_config",
+    [
+        ("databricks-claude-opus-4-8", {"type": "adaptive"}, {"effort": "high"}),
+        ("databricks-claude-opus-4-6", {"type": "enabled", "budget_tokens": 4096}, None),
+    ],
+    ids=["adaptive_only_upgrades_to_adaptive", "legacy_capable_forwards_verbatim"],
+)
+def test_map_openai_params_upgrades_legacy_thinking_on_adaptive_only_claude(
+    model, expected_thinking, expected_output_config
+):
+    mapped = DatabricksConfig().map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 4096}},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert mapped["thinking"] == expected_thinking
+    assert mapped.get("output_config") == expected_output_config
+
+
+def _streaming_chunk(usage=None, choices=None):
+    base = {
+        "id": "chatcmpl-test",
+        "created": 1234567890,
+        "model": "databricks-claude-sonnet-5",
+        "choices": [{"delta": {"content": "hi"}}] if choices is None else choices,
+    }
+    return base if usage is None else {**base, "usage": usage}
+
+
+@pytest.mark.parametrize(
+    "cache_read, cache_creation, expected_cached, expected_written",
+    [
+        (12002, 0, 12002, 0),
+        (0, 12002, 0, 12002),
+    ],
+    ids=["warm_cache_read", "cold_cache_write"],
+)
+def test_chunk_parser_surfaces_prompt_cache_usage(cache_read, cache_creation, expected_cached, expected_written):
+    iterator = DatabricksChatResponseIterator(streaming_response=None, sync_stream=True)
+
+    result = iterator.chunk_parser(
+        _streaming_chunk(
+            usage={
+                "prompt_tokens": 12011,
+                "completion_tokens": 8,
+                "total_tokens": 12019,
+                "cache_read_input_tokens": cache_read,
+                "cache_creation_input_tokens": cache_creation,
+            }
+        )
+    )
+
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 12011
+    assert result.usage.completion_tokens == 8
+    assert result.usage.prompt_tokens_details is not None
+    assert result.usage.prompt_tokens_details.cached_tokens == expected_cached
+    assert result.usage._cache_creation_input_tokens == expected_written
+
+
+def test_chunk_parser_surfaces_usage_only_final_chunk():
+    """stream_options={"include_usage": True} emits a trailing chunk whose choices
+    list is empty; usage must still reach the caller."""
+    iterator = DatabricksChatResponseIterator(streaming_response=None, sync_stream=True)
+
+    result = iterator.chunk_parser(
+        _streaming_chunk(
+            usage={
+                "prompt_tokens": 100,
+                "completion_tokens": 5,
+                "total_tokens": 105,
+                "cache_read_input_tokens": 90,
+            },
+            choices=[],
+        )
+    )
+
+    assert result.choices == []
+    assert result.usage is not None
+    assert result.usage.prompt_tokens_details.cached_tokens == 90
+
+
+def test_chunk_parser_without_usage_still_parses_content():
+    iterator = DatabricksChatResponseIterator(streaming_response=None, sync_stream=True)
+
+    result = iterator.chunk_parser(_streaming_chunk())
+
+    assert result.id == "chatcmpl-test"
+    assert result.model == "databricks-claude-sonnet-5"
+    assert result.choices[0]["delta"]["content"] == "hi"

@@ -6,6 +6,7 @@ from typing import Any, Final, Literal
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
@@ -43,9 +44,22 @@ async def arerank(
     """
     Async: Reranks a list of documents based on their relevance to the query
     """
+    _custom_llm_provider: str | None = (
+        None  # rebind-ok: set by the declared-provider guard or the get_llm_provider unpack; read in the except
+    )
     try:
         loop: Final = asyncio.get_event_loop()
         kwargs["arerank"] = True
+
+        declared_provider: Final = declared_authenticating_provider(model, custom_llm_provider)
+        if declared_provider is not None:
+            _custom_llm_provider = declared_provider  # rebind-ok: see pre-declaration above
+        else:
+            _, _custom_llm_provider, _, _ = litellm.get_llm_provider(  # rebind-ok: see pre-declaration above
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                api_base=kwargs.get("api_base", None),
+            )
 
         func: Final = partial(
             rerank,
@@ -70,7 +84,11 @@ async def arerank(
             response = init_response
         return response
     except Exception as e:
-        raise e
+        raise exception_type(
+            model=model,
+            custom_llm_provider=_custom_llm_provider or custom_llm_provider,
+            original_exception=e,
+        )
 
 
 @client
@@ -115,6 +133,7 @@ def rerank(
     model_info: Final = kwargs.get("model_info", None)
     user: Final = kwargs.get("user", None)
     client: Final = kwargs.get("client", None)
+    _custom_llm_provider: str | None = None  # rebind-ok: set by the get_llm_provider unpack; read in the except
     try:
         _is_async: Final = kwargs.pop("arerank", False) is True
         optional_params: Final = GenericLiteLLMParams(**kwargs)
@@ -127,7 +146,7 @@ def rerank(
 
         (
             model,
-            _custom_llm_provider,
+            _custom_llm_provider,  # rebind-ok: see pre-declaration above
             dynamic_api_key,
             dynamic_api_base,
         ) = litellm.get_llm_provider(
@@ -277,6 +296,8 @@ def rerank(
             if api_key is None:
                 raise ValueError("TogetherAI API key is required, please set 'TOGETHERAI_API_KEY' in your environment")
 
+            api_base = dynamic_api_base or optional_params.api_base or litellm.api_base or "https://api.together.ai/v1"
+
             response = together_rerank.rerank(
                 model=model,
                 query=query,
@@ -286,6 +307,7 @@ def rerank(
                 return_documents=return_documents,
                 max_chunks_per_doc=max_chunks_per_doc,
                 api_key=api_key,
+                api_base=api_base,
                 _is_async=_is_async,
             )
         elif _custom_llm_provider == litellm.LlmProviders.JINA_AI:
@@ -535,4 +557,8 @@ def rerank(
         return response
     except Exception as e:
         verbose_logger.error("Error in rerank: %s", e)
-        raise exception_type(model=model, custom_llm_provider=custom_llm_provider, original_exception=e)
+        raise exception_type(
+            model=model,
+            custom_llm_provider=_custom_llm_provider or custom_llm_provider,
+            original_exception=e,
+        )

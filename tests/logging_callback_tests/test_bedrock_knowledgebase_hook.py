@@ -1,9 +1,7 @@
 import io
 import os
-import sys
 
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
 import litellm
@@ -71,6 +69,48 @@ def setup_vector_store_registry():
             )
         ]
     )
+
+
+@pytest.mark.asyncio
+async def test_vector_store_hook_routes_search_through_proxy_router(
+    setup_vector_store_registry,
+):
+    proxy_router = Mock()
+    proxy_router.avector_store_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page",
+            search_query="what is litellm?",
+            data=[
+                VectorStoreSearchResult(
+                    score=1.0,
+                    content=[VectorStoreResultContent(text="routed context", type="text")],
+                )
+            ],
+        )
+    )
+    logging_obj = Mock()
+    logging_obj.model_call_details = {
+        "litellm_params": {"metadata": {"user_api_key_team_id": "team-a"}}
+    }
+
+    with patch("litellm.proxy.proxy_server.llm_router", proxy_router):
+        _, messages, _ = await VectorStorePreCallHook().async_get_chat_completion_prompt(
+            model="chat-model",
+            messages=[{"role": "user", "content": "what is litellm?"}],
+            non_default_params={"vector_store_ids": ["T37J8R4WTM"]},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+            litellm_logging_obj=logging_obj,
+        )
+
+    proxy_router.avector_store_search.assert_awaited_once_with(
+        vector_store_id="T37J8R4WTM",
+        query="what is litellm?",
+        custom_llm_provider="bedrock",
+        metadata={"user_api_key_team_id": "team-a"},
+    )
+    assert messages[0]["content"] == "Context:\n\nrouted context\n\n"
 
 
 @pytest.mark.asyncio
@@ -335,6 +375,7 @@ async def test_bedrock_kb_request_body_has_transformed_filters(
         timeout=None,
         client=None,
         _is_async=False,
+        router: "litellm.Router | None" = None,
     ):
         litellm_params_dict = (
             litellm_params.model_dump(exclude_none=False)

@@ -23,6 +23,7 @@ from litellm.proxy.guardrails._content_utils import (
 
 
 class _ENTERPRISE_BannedKeywords(CustomLogger):
+    enforces_request_content: bool = True
     # Class variables or attributes
     def __init__(self):
         banned_keywords_list = litellm.banned_keywords_list

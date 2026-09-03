@@ -59,7 +59,11 @@ describe("RoutingDecisionCard", () => {
         }}
       />,
     );
-    expect(screen.getByText("Heuristic, REASONING override (2 or more reasoning markers)")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Heuristic, REASONING override (2 or more reasoning markers, score of at least the Simple to Medium boundary)",
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByText("0.20")).toBeInTheDocument();
     // The score did not decide this tier, so NO band explanation may render at all.
     // Asserting the absence of one specific band would pass vacuously: 0.20 sits in
@@ -103,6 +107,23 @@ describe("RoutingDecisionCard", () => {
     expect(screen.queryByText("Tier")).not.toBeInTheDocument();
   });
 
+  it("explains a route that fell back to the configured fallback tier after the classifier failed", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          router_model_name: "custom-tier-router",
+          router_type: "complexity",
+          routed_model: "claude-sonnet",
+          cause: "classifier_fallback",
+          tier: "SECURITY_REVIEW",
+          signals: ["classifier-fallback:SECURITY_REVIEW"],
+        }}
+      />,
+    );
+    expect(screen.getByText("Fallback tier, LLM classifier failed")).toBeInTheDocument();
+    expect(screen.getByText("SECURITY_REVIEW")).toBeInTheDocument();
+  });
+
   it("shows the keyword that fired a tier rule", () => {
     render(
       <RoutingDecisionCard
@@ -110,6 +131,65 @@ describe("RoutingDecisionCard", () => {
       />,
     );
     expect(screen.getByText('Keyword match: "deploy to k8s"')).toBeInTheDocument();
+  });
+
+  it("shows the plan-mode sentinel that floored the tier", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{ ...heuristic, cause: "plan_mode", matched_keyword: "Plan mode is active", score: undefined }}
+      />,
+    );
+    expect(screen.getByText('Plan-mode floor: "Plan mode is active"')).toBeInTheDocument();
+  });
+
+  it("names the exit_plan_mode tool instead of quoting it as a sentinel", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{ ...heuristic, cause: "plan_mode", matched_keyword: "exit_plan_mode", score: undefined }}
+      />,
+    );
+    expect(screen.getByText("Plan-mode floor (exit_plan_mode tool)")).toBeInTheDocument();
+  });
+
+  it("does not claim the score chose the tier on a plan-mode floored row", () => {
+    // The score's band can name a lower tier than the floored badge; the cause suppresses it.
+    render(
+      <RoutingDecisionCard decision={{ ...heuristic, cause: "plan_mode", matched_keyword: "Plan mode is active" }} />,
+    );
+    expect(screen.queryByText(/below|to 0|at or above/)).not.toBeInTheDocument();
+    expect(screen.getByText('Plan-mode floor: "Plan mode is active"')).toBeInTheDocument();
+  });
+
+  it("names the housekeeping sentinel so an operator can extend the pattern list", () => {
+    // The sentinel is the string they would add to housekeeping_patterns to cover another
+    // client, so the row is only useful if it says which one matched.
+    render(
+      <RoutingDecisionCard
+        decision={{
+          ...heuristic,
+          cause: "housekeeping",
+          matched_keyword: "Write the title in the predominant language of the session",
+          score: undefined,
+        }}
+      />,
+    );
+    expect(
+      screen.getByText('Client housekeeping call: "Write the title in the predominant language of the session"'),
+    ).toBeInTheDocument();
+  });
+
+  it("still labels a housekeeping row when redaction dropped the sentinel", () => {
+    // matched_keyword is prompt-quoting, so message-log redaction removes it. The row must
+    // still read as a housekeeping decision rather than falling back to the raw cause.
+    render(<RoutingDecisionCard decision={{ ...heuristic, cause: "housekeeping", score: undefined }} />);
+    expect(screen.getByText("Client housekeeping call, classifier skipped")).toBeInTheDocument();
+    expect(screen.queryByText("housekeeping")).not.toBeInTheDocument();
+  });
+
+  it("labels a modality escalation instead of showing the raw cause token", () => {
+    render(<RoutingDecisionCard decision={{ ...heuristic, cause: "modality_escalation" }} />);
+    expect(screen.getByText("Escalated for image input")).toBeInTheDocument();
+    expect(screen.queryByText("modality_escalation")).not.toBeInTheDocument();
   });
 
   it("shows the escalation keyword", () => {
@@ -144,7 +224,11 @@ describe("RoutingDecisionCard", () => {
     // `signals` is gone under redaction; the cause alone must suppress the band.
     render(<RoutingDecisionCard decision={{ ...heuristic, cause: "reasoning_override", signals: undefined }} />);
     expect(screen.queryByText(/SIMPLE|MEDIUM|COMPLEX|at or above/)).not.toBeInTheDocument();
-    expect(screen.getByText("Heuristic, REASONING override (2 or more reasoning markers)")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Heuristic, REASONING override (2 or more reasoning markers, score of at least the Simple to Medium boundary)",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("shows the operator's tier name on the badge instead of the canonical one", () => {
@@ -168,7 +252,40 @@ describe("RoutingDecisionCard", () => {
     render(
       <RoutingDecisionCard decision={{ ...heuristic, cause: "reasoning_override", score: 0.2, tier_label: "Deep" }} />,
     );
-    expect(screen.getByText("Heuristic, Deep override (2 or more reasoning markers)")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Heuristic, Deep override (2 or more reasoning markers, score of at least the Simple to Medium boundary)",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("states the floor the override actually cleared", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{ ...heuristic, cause: "reasoning_override", score: 0.2, reasoning_override_min_score: 0.05 }}
+      />,
+    );
+    expect(
+      screen.getByText("Heuristic, REASONING override (2 or more reasoning markers, score of at least 0.05)"),
+    ).toBeInTheDocument();
+  });
+
+  // A floor of 0 is an unconditional override, so a falsy check here would print the "before this change"
+  // wording on a row that recorded a real floor.
+  it("states a recorded floor of 0 rather than treating it as unrecorded", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{ ...heuristic, cause: "reasoning_override", score: 0.2, reasoning_override_min_score: 0 }}
+      />,
+    );
+    expect(
+      screen.getByText("Heuristic, REASONING override (2 or more reasoning markers, score of at least 0)"),
+    ).toBeInTheDocument();
+  });
+
+  it("never prints undefined on a row logged before the floor was recorded", () => {
+    render(<RoutingDecisionCard decision={{ ...heuristic, cause: "reasoning_override", score: 0.2 }} />);
+    expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
   });
 
   it("falls back to the raw cause for a value this build does not know", () => {

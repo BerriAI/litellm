@@ -13,13 +13,15 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 import json
 from collections.abc import AsyncGenerator, Mapping
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Protocol
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import UserAPIKeyAuth
@@ -36,6 +38,11 @@ from litellm.proxy.agent_endpoints.databricks_oauth import (
 )
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.sse_keepalive import (
+    SSE_COMMENT_PING,
+    coerce_keepalive_interval,
+    wrap_sse_stream_with_keepalive_pings,
+)
 from litellm.proxy.utils import ProxyLogging, get_custom_url
 from litellm.types.utils import all_litellm_params
 
@@ -45,6 +52,15 @@ if TYPE_CHECKING:
     from litellm.types.agents import AgentResponse
 
 router: Final = APIRouter()
+
+# Mirrors the native seam's own headers: a reverse proxy that batches the whole
+# stream would swallow the keepalives this route sends to defeat idle timeouts.
+_SSE_KEEPALIVE_HEADERS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    }
+)
 
 _PASCAL_TO_WIRE: Final[Mapping[str, str]] = {
     "SendMessage": "message/send",
@@ -59,6 +75,27 @@ _PASCAL_TO_WIRE: Final[Mapping[str, str]] = {
     "DeleteTaskPushNotificationConfig": "tasks/pushNotificationConfig/delete",
     "GetExtendedAgentCard": "agent/getAuthenticatedExtendedCard",
 }
+
+
+def _sse_event(payload: object) -> str:
+    """Frame a JSON-RPC object as a single A2A SSE event (``data: <json>\\n\\n``)."""
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+def _to_jsonrpc_object(chunk: object) -> object:
+    """Coerce a streamed chunk to the JSON-RPC object it carries.
+
+    Chunks arrive as SDK models, plain dicts, or, when a guardrail terminates a
+    stream, as an already serialized JSON-RPC object.
+    """
+    if isinstance(chunk, (str, bytes, bytearray)):
+        try:
+            return json.loads(chunk)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return chunk
+    if hasattr(chunk, "model_dump"):
+        return chunk.model_dump(mode="json", exclude_none=True)
+    return chunk
 
 
 def _build_message_send_params(params: dict[str, Any]) -> "MessageSendParams":
@@ -152,14 +189,13 @@ def _jsonrpc_error(
     )
 
 
-def _get_agent(agent_id: str):
+async def _get_agent(agent_id: str) -> "AgentResponse | None":
     """Look up an agent by ID or name. Returns None if not found."""
-    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+    from litellm.proxy.common_utils.registry_read_through import (
+        get_agent_with_read_through,
+    )
 
-    agent = global_agent_registry.get_agent_by_id(agent_id=agent_id)
-    if agent is None:
-        agent = global_agent_registry.get_agent_by_name(agent_name=agent_id)
-    return agent
+    return await get_agent_with_read_through(agent_id)
 
 
 def _enforce_inbound_trace_id(agent: "AgentResponse", request: Request) -> None:
@@ -179,11 +215,20 @@ def _enforce_inbound_trace_id(agent: "AgentResponse", request: Request) -> None:
         )
 
 
+class _JsonRpcResponse(Protocol):
+    def json(self) -> dict[str, object]: ...
+
+
+def _jsonrpc_body(response: _JsonRpcResponse) -> dict[str, object]:
+    """The decoded JSON-RPC body of ``response``."""
+    return response.json()
+
+
 async def _forward_jsonrpc(
     agent_url: str,
     body: dict[str, object],
     extra_headers: Mapping[str, str] | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -194,7 +239,7 @@ async def _forward_jsonrpc(
     )
     resp: Final = await handler.post(agent_url, json=body, headers=headers)
     try:
-        result: Final = resp.json()
+        result: Final = _jsonrpc_body(resp)
     except Exception:
         resp.raise_for_status()
         raise
@@ -265,6 +310,22 @@ async def _a2a_sse_event_source(
         await resp.aclose()
 
 
+def _sse_streaming_response(generator: AsyncGenerator[str, None]) -> StreamingResponse:
+    # The upstream agent is only contacted once this generator is first pulled, so
+    # a slow first event leaves the response body idle for its whole
+    # time-to-first-token and an intermediary with an idle read timeout drops a
+    # healthy connection. Off until an operator sets an interval, and the
+    # buffering hint only goes out when there are keepalives to protect.
+    keepalive_interval: Final = coerce_keepalive_interval(litellm.sse_keepalive_ping_interval_seconds)
+    if keepalive_interval is None:
+        return StreamingResponse(generator, media_type="text/event-stream")
+    return StreamingResponse(
+        wrap_sse_stream_with_keepalive_pings(generator, keepalive_interval, ping_chunk=SSE_COMMENT_PING),
+        media_type="text/event-stream",
+        headers=_SSE_KEEPALIVE_HEADERS,
+    )
+
+
 async def _forward_jsonrpc_sse(
     agent_url: str,
     body: Mapping[str, object],
@@ -326,7 +387,7 @@ async def _forward_jsonrpc_sse(
 
         generator = _passthrough()
 
-    return StreamingResponse(generator, media_type="text/event-stream")
+    return _sse_streaming_response(generator)
 
 
 async def _handle_stream_message(
@@ -346,9 +407,12 @@ async def _handle_stream_message(
 ) -> StreamingResponse:
     """Handle message/stream method via SDK functions.
 
-    When user_api_key_dict, request_data, and proxy_logging_obj are provided,
-    uses common_request_processing.async_streaming_data_generator with NDJSON
-    serializers so proxy hooks and cost injection apply.
+    The A2A JSON-RPC binding streams responses as SSE (text/event-stream) with
+    each JSON-RPC object framed as ``data: <json>\n\n``, matching the official
+    a2a-sdk client which rejects any other Content-Type. When user_api_key_dict,
+    request_data, and proxy_logging_obj are provided, events are routed through
+    common_request_processing.async_streaming_data_generator so proxy hooks and
+    cost injection apply.
     """
     from litellm.a2a_protocol import asend_message_streaming
     from litellm.a2a_protocol.main import A2A_SDK_AVAILABLE
@@ -356,21 +420,18 @@ async def _handle_stream_message(
     if not A2A_SDK_AVAILABLE:
 
         async def _error_stream():
-            yield (
-                json.dumps(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "error": {
-                            "code": -32603,
-                            "message": "Server error: 'a2a' package not installed",
-                        },
-                    }
-                )
-                + "\n"
+            yield _sse_event(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {
+                        "code": -32603,
+                        "message": "Server error: 'a2a' package not installed",
+                    },
+                }
             )
 
-        return StreamingResponse(_error_stream(), media_type="application/x-ndjson")
+        return StreamingResponse(_error_stream(), media_type="text/event-stream")
 
     from a2a.compat.v0_3.types import SendStreamingMessageRequest
 
@@ -382,18 +443,21 @@ async def _handle_stream_message(
         invalid_params_message: Final = f"Invalid params: {e}"
 
         async def _invalid_params_stream():
-            yield (
-                json.dumps(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "error": {"code": -32602, "message": invalid_params_message},
-                    }
-                )
-                + "\n"
+            yield _sse_event(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {"code": -32602, "message": invalid_params_message},
+                }
             )
 
-        return StreamingResponse(_invalid_params_stream(), media_type="application/x-ndjson")
+        return StreamingResponse(_invalid_params_stream(), media_type="text/event-stream")
+
+    def _sse_chunk(chunk: object) -> str:
+        obj = _to_jsonrpc_object(chunk)
+        if isinstance(obj, dict):
+            obj = normalize_stream_event(obj, served_version, request_id=request_id)
+        return _sse_event(obj)
 
     async def stream_response():
         try:
@@ -421,32 +485,20 @@ async def _handle_stream_message(
                     ProxyBaseLLMRequestProcessing,
                 )
 
-                def _ndjson_chunk(chunk: Any) -> str:
-                    if hasattr(chunk, "model_dump"):
-                        obj = chunk.model_dump(mode="json", exclude_none=True)
-                    else:
-                        obj = chunk
-                    if isinstance(obj, dict):
-                        obj = normalize_stream_event(obj, served_version, request_id=request_id)
-                    return json.dumps(obj) + "\n"
-
-                def _ndjson_error(proxy_exc: object) -> str:
-                    return (
-                        json.dumps(
-                            {
-                                "jsonrpc": "2.0",
-                                "id": request_id,
-                                "error": {
-                                    "code": -32603,
-                                    "message": getattr(
-                                        proxy_exc,
-                                        "message",
-                                        f"Streaming error: {proxy_exc}",
-                                    ),
-                                },
-                            }
-                        )
-                        + "\n"
+                def _sse_error(proxy_exc: object) -> str:
+                    return _sse_event(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "error": {
+                                "code": -32603,
+                                "message": getattr(
+                                    proxy_exc,
+                                    "message",
+                                    f"Streaming error: {proxy_exc}",
+                                ),
+                            },
+                        }
                     )
 
                 async for line in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
@@ -454,19 +506,13 @@ async def _handle_stream_message(
                     user_api_key_dict=user_api_key_dict,
                     request_data=request_data,
                     proxy_logging_obj=proxy_logging_obj,
-                    serialize_chunk=_ndjson_chunk,
-                    serialize_error=_ndjson_error,
+                    serialize_chunk=_sse_chunk,
+                    serialize_error=_sse_error,
                 ):
                     yield line
             else:
                 async for chunk in a2a_stream:
-                    if hasattr(chunk, "model_dump"):
-                        obj = chunk.model_dump(mode="json", exclude_none=True)
-                    else:
-                        obj = chunk
-                    if isinstance(obj, dict):
-                        obj = normalize_stream_event(obj, served_version, request_id=request_id)
-                    yield json.dumps(obj) + "\n"
+                    yield _sse_chunk(chunk)
         except Exception as e:
             verbose_proxy_logger.exception("Error streaming A2A response: %s", e)
             if (
@@ -484,21 +530,18 @@ async def _handle_stream_message(
                     e = transformed_exception
             if isinstance(e, HTTPException):
                 raise
-            yield (
-                json.dumps(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "error": {
-                            "code": -32603,
-                            "message": f"Streaming error: {e}",
-                        },
-                    }
-                )
-                + "\n"
+            yield _sse_event(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {
+                        "code": -32603,
+                        "message": f"Streaming error: {e}",
+                    },
+                }
             )
 
-    return StreamingResponse(stream_response(), media_type="application/x-ndjson")
+    return _sse_streaming_response(stream_response())
 
 
 @router.get(
@@ -531,7 +574,7 @@ async def get_agent_card(
     )
 
     try:
-        agent: Final = _get_agent(agent_id)
+        agent: Final = await _get_agent(agent_id)
         if agent is None:
             raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
 
@@ -645,7 +688,7 @@ async def invoke_agent_a2a(
                 params.pop(key)
 
         # Find the agent
-        agent: Final = _get_agent(agent_id)
+        agent: Final = await _get_agent(agent_id)
         if agent is None:
             return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' not found", 404)
 
@@ -906,8 +949,8 @@ async def invoke_agent_a2a(
             )
             result = await _forward_jsonrpc(agent_url, forward_body, extra_headers=caller_headers)
             if method == "agent/getAuthenticatedExtendedCard":
-                if isinstance(result.get("result"), dict):
-                    card: Final = result["result"]
+                card: Final = result.get("result")
+                if isinstance(card, dict):
                     proxy_url: Final = get_custom_url(str(request.base_url), route=f"a2a/{agent_id}")
                     # Rewrite the upstream agent URL in both 0.3 (top-level `url`)
                     # and 1.0 (`supportedInterfaces[0].url`) wire formats so that
@@ -976,4 +1019,6 @@ async def invoke_agent_a2a(
             )
         except Exception:
             pass
+        if isinstance(e, litellm.BadRequestError):
+            return _jsonrpc_error(body.get("id"), -32602, e.message, 400)
         return _jsonrpc_error(body.get("id"), -32603, f"Internal error: {e}", 500)

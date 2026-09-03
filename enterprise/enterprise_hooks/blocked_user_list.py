@@ -20,6 +20,7 @@ from litellm.proxy.utils import PrismaClient
 
 
 class _ENTERPRISE_BlockedUserList(CustomLogger):
+    enforces_request_content: bool = True
     # Class variables or attributes
     def __init__(self, prisma_client: Optional[PrismaClient]):
         self.prisma_client = prisma_client

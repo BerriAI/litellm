@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -42,6 +43,8 @@ class AgentCredentialField(BaseModel):
     options: list[str] | None = None
     default_value: str | None = None
     include_in_litellm_params: bool | None = None
+    validation_pattern: str | None = None
+    validation_message: str | None = None
 
 
 class AgentCreateInfo(BaseModel):
@@ -68,3 +71,15 @@ class SupportedEndpoint(BaseModel):
 
 class SupportedEndpointsResponse(BaseModel):
     endpoints: list[SupportedEndpoint]
+
+
+class ComplexityScorerDefaults(BaseModel):
+    """The complexity router's shipped heuristic scorer defaults.
+
+    The dashboard prefills its Advanced scoring controls from these rather than keeping its own copy, so
+    a recalibration of the defaults cannot leave the form reporting numbers the router no longer uses.
+    """
+
+    tier_boundaries: Mapping[str, float]
+    token_thresholds: Mapping[str, int]
+    dimension_weights: Mapping[str, float]
