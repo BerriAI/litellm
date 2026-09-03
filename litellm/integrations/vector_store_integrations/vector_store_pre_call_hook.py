@@ -7,7 +7,9 @@ It searches the vector store for relevant context and appends it to the messages
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Protocol, assert_never, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+
+from typing_extensions import assert_never
 
 import litellm
 import litellm.vector_stores
