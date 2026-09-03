@@ -200,16 +200,18 @@ async def test_spend_logs_ui_wraps_params_in_at_time_zone_utc(monkeypatch):
     )
 
 
-def _make_ui_spend_logs_mock(count_total, page_rows):
+def _make_ui_spend_logs_mock(count_total, page_rows, conversation_total=None):
     """
     Build a prisma mock whose first `query_raw` (the bounded count) returns
-    `count_total` and whose second `query_raw` (the page data) returns
+    `count_total` rows spanning `conversation_total` conversations (one per
+    row unless given) and whose second `query_raw` (the page data) returns
     `page_rows`.
     """
+    group_count = count_total if conversation_total is None else conversation_total
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
     mock_prisma.db.query_raw = AsyncMock(
-        side_effect=[[{"total_count": count_total}], page_rows]
+        side_effect=[[{"total_count": count_total, "group_count": group_count}], page_rows]
     )
     mock_prisma.db.litellm_spendlogs = MagicMock()
     mock_prisma.db.litellm_spendlogs.count = AsyncMock(return_value=0)
@@ -341,7 +343,7 @@ async def test_spend_logs_ui_empty_page_reports_zero_total(monkeypatch):
     # page.
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(side_effect=[[{"total_count": 0}], []])
+    mock_prisma.db.query_raw = AsyncMock(side_effect=[[{"total_count": 0, "group_count": 0}], []])
     mock_prisma.db.litellm_spendlogs = MagicMock()
     mock_prisma.db.litellm_spendlogs.count = AsyncMock(return_value=0)
 
@@ -388,7 +390,7 @@ async def test_spend_logs_ui_out_of_range_page_keeps_total(monkeypatch):
     # out-of-range page (empty).
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(side_effect=[[{"total_count": 7}], []])
+    mock_prisma.db.query_raw = AsyncMock(side_effect=[[{"total_count": 7, "group_count": 7}], []])
     mock_prisma.db.litellm_spendlogs = MagicMock()
     mock_prisma.db.litellm_spendlogs.count = AsyncMock(return_value=0)
 

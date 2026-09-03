@@ -2741,9 +2741,10 @@ async def ui_view_spend_logs(
             prisma_client, count_query, *sql_params, SPEND_LOGS_PAGINATION_COUNT_CAP + 1
         )
         raw_total: Final = int(count_rows[0]["total_count"]) if count_rows else 0
-        conversation_total: Final = int(count_rows[0]["group_count"]) if count_rows else 0
+        raw_conversation_total: Final = int(count_rows[0]["group_count"]) if count_rows else 0
         total_is_capped: Final = raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP
         row_total: Final = SPEND_LOGS_PAGINATION_COUNT_CAP if total_is_capped else raw_total
+        conversation_total: Final = min(raw_conversation_total, SPEND_LOGS_PAGINATION_COUNT_CAP)
         total_records: Final = row_total if is_v2 else conversation_total
 
         sql_query: Final = (
