@@ -56755,6 +56755,8 @@ export interface operations {
                 sort_order?: string | null;
                 /** @description Exclude LiteLLM internal health check requests from results */
                 exclude_internal_health_checks?: boolean;
+                /** @description Paginate over sessions instead of raw logs: one representative row per session, total counts sessions */
+                group_by_session?: boolean;
             };
             header?: never;
             path?: never;
@@ -56867,6 +56869,8 @@ export interface operations {
                 sort_order?: string | null;
                 /** @description Exclude LiteLLM internal health check requests from results */
                 exclude_internal_health_checks?: boolean;
+                /** @description Paginate over sessions instead of raw logs: one representative row per session, total counts sessions */
+                group_by_session?: boolean;
             };
             header?: never;
             path?: never;

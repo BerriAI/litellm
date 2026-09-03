@@ -2854,10 +2854,12 @@ async def test_ui_view_request_response_custom_logger_is_keyed_by_callers_own_re
 
 
 @pytest.mark.asyncio
-async def test_ui_view_spend_logs_id_lookup_lists_exact_request_id_row_first(client, monkeypatch):
+@pytest.mark.parametrize("group_by_session", [False, True])
+async def test_ui_view_spend_logs_id_lookup_lists_exact_request_id_row_first(client, monkeypatch, group_by_session):
     """The dashboard's deep link fetches a single row for ``?log_id=``. When a newer
     row carries that id as its client-set litellm_call_id, the row whose request_id
-    is the id still comes first, so the link opens the request it names."""
+    is the id still comes first, so the link opens the request it names. The
+    session-grouped page orders its representatives the same way."""
     today = datetime.datetime.now(timezone.utc)
     corpus = [
         {
@@ -2898,7 +2900,7 @@ async def test_ui_view_spend_logs_id_lookup_lists_exact_request_id_row_first(cli
     try:
         response = client.get(
             "/spend/logs/ui",
-            params={"request_id": "victim-req", "page_size": 1},
+            params={"request_id": "victim-req", "page_size": 1, "group_by_session": str(group_by_session).lower()},
             headers={"Authorization": "Bearer sk-test"},
         )
         assert response.status_code == 200, response.text
@@ -4580,18 +4582,18 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
     ]
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
-        return_value=[
-            {"session_id": session_id, "_count": {"session_id": 2}},
-        ]
-    )
+    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock()
     mock_prisma.db.query_raw = AsyncMock(
         return_value=[
             {
                 "session_id": session_id,
+                "api_key": api_key,
+                "session_total_count": 2,
                 "session_total_spend": 15.0,
                 "mcp_tool_call_count": 1,
                 "mcp_tool_call_spend": 10.0,
+                "session_llm_count": 1,
+                "session_agent_count": 0,
             }
         ]
     )
@@ -4616,6 +4618,8 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
     assert rows[0]["mcp_tool_call_spend"] == 10.0
     assert rows[1]["mcp_tool_call_count"] == 1
     assert rows[1]["mcp_tool_call_spend"] == 10.0
+    assert rows[0]["session_llm_count"] == 1
+    assert rows[0]["session_agent_count"] == 0
 
     # Every row in the session carries the full session spend, not just its own
     assert rows[0]["session_total_spend"] == 15.0
@@ -4624,12 +4628,125 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
     # Row without a session_id defaults to 1
     assert rows[2]["session_total_count"] == 1
 
-    # group_by should have been called with the session_id
-    mock_prisma.db.litellm_spendlogs.group_by.assert_called_once_with(
-        by=["session_id"],
-        where={"session_id": {"in": [session_id]}},
-        count={"session_id": True},
+    # The count is folded into the single aggregate query; no separate group_by call.
+    mock_prisma.db.litellm_spendlogs.group_by.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_key_split_session_gets_per_key_aggregates():
+    """
+    Two keys reusing one session id are separate rows under grouped pagination,
+    and each row must carry ITS key's totals, never the combined session's:
+    the aggregate query and its lookup are keyed by (session_id, api_key).
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
     )
+
+    session_id = "sess-shared"
+    dict_rows = [
+        {"request_id": "req-a", "session_id": session_id, "call_type": "completion", "api_key": "key-a"},
+        {"request_id": "req-b", "session_id": session_id, "call_type": "completion", "api_key": "key-b"},
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "api_key": "key-a",
+                "session_total_count": 2,
+                "session_total_spend": 0.2,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+                "session_cache_hit_count": 1,
+                "session_llm_count": 2,
+                "session_agent_count": 0,
+            },
+            {
+                "session_id": session_id,
+                "api_key": "key-b",
+                "session_total_count": 1,
+                "session_total_spend": 0.7,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+                "session_cache_hit_count": 0,
+                "session_llm_count": 1,
+                "session_agent_count": 0,
+            },
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=2,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    rows = result["data"]
+    assert [(r["session_total_count"], r["session_total_spend"]) for r in rows] == [(2, 0.2), (1, 0.7)]
+    assert [r["session_cache_hit_count"] for r in rows] == [1, 0]
+    assert [r["session_llm_count"] for r in rows] == [2, 1]
+
+    aggregate_sql = mock_prisma.db.query_raw.mock_calls[0][1][0]
+    assert "GROUP BY session_id, api_key" in aggregate_sql
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_empty_api_key_keeps_session_aggregates():
+    """
+    The spend-log schema defaults api_key to an empty string, which is a real
+    group value and not a missing one: a multi-call session logged under an
+    empty key must keep its count and spend instead of degrading to a plain
+    single-call row.
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    session_id = "sess-keyless"
+    dict_rows = [
+        {"request_id": "req-1", "session_id": session_id, "call_type": "completion", "api_key": ""},
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "api_key": "",
+                "session_total_count": 3,
+                "session_total_spend": 0.09,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+                "session_cache_hit_count": 0,
+                "session_llm_count": 3,
+                "session_agent_count": 0,
+            }
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=1,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    row = result["data"][0]
+    assert row["session_total_count"] == 3
+    assert row["session_total_spend"] == 0.09
+
+    # The empty key must reach the aggregate's authorized-keys filter too.
+    _, call_args, _ = mock_prisma.db.query_raw.mock_calls[0]
+    assert call_args[2] == [""]
 
 
 @pytest.mark.asyncio
@@ -4654,14 +4771,13 @@ async def test_build_ui_spend_logs_response_sums_multi_round_session_spend():
     ]
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
-        return_value=[{"session_id": session_id, "_count": {"session_id": 3}}]
-    )
     # The raw aggregate query returns the full session spend (0.01 + 0.02 + 0.03).
     mock_prisma.db.query_raw = AsyncMock(
         return_value=[
             {
                 "session_id": session_id,
+                "api_key": api_key,
+                "session_total_count": 3,
                 "session_total_spend": 0.06,
                 "mcp_tool_call_count": 0,
                 "mcp_tool_call_spend": 0.0,
@@ -4710,13 +4826,12 @@ async def test_build_ui_spend_logs_response_session_cache_hit_count():
     ]
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
-        return_value=[{"session_id": session_id, "_count": {"session_id": 2}}]
-    )
     mock_prisma.db.query_raw = AsyncMock(
         return_value=[
             {
                 "session_id": session_id,
+                "api_key": api_key,
+                "session_total_count": 2,
                 "session_total_spend": 0.05,
                 "mcp_tool_call_count": 0,
                 "mcp_tool_call_spend": 0.0,
