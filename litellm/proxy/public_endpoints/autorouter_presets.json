@@ -17,6 +17,7 @@
       "classification_mode": "every_request",
       "session_affinity": false,
       "modality_routing": false,
+      "modality_pin_override": false,
       "deployment_affinity": true
     }
   },
@@ -35,6 +36,7 @@
       "classification_mode": "every_request",
       "session_affinity": false,
       "modality_routing": false,
+      "modality_pin_override": false,
       "deployment_affinity": true
     }
   },
@@ -63,6 +65,7 @@
       "classification_mode": "every_request",
       "session_affinity": false,
       "modality_routing": false,
+      "modality_pin_override": false,
       "deployment_affinity": true
     }
   },
@@ -84,6 +87,7 @@
       "classification_mode": "every_request",
       "session_affinity": false,
       "modality_routing": false,
+      "modality_pin_override": false,
       "deployment_affinity": true
     }
   }

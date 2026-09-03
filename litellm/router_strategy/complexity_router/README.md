@@ -187,6 +187,9 @@ model_list:
 
         # Replace a routed model that cannot take image input (default: false)
         modality_routing: true
+
+        # Let that replacement also override a kept session pin, for image turns only (default: false)
+        modality_pin_override: true
 ```
 
 ## Usage
@@ -227,8 +230,15 @@ vision model sits below the decided tier gets the 400 and an actionable message 
 A same-tier re-pick keeps the decision's cause and adds `modality:image` to `signals`; a tier
 change or default takeover records `cause: modality_escalation` with the displaced placement
 (`modality_escalated_from:<TIER>` or `modality_displaced_default_model`). Escalations are never
-pinned by session affinity, and a KEPT session pin bypasses the gate entirely: a session pinned
+pinned by session affinity, and by default a KEPT session pin bypasses the gate: a session pinned
 to a text-only model keeps it even when an image arrives.
+
+Add `modality_pin_override: true` to lift that last exemption. The image turn is then re-placed
+the same way every other decision is, and records `cause: modality_pin_override` whether or not
+the tier moved, since the model left the pin either way. The pin itself is untouched: the session
+affinity write happens upstream of the gate and stores the session's own model, so the next text
+turn replays the original pin and the override is never pinned in its place. It does nothing
+unless `modality_routing` is also on.
 
 ### Heuristic-first chaining
 

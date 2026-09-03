@@ -257,6 +257,30 @@ describe("buildUpdatedComplexityRouterConfig session affinity", () => {
   });
 });
 
+describe("buildUpdatedComplexityRouterConfig modality pin override", () => {
+  it("writes modality_pin_override explicitly both ways", () => {
+    expect(
+      buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, modality_pin_override: true }).modality_pin_override,
+    ).toBe(true);
+    expect(
+      buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, modality_pin_override: false }).modality_pin_override,
+    ).toBe(false);
+  });
+
+  it("re-asserts the backend's off-by-default when the form value is absent, rather than dropping the key", () => {
+    const result = buildUpdatedComplexityRouterConfig({ ...STORED, modality_pin_override: true }, FORM_VALUE);
+    expect(result.modality_pin_override).toBe(false);
+  });
+
+  it("round-trips a stored modality_pin_override=true through hydrate then save", () => {
+    const stored = { ...STORED, modality_routing: true, modality_pin_override: true };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+
+    expect(hydrated.modality_pin_override).toBe(true);
+    expect(buildUpdatedComplexityRouterConfig(stored, hydrated).modality_pin_override).toBe(true);
+  });
+});
+
 describe("buildUpdatedComplexityRouterConfig classification mode", () => {
   it("round-trips a stored user_turn through hydrate then save", () => {
     const stored = { ...STORED, classification_mode: "user_turn" };
@@ -505,6 +529,8 @@ describe("managed keys survive an untouched open-and-save", () => {
     classifier_fallback: "default_model",
     classification_mode: "user_turn",
     session_affinity: true,
+    modality_routing: true,
+    modality_pin_override: true,
     deployment_affinity: false,
     adaptive: true,
     adaptive_weights: { quality: 0.4, cost: 0.6 },

@@ -747,7 +747,8 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
 
     A modality escalation is transient the same way: it describes what this one call carries (an
     image), not what the session's traffic looks like, and pinning it would hold every following
-    text turn on the vision-capable model the image forced.
+    text turn on the vision-capable model the image forced. A modality pin override is the same
+    fact on a session that already holds a pin, so it must not overwrite the pin it displaced.
     """
     return decision is None or (
         decision.get("cause")
@@ -756,6 +757,7 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
             "plan_mode",
             "housekeeping",
             "modality_escalation",
+            "modality_pin_override",
         )
         and not decision.get("context_escalated")
     )
@@ -2389,8 +2391,11 @@ class ComplexityRouter(CustomLogger):
         """Replace a routed model that cannot accept this request's image input.
 
         The single modality owner, applied to the decided response at the hook's exits so every
-        routing path is covered uniformly. A KEPT session pin is exempt by design (its cause);
-        replacement picks and every other path are just responses. The re-placement walks
+        routing path is covered uniformly. A KEPT session pin is exempt by design (its cause)
+        unless modality_pin_override is set, in which case the image turn is re-placed and reported
+        as modality_pin_override while the stored pin, written upstream from the session's own
+        model, is left for the next text turn; replacement picks and every other path are just
+        responses. The re-placement walks
         UPWARD-ONLY from the decision's tier (so a plan-mode floor can never be undercut), picks
         through `_pick_model_for_tier` so routing plugins still apply, then falls to
         default_model (never on plugin routers, and never on a plan-floored decision, since
@@ -2403,7 +2408,11 @@ class ComplexityRouter(CustomLogger):
             not self.config.modality_routing
             or not resolved_messages
             or response.model is None
-            or (decision is not None and decision.get("cause") == "session_affinity_pin")
+            or (
+                decision is not None
+                and decision.get("cause") == "session_affinity_pin"
+                and not self.config.modality_pin_override
+            )
             or not request_contains_image_content(resolved_messages)
             or self._model_accepts_image_input(response.model)
         ):
@@ -2445,6 +2454,10 @@ class ComplexityRouter(CustomLogger):
         self._restamp_adaptive_choice(request_kwargs, response.model, new_model)
         same_tier: Final = capable is not None and decided == capable
         base_cause: Final = (decision.get("cause") if decision is not None else None) or "default_fallback"
+        # Reaching here on a kept pin means modality_pin_override is on, since the guard above
+        # returns otherwise. The model moved off the pin even on a same-tier repick, so reporting
+        # the pin's own cause would claim the session's model served a request it did not.
+        displaced_pin: Final = base_cause == "session_affinity_pin"
         displaced_default: Final = decided is None and response.model == self.config.default_model
         markers: Final = (
             "modality:image",
@@ -2454,7 +2467,7 @@ class ComplexityRouter(CustomLogger):
         old_signals: Final = tuple(decision.get("signals") or ()) if decision is not None else ()
         new_decision: Final = self._build_routing_decision(
             routed_model=new_model,
-            cause=base_cause if same_tier else "modality_escalation",
+            cause="modality_pin_override" if displaced_pin else (base_cause if same_tier else "modality_escalation"),
             tier=new_tier,
             score=decision.get("score") if decision is not None else None,
             signals=(*old_signals, *markers),

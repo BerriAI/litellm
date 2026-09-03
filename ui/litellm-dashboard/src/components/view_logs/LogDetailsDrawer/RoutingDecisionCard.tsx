@@ -93,6 +93,7 @@ const CONSTANT_CAUSE_LABELS: Record<string, string> = {
   session_affinity_escalation: "Escalated from session pin",
   user_turn_continuation: "Continuation turn, classifier skipped",
   modality_escalation: "Escalated for image input",
+  modality_pin_override: "Overrode session pin for image input",
   quality_tier: "Quality tier mapping",
   bandit: "Adaptive bandit",
   default_fallback: "Default model, no route matched",

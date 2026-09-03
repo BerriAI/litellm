@@ -148,6 +148,25 @@ describe("autorouter_presets", () => {
     expect(withoutFlag.complexityRouterConfig.modality_routing).toBe(false);
   });
 
+  it("carries a preset's modality_pin_override into the prefilled form state", () => {
+    const preset = getPresetByKey("anthropic_family")!;
+    const withFlag = { ...preset.complexity_router_config, modality_routing: true, modality_pin_override: true };
+    const prefill = buildPresetPrefill(withFlag, groupsOnly(getRequiredModelsInPreset(preset)));
+    expect(prefill.complexityRouterConfig.modality_pin_override).toBe(true);
+    const withoutFlag = buildPresetPrefill(
+      preset.complexity_router_config,
+      groupsOnly(getRequiredModelsInPreset(preset)),
+    );
+    expect(withoutFlag.complexityRouterConfig.modality_pin_override).toBe(false);
+  });
+
+  it("ships every bundled preset with both modality flags written out, since the payload type requires them", () => {
+    for (const preset of getAllPresets()) {
+      expect(preset.complexity_router_config.modality_routing, preset.key).toBe(false);
+      expect(preset.complexity_router_config.modality_pin_override, preset.key).toBe(false);
+    }
+  });
+
   it("prefills the anthropic preset's effort through to tier_model_params", () => {
     const preset = getPresetByKey("anthropic_family")!;
     const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
