@@ -20,6 +20,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
@@ -63,6 +64,7 @@ import { TOP_MODEL_LIMITS } from "./EntityUsage/TopModelView";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import UsageAIChatPanel from "./UsageAIChatPanel";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
+import { DEFAULT_USAGE_DATE_RANGE_SETTING_KEY, resolveDefaultUsageDateRange } from "./defaultUsageDateRange";
 
 interface UsagePageProps {
   teams: Team[];
@@ -86,15 +88,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   // Separate loading states for better UX
   const [isDateChanging, setIsDateChanging] = useState(false);
 
-  // Create initial dates outside of state to prevent recreation
-  const initialFromDate = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), []);
-  const initialToDate = useMemo(() => new Date(), []);
-
-  // Single date state that directly triggers data fetching
-  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
-    from: initialFromDate,
-    to: initialToDate,
-  });
+  const { data: uiSettings, isLoading: isUISettingsLoading } = useUISettings();
+  const configuredDefaultRange: unknown = uiSettings?.values?.[DEFAULT_USAGE_DATE_RANGE_SETTING_KEY];
+  const defaultDateValue = useMemo<DateRangePickerValue | null>(
+    () => (isUISettingsLoading ? null : resolveDefaultUsageDateRange(configuredDefaultRange)),
+    [isUISettingsLoading, configuredDefaultRange],
+  );
+  const [pickedDateValue, setPickedDateValue] = useState<DateRangePickerValue | null>(null);
+  const dateValue: DateRangePickerValue = pickedDateValue ?? defaultDateValue ?? {};
 
   const [fetchedTags, setFetchedTags] = useState<FetchedForRange<EntityList[]> | null>(null);
   // No [] default: an unresolved query must stay undefined so the customer
@@ -260,7 +261,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     setIsDateChanging(true);
 
     // Update date immediately for UI responsiveness
-    setDateValue(newValue);
+    setPickedDateValue(newValue);
   }, []);
 
   // Derived states from userSpendData

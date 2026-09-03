@@ -2,6 +2,7 @@ import { Calendar, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 import type { DateRangePickerValue } from "./date_picker_types";
+import { DATE_RANGE_PRESETS, type DateRangePreset } from "./date_range_presets";
 import moment from "moment";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
@@ -14,54 +15,9 @@ interface AdvancedDatePickerProps {
   align?: "left" | "right";
 }
 
-interface RelativeTimeOption {
-  label: string;
-  shortLabel: string;
-  getValue: () => { from: Date; to: Date };
-}
+type RelativeTimeOption = DateRangePreset;
 
-const relativeTimeOptions: RelativeTimeOption[] = [
-  {
-    label: "Today",
-    shortLabel: "today",
-    getValue: () => ({
-      from: moment().startOf("day").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
-  },
-  {
-    label: "Last 7 days",
-    shortLabel: "7d",
-    getValue: () => ({
-      from: moment().subtract(7, "days").startOf("day").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
-  },
-  {
-    label: "Last 30 days",
-    shortLabel: "30d",
-    getValue: () => ({
-      from: moment().subtract(30, "days").startOf("day").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
-  },
-  {
-    label: "Month to date",
-    shortLabel: "MTD",
-    getValue: () => ({
-      from: moment().startOf("month").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
-  },
-  {
-    label: "Year to date",
-    shortLabel: "YTD",
-    getValue: () => ({
-      from: moment().startOf("year").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
-  },
-];
+const relativeTimeOptions: readonly RelativeTimeOption[] = DATE_RANGE_PRESETS;
 
 /**
  * Advanced Date Range Picker with dropdown, relative times, and custom inputs

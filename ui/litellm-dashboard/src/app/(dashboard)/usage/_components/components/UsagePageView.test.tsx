@@ -1,5 +1,6 @@
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
@@ -29,6 +30,7 @@ vi.mock("@/components/networking", () => ({
   userDailyActivityAggregatedCall: vi.fn(),
   gatewayDailyActivityCall: vi.fn(),
   tagListCall: vi.fn(),
+  updateUiSettings: vi.fn(),
 }));
 
 // Mock child components to simplify testing
@@ -48,8 +50,22 @@ vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
 }));
 
 vi.mock("./EntityUsage/EntityUsage", () => ({
-  default: ({ entityType, entityList }: { entityType: string; entityList: unknown }) => (
-    <div data-testid="entity-usage" data-entity-type={entityType} data-entity-list={JSON.stringify(entityList ?? null)}>
+  default: ({
+    entityType,
+    entityList,
+    dateValue,
+  }: {
+    entityType: string;
+    entityList: unknown;
+    dateValue: { from?: Date; to?: Date };
+  }) => (
+    <div
+      data-testid="entity-usage"
+      data-entity-type={entityType}
+      data-entity-list={JSON.stringify(entityList ?? null)}
+      data-date-from={dateValue.from?.toISOString()}
+      data-date-to={dateValue.to?.toISOString()}
+    >
       Entity Usage
     </div>
   ),
@@ -133,6 +149,10 @@ vi.mock("@/app/(dashboard)/hooks/customers/useCustomers", () => ({
   useCustomers: vi.fn(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useUISettings: vi.fn(),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/agents/useAgents", () => ({
   useAgents: vi.fn(),
 }));
@@ -166,6 +186,16 @@ describe("UsagePage", () => {
   const mockUseAuthorized = vi.mocked(useAuthorized);
   const mockUseCurrentUser = vi.mocked(useCurrentUser);
   const mockUseInfiniteUsers = vi.mocked(useInfiniteUsers);
+  const mockUseUISettings = vi.mocked(useUISettings);
+  const mockUpdateUiSettings = vi.mocked(networking.updateUiSettings);
+
+  type UISettingsResult = ReturnType<typeof useUISettings>;
+  const uiSettingsResolvedWith = (values: Record<string, unknown>): UISettingsResult =>
+    ({
+      data: { values, field_schema: { properties: {} } },
+      isLoading: false,
+      isError: false,
+    }) as unknown as UISettingsResult;
 
   const mockSpendData = {
     results: [
@@ -373,6 +403,8 @@ describe("UsagePage", () => {
       isLoading: false,
       error: null,
     } as any);
+    mockUseUISettings.mockReturnValue(uiSettingsResolvedWith({}));
+    mockUpdateUiSettings.mockClear();
     mockUserDailyActivityAggregatedCall.mockClear();
     mockUserDailyActivityCall.mockClear();
     mockTagListCall.mockClear();
@@ -1022,6 +1054,120 @@ describe("UsagePage", () => {
           "user-123",
         );
       });
+    });
+  });
+
+  describe("admin-configured default date range", () => {
+    const firstFetchedRange = () => {
+      const [, from, to] = mockUserDailyActivityAggregatedCall.mock.calls[0] as [string, Date, Date, ...unknown[]];
+      return { from, to };
+    };
+    const startOfThisMonth = () => {
+      const now = new Date();
+      return new Date(now.getFullYear(), now.getMonth(), 1);
+    };
+    const endOfToday = () => {
+      const now = new Date();
+      return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    };
+
+    it("opens on the trailing 7 days when the admin has not set a default", async () => {
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+      });
+      const { from, to } = firstFetchedRange();
+      expect(to.getTime() - from.getTime()).toBe(7 * 24 * 60 * 60 * 1000);
+      expect(Date.now() - to.getTime()).toBeLessThan(60 * 1000);
+    });
+
+    it("opens a read-only user's first view on the configured month-to-date range", async () => {
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+      mockUseUISettings.mockReturnValue(uiSettingsResolvedWith({ default_usage_date_range: "month_to_date" }));
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+      });
+      expect(firstFetchedRange()).toEqual({ from: startOfThisMonth(), to: endOfToday() });
+    });
+
+    it("applies the configured range to every request an admin's first view makes", async () => {
+      mockUseUISettings.mockReturnValue(uiSettingsResolvedWith({ default_usage_date_range: "month_to_date" }));
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockGatewayDailyActivityCall).toHaveBeenCalledWith("test-token", startOfThisMonth(), endOfToday());
+      });
+      expect(firstFetchedRange()).toEqual({ from: startOfThisMonth(), to: endOfToday() });
+    });
+
+    it("carries the configured range into the entity usage views the user navigates to", async () => {
+      mockUseUISettings.mockReturnValue(uiSettingsResolvedWith({ default_usage_date_range: "month_to_date" }));
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      act(() => {
+        fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "team" } });
+      });
+
+      const entityUsage = await screen.findByTestId("entity-usage");
+      expect(entityUsage).toHaveAttribute("data-entity-type", "team");
+      expect(entityUsage).toHaveAttribute("data-date-from", startOfThisMonth().toISOString());
+      expect(entityUsage).toHaveAttribute("data-date-to", endOfToday().toISOString());
+    });
+
+    it("does not fetch with the fallback range while the setting is still loading", async () => {
+      mockUseUISettings.mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        isError: false,
+      } as unknown as UISettingsResult);
+
+      const { rerender } = renderWithProviders(<UsagePage {...defaultProps} />);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(mockUserDailyActivityAggregatedCall).not.toHaveBeenCalled();
+
+      mockUseUISettings.mockReturnValue(uiSettingsResolvedWith({ default_usage_date_range: "month_to_date" }));
+      rerender(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+      });
+      expect(firstFetchedRange()).toEqual({ from: startOfThisMonth(), to: endOfToday() });
+    });
+
+    it("lets the user pick another range without writing the admin default back", async () => {
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+      mockUseUISettings.mockReturnValue(uiSettingsResolvedWith({ default_usage_date_range: "month_to_date" }));
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("pick-a-different-range"));
+      });
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(2);
+      });
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenLastCalledWith(
+        "test-token",
+        new Date("2024-01-01T00:00:00Z"),
+        new Date("2024-01-08T00:00:00Z"),
+        "user-123",
+      );
+      expect(mockUpdateUiSettings).not.toHaveBeenCalled();
     });
   });
 

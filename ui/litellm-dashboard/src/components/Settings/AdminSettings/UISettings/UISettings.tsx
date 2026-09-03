@@ -5,7 +5,13 @@ import { useUpdateUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUpdat
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { toast } from "@/lib/toast";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import {
+  DATE_RANGE_PRESETS,
+  isDateRangePresetId,
+  type DateRangePresetId,
+} from "@/components/shared/date_range_presets";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
@@ -45,6 +51,13 @@ function SettingRow({
   );
 }
 
+const FALLBACK_USAGE_DATE_RANGE_LABEL = "Last 7 days (default)";
+
+const usageDateRangeItems = [
+  { value: null, label: FALLBACK_USAGE_DATE_RANGE_LABEL },
+  ...DATE_RANGE_PRESETS.map((preset) => ({ value: preset.id, label: preset.label })),
+];
+
 export default function UISettings() {
   const { accessToken } = useAuthorized();
   const { data, isLoading, isError, error } = useUISettings();
@@ -65,7 +78,11 @@ export default function UISettings() {
   const allowVectorStoresTeamAdminsProperty = schema?.properties?.allow_vector_stores_for_team_admins;
   const scopeUserSearchProperty = schema?.properties?.scope_user_search_to_org;
   const disableCustomApiKeysProperty = schema?.properties?.disable_custom_api_keys;
+  const defaultUsageDateRangeProperty = schema?.properties?.default_usage_date_range;
   const values = data?.values ?? {};
+  const defaultUsageDateRange: DateRangePresetId | null = isDateRangePresetId(values.default_usage_date_range)
+    ? values.default_usage_date_range
+    : null;
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
   const isAgentsDisabled = Boolean(values.disable_agents_for_internal_users);
@@ -241,6 +258,20 @@ export default function UISettings() {
   const handleToggleScopeUserSearch = (checked: boolean) => {
     updateSettings(
       { scope_user_search_to_org: checked },
+      {
+        onSuccess: () => {
+          toast.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          toast.fromError(error);
+        },
+      },
+    );
+  };
+
+  const handleChangeDefaultUsageDateRange = (value: DateRangePresetId | null) => {
+    updateSettings(
+      { default_usage_date_range: value },
       {
         onSuccess: () => {
           toast.success("UI settings updated successfully");
@@ -431,6 +462,32 @@ export default function UISettings() {
                 "If true, users cannot specify custom key values. All keys must be auto-generated."
               }
             />
+
+            <Separator />
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">Default Usage date range</p>
+              <p className="text-sm text-muted-foreground">
+                {defaultUsageDateRangeProperty?.description ??
+                  "Date range the Usage page opens with for every user, in the viewer's browser timezone. Unset falls back to the last 7 days."}
+              </p>
+              <Select
+                value={defaultUsageDateRange}
+                items={usageDateRangeItems}
+                onValueChange={handleChangeDefaultUsageDateRange}
+                disabled={isUpdating}
+              >
+                <SelectTrigger aria-label="Default Usage date range" className="w-56">
+                  <SelectValue placeholder={FALLBACK_USAGE_DATE_RANGE_LABEL} />
+                </SelectTrigger>
+                <SelectContent>
+                  {usageDateRangeItems.map((item) => (
+                    <SelectItem key={item.value ?? "unset"} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
             <Separator />
             <PageVisibilitySettings

@@ -1,5 +1,7 @@
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { chooseSelectOption } from "@/../tests/test-utils";
 import UISettings from "./UISettings";
 import { toast } from "@/lib/toast";
 
@@ -154,5 +156,71 @@ describe("UISettings", () => {
       }),
     );
     expect(toast.success).toHaveBeenCalledWith("UI settings updated successfully");
+  });
+
+  describe("default Usage date range", () => {
+    const selectWithValue = (value: unknown) => {
+      const response = buildSettingsResponse();
+      mockUseUISettings.mockReturnValue({
+        ...response,
+        data: { ...response.data, values: { ...response.data.values, default_usage_date_range: value } },
+      });
+    };
+
+    it("shows the 7-day fallback when the admin has not set a default", () => {
+      selectWithValue(null);
+
+      render(<UISettings />);
+
+      expect(screen.getByRole("combobox", { name: "Default Usage date range" })).toHaveTextContent(
+        "Last 7 days (default)",
+      );
+    });
+
+    it("shows the persisted preset", () => {
+      selectWithValue("month_to_date");
+
+      render(<UISettings />);
+
+      expect(screen.getByRole("combobox", { name: "Default Usage date range" })).toHaveTextContent("Month to date");
+    });
+
+    it("persists the chosen preset under default_usage_date_range", async () => {
+      const mutateMock = vi.fn((_settings, options) => {
+        options?.onSuccess?.();
+      });
+      mockUseUpdateUISettings.mockReturnValue({ mutate: mutateMock, isPending: false, error: null });
+      selectWithValue(null);
+      const user = userEvent.setup();
+
+      render(<UISettings />);
+      await chooseSelectOption(
+        user,
+        screen.getByRole("combobox", { name: "Default Usage date range" }),
+        "Month to date",
+      );
+
+      expect(mutateMock).toHaveBeenCalledWith(
+        { default_usage_date_range: "month_to_date" },
+        expect.objectContaining({ onSuccess: expect.any(Function), onError: expect.any(Function) }),
+      );
+      expect(toast.success).toHaveBeenCalledWith("UI settings updated successfully");
+    });
+
+    it("clears the setting back to the fallback with null", async () => {
+      const mutateMock = vi.fn();
+      mockUseUpdateUISettings.mockReturnValue({ mutate: mutateMock, isPending: false, error: null });
+      selectWithValue("month_to_date");
+      const user = userEvent.setup();
+
+      render(<UISettings />);
+      await chooseSelectOption(
+        user,
+        screen.getByRole("combobox", { name: "Default Usage date range" }),
+        "Last 7 days (default)",
+      );
+
+      expect(mutateMock).toHaveBeenCalledWith({ default_usage_date_range: null }, expect.anything());
+    });
   });
 });

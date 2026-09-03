@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import (
     Final,
+    Literal,
     NamedTuple,
     Protocol,
     cast,  # noqa: TID251  # prisma types Json columns as fields.Json but de-serializes them to plain python on read
@@ -212,6 +213,9 @@ class UIThemeSettingsResponse(SettingsResponse):
     """Response model for UI theme settings"""
 
 
+UsageDateRangePreset = Literal["today", "last_7_days", "last_30_days", "month_to_date", "year_to_date"]
+
+
 class UISettings(BaseModel):
     """Configuration for UI-specific flags"""
 
@@ -304,6 +308,16 @@ class UISettings(BaseModel):
         description="If true, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth.",
     )
 
+    default_usage_date_range: UsageDateRangePreset | None = Field(
+        default=None,
+        description=(
+            "Date range the Usage page opens with for every user. Boundaries are computed in the viewer's browser "
+            "timezone: month_to_date starts at 00:00 on the 1st of the current calendar month and ends at the end of "
+            "today. Unset falls back to the last 7 days. Users can still pick any other range; doing so does not "
+            "change this setting."
+        ),
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -326,6 +340,7 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
     "enable_chat_ui",
+    "default_usage_date_range",
 }
 
 ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: Final = "enable_ptu_cost_attribution"

@@ -3266,3 +3266,114 @@ class TestPtuCostAttributionUISetting:
         assert response.status_code == 400
         assert "enable_ptu_cost_attribution" in str(response.json()["detail"])
         assert not mock_prisma.db.litellm_uisettings.upsert.called
+
+
+class TestDefaultUsageDateRangeUISetting:
+    """``default_usage_date_range`` is what the Usage page opens with. It is persisted
+    through the same allowlisted PATCH/GET pair as the other UI settings."""
+
+    @staticmethod
+    def _mock_prisma(monkeypatch, stored=None):
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_prisma = MagicMock()
+        mock_record = None
+        if stored is not None:
+            mock_record = MagicMock()
+            mock_record.ui_settings = json.dumps(stored)
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=mock_record)
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+        return mock_prisma
+
+    @staticmethod
+    def _override_auth(role):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="test-user-123", user_role=role)
+
+    def test_get_reports_the_setting_as_unset_and_documents_the_fallback(self, mock_auth, monkeypatch):
+        self._mock_prisma(monkeypatch)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["values"]["default_usage_date_range"] is None
+        assert "Unset falls back to the last 7 days" in body["field_schema"]["properties"]["default_usage_date_range"]["description"]
+
+    def test_proxy_admin_can_persist_a_preset_and_read_it_back(self, mock_auth, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = self._mock_prisma(monkeypatch, stored={"enable_chat_ui": True})
+        self._override_auth(LitellmUserRoles.PROXY_ADMIN)
+
+        try:
+            response = client.patch("/update/ui_settings", json={"default_usage_date_range": "month_to_date"})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200, response.text
+        upsert_data = mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]
+        persisted = json.loads(upsert_data["update"]["ui_settings"])
+        assert persisted == {"enable_chat_ui": True, "default_usage_date_range": "month_to_date"}
+
+        self._mock_prisma(monkeypatch, stored=persisted)
+        read_back = client.get("/get/ui_settings")
+        assert read_back.json()["values"]["default_usage_date_range"] == "month_to_date"
+
+    def test_proxy_admin_can_clear_the_setting_back_to_the_fallback(self, mock_auth, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = self._mock_prisma(monkeypatch, stored={"default_usage_date_range": "month_to_date"})
+        self._override_auth(LitellmUserRoles.PROXY_ADMIN)
+
+        try:
+            response = client.patch("/update/ui_settings", json={"default_usage_date_range": None})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200, response.text
+        upsert_data = mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]
+        assert json.loads(upsert_data["update"]["ui_settings"])["default_usage_date_range"] is None
+
+    def test_patch_rejects_a_value_outside_the_presets(self, mock_auth, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = self._mock_prisma(monkeypatch)
+        self._override_auth(LitellmUserRoles.PROXY_ADMIN)
+
+        try:
+            response = client.patch("/update/ui_settings", json={"default_usage_date_range": "last_90_days"})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 422
+        assert not mock_prisma.db.litellm_uisettings.upsert.called
+
+    @pytest.mark.parametrize(
+        "role",
+        [LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
+    )
+    def test_non_proxy_admins_cannot_change_the_setting(self, mock_auth, monkeypatch, role):
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = self._mock_prisma(monkeypatch, stored={"default_usage_date_range": "month_to_date"})
+        self._override_auth(role)
+
+        try:
+            response = client.patch("/update/ui_settings", json={"default_usage_date_range": "last_30_days"})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 403
+        assert not mock_prisma.db.litellm_uisettings.upsert.called
+
+    def test_read_only_user_can_read_the_setting(self, mock_auth, monkeypatch):
+        self._mock_prisma(monkeypatch, stored={"default_usage_date_range": "month_to_date"})
+        self._override_auth(LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+
+        try:
+            response = client.get("/get/ui_settings")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        assert response.json()["values"]["default_usage_date_range"] == "month_to_date"
