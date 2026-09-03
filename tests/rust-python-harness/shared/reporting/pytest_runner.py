@@ -9,6 +9,7 @@ from typing import Final
 import pytest
 
 from .models import CaseResult, HarnessCase, HarnessRun, RunStatus
+from .strategy import SelectorCaseSpec
 
 UpdateCallback = Callable[[HarnessRun], None]
 
@@ -37,7 +38,8 @@ def runnable_selectors(
     selectors = {
         selector
         for case in cases
-        for selector in case.selectors
+        if isinstance(case.spec, SelectorCaseSpec)
+        for selector in case.spec.selectors
         if (repo_root / selector_path(selector)).exists()
     }
     return tuple(sorted(selectors))
@@ -56,9 +58,10 @@ class HarnessPytestPlugin:
         for item in items:
             matched_results: list[CaseResult] = []
             for result in self.run.results.values():
-                if any(
+                spec = result.case.spec
+                if isinstance(spec, SelectorCaseSpec) and any(
                     selector_matches_node(selector, item.nodeid)
-                    for selector in result.case.selectors
+                    for selector in spec.selectors
                 ):
                     result.collected.add(item.nodeid)
                     matched_results.append(result)
@@ -157,8 +160,10 @@ def run_pytest(
     finally:
         os.chdir(previous_directory)
     for result in run.results.values():
+        spec = result.case.spec
         missing = tuple(
-            selector for selector in result.case.selectors
+            selector
+            for selector in (spec.selectors if isinstance(spec, SelectorCaseSpec) else ())
             if not any(selector_matches_node(selector, node) for node in result.collected)
         )
         if missing:

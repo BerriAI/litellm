@@ -1,22 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from time import monotonic
-from typing import Final, Protocol
+from typing import Final
 
-from .models import HarnessCase, HarnessRun
+from .models import HarnessCase, HarnessRun, Strategy
 from .pytest_runner import UpdateCallback
+from .strategy import StrategyRunner
 
-
-class StrategyRunner(Protocol):
-    def __call__(
-        self,
-        cases: Sequence[HarnessCase],
-        repo_root: Path,
-        on_update: UpdateCallback,
-        pytest_args: Sequence[str] = (),
-    ) -> tuple[int, HarnessRun]: ...
+__all__ = ["StrategyRunner", "run_strategies"]
 
 
 def combine_reports(reports: Sequence[HarnessRun]) -> HarnessRun:
@@ -34,25 +27,30 @@ def combine_reports(reports: Sequence[HarnessRun]) -> HarnessRun:
 
 
 def run_strategies(
-    cases: Sequence[HarnessCase],
+    strategies: Sequence[Strategy],
     repo_root: Path,
     on_update: UpdateCallback,
-    pytest_args: Sequence[str],
-    resolve_runner: Callable[[str], StrategyRunner],
+    pytest_args: Sequence[str] = (),
 ) -> tuple[int, HarnessRun]:
-    strategy_ids: Final = tuple(dict.fromkeys(case.strategy_id for case in cases))
+    cases: Final = tuple(
+        case for strategy in strategies for case in strategy.cases
+    )
 
     def execute(
-        remaining: tuple[str, ...], reports: tuple[HarnessRun, ...], codes: tuple[int, ...]
+        remaining: tuple[Strategy, ...], reports: tuple[HarnessRun, ...], codes: tuple[int, ...]
     ) -> tuple[int, HarnessRun]:
         if not remaining:
             combined: Final = combine_reports(reports)
             on_update(combined)
             return next((code for code in codes if code), 0), combined
-        strategy_id, *tail = remaining
-        selected: Final = tuple(case for case in cases if case.strategy_id == strategy_id)
-        pending: Final = HarnessRun.from_cases(case for case in cases if case.strategy_id in tail)
-        code, report = resolve_runner(strategy_id)(
+        strategy, *tail = remaining
+        selected: Final = tuple(
+            case for case in cases if case.strategy_id == strategy.id
+        )
+        pending: Final = HarnessRun.from_cases(
+            case for case in cases if case.strategy_id in {later.id for later in tail}
+        )
+        code, report = strategy.definition.run(
             selected,
             repo_root,
             lambda current: on_update(combine_reports((*reports, current, pending))),
@@ -62,4 +60,4 @@ def run_strategies(
             return code, combine_reports((*reports, report, pending))
         return execute(tuple(tail), (*reports, report), (*codes, code))
 
-    return execute(strategy_ids, (), ())
+    return execute(tuple(strategies), (), ())

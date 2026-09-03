@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Final
 
 from ...shared.reporting.models import Coverage, HarnessCase, RunStatus
-from .runner import run
+from ...shared.reporting.strategy import SuiteCaseSpec
+from . import STRATEGY
 
 HARNESS_ROOT: Final = Path(__file__).resolve().parents[4]
 
@@ -26,9 +27,7 @@ def _case() -> HarnessCase:
         strategy_id="unit_tests_parity",
         strategy_label="Unit test parity",
         sdk_function="ocr",
-        coverage=Coverage.COMPLETE,
-        selectors=(),
-        unit_suite="suite.json",
+        spec=SuiteCaseSpec(coverage=Coverage.COMPLETE, suite="suite.json"),
     )
 
 
@@ -38,7 +37,7 @@ def test_passes_when_both_backends_agree(tmp_path: Path, monkeypatch) -> None:
     _write_tests(tmp_path)
     case: Final = _case()
 
-    code, report = run((case,), tmp_path, lambda _: None)
+    code, report = STRATEGY.run((case,), tmp_path, lambda _: None)
 
     assert code == 0, report.failures
     assert report.results[case.key].status is RunStatus.PASSED
@@ -50,7 +49,7 @@ def test_passes_when_both_backends_fail_identically(tmp_path: Path, monkeypatch)
     _write_tests(tmp_path, failing=True)
     case: Final = _case()
 
-    code, report = run((case,), tmp_path, lambda _: None)
+    code, report = STRATEGY.run((case,), tmp_path, lambda _: None)
 
     assert code == 0, report.failures
     assert report.results[case.key].status is RunStatus.PASSED
@@ -62,7 +61,7 @@ def test_fails_when_backend_outcomes_differ(tmp_path: Path, monkeypatch) -> None
     _write_tests(tmp_path, mismatch=True)
     case: Final = _case()
 
-    code, report = run((case,), tmp_path, lambda _: None)
+    code, report = STRATEGY.run((case,), tmp_path, lambda _: None)
 
     assert code == 1
     assert report.results[case.key].status is RunStatus.FAILED

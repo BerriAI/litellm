@@ -8,7 +8,8 @@ from typing import Final
 import pytest
 
 from ...shared.reporting.models import Coverage, HarnessCase, RunStatus
-from .runner import run
+from ...shared.reporting.strategy import SuiteCaseSpec
+from . import STRATEGY
 
 
 @pytest.mark.skipif(shutil.which("cargo") is None, reason="Cargo is required for the mapping unit strategy")
@@ -37,13 +38,11 @@ def test_validates_mappings_without_running_the_selected_tests(tmp_path: Path, m
         strategy_id="unit_tests_mapping",
         strategy_label="Unit test mapping",
         sdk_function="ocr",
-        coverage=Coverage.COMPLETE,
-        selectors=(),
-        unit_suite="suite.json",
+        spec=SuiteCaseSpec(coverage=Coverage.COMPLETE, suite="suite.json"),
     )
 
     (tmp_path / "test_api.py").write_text("def test_decode():\n    assert False\n")
-    passing_code, passing_report = run((case,), tmp_path, lambda _: None)
+    passing_code, passing_report = STRATEGY.run((case,), tmp_path, lambda _: None)
 
     assert passing_code == 0, passing_report.failures
     assert passing_report.results[case.key].status is RunStatus.PASSED
@@ -51,7 +50,7 @@ def test_validates_mappings_without_running_the_selected_tests(tmp_path: Path, m
     (tmp_path / "suite.json").write_text(
         json.dumps({**suite, "mappings": [{"python": "test_api.py::test_decode", "rust": "removed"}]})
     )
-    failed_code, failed_report = run((case,), tmp_path, lambda _: None)
+    failed_code, failed_report = STRATEGY.run((case,), tmp_path, lambda _: None)
 
     assert failed_code == 1
     assert failed_report.results[case.key].status is RunStatus.FAILED

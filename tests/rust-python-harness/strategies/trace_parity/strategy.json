@@ -5,16 +5,17 @@
   "description": "Compare mapped operations, call counts, and required execution ordering.",
   "functions": {
     "ocr": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "partial",
+      "selectors": ["tests/rust-python-harness/strategies/trace_parity/sdk/ocr/test_trace_parity.py"]
     },
     "messages": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "partial",
+      "selectors": ["tests/rust-python-harness/strategies/trace_parity/sdk/messages/test_trace_parity.py"],
+      "note": "Sync is a strict xfail until anthropic_messages_handler supports sync calls."
     },
     "chat_completions": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "partial",
+      "selectors": ["tests/rust-python-harness/strategies/trace_parity/sdk/chat_completions/test_trace_parity.py"]
     },
     "responses": {
       "coverage": "planned",
@@ -25,8 +26,9 @@
       "selectors": []
     },
     "transcription": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "partial",
+      "selectors": ["tests/rust-python-harness/strategies/trace_parity/sdk/transcription/test_trace_parity.py"],
+      "note": "The Python SDK delegates this provider to the Rust pipeline, so only dispatch is visible to the Python profiler."
     }
   },
   "gateway": {}

@@ -5,28 +5,22 @@
   "description": "Run the existing litellm Python unit tests with LITELLM_RUST disabled and enabled in separate processes and require the two runs to match, including on failures.",
   "functions": {
     "ocr": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "planned"
     },
     "messages": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "planned"
     },
     "chat_completions": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "planned"
     },
     "responses": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "planned"
     },
     "count_tokens": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "planned"
     },
     "transcription": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "planned"
     }
   }
 }

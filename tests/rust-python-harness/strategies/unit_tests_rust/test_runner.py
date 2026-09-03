@@ -8,7 +8,8 @@ from typing import Final
 import pytest
 
 from ...shared.reporting.models import Coverage, HarnessCase, RunStatus
-from .runner import run
+from ...shared.reporting.strategy import SuiteCaseSpec
+from . import STRATEGY
 
 
 @pytest.mark.skipif(shutil.which("cargo") is None, reason="Cargo is required for the native unit strategy")
@@ -24,24 +25,22 @@ def test_runs_cargo_tests_and_propagates_ignored_or_failing_tests(tmp_path: Path
         strategy_id="unit_tests_rust",
         strategy_label="Unit test Rust",
         sdk_function="ocr",
-        coverage=Coverage.COMPLETE,
-        selectors=(),
-        unit_suite="suite.json",
+        spec=SuiteCaseSpec(coverage=Coverage.COMPLETE, suite="suite.json"),
     )
 
-    code, report = run((case,), tmp_path, lambda _: None)
+    code, report = STRATEGY.run((case,), tmp_path, lambda _: None)
 
     assert code == 0, report.failures
     assert report.results[case.key].status is RunStatus.PASSED
 
     (tmp_path / "src/lib.rs").write_text("#[test] #[ignore] fn test_decode() {}\n")
-    ignored_code, ignored_report = run((case,), tmp_path, lambda _: None)
+    ignored_code, ignored_report = STRATEGY.run((case,), tmp_path, lambda _: None)
 
     assert ignored_code == 1
     assert any("native Rust tests did not all pass" in detail for _, detail in ignored_report.failures)
 
     (tmp_path / "src/lib.rs").write_text('#[test] fn test_decode() { assert_eq!(2 + 2, 5); }\n')
-    failed_code, failed_report = run((case,), tmp_path, lambda _: None)
+    failed_code, failed_report = STRATEGY.run((case,), tmp_path, lambda _: None)
 
     assert failed_code == 1
     assert failed_report.results[case.key].status is RunStatus.FAILED

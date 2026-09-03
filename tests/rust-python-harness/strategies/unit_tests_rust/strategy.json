@@ -5,28 +5,22 @@
   "description": "Run the focused native Cargo test suite for each mapped API.",
   "functions": {
     "ocr": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "planned"
     },
     "messages": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "planned"
     },
     "chat_completions": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "planned"
     },
     "responses": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "planned"
     },
     "count_tokens": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "planned"
     },
     "transcription": {
-      "coverage": "planned",
-      "selectors": []
+      "coverage": "planned"
     }
   }
 }

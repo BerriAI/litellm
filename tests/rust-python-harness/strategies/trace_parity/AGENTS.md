@@ -1,1 +1,1 @@
-Compares mapped operation names, call counts, and required completion-before-start ordering between the Python and Rust implementations.
+Compares canonical pipeline step presence, order, and nesting between Python profiler traces and Rust `trace=True` spans against a replayed provider response.

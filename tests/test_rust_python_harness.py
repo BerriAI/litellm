@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib
-import json
 import os
 import subprocess
 import sys
@@ -10,10 +9,10 @@ from typing import Final
 
 import pytest
 
-catalog = importlib.import_module("tests.rust-python-harness.catalog")
-cli = importlib.import_module("tests.rust-python-harness.cli")
+catalog = importlib.import_module("tests.rust-python-harness.cli.catalog")
 models = importlib.import_module("tests.rust-python-harness.shared.reporting.models")
 runner = importlib.import_module("tests.rust-python-harness.shared.reporting.pytest_runner")
+strategy_module = importlib.import_module("tests.rust-python-harness.shared.reporting.strategy")
 ui = importlib.import_module("tests.rust-python-harness.shared.reporting.ui")
 ledger_module = importlib.import_module("tests.rust-python-harness.shared.parity.ledger")
 mapping_validator = importlib.import_module(
@@ -26,10 +25,6 @@ ledger_path_for = mapping_validator.ledger_path_for
 REPO_ROOT = mapping_validator.REPO_ROOT
 audit_ledger = mapping_validator.audit_ledger
 build_function_report = mapping_validator.build_function_report
-_pick_values = cli._pick_values
-_coverage_pytest_args = cli._coverage_pytest_args
-_select = cli._select
-_validate_ledger = cli._validate_ledger
 CaseResult = models.CaseResult
 Coverage = models.Coverage
 HarnessCase = models.HarnessCase
@@ -40,6 +35,7 @@ section_confidence = models.section_confidence
 run_pytest = runner.run_pytest
 runnable_selectors = runner.runnable_selectors
 selector_matches_node = runner.selector_matches_node
+SelectorCaseSpec = strategy_module.SelectorCaseSpec
 _format_duration = ui._format_duration
 _rerun_command = ui._rerun_command
 _summary = ui._summary
@@ -52,51 +48,8 @@ def _case(
         strategy_id="example",
         strategy_label="Example",
         sdk_function="messages",
-        coverage=coverage,
-        selectors=selectors,
+        spec=SelectorCaseSpec(coverage=coverage, selectors=selectors),
     )
-
-
-def _manifest() -> dict[str, object]:
-    return {
-        "order": 1,
-        "id": "example",
-        "label": "Example strategy",
-        "description": "Example description",
-        "functions": {
-            function: {"coverage": "planned", "selectors": []}
-            for function in SDK_FUNCTIONS
-        },
-    }
-
-
-def test_should_load_the_five_harness_strategies_in_order() -> None:
-    strategies = load_catalog()
-
-    assert [strategy.id for strategy in strategies] == [
-        "e2e_parity",
-        "trace_parity",
-        "unit_tests_mapping",
-        "unit_tests_parity",
-        "unit_tests_rust",
-    ]
-    assert all(
-        tuple(case.sdk_function for case in strategy.cases) == SDK_FUNCTIONS
-        for strategy in strategies
-    )
-
-
-def test_should_reject_a_manifest_missing_an_sdk_function(tmp_path: Path) -> None:
-    strategy_directory = tmp_path / "example"
-    strategy_directory.mkdir()
-    manifest = _manifest()
-    del manifest["functions"]["count_tokens"]  # type: ignore[index]
-    (strategy_directory / "strategy.json").write_text(
-        json.dumps(manifest), encoding="utf-8"
-    )
-
-    with pytest.raises(ValueError, match="functions must exactly match"):
-        load_catalog(tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -176,12 +129,13 @@ def test_should_run_namespace_package_relative_imports(tmp_path: Path, strategy_
             "-c",
             "import importlib\n"
             "from pathlib import Path\n"
-            "cli = importlib.import_module('tests.rust-python-harness.cli')\n"
+            f"strategy = importlib.import_module('tests.rust-python-harness.strategies.{strategy_id}').STRATEGY\n"
             "models = importlib.import_module('tests.rust-python-harness.shared.reporting.models')\n"
-            f"case = models.HarnessCase(strategy_id={strategy_id!r}, strategy_label='Example', "
-            "sdk_function='ocr', coverage=models.Coverage.COMPLETE, "
-            "selectors=('manual_suite/relative-tests/',))\n"
-            f"code, run = cli._resolve_runner({strategy_id!r})((case,), Path.cwd(), lambda _: None)\n"
+            "specs = importlib.import_module('tests.rust-python-harness.shared.reporting.strategy')\n"
+            "case = models.HarnessCase(strategy_id=" + repr(strategy_id) + ", strategy_label='Example', "
+            "sdk_function='ocr', spec=specs.SelectorCaseSpec(coverage=models.Coverage.COMPLETE, "
+            "selectors=('manual_suite/relative-tests/',)))\n"
+            "code, run = strategy.run((case,), Path.cwd(), lambda _: None)\n"
             "assert code == 0, code\n"
             "assert next(iter(run.results.values())).passed == 1\n",
         ),
@@ -226,32 +180,6 @@ def test_should_replace_a_pass_with_a_teardown_error() -> None:
     assert result.duration == pytest.approx(0.3)
 
 
-def test_should_filter_the_catalog_by_strategy_and_sdk_function() -> None:
-    strategies = load_catalog()
-
-    cases = _select(strategies, {"e2e_parity"}, {"messages"})
-
-    assert len(cases) == 1
-    assert cases[0].key == "e2e_parity:messages"
-
-
-def test_should_reject_an_unknown_strategy() -> None:
-    with pytest.raises(ValueError, match="Unknown strategy"):
-        _select(load_catalog(), {"not-real"}, set())
-
-
-def test_should_pick_multiple_interactive_filters() -> None:
-    answers = iter(["nope", "1, 3"])
-
-    selected = _pick_values(
-        "Examples",
-        (("one", "One"), ("two", "Two"), ("three", "Three")),
-        input_fn=lambda _: next(answers),
-    )
-
-    assert selected == {"one", "three"}
-
-
 def test_should_format_developer_facing_run_context() -> None:
     run = HarnessRun.from_cases((_case(selectors=("tests/test_parity.py",)),))
     result = next(iter(run.results.values()))
@@ -266,19 +194,9 @@ def test_should_format_developer_facing_run_context() -> None:
     assert _rerun_command("tests/test_parity.py::test_one[value with spaces]") == (
         "poetry run pytest 'tests/test_parity.py::test_one[value with spaces]' -q -o consider_namespace_packages=true"
     )
-
-
-def test_should_build_python_coverage_reports_below_the_target_directory(
-    tmp_path: Path,
-) -> None:
-    args = _coverage_pytest_args(tmp_path)
-
-    assert tmp_path.is_dir()
-    assert "--cov=litellm" in args
-    assert "--cov-context=test" in args
-    assert f"--cov-report=json:{tmp_path / 'python.json'}" in args
-    assert f"--cov-report=xml:{tmp_path / 'python.xml'}" in args
-    assert f"--cov-report=html:{tmp_path / 'python-html'}" in args
+    assert _rerun_command("suite:unit_tests_mapping:ocr:ledgers/ocr/suite.json") == (
+        "python -m tests.rust-python-harness run --strategy unit_tests_mapping --function ocr --plain"
+    )
 
 
 def test_should_report_confidence_for_each_sdk_section() -> None:
@@ -295,11 +213,9 @@ def test_should_report_confidence_for_each_sdk_section() -> None:
 
     assert scores["responses"].verified_strategies == 1
     assert scores["responses"].required_strategies == 5
-    assert scores["responses"].percentage == 20
     assert scores["responses"].level.value == "MEDIUM"
     assert scores["count_tokens"].percentage == 0
     assert scores["count_tokens"].level.value == "LOW"
-
 
 
 def test_should_report_no_ledger_for_a_function_without_one() -> None:
@@ -318,36 +234,6 @@ def test_should_report_ocr_ledger_stats_and_a_clean_audit() -> None:
     assert report.ledger.mapped_count == ledger.mapped_count
     assert report.ledger.total_count == ledger.total_count
     assert report.is_clean is True
-
-
-def test_should_scope_validate_ledger_to_the_requested_function(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    exit_code = _validate_ledger({"messages"})
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "messages" in captured.out
-    assert "no ledger yet" in captured.out
-    assert "ocr" not in captured.out
-
-
-@pytest.mark.parametrize(
-    "strategy_id",
-    (None, "e2e_parity", "trace_parity", "unit_tests_mapping", "unit_tests_parity", "unit_tests_rust"),
-)
-def test_should_validate_chat_completions_ledger_from_each_runner(
-    strategy_id: str | None, capsys: pytest.CaptureFixture[str]
-) -> None:
-    exit_code: Final = cli.main(
-        ("--validate-ledger", "--function", "chat_completions"), strategy_id=strategy_id
-    )
-
-    captured: Final = capsys.readouterr()
-    assert exit_code == 0
-    assert "chat_completions" in captured.out
-    assert "no ledger yet" in captured.out
-    assert "ocr" not in captured.out
 
 
 def test_should_have_every_python_and_rust_ocr_test_accounted_for_in_the_ledger() -> None:

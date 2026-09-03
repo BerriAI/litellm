@@ -4,7 +4,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from time import monotonic
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
+
+if TYPE_CHECKING:
+    from .strategy import CaseSpec, StrategyDefinition
 
 
 class Coverage(str, Enum):
@@ -41,15 +44,16 @@ class HarnessCase:
     strategy_id: str
     strategy_label: str
     sdk_function: str
-    coverage: Coverage
-    selectors: tuple[str, ...]
-    note: str = ""
+    spec: CaseSpec
     surface: str = "sdk"
-    unit_suite: str | None = None
 
     @property
     def key(self) -> str:
         return f"{self.strategy_id}:{self.sdk_function}" if self.surface == "sdk" else f"{self.strategy_id}:gateway:{self.sdk_function}"
+
+    @property
+    def coverage(self) -> Coverage:
+        return self.spec.coverage
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,7 @@ class Strategy:
     description: str
     directory: Path
     cases: tuple[HarnessCase, ...]
+    definition: StrategyDefinition
 
 
 @dataclass
@@ -96,12 +101,12 @@ class CaseResult:
         self.finalize()
 
     def set_initial_status(self) -> None:
-        if self.case.coverage is Coverage.NOT_APPLICABLE:
+        if self.case.spec.coverage is Coverage.NOT_APPLICABLE:
             self.status = RunStatus.NOT_APPLICABLE
-        elif not self.case.selectors and not self.case.unit_suite:
-            self.status = RunStatus.PLANNED
-        else:
+        elif self.case.spec.configured:
             self.status = RunStatus.QUEUED
+        else:
+            self.status = RunStatus.PLANNED
 
     def finalize(self) -> None:
         if self.status in {RunStatus.NOT_APPLICABLE, RunStatus.PLANNED}:

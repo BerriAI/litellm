@@ -3,25 +3,31 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Final
 
-from .models import Coverage, HarnessCase, RunStatus
+from .models import Coverage, HarnessCase, RunStatus, Strategy
 from .orchestration import run_strategies
 from .pytest_runner import run_pytest
+from .strategy import SelectorCaseSpec, StrategyDefinition
+
+
+def _strategy(name: str, selector: str) -> Strategy:
+    definition: Final = StrategyDefinition(Path.cwd(), SelectorCaseSpec, run_pytest)
+    case: Final = HarnessCase(
+        strategy_id=name,
+        strategy_label=name,
+        sdk_function="ocr",
+        spec=SelectorCaseSpec(coverage=Coverage.COMPLETE, selectors=(selector,)),
+    )
+    return Strategy(1, name, name, "", Path.cwd(), (case,), definition)
 
 
 def test_combines_independent_strategy_reports_and_keeps_failures(tmp_path: Path) -> None:
     (tmp_path / "test_first.py").write_text("def test_first():\n    assert 1 == 2\n")
     (tmp_path / "test_second.py").write_text("def test_second():\n    assert True\n")
-    cases: Final = tuple(
-        HarnessCase(
-            strategy_id=name,
-            strategy_label=name,
-            sdk_function="ocr",
-            coverage=Coverage.COMPLETE,
-            selectors=(f"test_{name}.py",),
-        )
-        for name in ("first", "second")
+    strategies: Final = (
+        _strategy("first", "test_first.py"),
+        _strategy("second", "test_second.py"),
     )
-    code, report = run_strategies(cases, tmp_path, lambda _: None, (), lambda _: run_pytest)
+    code, report = run_strategies(strategies, tmp_path, lambda _: None, ())
     assert code == 1
     assert report.results["first:ocr"].status is RunStatus.FAILED
     assert report.results["second:ocr"].status is RunStatus.PASSED
@@ -38,8 +44,9 @@ def test_missing_selector_cannot_hide_behind_a_passing_surface(tmp_path: Path) -
         strategy_label="End-to-end parity",
         sdk_function="ocr",
         surface="gateway",
-        coverage=Coverage.PARTIAL,
-        selectors=("test_present.py", "test_missing.py"),
+        spec=SelectorCaseSpec(
+            coverage=Coverage.PARTIAL, selectors=("test_present.py", "test_missing.py")
+        ),
     )
     code, report = run_pytest((case,), tmp_path, lambda _: None)
     assert code == 1

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import sys
 import threading
-from collections.abc import Generator, Sequence
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from types import CodeType, FrameType, FunctionType
+from types import CodeType, FrameType
 from typing import Final
 
 
@@ -18,9 +18,8 @@ class FunctionTraceEvent:
 
 
 class PythonProfiler:
-    def __init__(self, functions: Sequence[FunctionType], source_root: Path | None = None) -> None:
-        self._source_root: Final = str(source_root.resolve()) + "/" if source_root is not None else None
-        self._names_by_code: Final = {function.__code__: function.__name__ for function in functions}
+    def __init__(self, source_root: Path) -> None:
+        self._source_root: Final = str(source_root.resolve()) + "/"
         self._seen_frames: Final[set[FrameType]] = set()
         self.events: Final[list[FunctionTraceEvent]] = []
 
@@ -34,17 +33,9 @@ class PythonProfiler:
             name for ancestor in _frame_ancestors(frame) if (name := self.function_name(ancestor.f_code)) is not None
         )
         self._seen_frames.add(frame)
-        self.events.append(
-            FunctionTraceEvent(
-                function=function_name,
-                depth=len(ancestors),
-                ancestors=ancestors if self._source_root is not None else None,
-            )
-        )
+        self.events.append(FunctionTraceEvent(function=function_name, depth=len(ancestors), ancestors=ancestors))
 
     def function_name(self, code: CodeType) -> str | None:
-        if self._source_root is None:
-            return self._names_by_code.get(code)
         if not code.co_filename.startswith(self._source_root):
             return None
         relative: Final = code.co_filename.removeprefix(self._source_root)
@@ -59,10 +50,8 @@ def _frame_ancestors(frame: FrameType) -> Generator[FrameType]:
 
 
 @contextmanager
-def profile_python(
-    functions: Sequence[FunctionType] = (), *, source_root: Path | None = None, threads: bool = False
-) -> Generator[PythonProfiler]:
-    profiler: Final = PythonProfiler(functions, source_root)
+def profile_python(source_root: Path, *, threads: bool = False) -> Generator[PythonProfiler]:
+    profiler: Final = PythonProfiler(source_root)
     previous_thread: Final = threading.getprofile()
     if threads:
         threading.setprofile(profiler)
