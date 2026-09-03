@@ -13,6 +13,10 @@ pub(crate) async fn execute_ocr_provider_call(
     request: PreparedOcrRequest,
     hooks: &OcrLifecycleHooks,
 ) -> Result<Value, Error> {
+    // Interim home for the OCR in-flight permit until the handler moves into
+    // core (the entrypoint wrap belongs with the route module). The permit
+    // spans the whole call including any Azure polling.
+    let _permit = litellm_core::concurrency::acquire().await?;
     let request = hooks.prepare_provider_request(request).await?;
     let mut request_builder = http_client().post(&request.url).json(&request.body);
     for (key, value) in &request.upstream_headers {

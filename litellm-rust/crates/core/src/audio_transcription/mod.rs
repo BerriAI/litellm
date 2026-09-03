@@ -13,6 +13,7 @@ pub use types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn audio_transcription(request: AudioTranscriptionRequest<'_>) -> Result<Value, Error> {
+    let _permit = crate::concurrency::acquire().await?;
     execute_audio_transcription_provider_call(prepare_audio_transcription_provider_call(request)?)
         .await
 }

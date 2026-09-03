@@ -30,6 +30,11 @@ pub enum Error {
     Connect(String),
     #[error("routing error: {0}")]
     Routing(String),
+    /// The process-wide in-flight limit for provider calls was reached (shed
+    /// mode) or closed. Nothing was sent to the provider, so a host that
+    /// keeps a reference implementation may retry on its own path.
+    #[error("native in-flight limit: {0}")]
+    Overloaded(String),
     /// The request is outside the surface this route covers in Rust. Hosts that
     /// keep a reference implementation treat this as "fall back", not "fail".
     #[error("unsupported by the rust path: {0}")]

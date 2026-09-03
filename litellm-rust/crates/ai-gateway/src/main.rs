@@ -76,6 +76,7 @@ async fn main() {
 
     let host = std::env::var("HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());
     let port = resolve_port();
+    init_concurrency_limits();
 
     let listener = tokio::net::TcpListener::bind((host.as_str(), port))
         .await
@@ -84,6 +85,42 @@ async fn main() {
     axum::serve(listener, routes::app(state))
         .await
         .expect("server error");
+}
+
+/// Resolve the in-flight provider-call limit (`LITELLM_RUST_MAX_IN_FLIGHT`,
+/// `LITELLM_RUST_SHED_ON_LIMIT`) into core's process-wide limiter. Unset or
+/// invalid keeps the process unlimited.
+fn init_concurrency_limits() {
+    let Some(max_in_flight) = parse_env_usize("LITELLM_RUST_MAX_IN_FLIGHT") else {
+        return;
+    };
+    let shed_on_limit = std::env::var("LITELLM_RUST_SHED_ON_LIMIT")
+        .map(|raw| {
+            matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false);
+    litellm_core::concurrency::init_limits(litellm_core::concurrency::Limits {
+        max_in_flight,
+        shed_on_limit,
+    });
+    eprintln!("in-flight provider calls capped at {max_in_flight} (shed_on_limit={shed_on_limit})");
+}
+
+/// Parse a positive usize env var, warning (rather than failing) on invalid values.
+fn parse_env_usize(name: &str) -> Option<usize> {
+    match std::env::var(name) {
+        Ok(raw) => {
+            let parsed = raw.trim().parse::<usize>().ok().filter(|value| *value > 0);
+            if parsed.is_none() {
+                eprintln!("warning: {name}={raw:?} is not a positive integer; ignoring it");
+            }
+            parsed
+        }
+        Err(_) => None,
+    }
 }
 
 /// Register every deployment's upstream key with the pool so the replenisher

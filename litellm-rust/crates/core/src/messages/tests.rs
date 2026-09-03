@@ -439,3 +439,69 @@ async fn messages_rejects_unsupported_provider() {
 
     assert!(matches!(err, Error::InvalidProvider(provider) if provider == "openai"));
 }
+
+#[tokio::test]
+async fn messages_entrypoint_is_capped_by_the_in_flight_limit() {
+    use std::sync::Arc;
+
+    use crate::concurrency;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("addr");
+
+    // Serve sequentially (one connection at a time) and record how many
+    // requests were in flight at once. Under a working limit of 1, the next
+    // client request cannot start until the previous response was written.
+    let in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let max_in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let server = {
+        let in_flight = Arc::clone(&in_flight);
+        let max_in_flight = Arc::clone(&max_in_flight);
+        tokio::spawn(async move {
+            for _ in 0..3 {
+                let (mut socket, _) = listener.accept().await.expect("accepts request");
+                let now = in_flight.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                max_in_flight.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+                let _request = read_http_request(&mut socket).await;
+                let response_body = r#"{"id":"msg_cap","type":"message","role":"assistant","content":[],"model":"m"}"#;
+                socket
+                    .write_all(write_response(response_body).as_bytes())
+                    .await
+                    .expect("writes response");
+                in_flight.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        })
+    };
+
+    concurrency::init_limits(concurrency::Limits {
+        max_in_flight: 1,
+        shed_on_limit: false,
+    });
+    let api_base = format!("http://{addr}");
+    let mut calls = Vec::new();
+    for _ in 0..3 {
+        calls.push(messages(MessagesRequest {
+            model: "claude-sonnet-4-5",
+            body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
+            api_key: Some("sk-ant"),
+            api_base: Some(&api_base),
+            custom_llm_provider: Some("anthropic"),
+            extra_headers: None,
+            timeout: Some(Duration::from_secs(10)),
+        }));
+    }
+    for result in futures_util::future::join_all(calls).await {
+        result.expect("capped call should still succeed");
+    }
+
+    // Restore an effectively-unlimited limiter for the other tests in this
+    // process; a limit of MAX_PERMITS can never be contended. Clearing to
+    // None would race the parallel tests' acquire() calls.
+    concurrency::init_limits(concurrency::Limits {
+        max_in_flight: tokio::sync::Semaphore::MAX_PERMITS,
+        shed_on_limit: false,
+    });
+
+    server.await.expect("server task completes");
+    assert_eq!(max_in_flight.load(std::sync::atomic::Ordering::SeqCst), 1);
+}

@@ -26,6 +26,7 @@ use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 pub async fn chat_completions(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
+    let _permit = crate::concurrency::acquire().await?;
     execute_chat_completions_provider_call(resolve_request(request)?).await
 }
 

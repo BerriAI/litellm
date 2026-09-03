@@ -307,5 +307,6 @@ fn core_error_kind(error: &Error) -> &'static str {
         Error::Connect(_) => "ConnectError",
         Error::Routing(_) => "RoutingError",
         Error::Unsupported(_) => "UnsupportedRequest",
+        Error::Overloaded(_) => "Overloaded",
     }
 }
