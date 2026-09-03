@@ -140,6 +140,35 @@ def _service_tier_router(
     )
 
 
+def test_service_tier_helpers_apply_concrete_constraint():
+    from litellm.types.router import DeploymentTypedDict
+
+    deployments: list[DeploymentTypedDict] = [
+        {
+            "model_name": "service-tier-model",
+            "litellm_params": {"model": "openai/gpt-4o-mini"},
+            "model_info": {"id": "default", "supported_service_tiers": ["default"]},
+        },
+        {
+            "model_name": "service-tier-model",
+            "litellm_params": {"model": "openai/gpt-4o-mini"},
+            "model_info": {"id": "flex", "supported_service_tiers": ["flex"]},
+        },
+    ]
+    requested_service_tier = Router._get_requested_service_tier(  # pyright: ignore[reportPrivateUsage]  # Direct coverage of the request boundary
+        {"service_tier": "flex"}
+    )
+
+    filtered = Router._filter_deployments_by_service_tier(  # pyright: ignore[reportPrivateUsage]  # Direct coverage required by the router coverage gate
+        model="service-tier-model",
+        deployments=deployments,
+        requested_service_tier=requested_service_tier,
+    )
+
+    assert isinstance(filtered, list)
+    assert [deployment["model_info"]["id"] for deployment in filtered] == ["flex"]
+
+
 def test_service_tier_routing_sync_filters_before_order():
     router = _service_tier_router((("default",), ("flex",)))
 
@@ -262,7 +291,7 @@ def test_model_info_supported_service_tiers_serialization():
     assert ModelInfo(supported_service_tiers=["default", "flex"]).model_dump(mode="json", exclude_none=True)[
         "supported_service_tiers"
     ] == ["default", "flex"]
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="supported_service_tiers"):
         ModelInfo(supported_service_tiers="flex")
 
 
