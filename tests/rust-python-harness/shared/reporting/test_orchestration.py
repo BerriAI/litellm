@@ -8,7 +8,7 @@ from typing import Final
 
 from .models import CaseResult, Coverage, HarnessCase, HarnessRun, RunStatus, Strategy
 from .orchestration import run_strategies
-from .rendering import ReportSection, StrategyRenderer, render_outcomes
+from .rendering import ReportSection, StrategyRenderer, render_case_outcome
 from .strategy import (
     CaseDefinition,
     ModuleCaseSpec,
@@ -44,7 +44,11 @@ def _record_case(run: HarnessRun, case: HarnessCase, on_update: UpdateCallback) 
     on_update(run)
 
 
-def _strategy(name: str, module: str, *, render: StrategyRenderer = render_outcomes) -> Strategy:
+def _render_test_results(results: Sequence[CaseResult]) -> tuple[ReportSection, ...]:
+    return (ReportSection("Test outcomes", tuple(render_case_outcome(result) for result in results)),)
+
+
+def _strategy(name: str, module: str, *, render: StrategyRenderer = _render_test_results) -> Strategy:
     case_definition: Final = CaseDefinition(
         "sdk", "ocr", ModuleCaseSpec(coverage=Coverage.COMPLETE, module=module)
     )
@@ -79,8 +83,9 @@ def test_combines_strategy_reports_and_delegates_rendering() -> None:
     assert report.completed_checks == 2
     rendered: Final = final_report(report, code, strategies)
     assert "Status: FAILED" in rendered
-    assert "first\n- sdk/ocr: failed, 1/1 checks, complete coverage" in rendered
-    assert "second\n- sdk/ocr: passed, 1/1 checks, complete coverage" in rendered
+    assert rendered.count("Test outcomes") == 2
+    assert "- sdk/ocr: failed, 1/1 checks, complete coverage" in rendered
+    assert "- sdk/ocr: passed, 1/1 checks, complete coverage" in rendered
     assert "Failures (showing 1 of 1)" in rendered
     assert "Port confidence" not in rendered
     assert "Slowest tests" not in rendered

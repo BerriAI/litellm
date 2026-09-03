@@ -17,15 +17,7 @@ class StrategyRenderer(Protocol):
     def __call__(self, results: Sequence[CaseResult]) -> tuple[ReportSection, ...]: ...
 
 
-def render_outcomes(results: Sequence[CaseResult]) -> tuple[ReportSection, ...]:
-    if not results:
-        return ()
-    label: Final = results[0].case.strategy_label
-    lines: Final = tuple(_render_result(result) for result in results)
-    return (ReportSection(label, lines),)
-
-
-def _render_result(result: CaseResult) -> str:
+def render_case_outcome(result: CaseResult) -> str:
     prefix: Final = f"- {result.case.surface}/{result.case.sdk_function}: {result.status.value}"
     spec: Final = result.case.spec
     match spec.disposition:

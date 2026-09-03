@@ -12,11 +12,13 @@ tests/rust-python-harness/
 ├── strategies/
 │   ├── e2e_parity/
 │   │   ├── __init__.py
+│   │   ├── reporting.py
 │   │   ├── sdk/
 │   │   │   └── ocr/
 │   │
 │   ├── trace_parity/
 │   │   ├── __init__.py
+│   │   ├── reporting.py
 │   │   └── sdk/
 │   │       ├── chat_completions/
 │   │       ├── messages/
@@ -25,16 +27,19 @@ tests/rust-python-harness/
 │   │
 │   ├── unit_tests_mapping/
 │   │   ├── __init__.py
+│   │   ├── reporting.py
 │   │   ├── runner.py
 │   │   ├── ledger_report.py
 │   │   └── mapping_validator.py
 │   │
 │   ├── unit_tests_parity/
 │   │   ├── __init__.py
+│   │   ├── reporting.py
 │   │   └── runner.py
 │   │
 │   └── unit_tests_rust/
 │       ├── __init__.py
+│       ├── reporting.py
 │       └── runner.py
 │
 └── shared/
@@ -59,7 +64,8 @@ tests/rust-python-harness/
 - `unit_tests_parity/runner.py` runs existing Python unit tests with `LITELLM_RUST=0` and `LITELLM_RUST=1` in separate processes and requires matching outcomes, including failures
 - `unit_tests_rust/runner.py` runs Cargo tests; native Rust unit tests stay beside their implementation
 - `shared/unit_runners/suite_runner.py` runs the JSON-suite loop behind every suite-driven strategy with nodeids of the form `suite:<strategy_id>:<function>:<path>`
-- `shared/` contains reusable parity, tracing, reporting, and unit-runner machinery
+- Every strategy declares its report sections and presentation in its own `reporting.py`; shared reporting code only provides reusable models and cell-formatting primitives
+- `shared/` contains reusable parity, tracing, reporting primitives, and unit-runner machinery
 - Keep fixtures with their owning API and existing Python tests in their current locations
 - Each strategy folder carries an `AGENTS.md` one-liner stating what it should be doing
 - Run the harness's own checks with `uv run pytest -o consider_namespace_packages=true tests/rust-python-harness/shared tests/rust-python-harness/cli tests/rust-python-harness/strategies/unit_tests_mapping tests/rust-python-harness/strategies/unit_tests_parity tests/rust-python-harness/strategies/unit_tests_rust tests/test_rust_python_harness.py -q`

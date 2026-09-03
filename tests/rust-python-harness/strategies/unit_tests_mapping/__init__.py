@@ -4,7 +4,6 @@ from functools import partial
 from pathlib import Path
 from typing import Final
 
-from ...shared.reporting.rendering import render_outcomes
 from ...shared.reporting.strategy import (
     CaseDefinition,
     NotImplementedCaseSpec,
@@ -14,6 +13,7 @@ from ...shared.reporting.strategy import (
 )
 from ...shared.unit_runners.suite_runner import run_suites
 from .ledger_report import check_ledgers
+from .reporting import render_mapping_results
 from .runner import UnitSuite, run_suite
 
 
@@ -67,6 +67,6 @@ STRATEGY: Final = StrategyDefinition(
     runnable_spec=SuiteCaseSpec,
     cases=CASES,
     run=partial(run_suites, load=_load_suite, execute=run_suite),
-    render=render_outcomes,
+    render=render_mapping_results,
     check=check_ledgers,
 )

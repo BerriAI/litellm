@@ -4,7 +4,6 @@ from functools import partial
 from pathlib import Path
 from typing import Final
 
-from ...shared.reporting.rendering import render_outcomes
 from ...shared.reporting.strategy import (
     CaseDefinition,
     NotImplementedCaseSpec,
@@ -13,6 +12,7 @@ from ...shared.reporting.strategy import (
     SuiteCaseSpec,
 )
 from ...shared.unit_runners.suite_runner import run_suites
+from .reporting import render_rust_unit_results
 from .runner import RustSuite, run_suite
 
 
@@ -62,5 +62,5 @@ STRATEGY: Final = StrategyDefinition(
     runnable_spec=SuiteCaseSpec,
     cases=CASES,
     run=partial(run_suites, load=_load_suite, execute=run_suite),
-    render=render_outcomes,
+    render=render_rust_unit_results,
 )

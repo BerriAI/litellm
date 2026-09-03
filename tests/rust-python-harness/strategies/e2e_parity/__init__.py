@@ -2,13 +2,13 @@ from pathlib import Path
 from typing import Final
 
 from ...shared.reporting.models import Coverage
-from ...shared.reporting.rendering import render_outcomes
 from ...shared.reporting.strategy import (
     CaseDefinition,
     ModuleCaseSpec,
     NotImplementedCaseSpec,
     StrategyDefinition,
 )
+from .reporting import render_e2e_results
 from .runner import run_e2e_cases
 
 CASES: Final[tuple[CaseDefinition, ...]] = (
@@ -98,5 +98,5 @@ STRATEGY: Final = StrategyDefinition(
     runnable_spec=ModuleCaseSpec,
     cases=CASES,
     run=run_e2e_cases,
-    render=render_outcomes,
+    render=render_e2e_results,
 )

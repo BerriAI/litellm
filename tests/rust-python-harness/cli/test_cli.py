@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Final
 
 import pytest
 
-from ..shared.reporting.models import SDK_FUNCTIONS, SURFACES, CaseDisposition, HarnessRun, Strategy
+from ..shared.reporting.models import SDK_FUNCTIONS, SURFACES, CaseDisposition, HarnessCase, HarnessRun, RunStatus, Strategy
 from ..shared.reporting.strategy import NotImplementedCaseSpec, SkippedCaseSpec, StrategyDefinition
+from ..shared.reporting.ui import final_report
 from . import main
 from .catalog import STRATEGIES_ROOT, load_catalog
+from .commands import REPO_ROOT
 from .selection import pick_values, select
 
 def _strategy_source(
@@ -45,11 +48,13 @@ def _strategy_source(
         "models = importlib.import_module('tests.rust-python-harness.shared.reporting.models')\n"
         "runner = importlib.import_module('tests.rust-python-harness.strategies.trace_parity.runner')\n"
         "rendering = importlib.import_module('tests.rust-python-harness.shared.reporting.rendering')\n"
+        "def render(results):\n"
+        "    return (rendering.ReportSection('Example outcomes', tuple(rendering.render_case_outcome(r) for r in results)),)\n"
         f"CASES = ({','.join(definitions)},)\n"
         "STRATEGY = strategy.StrategyDefinition("
         f"id={strategy_id!r}, order=1, label='Example strategy', description='Example description', "
         "directory=Path(__file__).parent, runnable_spec=strategy.SuiteCaseSpec, cases=CASES, "
-        "run=runner.run_trace_cases, render=rendering.render_outcomes)\n"
+        "run=runner.run_trace_cases, render=render)\n"
     )
 
 
@@ -166,6 +171,65 @@ def test_should_filter_the_catalog_by_surface() -> None:
     assert len(cases) == len(strategies) * len(SDK_FUNCTIONS)
     assert all(case.surface == "gateway" for case in cases)
     assert select(strategies, {"e2e_parity"}, set(), "sdk")[0].surface == "sdk"
+
+
+def test_every_matrix_cell_can_be_selected_exactly() -> None:
+    strategies: Final = load_catalog()
+    selections: Final = tuple(
+        tuple((case.surface, case.sdk_function) for case in select(strategies, {strategy.id}, {sdk_function}, surface))
+        for strategy in strategies
+        for surface in SURFACES
+        for sdk_function in SDK_FUNCTIONS
+    )
+    expected: Final = tuple(
+        ((surface, sdk_function),)
+        for _strategy in strategies
+        for surface in SURFACES
+        for sdk_function in SDK_FUNCTIONS
+    )
+
+    assert selections == expected
+
+
+def _assert_unavailable_cell(strategy: Strategy, case: HarnessCase, section_title: str) -> None:
+    spec: Final = case.spec
+    assert isinstance(spec, (NotImplementedCaseSpec, SkippedCaseSpec))
+    scoped: Final = replace(strategy, cases=(case,))
+    exit_code, run = strategy.definition.run((case,), REPO_ROOT, lambda _: None)
+    result: Final = run.results[case.key]
+    expected: Final = (
+        RunStatus.NOT_IMPLEMENTED
+        if spec.disposition is CaseDisposition.NOT_IMPLEMENTED
+        else RunStatus.SKIPPED
+    )
+    report: Final = final_report(run, exit_code, (scoped,))
+
+    assert exit_code == 0
+    assert result.status is expected
+    assert spec.reason in report
+    assert section_title in report
+    assert f"Status: {'INCOMPLETE' if expected is RunStatus.NOT_IMPLEMENTED else 'SKIPPED'}" in report
+
+
+def test_every_unavailable_matrix_cell_finishes_and_explains_itself() -> None:
+    strategies: Final = load_catalog()
+    section_titles: Final = {
+        "e2e_parity": "End-to-end parity outcomes",
+        "trace_parity": "Trace comparisons",
+        "unit_tests_mapping": "Python/Rust unit-test mappings",
+        "unit_tests_parity": "Python backend parity outcomes",
+        "unit_tests_rust": "Native Rust unit-test outcomes",
+    }
+
+    unavailable: Final = tuple(
+        (strategy, case)
+        for strategy in strategies
+        for case in strategy.cases
+        if case.spec.disposition is not CaseDisposition.RUNNABLE
+    )
+
+    for strategy, case in unavailable:
+        _assert_unavailable_cell(strategy, case, section_titles[strategy.id])
 
 
 def test_should_reject_an_unknown_strategy() -> None:
