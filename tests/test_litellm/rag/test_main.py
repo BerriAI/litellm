@@ -388,6 +388,66 @@ async def test_aquery_does_not_forward_connection_override_keys_to_search():
     assert not (blocked & set(search_kwargs.keys()))
 
 
+@pytest.mark.asyncio
+async def test_aquery_forwards_vector_store_params_to_search_but_not_completion():
+    """
+    Regression for LIT-6773: the server-trusted vector_store_params (a managed
+    store's litellm_params) must reach the search call wholesale, including the
+    connection keys the caller allowlist blocks, while the caller's own
+    retrieval_config overrides stay blocked and the completion never inherits
+    the store's connection params.
+    """
+    from unittest.mock import AsyncMock
+
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page", search_query="q", data=[]
+        )
+    )
+    fake_completion = AsyncMock(
+        return_value=ModelResponse(
+            id="chatcmpl-test",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            model="gpt-4o-mini",
+        )
+    )
+    with patch("litellm.vector_stores.asearch", new=fake_search), patch(  # test-quality-ok: asearch and acompletion are the two boundaries the forwarding contract under test targets
+        "litellm.acompletion", new=fake_completion
+    ):
+        await litellm.aquery(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            retrieval_config={
+                "vector_store_id": "customer_kb",
+                "custom_llm_provider": "milvus",
+                "api_base": "https://attacker.example.com",
+                "api_key": "attacker-key",
+            },
+            vector_store_params={
+                "vector_store_id": "customer_kb",
+                "custom_llm_provider": "milvus",
+                "api_base": "http://127.0.0.1:19530",
+                "api_key": "root:Milvus",
+                "milvus_text_field": "book_intro_text",
+                "outputFields": ["book_intro_text"],
+            },
+        )
+
+    fake_search.assert_awaited_once()
+    search_kwargs = fake_search.await_args.kwargs
+    assert search_kwargs["vector_store_id"] == "customer_kb"
+    assert search_kwargs["custom_llm_provider"] == "milvus"
+    assert search_kwargs["api_base"] == "http://127.0.0.1:19530"
+    assert search_kwargs["api_key"] == "root:Milvus"
+    assert search_kwargs["milvus_text_field"] == "book_intro_text"
+    assert search_kwargs["outputFields"] == ["book_intro_text"]
+    fake_completion.assert_awaited_once()
+    store_only_keys = {"api_base", "api_key", "milvus_text_field", "outputFields"}
+    assert not (store_only_keys & set(fake_completion.await_args.kwargs))
+
+
 def test_rag_call_types_are_registered():
     """
     query/aquery/ingest/aingest are @client-decorated entry points, so their
