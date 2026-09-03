@@ -122,6 +122,13 @@ def test_kagent_stream_finishes_on_completed_state():
         pytest.param(["O", "K", "OK"], "OK", id="deltas_then_final_snapshot"),
         pytest.param(["O", "K", "OK", "OK"], "OK", id="deltas_then_repeated_snapshots"),
         pytest.param(["OK", "OK"], "OK", id="one_delta_then_equal_snapshot"),
+        pytest.param(["Hello ", "Hello world"], "Hello world", id="snapshot_keeps_emitted_space_once"),
+        pytest.param(["OK\n", "OK\n"], "OK\n", id="snapshot_keeps_emitted_newline_once"),
+        pytest.param(
+            ["Hello ", "Hello \n\nworld"],
+            "Hello \n\nworld",
+            id="snapshot_keeps_its_own_new_whitespace",
+        ),
         # Known limitation: A2A marks no event as delta-or-snapshot, so a delta that
         # exactly reproduces the accumulated text is indistinguishable from a snapshot
         # and collapses. Duplicating a whole reply is the worse failure of the two.

@@ -34,6 +34,16 @@ def _index_after(text: str, non_space_count: int) -> int:
     )
 
 
+def _trailing_whitespace(text: str) -> int:
+    """How many whitespace characters `text` ends with."""
+    return len(text) - len(text.rstrip())
+
+
+def _leading_whitespace(text: str) -> int:
+    """How many whitespace characters `text` begins with."""
+    return len(text) - len(text.lstrip())
+
+
 class A2AModelResponseIterator(BaseModelResponseIterator):
     """
     Iterator for parsing A2A streaming responses.
@@ -135,8 +145,14 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
 
         if emitted_key and text_key.startswith(emitted_key):
             # A cumulative snapshot: emit only its tail, which is empty when the snapshot
-            # just repeats everything sent so far.
-            suffix: Final = text[_index_after(text, len(emitted_key)) :]
+            # just repeats everything sent so far. The offset lands just past the last
+            # matched non-whitespace character, so any whitespace already delivered at the
+            # end of the emitted text would otherwise be sent a second time. Drop only that
+            # overlap, so a snapshot introducing further whitespace (a paragraph break, say)
+            # keeps it.
+            tail: Final = text[_index_after(text, len(emitted_key)) :]
+            already_sent: Final = min(_trailing_whitespace(self._emitted_text), _leading_whitespace(tail))
+            suffix: Final = tail[already_sent:]
             self._emitted_text += suffix
             return suffix
 
