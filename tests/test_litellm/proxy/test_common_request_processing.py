@@ -7719,3 +7719,38 @@ def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_
     records = [r for r in caplog.records if "_handle_llm_api_exception(): Exception occured" in r.getMessage()]
     assert len(records) == 1
     assert (records[0].exc_info is not None) is expect_traceback
+
+
+def test_log_llm_api_exception_includes_litellm_call_id(caplog):
+    """Regression for #37532: proxy error log lines carry litellm_call_id so a
+    logged exception can be correlated back to the request that failed."""
+    from litellm._logging import verbose_proxy_logger
+    from litellm.proxy.common_request_processing import _log_llm_api_exception
+
+    verbose_proxy_logger.propagate = True
+    try:
+        with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+            _log_llm_api_exception(ValueError("boom"), "abc-123")
+    finally:
+        verbose_proxy_logger.propagate = False
+
+    records = [r for r in caplog.records if "_handle_llm_api_exception(): Exception occured" in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].litellm_call_id == "abc-123"
+
+
+def test_log_llm_api_exception_without_call_id_omits_field(caplog):
+    """When no call id is available, the record still logs without the extra field."""
+    from litellm._logging import verbose_proxy_logger
+    from litellm.proxy.common_request_processing import _log_llm_api_exception
+
+    verbose_proxy_logger.propagate = True
+    try:
+        with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+            _log_llm_api_exception(ValueError("boom"))
+    finally:
+        verbose_proxy_logger.propagate = False
+
+    records = [r for r in caplog.records if "_handle_llm_api_exception(): Exception occured" in r.getMessage()]
+    assert len(records) == 1
+    assert not hasattr(records[0], "litellm_call_id")
