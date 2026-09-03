@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm.proxy.proxy_server as proxy_server
+from litellm.constants import BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME
 from litellm.proxy.proxy_server import (
     _adaptive_router_flusher_loop,
     _get_endpoint_exception_status,
@@ -243,6 +244,86 @@ async def test_schedule_background_health_check_db_save_invalid_no_event_loop_ra
             healthy_endpoints=[],
             unhealthy_endpoints=[],
         )
+
+
+def _lock_manager(redis_cache, acquired):
+    manager = MagicMock()
+    manager.redis_cache = redis_cache
+    manager.acquire_lock = AsyncMock(return_value=acquired)
+    manager.release_lock = AsyncMock()
+    return manager
+
+
+def _capture_saves(monkeypatch):
+    saves = []
+
+    async def _fake_save(*_args, **kwargs):
+        saves.append(kwargs)
+
+    import litellm.proxy.health_endpoints._health_endpoints as he
+
+    monkeypatch.setattr(he, "_save_background_health_checks_to_db", _fake_save)
+    return saves
+
+
+def _schedule_with(lock_manager):
+    _schedule_background_health_check_db_save(
+        prisma_client=MagicMock(),
+        shared_health_manager=None,
+        model_list=[],
+        healthy_endpoints=[],
+        unhealthy_endpoints=[],
+        pod_lock_manager=lock_manager,
+        lock_ttl=300,
+    )
+
+
+@pytest.mark.asyncio
+async def test_schedule_background_health_check_db_save_skips_a_window_another_pod_persisted(monkeypatch):
+    saves = _capture_saves(monkeypatch)
+    lock_manager = _lock_manager(redis_cache=MagicMock(), acquired=False)
+
+    _schedule_with(lock_manager)
+    await asyncio.sleep(0)
+
+    assert saves == []
+
+
+@pytest.mark.asyncio
+async def test_schedule_background_health_check_db_save_holds_the_window_lock_for_the_whole_interval(monkeypatch):
+    """The lock is the "saved this window" marker: never reentrant, TTL = interval, and never released."""
+    saves = _capture_saves(monkeypatch)
+    lock_manager = _lock_manager(redis_cache=MagicMock(), acquired=True)
+
+    _schedule_with(lock_manager)
+    await asyncio.sleep(0)
+
+    assert normalize(
+        {
+            "saves": len(saves),
+            "lock_request": lock_manager.acquire_lock.await_args.kwargs,
+            "released": lock_manager.release_lock.await_count,
+        }
+    ) == {
+        "saves": 1,
+        "lock_request": {
+            "cronjob_id": BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME,
+            "ttl": 300,
+            "allow_reentrant": False,
+        },
+        "released": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_schedule_background_health_check_db_save_runs_ungated_without_redis(monkeypatch):
+    saves = _capture_saves(monkeypatch)
+    lock_manager = _lock_manager(redis_cache=None, acquired=True)
+
+    _schedule_with(lock_manager)
+    await asyncio.sleep(0)
+
+    assert (len(saves), lock_manager.acquire_lock.await_count) == (1, 0)
 
 
 # ---------------------------------------------------------------------------

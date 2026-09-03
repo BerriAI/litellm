@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
 from litellm.proxy.health_endpoints._health_endpoints import (
     _aggregate_health_check_results,
     _build_model_param_to_info_mapping,
@@ -13,6 +15,7 @@ from litellm.proxy.health_endpoints._health_endpoints import (
     _save_background_health_checks_to_db,
     _save_health_check_results_if_changed,
     _save_health_check_to_db,
+    latest_health_checks_endpoint,
 )
 from litellm.proxy.utils import PrismaClient
 
@@ -451,96 +454,125 @@ async def test_save_background_health_checks_to_db_exception_handling():
     # Function should complete without raising
 
 
-@pytest.mark.asyncio
-async def test_get_all_latest_health_checks_with_model_id(mock_prisma):
-    """Test get_all_latest_health_checks properly groups by model_id"""
-    mock_check2 = MagicMock()
-    mock_check2.model_id = "model-456"
-    mock_check2.model_name = "gpt-3.5-turbo"
-    mock_check2.checked_at = datetime.now(timezone.utc) - timedelta(minutes=5)
-
-    mock_check3 = MagicMock()
-    mock_check3.model_id = "model-123"
-    mock_check3.model_name = "gpt-3.5-turbo"
-    mock_check3.checked_at = datetime.now(timezone.utc) - timedelta(
-        minutes=1
-    )  # Latest for model-123
-
-    # Order by checked_at desc
-    mock_prisma.db.litellm_healthchecktable.find_many = AsyncMock(
-        return_value=[mock_check3, mock_check2]
-    )
-
-    result = await mock_prisma.get_all_latest_health_checks()
-
-    # Should return 2 unique models (by model_id)
-    assert len(result) == 2
-
-    # Should have latest check for each model_id
-    model_ids = {check.model_id for check in result}
-    assert "model-123" in model_ids
-    assert "model-456" in model_ids
-
-    # model-123 should have the latest check (1 minute ago)
-    model123_check = next(c for c in result if c.model_id == "model-123")
-    assert model123_check.checked_at == mock_check3.checked_at
+def _raw_latest_row(model_name: str, model_id, checked_at: datetime) -> dict:
+    return {
+        "health_check_id": f"hc-{model_id or 'no-id'}-{model_name}",
+        "model_name": model_name,
+        "model_id": model_id,
+        "status": "healthy",
+        "healthy_count": 1,
+        "unhealthy_count": 0,
+        "error_message": None,
+        "response_time_ms": 10.0,
+        "details": None,
+        "checked_by": "pod-1",
+        "checked_at": checked_at.isoformat(),
+        "created_at": checked_at.isoformat(),
+        "updated_at": checked_at.isoformat(),
+    }
 
 
 @pytest.mark.asyncio
-async def test_get_all_latest_health_checks_without_model_id(mock_prisma):
-    """Test get_all_latest_health_checks groups by model_name when model_id is None"""
-    mock_check2 = MagicMock()
-    mock_check2.model_id = None
-    mock_check2.model_name = "gpt-3.5-turbo"
-    mock_check2.checked_at = datetime.now(timezone.utc) - timedelta(minutes=1)  # Latest
-
-    mock_prisma.db.litellm_healthchecktable.find_many = AsyncMock(
-        return_value=[mock_check2]
-    )
-
-    result = await mock_prisma.get_all_latest_health_checks()
-
-    # Should return 1 unique model (by model_name)
-    assert len(result) == 1
-    assert result[0].model_name == "gpt-3.5-turbo"
-    assert result[0].checked_at == mock_check2.checked_at  # Latest
-
-
-@pytest.mark.asyncio
-async def test_get_all_latest_health_checks_same_name_with_and_without_model_id(
-    mock_prisma,
-):
+async def test_get_all_latest_health_checks_keeps_every_distinct_group_with_its_own_checked_at(mock_prisma):
     """
-    Same model_name can appear twice after DISTINCT ON: once keyed by (model_id, name)
-    and once by (NULL, name) — different Postgres groups than a single row with id.
+    Postgres owns the dedup. (id, name), (other id, name) and (NULL, name) are distinct groups and each row
+    must arrive typed, with its own checked_at, for the 1h re-save compare and the id-or-name lookup key.
     """
     now = datetime.now(timezone.utc)
-    with_id = MagicMock()
-    with_id.model_id = "deployment-abc"
-    with_id.model_name = "gpt-4"
-    with_id.checked_at = now - timedelta(minutes=2)
-
-    without_id = MagicMock()
-    without_id.model_id = None
-    without_id.model_name = "gpt-4"
-    without_id.checked_at = now - timedelta(minutes=1)
-
-    mock_prisma.db.litellm_healthchecktable.find_many = AsyncMock(
-        return_value=[without_id, with_id]
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            _raw_latest_row("gpt-3.5-turbo", "model-123", now - timedelta(minutes=1)),
+            _raw_latest_row("gpt-3.5-turbo", "model-456", now - timedelta(minutes=5)),
+            _raw_latest_row("gpt-4", "deployment-abc", now - timedelta(minutes=2)),
+            _raw_latest_row("gpt-4", None, now - timedelta(minutes=3)),
+        ]
     )
 
     result = await mock_prisma.get_all_latest_health_checks()
 
-    assert len(result) == 2
-    names = {r.model_name for r in result}
-    assert names == {"gpt-4"}
-    ids = {r.model_id for r in result}
-    assert "deployment-abc" in ids
-    assert None in ids
+    assert {(check.model_id, check.model_name): check.checked_at for check in result} == {
+        ("model-123", "gpt-3.5-turbo"): now - timedelta(minutes=1),
+        ("model-456", "gpt-3.5-turbo"): now - timedelta(minutes=5),
+        ("deployment-abc", "gpt-4"): now - timedelta(minutes=2),
+        (None, "gpt-4"): now - timedelta(minutes=3),
+    }
 
-    by_key = {(r.model_id, r.model_name): r for r in result}
-    assert by_key[("deployment-abc", "gpt-4")].checked_at == with_id.checked_at
-    assert by_key[(None, "gpt-4")].checked_at == without_id.checked_at
+
+@pytest.mark.asyncio
+async def test_save_background_health_checks_compares_raw_checked_at_against_utc_now(mock_prisma):
+    """
+    Raw rows carry ISO strings and the engine may omit the offset. A naive checked_at would TypeError
+    inside the 1h compare, be swallowed, and silently stop every save; a stale row must still re-save.
+    """
+    stale = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(tzinfo=None)
+    fresh = datetime.now(timezone.utc) - timedelta(minutes=5)
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            _raw_latest_row("stale-model", "stale-id", stale),
+            _raw_latest_row("fresh-model", "fresh-id", fresh),
+        ]
+    )
+    mock_prisma.save_health_check_result = AsyncMock()
+    model_list = [
+        {"model_name": "stale-model", "model_info": {"id": "stale-id"}, "litellm_params": {"model": "openai/stale"}},
+        {"model_name": "fresh-model", "model_info": {"id": "fresh-id"}, "litellm_params": {"model": "openai/fresh"}},
+    ]
+
+    await _save_background_health_checks_to_db(
+        mock_prisma,
+        model_list,
+        [{"model": "openai/stale"}, {"model": "openai/fresh"}],
+        [],
+        time.time(),
+        "pod-1",
+    )
+    await asyncio.sleep(0)
+
+    assert [call.kwargs["model_id"] for call in mock_prisma.save_health_check_result.await_args_list] == ["stale-id"]
+
+
+@pytest.mark.asyncio
+async def test_latest_health_checks_endpoint_serialises_raw_rows(monkeypatch):
+    row = LatestHealthCheckRow(
+        health_check_id="hc-1",
+        model_name="gpt-4",
+        model_id="deployment-abc",
+        status="healthy",
+        healthy_count=1,
+        unhealthy_count=0,
+        error_message=None,
+        response_time_ms=12.5,
+        details='{"region": "eu"}',
+        checked_by="pod-1",
+        checked_at=datetime(2026, 8, 25),
+        created_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+    )
+    prisma = MagicMock()
+    prisma.get_all_latest_health_checks = AsyncMock(return_value=(row,))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+
+    response = await latest_health_checks_endpoint(user_api_key_dict=UserAPIKeyAuth())
+
+    assert response == {
+        "latest_health_checks": {
+            "deployment-abc": {
+                "health_check_id": "hc-1",
+                "model_name": "gpt-4",
+                "model_id": "deployment-abc",
+                "status": "healthy",
+                "healthy_count": 1,
+                "unhealthy_count": 0,
+                "error_message": None,
+                "response_time_ms": 12.5,
+                "details": {"region": "eu"},
+                "checked_by": "pod-1",
+                "checked_at": "2026-08-25T00:00:00+00:00",
+                "created_at": "2026-08-25T00:00:00+00:00",
+            }
+        },
+        "total_models": 1,
+    }
 
 
 @pytest.mark.asyncio
