@@ -152,9 +152,10 @@ jobs:
         run: |
           read -r -a test_files <<< "${TESTS}"
           for pass in 1 2 3; do
+            report="${RUNNER_TEMP}/e2e-pass-${pass}.xml"
             echo "::group::pass ${pass} of 3"
             set +e
-            uv run --no-sync pytest "${test_files[@]}" --reruns 0 -v -rA --tb=short -p no:cacheprovider
+            uv run --no-sync pytest "${test_files[@]}" --reruns 0 -v -rA --tb=short -p no:cacheprovider --junitxml="${report}"
             status=$?
             set -e
             echo "::endgroup::"
@@ -166,6 +167,7 @@ jobs:
               echo "::error::pass ${pass} of 3 failed with exit code ${status}"
               exit "${status}"
             fi
+            uv run --no-sync python .github/e2e-stack/assert_tests_ran.py "${report}"
           done
 
       - name: Show stack logs on failure
