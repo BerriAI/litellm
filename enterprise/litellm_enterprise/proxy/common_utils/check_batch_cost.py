@@ -112,35 +112,39 @@ class CheckBatchCost:
             verbose_proxy_logger.error(f"CheckBatchCost: could not look up user {user_id} for batch {batch_id}: {e}")
             return {}
 
-    async def _get_key_alias(self, batch_id: str, api_key: str | None) -> str | None:
-        """Resolve the creating virtual key's alias from its hashed token."""
+    async def _get_key_attribution(self, batch_id: str, api_key: str | None) -> tuple[str | None, str | None]:
+        """Resolve the creating virtual key's (alias, org_id) from its hashed token."""
         if not api_key:
-            return None
+            return None, None
         try:
             key_row: prisma_models.LiteLLM_VerificationToken | None = (
                 await self.prisma_client.db.litellm_verificationtoken.find_unique(
                     where={"token": api_key}
                 )
             )
-            return getattr(key_row, "key_alias", None) if key_row is not None else None
+            if key_row is None:
+                return None, None
+            return getattr(key_row, "key_alias", None), getattr(key_row, "org_id", None)
         except Exception as e:
             verbose_proxy_logger.error(f"CheckBatchCost: could not look up key alias for batch {batch_id}: {e}")
-            return None
+            return None, None
 
-    async def _get_team_alias(self, team_id: str | None) -> str | None:
-        """Resolve a team's alias from its id."""
+    async def _get_team_attribution(self, team_id: str | None) -> tuple[str | None, str | None]:
+        """Resolve a team's (alias, organization_id) from its id."""
         if not team_id:
-            return None
+            return None, None
         try:
             team_row: prisma_models.LiteLLM_TeamTable | None = (
                 await self.prisma_client.db.litellm_teamtable.find_unique(
                     where={"team_id": team_id}
                 )
             )
-            return getattr(team_row, "team_alias", None) if team_row is not None else None
+            if team_row is None:
+                return None, None
+            return getattr(team_row, "team_alias", None), getattr(team_row, "organization_id", None)
         except Exception as e:
             verbose_proxy_logger.error(f"CheckBatchCost: could not look up team alias for team {team_id}: {e}")
-            return None
+            return None, None
 
     async def _build_creator_attribution_metadata(
         self, job: "LiteLLM_ManagedObjectTable", batch_id: str
@@ -153,6 +157,10 @@ class CheckBatchCost:
         user_api_key_alias; when it has no alias, or the key has since been rotated or
         deleted, the field keeps the creating user's alias that _get_user_info filled in,
         because a resolvable name is more useful on the spend row than a null.
+
+        user_api_key_org_id must be resolved here too: the spend update writer reads it
+        off this metadata to increment organization spend, so leaving it out silently
+        drops batch cost from org accounting for keys and teams that belong to one.
         """
         api_key = getattr(job, "api_key", None)
         team_id = getattr(job, "team_id", None)
@@ -165,12 +173,15 @@ class CheckBatchCost:
             **(await self._get_user_info(batch_id, job.created_by)),
         }
 
-        key_alias = await self._get_key_alias(batch_id, api_key)
+        key_alias, key_org_id = await self._get_key_attribution(batch_id, api_key)
         if key_alias is not None:
             metadata["user_api_key_alias"] = key_alias
-        team_alias = await self._get_team_alias(team_id)
+        team_alias, team_org_id = await self._get_team_attribution(team_id)
         if team_alias is not None:
             metadata["user_api_key_team_alias"] = team_alias
+        org_id: Final = key_org_id or team_org_id
+        if org_id is not None:
+            metadata["user_api_key_org_id"] = org_id
         if isinstance(request_tags, list) and request_tags:
             metadata["tags"] = [tag for tag in request_tags if isinstance(tag, str)]
 
@@ -804,6 +815,7 @@ class CheckBatchCost:
             function_id=str(uuid.uuid4()),
         )
 
+        deployment_api_base: Final = deployment_info.litellm_params.api_base
         logging_obj.update_environment_variables(
             litellm_params={
                 # set the user-agent header so that S3 callback consumers can easily identify CheckBatchCost callbacks
@@ -812,9 +824,17 @@ class CheckBatchCost:
                         "user-agent": CHECK_BATCH_COST_USER_AGENT,
                     }
                 },
-                "metadata": await self._build_creator_attribution_metadata(job, batch_id),
+                **({"api_base": deployment_api_base} if deployment_api_base else {}),
+                "metadata": {
+                    **(await self._build_creator_attribution_metadata(job, batch_id)),
+                    # spend logs read the deployment identity off these metadata keys, so
+                    # without them the batch cost row carries no model_id or model_group
+                    "model_info": {"id": model_id},
+                    "model_group": deployment_info.model_name,
+                },
             },
             optional_params={},
+            custom_llm_provider=str(llm_provider) if llm_provider else None,
         )
 
         if not await self._claim_job_for_costing(job):
@@ -832,6 +852,8 @@ class CheckBatchCost:
                 batch_models=batch_result.models,
                 batch_successful_requests=batch_result.successful_requests,
                 batch_failed_requests=batch_result.failed_requests,
+                batch_prompt_cost=batch_result.prompt_cost,
+                batch_completion_cost=batch_result.completion_cost,
             )
         except Exception:
             await self._release_job_claim(job)
