@@ -132,6 +132,9 @@ def _record_job(job: RecordingJob[InputT], case_type: type[CaseT]) -> RecordedFi
         job.case_input,
         job.invocation.execute,
     )
+    status: Final = interactions[-1].response.status_code
+    if status in {408, 429} or status >= 500:
+        raise RuntimeError(f"Upstream returned transient HTTP {status}; rerun recording to retry")
     case: Final = case_type.model_validate(
         {
             "litellm_input": job.case_input,
