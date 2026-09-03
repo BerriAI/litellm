@@ -12,7 +12,7 @@ mod routes;
 #[path = "../tests/callbacks/mod.rs"]
 mod callback_tests;
 
-use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
+use litellm_core::responses::connection::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use serde_json::Value;
@@ -190,6 +190,124 @@ asyncio.run(asyncio.wait_for(exercise(), timeout=5))
         runtime
             .block_on(async { tokio::time::timeout(Duration::from_secs(5), server).await })
             .expect("server should finish")
+            .expect("server task should not panic");
+    }
+
+    #[test]
+    fn responses_websocket_connection_sends_while_a_recv_is_pending() {
+        Python::initialize();
+        let runtime = pyo3_async_runtimes::tokio::get_runtime();
+        let listener = runtime
+            .block_on(TcpListener::bind("127.0.0.1:0"))
+            .expect("listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("listener should have an address");
+        let server = runtime.spawn(async move {
+            let (stream, _) = listener.accept().await.expect("server should accept");
+            let mut socket = accept_async(stream)
+                .await
+                .expect("handshake should succeed");
+
+            let message = socket
+                .next()
+                .await
+                .expect("client should send a frame")
+                .expect("client frame should be valid");
+            assert_eq!(message, Message::Text("ping".into()));
+            socket
+                .send(Message::Text("pong".into()))
+                .await
+                .expect("server should reply");
+            assert!(matches!(socket.next().await, Some(Ok(Message::Close(_)))));
+        });
+
+        Python::attach(|py| {
+            let module = pyo3::wrap_pymodule!(_native)(py).into_bound(py);
+            let locals = PyDict::new(py);
+            locals
+                .set_item("native", &module)
+                .expect("module should enter Python locals");
+            locals
+                .set_item("url", format!("ws://{address}"))
+                .expect("URL should enter Python locals");
+            let code = CString::new(
+                r#"
+import asyncio
+
+async def exercise():
+    connection = await native.ResponsesWebSocketConnection.connect(url)
+    pending = connection.recv_text()
+    await asyncio.sleep(0.1)
+    await connection.send_text("ping")
+    assert await asyncio.wait_for(pending, timeout=2) == "pong"
+    await connection.close()
+
+asyncio.run(asyncio.wait_for(exercise(), timeout=5))
+"#,
+            )
+            .expect("Python source should not contain null bytes");
+            py.run(&code, Some(&locals), Some(&locals))
+                .expect("send should complete while a recv is pending");
+        });
+
+        runtime
+            .block_on(async { tokio::time::timeout(Duration::from_secs(5), server).await })
+            .expect("server should finish")
+            .expect("server task should not panic");
+    }
+
+    #[test]
+    fn abandoned_responses_websocket_connection_closes_the_upstream_socket() {
+        Python::initialize();
+        let runtime = pyo3_async_runtimes::tokio::get_runtime();
+        let listener = runtime
+            .block_on(TcpListener::bind("127.0.0.1:0"))
+            .expect("listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("listener should have an address");
+        let server = runtime.spawn(async move {
+            let (stream, _) = listener.accept().await.expect("server should accept");
+            let mut socket = accept_async(stream)
+                .await
+                .expect("handshake should succeed");
+            let message = socket
+                .next()
+                .await
+                .expect("server should observe a close frame")
+                .expect("close frame should be valid");
+            assert!(matches!(message, Message::Close(_)));
+        });
+
+        Python::attach(|py| {
+            let module = pyo3::wrap_pymodule!(_native)(py).into_bound(py);
+            let locals = PyDict::new(py);
+            locals
+                .set_item("native", &module)
+                .expect("module should enter Python locals");
+            locals
+                .set_item("url", format!("ws://{address}"))
+                .expect("URL should enter Python locals");
+            let code = CString::new(
+                r#"
+import asyncio
+
+async def exercise():
+    connection = await native.ResponsesWebSocketConnection.connect(url)
+    del connection
+
+asyncio.run(asyncio.wait_for(exercise(), timeout=5))
+"#,
+            )
+            .expect("Python source should not contain null bytes");
+            py.run(&code, Some(&locals), Some(&locals))
+                .expect("abandoning the connection should not raise");
+        });
+
+        runtime
+            .block_on(async { tokio::time::timeout(Duration::from_secs(5), server).await })
+            .expect("dropping the connection should close the socket")
             .expect("server task should not panic");
     }
 }

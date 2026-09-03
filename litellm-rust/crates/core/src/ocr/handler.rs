@@ -1,6 +1,11 @@
 use reqwest::{RequestBuilder, StatusCode, header::HeaderMap};
+use serde_json::Value;
 
+use super::client::http_client;
+use super::common_utils::poll_document_intelligence;
 use super::observers::{OcrObserver, OcrPostCall, OcrPreCall};
+use super::transformation::OcrResponseHandling;
+use super::types::{OcrRequestData, ProviderOcrRequest};
 use crate::Error;
 use crate::http_utils::{http_request, truncate_error_body};
 
@@ -48,4 +53,65 @@ fn transport_error(error: reqwest::Error) -> Error {
     } else {
         error.to_string()
     })
+}
+
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+pub async fn execute_ocr_provider_call(
+    request: ProviderOcrRequest,
+    observer: &mut impl OcrObserver,
+) -> Result<Value, Error> {
+    let mut request_builder = http_client().post(request.url()).json(request.body());
+    for (key, value) in &request.upstream_headers {
+        request_builder = request_builder.header(key, value);
+    }
+    if let Some(duration) = request.timeout {
+        request_builder = request_builder.timeout(duration);
+    }
+
+    let event = OcrPreCall {
+        model: request.model().to_string(),
+        request: OcrRequestData {
+            data: request.body().clone(),
+            files: None,
+        },
+        api_base: request.url().to_string(),
+        headers: request.upstream_headers.iter().cloned().collect(),
+    };
+    let response = send_ocr_request(request_builder, &event, observer).await?;
+
+    let status = response.status;
+    if request.config.response_handling() == OcrResponseHandling::AzureDocumentIntelligencePoll
+        && status.as_u16() == 202
+    {
+        let operation_url = response
+            .headers
+            .get("operation-location")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                Error::InvalidResponse(
+                    "Azure Document Intelligence returned 202 but no Operation-Location header found"
+                        .to_string(),
+                )
+            })?;
+        let response_json = poll_document_intelligence(
+            &operation_url,
+            request.url(),
+            &request.upstream_headers,
+            request.timeout,
+        )
+        .await?;
+        return Ok(request
+            .config
+            .transform_ocr_response(request.model(), response_json)?
+            .into_json());
+    }
+
+    let response_json: Value = serde_json::from_str(&response.body)
+        .map_err(|err| Error::InvalidResponse(format!("invalid OCR response JSON: {err}")))?;
+
+    Ok(request
+        .config
+        .transform_ocr_response(request.model(), response_json)?
+        .into_json())
 }

@@ -3,7 +3,6 @@ use litellm_core::call_lifecycle::CallLifecycle;
 use litellm_core::ocr::observers::{NoopOcrObserver, OcrObserver};
 use serde_json::Value;
 
-mod common_utils;
 mod handler;
 mod hooks;
 mod prepare;

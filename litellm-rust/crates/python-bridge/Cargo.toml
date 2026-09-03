@@ -20,7 +20,6 @@ futures-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 litellm-core = { workspace = true, features = ["bedrock-auth"] }
-litellm-ai-gateway = { workspace = true, default-features = false }
 litellm-python-interop.workspace = true
 pyo3.workspace = true
 pyo3-async-runtimes.workspace = true
