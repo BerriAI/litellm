@@ -1,5 +1,4 @@
 {
-  "schema_version": 2,
   "sdk_function": "ocr",
   "python_scope": [
     "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py",

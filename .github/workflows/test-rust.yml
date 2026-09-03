@@ -92,9 +92,9 @@ jobs:
       - name: Audit Rust and Python parity ledger
         working-directory: .
         run: >-
-          uv run --no-project
-          --with pydantic==2.13.4
+          uv run --frozen --no-default-groups
           --with pytest==9.0.3
+          --with pytest-asyncio==1.3.0
           python -m tests.rust-python-harness
           --audit-ledger --function ocr
 

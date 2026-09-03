@@ -42,4 +42,5 @@ python-config = ["dep:pyo3"]
 
 [dev-dependencies]
 futures-channel = "0.3"
+rstest = { workspace = true }
 tower = { version = "0.5.3", features = ["util"] }

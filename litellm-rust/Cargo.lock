@@ -1415,6 +1415,7 @@ dependencies = [
  "litellm-core",
  "pyo3",
  "reqwest",
+ "rstest",
  "serde",
  "serde_json",
  "sha2 0.10.9",

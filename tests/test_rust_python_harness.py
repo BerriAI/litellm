@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import json
 import shutil
 import sys
@@ -16,6 +17,9 @@ mapping_validator = importlib.import_module(
     "tests.rust-python-harness.strategies.unit_tests.mapping_validator"
 )
 models = importlib.import_module("tests.rust-python-harness.models")
+python_runner = importlib.import_module(
+    "tests.rust-python-harness.strategies.unit_tests.python_runner"
+)
 runner = importlib.import_module("tests.rust-python-harness.runner")
 rust_runner = importlib.import_module("tests.rust-python-harness.strategies.unit_tests.rust_runner")
 ui = importlib.import_module("tests.rust-python-harness.ui")
@@ -26,10 +30,13 @@ ledger_path_for = mapping_validator.ledger_path_for
 REPO_ROOT = mapping_validator.REPO_ROOT
 audit_ledger = mapping_validator.audit_ledger
 build_function_report = mapping_validator.build_function_report
+collect_python_inventory = python_runner.collect_python_inventory
+_parse_collected_output = python_runner._parse_collected_output
 _pick_values = cli._pick_values
 _coverage_pytest_args = cli._coverage_pytest_args
 _select = cli._select
 _validate_ledger = cli._validate_ledger
+_print_function_report = cli._print_function_report
 CaseResult = models.CaseResult
 Coverage = models.Coverage
 HarnessCase = models.HarnessCase
@@ -261,6 +268,20 @@ def test_should_report_confidence_for_each_sdk_section() -> None:
 
 
 
+def _ledger_python_inventory(ledger: ledger_module.TestLedger) -> object:
+    def inventory(
+        _repo_root: Path, relative_paths: tuple[str, ...]
+    ) -> dict[str, frozenset[str]]:
+        return {
+            path: frozenset(
+                entry.python_test for entry in ledger.entries if entry.python_file == path
+            )
+            for path in relative_paths
+        }
+
+    return inventory
+
+
 def test_should_report_no_ledger_for_a_function_without_one() -> None:
     report = build_function_report("messages", repo_root=REPO_ROOT)
 
@@ -271,7 +292,12 @@ def test_should_report_no_ledger_for_a_function_without_one() -> None:
 def test_should_report_ocr_ledger_stats_and_unresolved_portable_contracts() -> None:
     ledger = load_ledger(ledger_path_for("ocr"))
 
-    report = build_function_report("ocr", repo_root=REPO_ROOT, rust_inventory=lambda *_: ledger.rust_tests)
+    report = build_function_report(
+        "ocr",
+        repo_root=REPO_ROOT,
+        rust_inventory=lambda *_: ledger.rust_tests,
+        python_inventory=_ledger_python_inventory(ledger),
+    )
 
     assert report.has_ledger is True
     assert report.ledger.mapped_count == ledger.mapped_count
@@ -296,6 +322,58 @@ def test_should_scope_validate_ledger_to_the_requested_function(
     assert "ocr" not in captured.out
 
 
+def test_should_group_unresolved_contracts_by_file_and_reason(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    ledger = load_ledger(ledger_path_for("ocr"))
+    report = build_function_report(
+        "ocr",
+        repo_root=REPO_ROOT,
+        rust_inventory=lambda *_: ledger.rust_tests,
+        python_inventory=_ledger_python_inventory(ledger),
+    )
+
+    _print_function_report(report)
+
+    captured = capsys.readouterr()
+    assert "unresolved portable contract: tests/" not in captured.out
+    assert "tests/test_litellm/ocr/test_ocr_file_input.py (39)" in captured.out
+    assert (
+        "    [39] File-input normalization and body-guard port is pending in PR #39565"
+        in captured.out
+    )
+
+
+def test_should_list_every_unresolved_contract_in_verbose_mode(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    ledger = load_ledger(ledger_path_for("ocr"))
+    report = build_function_report(
+        "ocr",
+        repo_root=REPO_ROOT,
+        rust_inventory=lambda *_: ledger.rust_tests,
+        python_inventory=_ledger_python_inventory(ledger),
+    )
+    first_file_input_entry: Final = next(
+        entry
+        for entry in ledger.entries
+        if entry.status == "unresolved_portable"
+        and entry.python_file == "tests/test_litellm/ocr/test_ocr_file_input.py"
+    )
+
+    _print_function_report(report, verbose=True)
+
+    captured = capsys.readouterr()
+    assert (
+        "unresolved portable contract: "
+        f"tests/test_litellm/ocr/test_ocr_file_input.py::{first_file_input_entry.python_test}"
+    ) in captured.out
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("litellm") is None,
+    reason="Real pytest collection imports the litellm package via conftest",
+)
 def test_should_have_every_python_ocr_test_accounted_for_in_the_ledger() -> None:
     ledger = load_ledger(ledger_path_for("ocr"))
 
@@ -308,6 +386,34 @@ def test_should_have_every_python_ocr_test_accounted_for_in_the_ledger() -> None
         f"Ledger references a Rust test that no longer exists: {list(report.missing_rust_tests)}\n"
         f"Rust test exists but is not tracked in the ledger: {list(report.stale_rust_tests)}\n"
     )
+
+
+def test_should_detect_missing_and_untracked_python_tests_with_real_collection() -> None:
+    ledger = load_ledger(ledger_path_for("ocr"))
+    removed: Final = next(iter(ledger.entries)).python_test
+    stale_name: Final = "test_not_in_the_ledger"
+    stale_file: Final = ledger.python_scope[0]
+
+    def inventory(_root: Path, paths: tuple[str, ...]) -> dict[str, frozenset[str]]:
+        return {
+            path: frozenset(
+                entry.python_test
+                for entry in ledger.entries
+                if entry.python_file == path and entry.python_test != removed
+            )
+            | (frozenset((stale_name,)) if path == stale_file else frozenset())
+            for path in paths
+        }
+
+    report: Final = audit_ledger(ledger, rust_inventory=lambda *_: ledger.rust_tests, python_inventory=inventory)
+
+    assert report.is_clean is False
+    assert report.missing_python_tests == tuple(
+        f"{entry.python_file}:{entry.python_test}"
+        for entry in ledger.entries
+        if entry.python_test == removed
+    )
+    assert report.stale_python_tests == (f"{stale_file}:{stale_name}",)
 
 
 def test_should_reject_duplicate_rust_mapping_targets(tmp_path: Path) -> None:
@@ -433,7 +539,11 @@ def test_should_report_inventory_failure_without_claiming_a_clean_audit() -> Non
     def failed_inventory(*_: object) -> frozenset[object]:
         raise ValueError("Cargo build failed")
 
-    report: Final = build_function_report("ocr", rust_inventory=failed_inventory)
+    report: Final = build_function_report(
+        "ocr",
+        rust_inventory=failed_inventory,
+        python_inventory=lambda _root, paths: {path: frozenset() for path in paths},
+    )
 
     assert report.passes_audit is False
     assert report.passes_validation is False
@@ -500,3 +610,81 @@ mod ocr {
     )
     with pytest.raises(ValueError, match=r"Ignored Rust tests.*ocr::ignored_case"):
         rust_runner.enumerate_rust_tests(tmp_path, (ignored_scope,))
+
+
+def test_should_collapse_parametrized_pytest_ids_to_function_level() -> None:
+    output: Final = (
+        "tests/one.py::test_plain\n"
+        "tests/one.py::test_map_ocr_params_features[features0-keyValuePairs]\n"
+        "tests/one.py::test_map_ocr_params_features[keyValuePairs, languages-keyValuePairs,languages]\n"
+        "tests/two.py::TestGroup::test_cost[1-mistral-ocr-4-0]\n"
+        "tests/two.py::TestGroup::test_cost[10-mistral-ocr-latest]\n"
+        "5 tests collected in 0.31s\n"
+    )
+
+    inventory: Final = _parse_collected_output(output, ("tests/one.py", "tests/two.py"))
+
+    assert inventory == {
+        "tests/one.py": frozenset(("test_plain", "test_map_ocr_params_features")),
+        "tests/two.py": frozenset(("TestGroup::test_cost",)),
+    }
+
+
+def test_should_ignore_warnings_and_unrequested_paths_when_grouping_collected_ids() -> None:
+    output: Final = (
+        "tests/one.py::test_one\n"
+        "tests/unrequested.py::test_elsewhere\n"
+        "================== warnings summary ==================\n"
+        "  /usr/lib/site-packages/foo.py:12: DeprecationWarning: a::b in message\n"
+        "1 test collected in 0.05s\n"
+    )
+
+    inventory: Final = _parse_collected_output(output, ("tests/one.py",))
+
+    assert inventory == {"tests/one.py": frozenset(("test_one",))}
+
+
+def test_should_fail_closed_when_a_scoped_file_collects_nothing() -> None:
+    output: Final = "tests/one.py::test_one\n1 test collected in 0.05s\n"
+
+    with pytest.raises(ValueError, match=r"collected no tests in: tests/empty\.py"):
+        _parse_collected_output(output, ("tests/one.py", "tests/empty.py"))
+
+
+def test_should_fail_closed_when_the_collected_count_disagrees_with_the_summary() -> None:
+    output: Final = "tests/one.py::test_one\n5 tests collected in 0.05s\n"
+
+    with pytest.raises(ValueError, match="collected 5 tests but 1 node ids were parsed"):
+        _parse_collected_output(output, ("tests/one.py",))
+
+
+def test_should_reject_non_test_pytest_node_ids() -> None:
+    output: Final = "tests/one.py::TestGroup::helper_name\n1 test collected in 0.05s\n"
+
+    with pytest.raises(ValueError, match="Unrecognized pytest node id"):
+        _parse_collected_output(output, ("tests/one.py",))
+
+
+def test_should_fail_closed_when_a_collect_command_exits_nonzero(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"failed \(3\)"):
+        python_runner.run_collect_command(
+            (sys.executable, "-c", "raise SystemExit(3)"), tmp_path
+        )
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("litellm") is None,
+    reason="Real pytest collection imports the litellm package via conftest",
+)
+def test_should_collect_the_real_python_ocr_inventory_with_pytest() -> None:
+    ledger: Final = load_ledger(ledger_path_for("ocr"))
+
+    inventory: Final = collect_python_inventory(REPO_ROOT, ledger.python_scope)
+
+    expected: Final = {
+        path: frozenset(
+            entry.python_test for entry in ledger.entries if entry.python_file == path
+        )
+        for path in ledger.python_scope
+    }
+    assert inventory == expected

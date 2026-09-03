@@ -6,12 +6,13 @@ from pathlib import Path
 from typing import Final, TypeAlias
 
 from ...shared.parity.ledger import RustTestIdentity, RustTestScope, TestLedger, load_ledger
-from .python_runner import enumerate_python_tests
+from .python_runner import collect_python_inventory
 from .rust_runner import enumerate_rust_tests
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[4]
 LEDGER_DIRECTORY: Final = Path("tests/rust-python-harness/strategies/unit_tests/ledgers")
 RustInventory: TypeAlias = Callable[[Path, tuple[RustTestScope, ...]], frozenset[RustTestIdentity]]
+PythonInventory: TypeAlias = Callable[[Path, tuple[str, ...]], dict[str, frozenset[str]]]
 
 
 def ledger_path_for(sdk_function: str, repo_root: Path = REPO_ROOT) -> Path:
@@ -40,10 +41,15 @@ def _ledger_python_tests_by_file(ledger: TestLedger) -> dict[str, set[str]]:
 
 
 def audit_ledger(
-    ledger: TestLedger, repo_root: Path = REPO_ROOT, *, rust_inventory: RustInventory = enumerate_rust_tests
+    ledger: TestLedger,
+    repo_root: Path = REPO_ROOT,
+    *,
+    rust_inventory: RustInventory = enumerate_rust_tests,
+    python_inventory: PythonInventory = collect_python_inventory,
 ) -> AuditReport:
+    collected: Final = python_inventory(repo_root, ledger.python_scope)
     python_tests: Final = tuple(
-        (python_file, ledger_tests, enumerate_python_tests(repo_root, python_file))
+        (python_file, ledger_tests, collected[python_file])
         for python_file, ledger_tests in _ledger_python_tests_by_file(ledger).items()
     )
     missing_python: Final = tuple(
@@ -94,7 +100,11 @@ class FunctionReport:
 
 
 def build_function_report(
-    sdk_function: str, repo_root: Path = REPO_ROOT, *, rust_inventory: RustInventory = enumerate_rust_tests
+    sdk_function: str,
+    repo_root: Path = REPO_ROOT,
+    *,
+    rust_inventory: RustInventory = enumerate_rust_tests,
+    python_inventory: PythonInventory = collect_python_inventory,
 ) -> FunctionReport:
     path: Final = ledger_path_for(sdk_function, repo_root)
     if not path.exists():
@@ -106,7 +116,9 @@ def build_function_report(
         return FunctionReport(
             sdk_function=sdk_function,
             ledger=ledger,
-            audit=audit_ledger(ledger, repo_root, rust_inventory=rust_inventory),
+            audit=audit_ledger(
+                ledger, repo_root, rust_inventory=rust_inventory, python_inventory=python_inventory
+            ),
         )
     except (ValueError, OSError, SyntaxError) as exc:
         return FunctionReport(sdk_function=sdk_function, ledger=None, audit=None, error=str(exc))

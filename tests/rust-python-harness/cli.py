@@ -8,6 +8,7 @@ from pathlib import Path
 from .catalog import load_catalog
 from .models import SDK_FUNCTIONS, HarnessCase, Strategy
 from .runner import run_pytest
+from .shared.parity.ledger import TestLedger
 from .strategies.unit_tests.mapping_validator import FunctionReport, build_function_report
 from .ui import make_dashboard
 
@@ -57,6 +58,12 @@ def _parser() -> argparse.ArgumentParser:
         "--audit-ledger",
         action="store_true",
         help="check mapping structure and compiled inventory while allowing unresolved ports; narrow with --function",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="with --validate-ledger, list every unresolved portable contract instead of grouping them",
     )
     parser.add_argument(
         "--plain",
@@ -146,7 +153,31 @@ def _print_catalog(strategies: Sequence[Strategy]) -> None:
             print(f"  {case.sdk_function:12} {case.coverage.value:14} {selectors}")
 
 
-def _print_function_report(report: FunctionReport, *, show_unresolved: bool = True) -> None:
+def _print_unresolved(ledger: TestLedger, *, verbose: bool = False) -> None:
+    unresolved = [entry for entry in ledger.entries if entry.status == "unresolved_portable"]
+    if verbose:
+        for entry in unresolved:
+            print(
+                "  unresolved portable contract: "
+                f"{entry.python_file}::{entry.python_test}: {entry.reason}"
+            )
+        return
+    by_file: dict[str, list[tuple[str, str]]] = {}
+    for entry in unresolved:
+        reason = entry.reason.partition(";")[0].strip()
+        by_file.setdefault(entry.python_file, []).append((reason, entry.python_test))
+    for python_file, entries in sorted(by_file.items(), key=lambda item: (-len(item[1]), item[0])):
+        print(f"  {python_file} ({len(entries)})")
+        reasons: dict[str, list[str]] = {}
+        for reason, python_test in entries:
+            reasons.setdefault(reason, []).append(python_test)
+        for reason, python_tests in sorted(reasons.items(), key=lambda item: (-len(item[1]), item[0])):
+            print(f"    [{len(python_tests)}] {reason}")
+
+
+def _print_function_report(
+    report: FunctionReport, *, show_unresolved: bool = True, verbose: bool = False
+) -> None:
     print(f"\n{report.sdk_function}")
     if report.error is not None:
         print(f"  invalid ledger: {report.error}")
@@ -168,12 +199,8 @@ def _print_function_report(report: FunctionReport, *, show_unresolved: bool = Tr
     print(f"  {len(ledger.rust_only_tests)} Rust-only tests")
     if audit.is_clean:
         print("  ledger is in sync with Python sources and compiled Rust tests")
-    for entry in ledger.entries:
-        if show_unresolved and entry.status == "unresolved_portable":
-            print(
-                "  unresolved portable contract: "
-                f"{entry.python_file}::{entry.python_test}: {entry.reason}"
-            )
+    if show_unresolved:
+        _print_unresolved(ledger, verbose=verbose)
     for label, items in (
         ("ledger references a python test that no longer exists", audit.missing_python_tests),
         ("python test exists but is not tracked in the ledger", audit.stale_python_tests),
@@ -186,11 +213,13 @@ def _print_function_report(report: FunctionReport, *, show_unresolved: bool = Tr
         print("  one-to-one mapping validation passed")
 
 
-def _validate_ledger(sdk_functions: set[str], *, audit_only: bool = False) -> int:
+def _validate_ledger(
+    sdk_functions: set[str], *, audit_only: bool = False, verbose: bool = False
+) -> int:
     functions = sdk_functions or set(SDK_FUNCTIONS)
     reports = tuple(build_function_report(function) for function in sorted(functions))
     for report in reports:
-        _print_function_report(report, show_unresolved=not audit_only)
+        _print_function_report(report, show_unresolved=not audit_only, verbose=verbose)
     return 0 if all(report.passes_audit if audit_only else report.passes_validation for report in reports) else 1
 
 
@@ -202,7 +231,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "`poetry run python -m tests.rust-python-harness --coverage`"
         )
     if args.validate_ledger or args.audit_ledger:
-        return _validate_ledger(set(args.sdk_functions), audit_only=args.audit_ledger)
+        return _validate_ledger(
+            set(args.sdk_functions), audit_only=args.audit_ledger, verbose=args.verbose
+        )
     strategies = load_catalog()
     if args.list:
         _print_catalog(strategies)

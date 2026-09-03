@@ -4,6 +4,7 @@ use std::time::Duration;
 use litellm_core::error::Error;
 use litellm_core::http_utils::has_header;
 use litellm_core::ocr::transformation::OcrResponseHandling;
+use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -139,22 +140,6 @@ struct RecordingOcrGuardrail {
 }
 
 impl RecordingOcrGuardrail {
-    fn new(hooks: Vec<GuardrailEventHook>) -> Self {
-        Self {
-            hooks,
-            events: Mutex::new(Vec::new()),
-            block_pre_call: false,
-        }
-    }
-
-    fn blocking_pre_call() -> Self {
-        Self {
-            hooks: vec![GuardrailEventHook::PreCall],
-            events: Mutex::new(Vec::new()),
-            block_pre_call: true,
-        }
-    }
-
     fn events(&self) -> Vec<&'static str> {
         self.events.lock().unwrap().clone()
     }
@@ -197,6 +182,34 @@ impl CustomGuardrail for RecordingOcrGuardrail {
             Ok(GuardrailDecision::Mask(request))
         })
     }
+}
+
+#[fixture]
+fn recording_logger() -> Arc<RecordingOcrLogger> {
+    Arc::new(RecordingOcrLogger::default())
+}
+
+#[fixture]
+fn recording_guardrail(
+    #[default(vec![GuardrailEventHook::PreCall, GuardrailEventHook::DuringCall])] hooks: Vec<
+        GuardrailEventHook,
+    >,
+    #[default(false)] block_pre_call: bool,
+) -> Arc<RecordingOcrGuardrail> {
+    Arc::new(RecordingOcrGuardrail {
+        hooks,
+        events: Mutex::new(Vec::new()),
+        block_pre_call,
+    })
+}
+
+#[fixture]
+async fn bound_listener() -> (TcpListener, std::net::SocketAddr) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let addr = listener.local_addr().expect("listener has local addr");
+    (listener, addr)
 }
 
 #[test]
@@ -280,12 +293,14 @@ fn auth_header_detection_is_case_insensitive() {
     assert!(!has_header(&headers, "authorization"));
 }
 
+#[rstest]
 #[tokio::test]
-async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("test listener binds");
-    let addr = listener.local_addr().expect("listener has local addr");
+async fn ocr_lifecycle_runs_pre_during_and_success_hooks(
+    #[future] bound_listener: (TcpListener, std::net::SocketAddr),
+    recording_logger: Arc<RecordingOcrLogger>,
+    recording_guardrail: Arc<RecordingOcrGuardrail>,
+) {
+    let (listener, addr) = bound_listener.await;
 
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("accepts one request");
@@ -303,11 +318,6 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
         request
     });
 
-    let logger = Arc::new(RecordingOcrLogger::default());
-    let guardrail = Arc::new(RecordingOcrGuardrail::new(vec![
-        GuardrailEventHook::PreCall,
-        GuardrailEventHook::DuringCall,
-    ]));
     let response = ocr(OcrRequest {
         model: "mistral-ocr-latest",
         document: json!({
@@ -320,8 +330,8 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
         extra_headers: None,
         optional_params: Map::new(),
         timeout: Some(Duration::from_secs(5)),
-        callbacks: vec![logger.clone()],
-        guardrails: vec![guardrail.clone()],
+        callbacks: vec![recording_logger.clone()],
+        guardrails: vec![recording_guardrail.clone()],
         request_metadata: RequestMetadata {
             user_api_key_user_id: Some("user-1".to_string()),
             ..Default::default()
@@ -333,11 +343,11 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
 
     assert_eq!(response["pages"][0]["markdown"], "ok");
     assert_eq!(
-        guardrail.events(),
+        recording_guardrail.events(),
         vec!["async_pre_call_hook", "async_moderation_hook"]
     );
     assert_eq!(
-        logger.events(),
+        recording_logger.events(),
         vec![RecordedLogEvent {
             hook: "async_log_success_event",
             model: "mistral-ocr-latest".to_string(),
@@ -353,12 +363,13 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
     assert!(request.contains(r#""guarded_during":true"#), "{request}");
 }
 
+#[rstest]
 #[tokio::test]
-async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("test listener binds");
-    let addr = listener.local_addr().expect("listener has local addr");
+async fn ocr_lifecycle_runs_failure_hook_on_provider_error(
+    #[future] bound_listener: (TcpListener, std::net::SocketAddr),
+    recording_logger: Arc<RecordingOcrLogger>,
+) {
+    let (listener, addr) = bound_listener.await;
 
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("accepts one request");
@@ -375,7 +386,6 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
             .expect("writes response");
     });
 
-    let logger = Arc::new(RecordingOcrLogger::default());
     let err = ocr(OcrRequest {
         model: "mistral-ocr-latest",
         document: json!({
@@ -388,7 +398,7 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
         extra_headers: None,
         optional_params: Map::new(),
         timeout: Some(Duration::from_secs(5)),
-        callbacks: vec![logger.clone()],
+        callbacks: vec![recording_logger.clone()],
         guardrails: Vec::new(),
         request_metadata: RequestMetadata::default(),
         litellm_call_id: Some("ocr-call-2"),
@@ -399,7 +409,7 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
     assert!(matches!(err, Error::Http { status: 500, .. }));
     server.await.expect("server task completes");
     assert_eq!(
-        logger.events(),
+        recording_logger.events(),
         vec![RecordedLogEvent {
             hook: "async_log_failure_event",
             model: "mistral-ocr-latest".to_string(),
@@ -411,14 +421,16 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
     );
 }
 
+#[rstest]
 #[tokio::test]
-async fn ocr_lifecycle_pre_call_block_skips_provider_socket() {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("test listener binds");
-    let addr = listener.local_addr().expect("listener has local addr");
-    let logger = Arc::new(RecordingOcrLogger::default());
-    let guardrail = Arc::new(RecordingOcrGuardrail::blocking_pre_call());
+async fn ocr_lifecycle_pre_call_block_skips_provider_socket(
+    #[future] bound_listener: (TcpListener, std::net::SocketAddr),
+    recording_logger: Arc<RecordingOcrLogger>,
+    #[with(vec![GuardrailEventHook::PreCall], true)] recording_guardrail: Arc<
+        RecordingOcrGuardrail,
+    >,
+) {
+    let (listener, addr) = bound_listener.await;
 
     let err = ocr(OcrRequest {
         model: "mistral-ocr-latest",
@@ -432,8 +444,8 @@ async fn ocr_lifecycle_pre_call_block_skips_provider_socket() {
         extra_headers: None,
         optional_params: Map::new(),
         timeout: Some(Duration::from_millis(100)),
-        callbacks: vec![logger.clone()],
-        guardrails: vec![guardrail.clone()],
+        callbacks: vec![recording_logger.clone()],
+        guardrails: vec![recording_guardrail.clone()],
         request_metadata: RequestMetadata::default(),
         litellm_call_id: Some("ocr-call-3"),
     })
@@ -441,9 +453,9 @@ async fn ocr_lifecycle_pre_call_block_skips_provider_socket() {
     .expect_err("guardrail blocks request");
 
     assert!(matches!(err, Error::InvalidRequest(_)));
-    assert_eq!(guardrail.events(), vec!["async_pre_call_hook"]);
+    assert_eq!(recording_guardrail.events(), vec!["async_pre_call_hook"]);
     assert_eq!(
-        logger.events(),
+        recording_logger.events(),
         vec![RecordedLogEvent {
             hook: "async_log_failure_event",
             model: "mistral-ocr-latest".to_string(),
@@ -457,12 +469,12 @@ async fn ocr_lifecycle_pre_call_block_skips_provider_socket() {
     assert!(accepted.is_err(), "provider socket should not be touched");
 }
 
+#[rstest]
 #[tokio::test]
-async fn ocr_does_not_duplicate_authorization_header_when_header_is_supplied() {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("test listener binds");
-    let addr = listener.local_addr().expect("listener has local addr");
+async fn ocr_does_not_duplicate_authorization_header_when_header_is_supplied(
+    #[future] bound_listener: (TcpListener, std::net::SocketAddr),
+) {
+    let (listener, addr) = bound_listener.await;
 
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("accepts one request");
@@ -525,12 +537,12 @@ async fn ocr_does_not_duplicate_authorization_header_when_header_is_supplied() {
     );
 }
 
+#[rstest]
 #[tokio::test]
-async fn document_intelligence_poll_uses_resolved_subscription_key() {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("test listener binds");
-    let addr = listener.local_addr().expect("listener has local addr");
+async fn document_intelligence_poll_uses_resolved_subscription_key(
+    #[future] bound_listener: (TcpListener, std::net::SocketAddr),
+) {
+    let (listener, addr) = bound_listener.await;
     let operation_url = format!("http://{addr}/operations/1");
 
     let server = tokio::spawn(async move {

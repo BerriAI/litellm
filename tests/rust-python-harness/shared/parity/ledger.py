@@ -104,7 +104,6 @@ def _require_unique(targets: tuple[str, ...], field: str) -> None:
 class TestLedger(BaseModel):
     model_config = LEDGER_CONFIG
 
-    schema_version: Literal[2]
     sdk_function: NonEmptyString
     python_scope: tuple[NonEmptyString, ...]
     rust_scope: tuple[RustTestScope, ...]
