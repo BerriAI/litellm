@@ -8143,19 +8143,18 @@ class Router:
         message_start by well over a minute).
         """
         lookup_groups: Final = fallback_lookup_groups(kwargs, model_group)
-        for fallback_key, configured_fallbacks in (
-            ("fallbacks", self.fallbacks),
-            ("context_window_fallbacks", self.context_window_fallbacks),
-            ("content_policy_fallbacks", self.content_policy_fallbacks),
+        candidate_fallback_lists: Final = (
+            kwargs.get("fallbacks", self.fallbacks),
+            kwargs.get("context_window_fallbacks", self.context_window_fallbacks),
+            kwargs.get("content_policy_fallbacks", self.content_policy_fallbacks),
+        )
+        if any(
+            fallbacks_value is not None
+            and self._get_fallback_model_group_for_lookup_groups(fallbacks=fallbacks_value, lookup_groups=lookup_groups)
+            is not None
+            for fallbacks_value in candidate_fallback_lists
         ):
-            fallbacks_value: Final = kwargs.get(fallback_key, configured_fallbacks)
-            if fallbacks_value is not None and (
-                self._get_fallback_model_group_for_lookup_groups(
-                    fallbacks=fallbacks_value, lookup_groups=lookup_groups
-                )
-                is not None
-            ):
-                return True
+            return True
         return self._has_default_fallbacks()
 
     def _has_content_policy_fallback(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
