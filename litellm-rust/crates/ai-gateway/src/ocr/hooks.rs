@@ -78,7 +78,9 @@ impl OcrLifecycleHooks {
         let env_lookup = |key: &str| std::env::var(key).ok();
         let headers = string_headers(request.extra_headers)?;
         let auth_strategy = config.auth_strategy();
-        let api_key = (!has_header(&headers, auth_strategy.header_name()))
+        let has_auth_header = has_header(&headers, auth_strategy.header_name())
+            || config.allows_bearer_auth_fallback() && has_header(&headers, "authorization");
+        let api_key = (!has_auth_header)
             .then(|| config.resolve_api_key(request.api_key.as_deref(), &env_lookup))
             .transpose()?;
         let url = config.complete_url(
@@ -87,7 +89,8 @@ impl OcrLifecycleHooks {
             &request.optional_params,
             &env_lookup,
         )?;
-        let filtered_params = config.map_ocr_params(&request.optional_params);
+        let filtered_params = config.map_ocr_params(&request.optional_params)?;
+        let response_params = filtered_params.clone();
         let model = request.model.clone();
         let custom_llm_provider = request.custom_llm_provider.clone();
         let document = if config.requires_data_uri_document() {
@@ -107,6 +110,7 @@ impl OcrLifecycleHooks {
             config,
             url,
             body,
+            optional_params: response_params,
             upstream_headers,
             timeout: request.timeout,
         })
