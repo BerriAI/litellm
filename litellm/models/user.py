@@ -6,6 +6,7 @@ Canonical definition for ``litellm_usertable``. Re-exported from
 """
 
 from datetime import datetime
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -50,22 +51,24 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
-        if isinstance(values, BaseModel):
-            normalized = values.model_dump()
-        elif hasattr(values, "__dict__") and not isinstance(values, dict):
-            normalized = dict(values.__dict__)
-        elif isinstance(values, dict):
-            normalized = dict(values)
-        else:
-            return values
+        raw: Final = (
+            values.model_dump()
+            if isinstance(values, BaseModel)
+            else dict(values.__dict__)  # mutable-ok: object normalization
+            if hasattr(values, "__dict__") and not isinstance(values, dict)
+            else dict(values)  # mutable-ok: dict copy
+            if isinstance(values, dict)
+            else values
+        )
 
-        if normalized.get("spend") is None:
-            normalized["spend"] = 0.0
-        if normalized.get("models") is None:
-            normalized["models"] = []
-        if normalized.get("teams") is None:
-            normalized["teams"] = []
-        return normalized
+        if isinstance(raw, dict):
+            if raw.get("spend") is None:
+                raw["spend"] = 0.0  # rebind-ok: default spend value
+            if raw.get("models") is None:
+                raw["models"] = []  # mutable-ok: default models value  # rebind-ok: default models value
+            if raw.get("teams") is None:
+                raw["teams"] = []  # mutable-ok: default teams value  # rebind-ok: default teams value
+        return raw
 
     def is_over_budget(self) -> bool:
         if self.max_budget is None:
