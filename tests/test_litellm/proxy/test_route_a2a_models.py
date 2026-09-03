@@ -4,8 +4,6 @@ Test A2A model routing in proxy.
 Maps to: litellm/proxy/agent_endpoints/a2a_routing.py
 """
 
-
-
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -214,9 +212,7 @@ def _router_without_a2a_deployment(
             id="team_scoped_key",
         ),
         pytest.param({"patterns": ("openrouter/*",)}, {}, id="wildcard_model_group"),
-        pytest.param(
-            {"default_deployment": {"model_name": "*"}}, {}, id="default_deployment"
-        ),
+        pytest.param({"default_deployment": {"model_name": "*"}}, {}, id="default_deployment"),
     ],
 )
 async def test_a2a_model_resolves_before_router_branches(router_kwargs, extra_data):

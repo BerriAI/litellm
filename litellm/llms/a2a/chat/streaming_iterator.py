@@ -2,12 +2,36 @@
 A2A Streaming Response Iterator
 """
 
+from itertools import accumulate
 from typing import Final
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 from ..common_utils import extract_text_from_a2a_response
+
+
+def _ignoring_whitespace(text: str) -> str:
+    """
+    Comparison key for snapshot detection.
+
+    A2A joins a multi-part message's text parts with spaces, so the same content arrives
+    with different whitespace depending on how the server chunked it: two delta events
+    ("Hello", "world") accumulate to "Helloworld" while a single two-part snapshot of the
+    same content renders "Hello world". Comparing without whitespace makes them equal.
+    """
+    return "".join(text.split())
+
+
+def _index_after(text: str, non_space_count: int) -> int:
+    """Index in `text` just past its first `non_space_count` non-whitespace characters."""
+    if non_space_count <= 0:
+        return 0
+    running: Final = accumulate(0 if char.isspace() else 1 for char in text)
+    return next(
+        (index + 1 for index, total in enumerate(running) if total >= non_space_count),
+        len(text),
+    )
 
 
 class A2AModelResponseIterator(BaseModelResponseIterator):
@@ -101,18 +125,21 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
         if not text:
             return ""
 
-        emitted: str = self._emitted_text
-        if emitted and text.startswith(emitted):
-            suffix: str = text[len(emitted) :]
-            if suffix:
-                self._emitted_text = text
+        emitted_key: Final = _ignoring_whitespace(self._emitted_text)
+        text_key: Final = _ignoring_whitespace(text)
+
+        if emitted_key and text_key.startswith(emitted_key):
+            suffix: Final = text[_index_after(text, len(emitted_key)) :]
+            if suffix.strip():
+                self._emitted_text += suffix
                 return suffix
-            # text == emitted. Treat as a snapshot repeat, except while only a single delta
-            # has been emitted, where a genuinely repeated delta is still indistinguishable.
+            # Same content as everything emitted so far: a snapshot repeat, except while
+            # only a single delta has been emitted, where a genuinely repeated delta is
+            # still indistinguishable from one.
             if self._delta_count > 1:
                 return ""
 
-        self._emitted_text = emitted + text
+        self._emitted_text += text
         self._delta_count += 1
         return text
 
