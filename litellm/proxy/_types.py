@@ -4172,6 +4172,8 @@ class TeamAccessGroupModelGrant(LiteLLMPydanticObjectBase):
     access_group_id: str
     access_group_name: str
     models: tuple[str, ...]
+    mcp_server_ids: tuple[str, ...] = ()
+    agent_ids: tuple[str, ...] = ()
 
 
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):

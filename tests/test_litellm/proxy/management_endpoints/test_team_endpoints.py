@@ -9897,11 +9897,11 @@ class TestResolveTeamAccessGroupResources:
         assert resolved.access_group_mcp_server_ids == ["mcp-1"]
         assert resolved.access_group_agent_ids == ["agent-1"]
         assert [
-            (d.access_group_id, d.access_group_name, d.models)
+            (d.access_group_id, d.access_group_name, d.models, d.mcp_server_ids, d.agent_ids)
             for d in (resolved.access_group_details or [])
         ] == [
-            ("ag-1", "shared-models", ("gpt-4", "claude-3")),
-            ("ag-2", "extra-models", ("claude-3", "gemini")),
+            ("ag-1", "shared-models", ("gpt-4", "claude-3"), ("mcp-1",), ()),
+            ("ag-2", "extra-models", ("claude-3", "gemini"), (), ("agent-1",)),
         ]
 
     @pytest.mark.asyncio
