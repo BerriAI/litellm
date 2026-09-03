@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Any, Final, Literal, Optional, Union
 
 from pydantic import BaseModel
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 
 class LiteLLMCacheType(str, Enum):
@@ -61,6 +61,7 @@ class RedisPipelineIncrementOperation(TypedDict):
     key: str
     increment_value: float
     ttl: int | None
+    refresh_ttl: NotRequired[bool]
 
 
 class RedisPipelineSetOperation(TypedDict):

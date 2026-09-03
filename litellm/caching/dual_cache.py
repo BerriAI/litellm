@@ -24,7 +24,11 @@ from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 
 from .base_cache import BaseCache
 from .in_memory_cache import InMemoryCache
-from .redis_cache import RedisCache
+from .redis_cache import (
+    RedisCache,
+    _refresh_ttl_argument,  # pyright: ignore[reportPrivateUsage]  # shared Redis argument validation
+    _ttl_argument,  # pyright: ignore[reportPrivateUsage]  # shared Redis argument validation
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -137,6 +141,11 @@ class DualCache(BaseCache):
 
         Returns - int - the incremented value
         """
+        if self.redis_cache is not None and local_only is False:
+            redis_ttl = self.redis_cache.get_ttl(ttl=kwargs.get("ttl"))
+            if type(redis_ttl) is int or redis_ttl is None:
+                _ttl_argument(redis_ttl)
+
         try:
             result: int = value
             if self.in_memory_cache is not None:
@@ -375,6 +384,7 @@ class DualCache(BaseCache):
         parent_otel_span: Span | None = None,
         local_only: bool = False,
         refresh_ttl: bool = False,
+        fail_on_redis_error: bool = False,
         **kwargs,
     ) -> float | None:
         """
@@ -385,9 +395,18 @@ class DualCache(BaseCache):
         Refresh_ttl - bool - if True, resets the Redis TTL on every write.
         Default False preserves window-style semantics.
 
+        Fail_on_redis_error - bool - if True, propagate Redis failures instead
+        of treating the in-memory result as authoritative. Use this for
+        security-sensitive shared counters such as rate limits and replay guards.
+
         Returns - the incremented value, or None if no cache backend is
         available (in_memory_cache is None and Redis failed/is absent).
         """
+        if self.redis_cache is not None and local_only is False:
+            redis_ttl = self.redis_cache.get_ttl(ttl=kwargs.get("ttl"))
+            if type(redis_ttl) is int or redis_ttl is None:
+                _ttl_argument(redis_ttl)
+
         result: float | None = None
         try:
             if self.in_memory_cache is not None:
@@ -404,6 +423,8 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
+            if fail_on_redis_error:
+                raise
             verbose_logger.warning(
                 "Redis async_increment_cache failed, falling back to in-memory result: %s",
                 e,
@@ -415,8 +436,14 @@ class DualCache(BaseCache):
         increment_list: list["RedisPipelineIncrementOperation"],
         local_only: bool = False,
         parent_otel_span: Span | None = None,
+        fail_on_redis_error: bool = False,
         **kwargs,
     ) -> list[float] | None:
+        if self.redis_cache is not None and local_only is False:
+            for increment_op in increment_list:
+                _ttl_argument(increment_op["ttl"])
+                _refresh_ttl_argument(increment_op.get("refresh_ttl", True))
+
         result: list[float] | None = None
         try:
             if self.in_memory_cache is not None:
@@ -433,6 +460,8 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
+            if fail_on_redis_error:
+                raise
             verbose_logger.warning(
                 "Redis async_increment_cache_pipeline failed, falling back to in-memory result: %s",
                 e,

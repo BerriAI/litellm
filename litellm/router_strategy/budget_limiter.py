@@ -20,6 +20,7 @@ anthropic:
 
 import asyncio
 import builtins
+import math
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, Final
@@ -393,6 +394,7 @@ class RouterBudgetLimiting(CustomLogger):
             key=spend_key,
             increment_value=response_cost,
             ttl=ttl,
+            refresh_ttl=True,
         )
         self.redis_increment_operation_queue.append(increment_op)
 
@@ -481,7 +483,7 @@ class RouterBudgetLimiting(CustomLogger):
                 response_cost=response_cost,
                 ttl_seconds=ttl_seconds,
             )
-        elif (current_time - budget_start) > ttl_seconds:
+        elif (current_time - budget_start) >= ttl_seconds:
             # Budget window expired - reset everything
             verbose_router_logger.debug("Budget window expired - resetting everything")
             budget_start = await self._handle_new_budget_window(
@@ -494,7 +496,7 @@ class RouterBudgetLimiting(CustomLogger):
         else:
             # Within existing window - increment spend
             remaining_time: Final = ttl_seconds - (current_time - budget_start)
-            ttl_for_increment: Final = int(remaining_time)
+            ttl_for_increment: Final = max(1, math.ceil(remaining_time))
 
             await self._increment_spend_in_current_window(
                 spend_key=spend_key, response_cost=response_cost, ttl=ttl_for_increment
