@@ -21,7 +21,7 @@ import time
 import traceback
 import weakref
 from collections import defaultdict
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator, Iterator, Mapping, Sequence
 from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
@@ -117,6 +117,9 @@ from litellm.router_utils.add_retry_fallback_headers import (
 from litellm.router_utils.auto_router_model_naming import (
     AUTO_ROUTER_MODEL_PREFIX,
     classify_strategy_router_model,
+    count_heuristic_v2_routers,
+    heuristic_v2_limit_violation,
+    uses_heuristic_v2_classifier,
 )
 from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
@@ -211,6 +214,7 @@ from litellm.types.router import (
     DeploymentTypedDict,
     FallbackAccessCheck,
     GuardrailTypedDict,
+    HeuristicV2RouterLimit,
     LiteLLM_Params,
     MockRouterTestingParams,
     ModelGroupInfo,
@@ -590,16 +594,20 @@ set_live_deployment_replay(_replay_live_router_model_cost)
 
 
 # Kwargs that carry no signal about the failed attempt, so log_retry drops them from a
-# breadcrumb entirely: the request payload and the router-internal walk state. Credentials are
-# handled separately by mask_credentials_in_payload, which scrubs credential-named values from
-# whatever kwargs remain rather than trying to enumerate every credential-bearing key here.
+# breadcrumb entirely: the request payload, the proxy's snapshot of the inbound request (its body
+# aliases the live request metadata, earlier breadcrumbs included, so copying it would nest every
+# breadcrumb inside the next one), and the router-internal walk state. Credentials are handled
+# separately by mask_credentials_in_payload, which scrubs credential-named values from whatever
+# kwargs remain rather than trying to enumerate every credential-bearing key here.
 RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
     (
         "messages",
         "original_function",
         "attempted_targets",
+        "proxy_server_request",
     )
 )
+RETRY_BREADCRUMB_LIMIT: Final = 4
 
 
 class Router:
@@ -683,6 +691,7 @@ class Router:
         background_health_check_model_groups: Sequence[str] | None = None,
         enable_weighted_failover: bool = False,
         fallback_access_check: FallbackAccessCheck | None = None,
+        heuristic_v2_router_limit: HeuristicV2RouterLimit | None = None,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -759,6 +768,7 @@ class Router:
 
         self.set_verbose = set_verbose
         self.ignore_invalid_deployments = ignore_invalid_deployments
+        self.heuristic_v2_router_limit = heuristic_v2_router_limit
         self.fallback_access_check: Final = fallback_access_check
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
@@ -958,7 +968,6 @@ class Router:
         self.total_calls: defaultdict = defaultdict(int)  # dict to store total calls made to each model
         self.fail_calls: defaultdict = defaultdict(int)  # dict to store fail_calls made to each model
         self.success_calls: defaultdict = defaultdict(int)  # dict to store success_calls  made to each model
-        self.previous_models: list = []  # list to store failed calls (passed in as metadata to next call)
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
         default_litellm_params = default_litellm_params or {}
@@ -8137,35 +8146,31 @@ class Router:
         """
         When a retry or fallback happens, log the details of the just failed model call - similar to Sentry breadcrumbing
         """
-        try:
-            _metadata_var: Final = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
-            # Log failed model as the previous model
-            previous_model: Final = {
+        _metadata_var: Final = "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+        request_metadata: Final[Mapping[str, object]] = kwargs[_metadata_var]
+        attempt_kwargs: Final = MappingProxyType(
+            {k: v for k, v in kwargs.items() if k != _metadata_var and k not in RETRY_BREADCRUMB_EXCLUDED_KWARGS}
+        )
+        attempt_metadata: Final = MappingProxyType(
+            {k: v for k, v in request_metadata.items() if k != "previous_models"}
+        )
+        previous_model: Final = MappingProxyType(
+            {
                 "exception_type": type(e).__name__,
                 "exception_string": str(e),
+                **attempt_kwargs,
+                _metadata_var: attempt_metadata,
             }
-            for (
-                k,
-                v,
-            ) in kwargs.items():  # log everything in kwargs except the old previous_models value - prevent nesting
-                if k != _metadata_var and k not in RETRY_BREADCRUMB_EXCLUDED_KWARGS:
-                    previous_model[k] = v
-                elif k == _metadata_var and isinstance(v, dict):
-                    previous_model[_metadata_var] = {}
-                    for metadata_k, metadata_v in kwargs[_metadata_var].items():
-                        if metadata_k != "previous_models":
-                            previous_model[k][metadata_k] = metadata_v
-
-            # check current size of self.previous_models, if it's larger than 3, remove the first element
-            if len(self.previous_models) > 3:
-                self.previous_models.pop(0)
-
-            scrubbed_previous_model: Final = mask_credentials_in_payload(previous_model)
-            self.previous_models.append(scrubbed_previous_model)
-            kwargs[_metadata_var]["previous_models"] = self.previous_models
-            return kwargs
-        except Exception as e:
-            raise e
+        )
+        earlier_breadcrumbs: Final = request_metadata.get("previous_models")
+        kept_breadcrumbs: Final[tuple[object, ...]] = (
+            tuple(earlier_breadcrumbs)[-(RETRY_BREADCRUMB_LIMIT - 1) :]
+            if isinstance(earlier_breadcrumbs, (list, tuple))
+            else ()
+        )
+        breadcrumbs: Final = (*kept_breadcrumbs, mask_credentials_in_payload(previous_model))
+        kwargs[_metadata_var]["previous_models"] = breadcrumbs  # rebind-ok: the logging object already holds this dict
+        return kwargs
 
     def _update_usage(self, deployment_id: str, parent_otel_span: Span | None) -> int:
         """
@@ -8796,6 +8801,30 @@ class Router:
         """
         return classify_strategy_router_model(litellm_params.model) == "complexity"
 
+    def config_deployments(self) -> Iterator[Mapping[str, object]]:
+        """The model_list rows that came from config.yaml rather than the DB (``model_info.db_model`` unset)."""
+        for deployment in self.model_list:
+            if not isinstance(deployment, Mapping):
+                continue
+            model_info = deployment.get("model_info")
+            if not (isinstance(model_info, Mapping) and model_info.get("db_model")):
+                yield deployment
+
+    def heuristic_v2_router_limit_violation(self) -> str | None:
+        """
+        Why one more heuristic_v2 router cannot join this router, or None when it can.
+
+        Judged against every deployment currently on the model_list; an upsert pops the row being
+        edited first, so an edit of an existing heuristic_v2 router keeps its own slot. The limit is
+        resolved on every call through ``heuristic_v2_router_limit``; unset means unlimited, which
+        is the SDK default, and the proxy injects a resolver backed by its license.
+        """
+        limit: Final = self.heuristic_v2_router_limit() if self.heuristic_v2_router_limit is not None else None
+        others: Final = count_heuristic_v2_routers(
+            deployment for deployment in self.model_list if isinstance(deployment, Mapping)
+        )
+        return heuristic_v2_limit_violation(held=others + 1, limit=limit)
+
     def init_complexity_router_deployment(self, deployment: Deployment):
         """
         Initialize the complexity-router deployment.
@@ -8813,6 +8842,10 @@ class Router:
         )
 
         complexity_router_config: Final[dict | None] = deployment.litellm_params.complexity_router_config
+        if uses_heuristic_v2_classifier(complexity_router_config):
+            limit_violation: Final = self.heuristic_v2_router_limit_violation()
+            if limit_violation is not None:
+                raise ValueError(limit_violation)
 
         default_model: str | None = deployment.litellm_params.complexity_router_default_model
 
@@ -9636,8 +9669,16 @@ class Router:
                 raise e
 
     def _restore_deployment_after_failed_upsert(self, previous_deployment: Deployment | None, model_id: str) -> None:
+        """Put a deployment back the way it was before a failed upsert popped it.
+
+        A rollback re-admits state that was already serving, so it does not go through the
+        heuristic_v2 ceiling a newcomer gets: with the ceiling tightened since the deployment first
+        registered, judging the rollback would drop a serving router over an unrelated failed edit.
+        """
         if previous_deployment is None or self.has_model_id(model_id):
             return
+        limit_resolver: Final = self.heuristic_v2_router_limit
+        self.heuristic_v2_router_limit = None
         try:
             self.add_deployment(deployment=previous_deployment)
             verbose_router_logger.info(
@@ -9652,6 +9693,8 @@ class Router:
                 model_id,
                 restore_error,
             )
+        finally:
+            self.heuristic_v2_router_limit = limit_resolver
 
     @staticmethod
     def _backend_cost_map_keys(model: str, custom_llm_provider: str | None) -> tuple[str, ...]:
@@ -9980,6 +10023,17 @@ class Router:
             coerce_token_limit(model_info.get("max_input_tokens")),
             coerce_token_limit(model_info.get("max_output_tokens")),
         )
+
+    def get_configured_mode(self, model_name: str) -> "str | None":
+        """Return the mode explicitly configured for a concrete deployment."""
+        deployment: Final = self.get_deployment_by_model_group_name(model_group_name=model_name)
+        if deployment is None:
+            return None
+
+        mode: Final = deployment.model_info.get("mode")
+        if isinstance(mode, str) and mode.strip():
+            return mode
+        return None
 
     def get_configured_display_name(self, model_name: str) -> "str | None":
         """

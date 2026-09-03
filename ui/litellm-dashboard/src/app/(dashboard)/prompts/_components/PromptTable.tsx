@@ -13,8 +13,8 @@ import { ModelGroupInfo } from "./prompt_utils";
 interface PromptTableProps {
   promptsList: PromptSpec[];
   isLoading: boolean;
-  onPromptClick?: (id: string) => void;
-  onDeleteClick?: (id: string, name: string) => void;
+  onPromptClick?: (id: string, environment: string) => void;
+  onDeleteClick?: (id: string, name: string, environment: string) => void;
   accessToken: string | null;
   isAdmin: boolean;
 }
@@ -74,7 +74,9 @@ const PromptTable: React.FC<PromptTableProps> = ({
     <DataTable
       data={promptsList}
       columns={columns}
-      getRowId={(prompt, index) => prompt.prompt_id || String(index)}
+      getRowId={(prompt, index) =>
+        prompt.prompt_id ? `${prompt.prompt_id}::${prompt.environment || "development"}` : String(index)
+      }
       sortingMode="client"
       sorting={sorting}
       onSortingChange={setSorting}
