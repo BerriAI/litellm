@@ -672,6 +672,8 @@ darkbloom_models: Set = set()
 v0_models: Set = set()
 morph_models: Set = set()
 lambda_ai_models: Set = set()
+opencode_models: Set = set()
+opencode_go_models: Set = set()
 inception_models: Set = set()
 hyperbolic_models: Set = set()
 black_forest_labs_models: Set = set()
@@ -934,6 +936,10 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             morph_models.add(key)
         elif value.get("litellm_provider") == "lambda_ai":
             lambda_ai_models.add(key)
+        elif value.get("litellm_provider") == "opencode":
+            opencode_models.add(key)
+        elif value.get("litellm_provider") == "opencode_go":
+            opencode_go_models.add(key)
         elif value.get("litellm_provider") == "inception":
             inception_models.add(key)
         elif value.get("litellm_provider") == "hyperbolic":
@@ -1091,6 +1097,8 @@ model_list = list(
     | v0_models
     | morph_models
     | lambda_ai_models
+    | opencode_models
+    | opencode_go_models
     | inception_models
     | black_forest_labs_models
     | recraft_models
@@ -1200,6 +1208,8 @@ def _build_models_by_provider() -> dict:
         "v0": v0_models,
         "morph": morph_models,
         "lambda_ai": lambda_ai_models,
+        "opencode": opencode_models,
+        "opencode_go": opencode_go_models,
         "inception": inception_models,
         "hyperbolic": hyperbolic_models,
         "black_forest_labs": black_forest_labs_models,
@@ -2063,6 +2073,12 @@ if TYPE_CHECKING:
     from .llms.ragflow.chat.transformation import RAGFlowConfig as RAGFlowConfig
     from .llms.lambda_ai.chat.transformation import (
         LambdaAIChatConfig as LambdaAIChatConfig,
+    )
+    from .llms.opencode.chat.transformation import (
+        OpenCodeGoChatConfig as OpenCodeGoChatConfig,
+    )
+    from .llms.opencode.chat.transformation import (
+        OpenCodeZenChatConfig as OpenCodeZenChatConfig,
     )
     from .llms.inception.chat.transformation import (
         InceptionChatConfig as InceptionChatConfig,

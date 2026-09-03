@@ -8019,6 +8019,8 @@ class ProviderConfigManager:
             LlmProviders.XAI: (lambda: litellm.XAIChatConfig(), False),
             LlmProviders.ZAI: (lambda: litellm.ZAIChatConfig(), False),
             LlmProviders.LAMBDA_AI: (lambda: litellm.LambdaAIChatConfig(), False),
+            LlmProviders.OPENCODE: (lambda: litellm.OpenCodeZenChatConfig(), False),
+            LlmProviders.OPENCODE_GO: (lambda: litellm.OpenCodeGoChatConfig(), False),
             LlmProviders.INCEPTION: (lambda: litellm.InceptionChatConfig(), False),
             LlmProviders.LLAMA: (lambda: litellm.LlamaAPIConfig(), False),
             LlmProviders.TEXT_COMPLETION_OPENAI: (

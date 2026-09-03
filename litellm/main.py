@@ -2076,6 +2076,56 @@ def _complete_groq(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult
     )
 
 
+def _complete_opencode(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    acompletion: Final = ctx.acompletion
+    api_base: Final = ctx.api_base
+    api_key: Final = ctx.api_key
+    client: Final = _dispatch_client_http(ctx)
+    custom_llm_provider: Final = ctx.custom_llm_provider
+    headers: Final = ctx.headers
+    litellm_params: Final = ctx.litellm_params
+    logging: Final = ctx.logging
+    messages: Final = ctx.messages
+    model: Final = ctx.model
+    model_response: Final = ctx.model_response
+    optional_params: Final = ctx.optional_params
+    provider_config: Final = ctx.provider_config
+    shared_session: Final = ctx.shared_session
+    stream: Final = ctx.stream
+    timeout: Final = ctx.timeout
+
+    try:
+        response: Final = base_llm_http_handler.completion(
+            model=model,
+            messages=messages,
+            headers=headers,
+            model_response=model_response,
+            api_key=api_key,
+            api_base=api_base,
+            acompletion=acompletion,
+            logging_obj=logging,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            shared_session=shared_session,
+            timeout=timeout,  # pyright: ignore[reportArgumentType]  # ctx.timeout allows str/None, as in sibling helpers
+            client=client,
+            custom_llm_provider=custom_llm_provider,
+            encoding=_get_encoding(),
+            stream=stream,
+            provider_config=provider_config,
+        )
+    except Exception as e:
+        logging.post_call(
+            input=messages,
+            api_key=api_key,
+            original_response=str(e),
+            additional_args={"headers": headers},
+        )
+        raise e
+
+    return response
+
+
 def _complete_bedrock_mantle(
     ctx: _CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -5671,6 +5721,8 @@ def completion(
             response = _complete_groq(_dispatch_ctx)
         elif custom_llm_provider == "bedrock_mantle":
             response = _complete_bedrock_mantle(_dispatch_ctx)
+        elif custom_llm_provider == "opencode" or custom_llm_provider == "opencode_go":
+            response = _complete_opencode(_dispatch_ctx)
         elif custom_llm_provider == "a2a":
             # A2A (Agent-to-Agent) Protocol
             # Resolve agent configuration from registry if model format is "a2a/<agent-name>"

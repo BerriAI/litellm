@@ -94,6 +94,11 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
+        "cache_creation_input_token_cost_above_256k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "cache_creation_input_token_cost_above_272k_tokens": {
           "type": "number",
           "minimum": 0,
@@ -137,6 +142,11 @@
           "type": "number",
           "minimum": 0,
           "description": "Priority service-tier rate for the same-named base field."
+        },
+        "cache_read_input_token_cost_above_256k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
         "cache_read_input_token_cost_above_272k_tokens": {
           "type": "number",

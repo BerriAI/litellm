@@ -320,6 +320,8 @@ LLM_CONFIG_NAMES: Final = (
     "MorphChatConfig",
     "RAGFlowConfig",
     "LambdaAIChatConfig",
+    "OpenCodeZenChatConfig",
+    "OpenCodeGoChatConfig",
     "InceptionChatConfig",
     "HyperbolicChatConfig",
     "VercelAIGatewayConfig",
@@ -1200,6 +1202,8 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "MorphChatConfig": (".llms.morph.chat.transformation", "MorphChatConfig"),
     "RAGFlowConfig": (".llms.ragflow.chat.transformation", "RAGFlowConfig"),
     "LambdaAIChatConfig": (".llms.lambda_ai.chat.transformation", "LambdaAIChatConfig"),
+    "OpenCodeZenChatConfig": (".llms.opencode.chat.transformation", "OpenCodeZenChatConfig"),
+    "OpenCodeGoChatConfig": (".llms.opencode.chat.transformation", "OpenCodeGoChatConfig"),
     "InceptionChatConfig": (
         ".llms.inception.chat.transformation",
         "InceptionChatConfig",
