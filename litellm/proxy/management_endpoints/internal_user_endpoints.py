@@ -17,6 +17,7 @@ import json
 import traceback
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol, cast, overload
 
 import fastapi
@@ -2069,6 +2070,22 @@ async def _authorize_user_list_request(
     return ",".join(allowed_org_ids)
 
 
+_NO_SEARCH_WHERE: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _user_search_where(search: str | None) -> Mapping[str, object]:
+    """Prisma predicate for `/user/list?search=`: user_id or user_email contains it, case-insensitive."""
+    if not search:
+        return _NO_SEARCH_WHERE
+    search_where: Final[UserSearchWhere] = {
+        "OR": (
+            {"user_id": {"contains": search, "mode": "insensitive"}},
+            {"user_email": {"contains": search, "mode": "insensitive"}},
+        )
+    }
+    return search_where
+
+
 @router.get(
     "/user/list",
     tags=["Internal User management"],
@@ -2175,15 +2192,6 @@ async def get_users(
             "mode": "insensitive",  # Case-insensitive search
         }
 
-    if search:
-        search_where: Final[UserSearchWhere] = {
-            "OR": (
-                {"user_id": {"contains": search, "mode": "insensitive"}},
-                {"user_email": {"contains": search, "mode": "insensitive"}},
-            )
-        }
-        where_conditions["OR"] = search_where["OR"]
-
     if team is not None and isinstance(team, str):
         where_conditions["teams"] = {
             "has": team  # Array contains for string arrays in Prisma
@@ -2201,7 +2209,11 @@ async def get_users(
             where_conditions["organization_memberships"] = {"some": {"organization_id": {"in": org_id_list}}}
 
     ## Filter any none fastapi.Query params - e.g. where_conditions: {'user_email': {'contains': Query(None), 'mode': 'insensitive'}, 'teams': {'has': Query(None)}}
-    where_conditions = {k: v for k, v in where_conditions.items() if v is not None}
+    where: Final[Mapping[str, object]] = {
+        key: value
+        for key, value in (*where_conditions.items(), *_user_search_where(search).items())
+        if value is not None
+    }
 
     # Build order_by conditions
 
@@ -2210,14 +2222,14 @@ async def get_users(
     )
 
     users: Final[Sequence[prisma_models.LiteLLM_UserTable]] = await UserRepository(prisma_client).table.find_many(
-        where=where_conditions,
+        where=where,
         skip=skip,
         take=page_size,
         order=(order_by if order_by else {"created_at": "desc"}),  # Default to created_at desc if no sort specified
     )
 
     # Get total count of user rows
-    total_count: Final[int] = await UserRepository(prisma_client).table.count(where=where_conditions)
+    total_count: Final[int] = await UserRepository(prisma_client).table.count(where=where)
 
     # Get key count for each user
     user_key_counts: Final = await get_user_key_counts(prisma_client, [user.user_id for user in users])
