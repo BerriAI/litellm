@@ -660,6 +660,8 @@ model LiteLLM_SpendLogs {
   updated_at          DateTime   @default(now()) @updatedAt @map("updated_at")
   @@index([startTime])
   @@index([startTime, request_id])
+  @@index([api_key, startTime])
+  @@index([team_id, startTime])
   @@index([end_user])
   @@index([session_id])
 }
