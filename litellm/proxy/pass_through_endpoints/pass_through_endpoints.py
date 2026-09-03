@@ -874,9 +874,6 @@ async def _relay_reporting_failures(
     user_api_key_dict: UserAPIKeyAuth,
     request_payload: dict,  # mutable-ok: post_call_failure_hook lifts fields onto request_data in place
 ) -> AsyncGenerator[bytes, None]:
-    """An upstream that dies mid-stream leaves the client a truncated body and the proxy no record, so run
-    ``post_call_failure_hook`` (spend row, alerting, failure metric) the way the unified endpoints' generators do.
-    Error statuses were already reported by ``_log_passthrough_upstream_failure`` and relay untouched."""
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     try:
