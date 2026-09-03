@@ -36,10 +36,6 @@ class CacheControl(BaseModel):
     type: Literal["ephemeral"]
     ttl: str | None = None
 
-    def model_dump(self, **kwargs: object) -> dict:  # kwargs-ok: forwarded verbatim to pydantic model_dump
-        kwargs["exclude_unset"] = False  # rebind-ok: sets serialization option before forwarding to pydantic
-        return super().model_dump(**kwargs)  # pyright: ignore[reportArgumentType]  # kwargs forwarded verbatim to pydantic model_dump
-
     @model_serializer(mode="wrap")
     def _serialize(
         self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
