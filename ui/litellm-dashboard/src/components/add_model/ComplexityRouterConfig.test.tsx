@@ -880,6 +880,44 @@ describe("ComplexityRouterConfig modality panel", () => {
 
     expect(screen.getByRole("switch", { name: "Route image requests to vision-capable models" })).toBeChecked();
   });
+
+  // The backend ignores modality_pin_override unless modality_routing is on, so offering it while
+  // image routing is off would let an operator save a flag that does nothing.
+  it("disables the pin-override switch while image routing is off", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Modality Routing"));
+
+    const override = screen.getByRole("switch", { name: "Override session pin for image requests" });
+    expect(override).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(override);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("writes modality_pin_override through onChange once image routing is on", () => {
+    const onChange = vi.fn();
+    const value = { ...defaultValue, modality_routing: true };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={value} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Modality Routing"));
+
+    const override = screen.getByRole("switch", { name: "Override session pin for image requests" });
+    expect(override).not.toBeChecked();
+    fireEvent.click(override);
+
+    expect(onChange).toHaveBeenCalledWith({ ...value, modality_pin_override: true });
+  });
+
+  it("renders a stored modality_pin_override=true as on", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...defaultValue, modality_routing: true, modality_pin_override: true }}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Modality Routing"));
+
+    expect(screen.getByRole("switch", { name: "Override session pin for image requests" })).toBeChecked();
+  });
 });
 
 describe("ComplexityRouterConfig affinity panel", () => {
