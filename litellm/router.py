@@ -4422,7 +4422,7 @@ class Router:
                 **{
                     **data,
                     "input": input,
-                    "voice": voice,
+                    **({"voice": voice} if voice is not None else {}),
                     "client": model_client,
                     **kwargs,
                 }

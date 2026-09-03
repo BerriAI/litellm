@@ -115,7 +115,7 @@ class MistralTextToSpeechConfig(BaseTextToSpeechConfig):
         api_base: str | None,
         litellm_params: Mapping[str, object],
     ) -> str:
-        configured_base: Final = (api_base or get_secret_str("MISTRAL_API_BASE") or self.TTS_BASE_URL).rstrip("/")
+        configured_base: Final = (api_base or self.TTS_BASE_URL).rstrip("/")
         versioned_base: Final = configured_base if configured_base.endswith("/v1") else f"{configured_base}/v1"
         return f"{versioned_base}/audio/speech"
 
