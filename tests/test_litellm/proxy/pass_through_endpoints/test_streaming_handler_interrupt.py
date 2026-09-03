@@ -741,3 +741,100 @@ async def test_chunk_processor_logs_failure_not_success_on_mid_stream_exception(
     assert failure_payload["prompt_tokens"] == 52
     assert failure_payload["response_cost"] > 0
     assert isinstance(recorder.failure_kwargs[0]["exception"], httpx.ReadTimeout)
+
+
+def _google_sse(prompt_tokens: int, completion_tokens: int, text: str) -> bytes:
+    payload = {
+        "candidates": [{"content": {"parts": [{"text": text}], "role": "model"}, "index": 0}],
+        "usageMetadata": {
+            "promptTokenCount": prompt_tokens,
+            "candidatesTokenCount": completion_tokens,
+            "totalTokenCount": prompt_tokens + completion_tokens,
+        },
+        "modelVersion": "gemini-3.8-flash",
+    }
+    return f"data: {json.dumps(payload)}\r\n\r\n".encode()
+
+
+def _google_stream_that_times_out_mid_stream():
+    mock = MagicMock(spec=httpx.Response)
+    mock.status_code = 200
+
+    async def _aiter_bytes():
+        yield _google_sse(9, 4, "The sea")
+        yield _google_sse(9, 12, " is wide and restless")
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+
+    mock.aiter_bytes = _aiter_bytes
+    return mock
+
+
+@pytest.mark.parametrize(
+    "endpoint_type, url_route",
+    [
+        (EndpointType.GEMINI, "/gemini/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse"),
+        (
+            EndpointType.VERTEX_AI,
+            "/vertex_ai/v1/projects/p/locations/us-central1/publishers/google/models/gemini-3.8-flash:streamGenerateContent?alt=sse",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_chunk_processor_bills_partial_google_usage_on_mid_stream_exception(endpoint_type, url_route):
+    """Google streams carry cumulative usage on every chunk, so a stream that
+    dies mid-way must log a failure billed at what was already delivered rather
+    than a failure at zero usage."""
+    recorder = _EventRecorder()
+    logging_obj = LiteLLMLoggingObj(
+        model="gemini-3.8-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id=f"test-google-mid-stream-timeout-{endpoint_type.value}",
+        function_id="test-google-mid-stream-timeout",
+        dynamic_async_success_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="gemini-3.8-flash",
+        user="unknown",
+        optional_params={},
+        litellm_params={"metadata": {}},
+        call_type="pass_through_endpoint",
+    )
+    success_routes = []
+
+    async def _record_success_route(**kwargs):
+        success_routes.append(kwargs)
+
+    async def _consume_stream():
+        async for _ in PassThroughStreamingHandler.chunk_processor(
+            response=_google_stream_that_times_out_mid_stream(),
+            request_body={"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+            litellm_logging_obj=logging_obj,
+            endpoint_type=endpoint_type,
+            start_time=datetime.now(),
+            passthrough_success_handler_obj=MagicMock(),
+            url_route=url_route,
+            route_streaming_logging=_record_success_route,
+        ):
+            pass
+
+    with pytest.raises(httpx.ReadTimeout):
+        await _consume_stream()
+
+    for _ in range(300):
+        if recorder.failure_kwargs:
+            break
+        await asyncio.sleep(0.01)
+
+    assert success_routes == []
+    assert recorder.success_kwargs == []
+    assert len(recorder.failure_kwargs) == 1
+    failure_payload = recorder.failure_kwargs[0]["standard_logging_object"]
+    assert failure_payload["status"] == "failure"
+    assert failure_payload["prompt_tokens"] == 9
+    assert failure_payload["completion_tokens"] == 12
+    assert failure_payload["response_cost"] > 12 * 3.75e-06
+    assert isinstance(recorder.failure_kwargs[0]["exception"], httpx.ReadTimeout)
