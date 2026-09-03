@@ -3320,6 +3320,17 @@ class Router:
             ):
                 await response.fetch_stream()
 
+            # Record that this deployment successfully served this model.
+            # Stored in Redis (via DualCache) so all router instances share the signal.
+            _dep_id_cap: str | None = (deployment.get("model_info") or {}).get("id") if deployment else None
+            if _dep_id_cap:
+                asyncio.create_task(
+                    self.cache.async_set_cache(
+                        key=f"litellm:cap:{_dep_id_cap}:{model}",
+                        value=True,
+                        ttl=86400,  # 24h — re-confirm capability daily
+                    )
+                )
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.acompletion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
             # debug how often this deployment picked
@@ -3357,6 +3368,19 @@ class Router:
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
                 self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
+                # 404 → provider does not support this model. Cache this signal in Redis
+                # (via DualCache) so every router instance skips this deployment next time.
+                # TTL of 1h means we re-test after an hour, in case the provider adds support.
+                if isinstance(e, litellm.NotFoundError):
+                    _dep_id_cap: str | None = (deployment.get("model_info") or {}).get("id")
+                    if _dep_id_cap:
+                        asyncio.create_task(
+                            self.cache.async_set_cache(
+                                key=f"litellm:cap:{_dep_id_cap}:{model}",
+                                value=False,
+                                ttl=3600,  # 1h — re-test after TTL
+                            )
+                        )
             raise e
 
     def _update_kwargs_before_fallbacks(
@@ -7614,11 +7638,15 @@ class Router:
         status_code: Final = getattr(error, "status_code", None)
         if status_code is not None and not litellm._should_retry(status_code):
             # 401/403 are special cases - allow retry if multiple deployments exist (handled below)
-            if status_code not in (401, 403):
+            # 404 means the provider does not serve this model, so the retry loop is
+            # allowed to advance to the next-priority deployment. The
+            # `_num_healthy_deployments <= 0` guard at the end of this method still
+            # raises once nothing else is left to try, and the capability cache in
+            # async_get_healthy_deployments keeps the 404-ing deployment out of the
+            # candidate list on subsequent attempts.
+            if status_code not in (401, 403, 404):
                 raise error
 
-        if isinstance(error, litellm.NotFoundError):
-            raise error
         # Error we should only retry if there are other deployments
         if isinstance(error, openai.RateLimitError):
             if (
@@ -12280,19 +12308,44 @@ class Router:
             request_kwargs=request_kwargs,
         )
 
-        ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
-        _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        healthy_deployments = litellm.utils._get_order_filtered_deployments(
-            cast(list[dict], healthy_deployments), target_order=_target_order
-        )
+        ## CAPABILITY CACHE FILTER ## -> skip deployments whose 404 responses have been
+        ## cached, indicating they cannot serve this model at this provider. The cache
+        ## is backed by Redis (via self.cache DualCache) with a TTL so providers that
+        ## later add model support are automatically re-tested after expiry.
+        ## key schema: litellm:cap:<deployment_id>:<model_group>
+        ##   None  → unknown (first request) → allow
+        ##   True  → confirmed capable        → allow
+        ##   False → confirmed incapable (404) → skip
+        _capable_deployments: list[dict] = []
+        for _dep in cast(list[dict], healthy_deployments):
+            _dep_id: str | None = (_dep.get("model_info") or {}).get("id")
+            if _dep_id:
+                _cap_key = f"litellm:cap:{_dep_id}:{model}"
+                _cached_cap = await self.cache.async_get_cache(_cap_key)
+                if _cached_cap is not False:  # None or True → keep
+                    _capable_deployments.append(_dep)
+            else:
+                _capable_deployments.append(_dep)  # no id to look up, allow through
+        if _capable_deployments:  # only narrow if filter leaves at least one candidate
+            healthy_deployments = _capable_deployments
 
-        ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
-        ## this request via weighted-failover. Always honored, regardless of the
-        ## router-level flag, so a stale exclusion key on kwargs cannot escape.
+        ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in this
+        ## request via weighted-failover. Runs BEFORE order filter so that excluded
+        ## order-1 deployments don't prevent order-2 from being selected — this was
+        ## the root cause of silent 404 routing failures with order-based fallback.
         _excluded_deployment_ids: Final = (request_kwargs or {}).pop("_excluded_deployment_ids", None)
         healthy_deployments = litellm.utils._get_excluded_filtered_deployments(
             cast(list[dict], healthy_deployments),
             excluded_deployment_ids=_excluded_deployment_ids,
+        )
+
+        ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments
+        ## with the lowest order value (order=1 preferred over order=2). Runs AFTER
+        ## exclusion so incapable/excluded order-1 deployments correctly fall through
+        ## to order-2 rather than producing an empty deployment list.
+        _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
+        healthy_deployments = litellm.utils._get_order_filtered_deployments(
+            cast(list[dict], healthy_deployments), target_order=_target_order
         )
 
         if len(healthy_deployments) == 0:
