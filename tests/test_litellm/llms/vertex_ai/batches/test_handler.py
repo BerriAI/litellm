@@ -178,6 +178,125 @@ def test_create_batch_async_returns_coroutine_and_uses_async_client():
     sync_client.post.assert_not_called()
 
 
+def test_create_batch_sync_does_not_resolve_publisher_models():
+    """Publisher-model jobs must not incur the endpoint-resolution GET."""
+    h = _make_handler()
+    client = MagicMock()
+    client.post.return_value = _http_response()
+
+    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+        h.create_batch(
+            _is_async=False,
+            create_batch_data=CREATE_DATA,
+            api_base=None,
+            vertex_credentials=None,
+            vertex_project=PROJECT,
+            vertex_location=LOCATION,
+            timeout=600.0,
+            max_retries=None,
+        )
+
+    client.get.assert_not_called()
+
+
+ENDPOINT_ID = "7768560373388541952"
+ENDPOINT_CREATE_DATA = {
+    "input_file_id": f"gs://bucket/litellm-vertex-files/endpoints/{ENDPOINT_ID}/file-uuid"
+}
+TUNED_MODEL_RESOURCE = f"projects/{PROJECT}/locations/{LOCATION}/models/1234509876"
+
+
+def _endpoint_get_response(deployed_models: list | None = None) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {
+        "name": f"projects/{PROJECT}/locations/{LOCATION}/endpoints/{ENDPOINT_ID}",
+        "deployedModels": (
+            deployed_models if deployed_models is not None else [{"model": TUNED_MODEL_RESOURCE}]
+        ),
+    }
+    return resp
+
+
+def test_create_batch_sync_resolves_fine_tuned_endpoint_to_tuned_model():
+    """A fine-tuned Gemini file id must produce a batch job against the endpoint's deployed
+    tuned model resource; the v1 batch API rejects endpoint resources in `model` (LIT-6899)."""
+    h = _make_handler()
+    client = MagicMock()
+    client.get.return_value = _endpoint_get_response()
+    client.post.return_value = _http_response()
+
+    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+        out = h.create_batch(
+            _is_async=False,
+            create_batch_data=ENDPOINT_CREATE_DATA,
+            api_base=None,
+            vertex_credentials=None,
+            vertex_project=PROJECT,
+            vertex_location=LOCATION,
+            timeout=600.0,
+            max_retries=None,
+        )
+
+    assert isinstance(out, LiteLLMBatch)
+    get_kwargs = client.get.call_args.kwargs
+    assert get_kwargs["url"] == (
+        f"https://{LOCATION}-aiplatform.googleapis.com/v1/projects/{PROJECT}"
+        f"/locations/{LOCATION}/endpoints/{ENDPOINT_ID}"
+    )
+    assert get_kwargs["headers"]["Authorization"] == f"Bearer {TOKEN}"
+    sent = json.loads(client.post.call_args.kwargs["data"])
+    assert sent["model"] == TUNED_MODEL_RESOURCE
+
+
+def test_create_batch_sync_endpoint_resolution_error_raises():
+    h = _make_handler()
+    client = MagicMock()
+    resolve_response = MagicMock()
+    resolve_response.status_code = 404
+    resolve_response.text = "endpoint not found"
+    client.get.return_value = resolve_response
+
+    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+        with pytest.raises(VertexAIError) as exc_info:
+            h.create_batch(
+                _is_async=False,
+                create_batch_data=ENDPOINT_CREATE_DATA,
+                api_base=None,
+                vertex_credentials=None,
+                vertex_project=PROJECT,
+                vertex_location=LOCATION,
+                timeout=600.0,
+                max_retries=None,
+            )
+
+    assert exc_info.value.status_code == 404
+    client.post.assert_not_called()
+
+
+def test_create_batch_sync_endpoint_without_deployed_model_raises_400():
+    h = _make_handler()
+    client = MagicMock()
+    client.get.return_value = _endpoint_get_response(deployed_models=[])
+
+    with patch(f"{HMOD}._get_httpx_client", return_value=client):
+        with pytest.raises(VertexAIError) as exc_info:
+            h.create_batch(
+                _is_async=False,
+                create_batch_data=ENDPOINT_CREATE_DATA,
+                api_base=None,
+                vertex_credentials=None,
+                vertex_project=PROJECT,
+                vertex_location=LOCATION,
+                timeout=600.0,
+                max_retries=None,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "no deployed model" in str(exc_info.value)
+    client.post.assert_not_called()
+
+
 def test_create_batch_sync_httpstatuserror_propagates():
     """``HTTPHandler.post`` raises for non-2xx via ``raise_for_status``; the
     sync create path must surface that error, not swallow it."""

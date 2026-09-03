@@ -1760,6 +1760,35 @@ class TestUnmanagedVertexRouting:
         )
         router.get_model_ids.assert_called_once_with(model_name="gemini-2.5-flash")
 
+    def test_flag_on_routes_fine_tuned_endpoint_to_vertex_deployment(self):
+        """A fine-tuned Gemini batch stores `endpoints/<id>` in the gs:// path; the bare model
+        (the endpoint id) must round-trip to the deployment configured as
+        `vertex_ai/gemini/<id>` (LIT-6899)."""
+        endpoint_id = "7768560373388541952"
+        router = MagicMock()
+        router.resolve_model_name_from_model_id.return_value = None
+        router.get_model_list.return_value = [
+            {
+                "model_name": "gemini-2.5-flash-dts-usc1",
+                "litellm_params": {
+                    "model": f"vertex_ai/gemini/{endpoint_id}",
+                    "custom_llm_provider": "vertex_ai",
+                },
+                "model_info": {"id": "deploy-ft"},
+            },
+        ]
+        instance = self._instance(track_unmanaged=True, router=router)
+        job = self._job(
+            file_object=_unmanaged_vertex_file_object(
+                input_file_id=f"gs://bucket/litellm-vertex-files/endpoints/{endpoint_id}/abc.jsonl"
+            )
+        )
+
+        with patch(_IS_B64, return_value=False):
+            result = instance._resolve_job_routing(job, MagicMock())
+
+        assert result == ("deploy-ft", "8823717160934178816")
+
     def test_flag_on_skips_non_vertex_deployment_sharing_model_group(self):
         """Flag on, but the only deployment for the model group is a non-vertex_ai
         provider: must not be selected, even though the model group name matches."""
