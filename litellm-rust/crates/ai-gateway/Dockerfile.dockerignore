@@ -26,6 +26,8 @@
 # --- prune heavy / irrelevant subpaths back out of the re-included trees ---
 # Rust build artifacts (huge; regenerated in the builder).
 **/target/
+# Committed python distribution artifacts; the wheel build does not read them.
+enterprise/dist/
 # Python caches and compiled bytecode.
 **/__pycache__/
 **/*.pyc
