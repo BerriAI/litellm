@@ -287,6 +287,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.guardrail_provider = "bedrock"
         self.chunk_budget_chars = chunk_budget_chars
         self.experimental_use_latest_role_message_only = bool(kwargs.get("experimental_use_latest_role_message_only"))
+
         # Resource-less, detect-only InvokeGuardrailChecks mode. Present `checks`
         # routes the guardrail to InvokeGuardrailChecks; absent => ApplyGuardrail.
         self.checks: dict[str, object] | None = self._normalize_checks(checks)
@@ -1251,7 +1252,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         guardrail block on any (sub-)chunk raises immediately
         -- callers must not lose that signal by continuing to post the remaining
         chunks.
-
         """
         try:
             response: Final = await self._post_apply_guardrail_content_with_retry(
@@ -3211,6 +3211,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     masking_index += 1
                 if item is not None:
                     new_content.append(item)
+
         return new_content, masking_index
 
     def _apply_masking_to_response(
