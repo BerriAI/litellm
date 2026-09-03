@@ -47,7 +47,13 @@ const numberOr = (value: unknown, fallback: number): number =>
 const REASONING_EFFORTS = new Set<FusionReasoningEffort>(["none", "minimal", "low", "medium", "high", "xhigh"]);
 
 const webAccessConfigError = (value: FusionFormValue): string | null =>
-  value.web_access_enabled && !value.search_tool_name ? "Select a Search Tool or turn Web access off." : null;
+  value.web_access_enabled && !value.search_tool_name.trim() ? "Select a Search Tool or turn Web access off." : null;
+
+const isFiniteNumberInRange = (value: number, minimum: number, maximum: number): boolean =>
+  Number.isFinite(value) && value >= minimum && value <= maximum;
+
+const isIntegerInRange = (value: number, minimum: number, maximum: number): boolean =>
+  Number.isInteger(value) && value >= minimum && value <= maximum;
 
 export const parseFusionConfig = (value: unknown): FusionRouterConfigValue => {
   const config = asRecord(value);
@@ -77,26 +83,24 @@ export const parseFusionConfig = (value: unknown): FusionRouterConfigValue => {
 export const fusionConfigError = (value: FusionFormValue, requiresTeamScope: boolean): string | null => {
   if (!value.model_name.trim()) return "Fusion model name is required.";
   if (requiresTeamScope && !value.team_id) return "Select a team to continue.";
-  if (!value.outer_model) return "Select the outer model.";
+  if (!value.outer_model.trim()) return "Select the outer model.";
   if (value.panel_models.length < 1) return "Select at least one panel model.";
   if (value.panel_models.length > 8) return "A Fusion panel can contain at most eight models.";
   const webAccessError = webAccessConfigError(value);
   if (webAccessError) return webAccessError;
-  if (value.panel_timeout_seconds <= 0 || value.panel_timeout_seconds > 600) {
+  if (!isFiniteNumberInRange(value.panel_timeout_seconds, Number.MIN_VALUE, 600)) {
     return "Panel and analyst timeout must be between 1 and 600 seconds.";
   }
-  if (value.max_candidate_chars < 1000 || value.max_candidate_chars > 50000) {
+  if (!isIntegerInRange(value.max_candidate_chars, 1000, 50000)) {
     return "Candidate limit must be between 1,000 and 50,000 characters.";
   }
-  if (
-    !Number.isInteger(value.max_completion_tokens) ||
-    value.max_completion_tokens < 1 ||
-    value.max_completion_tokens > 128000
-  ) {
+  if (!isIntegerInRange(value.max_completion_tokens, 1, 128000)) {
     return "Internal output tokens must be between 1 and 128,000.";
   }
-  if (value.temperature < 0 || value.temperature > 2) return "Panel temperature must be between 0 and 2.";
-  if (!Number.isInteger(value.max_tool_calls) || value.max_tool_calls < 1 || value.max_tool_calls > 16) {
+  if (!isFiniteNumberInRange(value.temperature, 0, 2)) {
+    return "Panel temperature must be between 0 and 2.";
+  }
+  if (!isIntegerInRange(value.max_tool_calls, 1, 16)) {
     return "Tool calls must be between 1 and 16.";
   }
   return null;

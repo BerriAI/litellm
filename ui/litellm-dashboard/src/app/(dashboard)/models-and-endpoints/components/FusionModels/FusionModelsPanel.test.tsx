@@ -10,6 +10,8 @@ const modelPatchUpdateCall = vi.fn();
 const modelDeleteCall = vi.fn();
 const invalidate = vi.fn().mockResolvedValue(undefined);
 const useFusionRouters = vi.fn();
+const toastSuccess = vi.fn();
+const toastFromError = vi.fn();
 
 vi.mock("@/components/networking", () => ({
   modelCreateCall: (...args: unknown[]) => modelCreateCall(...args),
@@ -58,9 +60,21 @@ vi.mock("@/components/common_components/team_dropdown", () => ({
   ),
 }));
 
-vi.mock("@/components/common_components/DeleteResourceModal", () => ({ default: () => null }));
+vi.mock("@/components/common_components/DeleteResourceModal", () => ({
+  default: ({ title, message, onOk }: { title: string; message: string; onOk: () => void }) => (
+    <div role="dialog" aria-label={title}>
+      <p>{message}</p>
+      <button type="button" onClick={onOk}>
+        Confirm delete
+      </button>
+    </div>
+  ),
+}));
 vi.mock("@/lib/toast", () => ({
-  toast: { success: vi.fn(), fromError: vi.fn() },
+  toast: {
+    success: (...args: unknown[]) => toastSuccess(...args),
+    fromError: (...args: unknown[]) => toastFromError(...args),
+  },
 }));
 
 const existingDeployment = {
@@ -101,6 +115,7 @@ describe("FusionModelsPanel", () => {
     useFusionRouters.mockReturnValue({ data: [], isLoading: false });
     modelCreateCall.mockResolvedValue({});
     modelPatchUpdateCall.mockResolvedValue({});
+    modelDeleteCall.mockResolvedValue({});
   });
 
   it("creates an auto Fusion model with an ordinary model/new payload", async () => {
@@ -135,6 +150,25 @@ describe("FusionModelsPanel", () => {
       },
       model_info: {},
     });
+  });
+
+  it("keeps the form open and shows the backend error when creation fails", async () => {
+    modelCreateCall.mockRejectedValue(new Error("backend unavailable"));
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByRole("button", { name: "Add Fusion Model" }));
+    await user.type(screen.getByLabelText("Model name"), "fusion/coding");
+    await user.click(screen.getByRole("button", { name: "Choose panel models" }));
+    await user.click(screen.getByLabelText("Outer model"));
+    await user.click(await screen.findByRole("option", { name: "outer" }, { timeout: 5000 }));
+    await user.click(screen.getByRole("button", { name: "Load search tools" }));
+    await user.click(screen.getByRole("button", { name: "Create Fusion Model" }));
+
+    expect(await screen.findByText("backend unavailable")).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Add Fusion Model" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Create Fusion Model" })).toBeEnabled();
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
   it("shows readable, full-width deliberation presets", async () => {
@@ -199,5 +233,33 @@ describe("FusionModelsPanel", () => {
       },
       "fusion-id",
     );
+  });
+
+  it("deletes a stored Fusion model and refreshes the list", async () => {
+    useFusionRouters.mockReturnValue({ data: [existingDeployment], isLoading: false });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByRole("button", { name: "Delete fusion/existing" }));
+    expect(screen.getByRole("dialog", { name: "Delete Fusion Model" })).toHaveTextContent("fusion/existing");
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    await waitFor(() => expect(modelDeleteCall).toHaveBeenCalledWith("token", "fusion-id"));
+    await waitFor(() => expect(invalidate).toHaveBeenCalled());
+    expect(toastSuccess).toHaveBeenCalledWith("Deleted Fusion model: fusion/existing");
+  });
+
+  it("keeps the delete dialog open when deletion fails", async () => {
+    useFusionRouters.mockReturnValue({ data: [existingDeployment], isLoading: false });
+    modelDeleteCall.mockRejectedValue(new Error("backend unavailable"));
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByRole("button", { name: "Delete fusion/existing" }));
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    await waitFor(() => expect(toastFromError).toHaveBeenCalled());
+    expect(screen.getByRole("dialog", { name: "Delete Fusion Model" })).toBeVisible();
+    expect(invalidate).not.toHaveBeenCalled();
   });
 });

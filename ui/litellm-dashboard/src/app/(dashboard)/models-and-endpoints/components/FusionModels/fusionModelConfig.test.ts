@@ -74,6 +74,15 @@ describe("Fusion model configuration", () => {
     ).toMatchObject({ search_tool_name: "web-search", max_tool_calls: 4 });
   });
 
+  it("rejects non-finite and fractional numeric settings before sending them", () => {
+    expect(fusionConfigError(validValue({ panel_timeout_seconds: Number.NaN }), false)).toMatch(/timeout/);
+    expect(fusionConfigError(validValue({ max_candidate_chars: 1000.5 }), false)).toMatch(/Candidate limit/);
+    expect(fusionConfigError(validValue({ temperature: Number.NaN }), false)).toMatch(/temperature/);
+    expect(fusionConfigError(validValue({ web_access_enabled: true, search_tool_name: "   " }), false)).toMatch(
+      /Search Tool/,
+    );
+  });
+
   it("includes team scope only when required", () => {
     expect(fusionModelPayload(validValue({ team_id: "team-1" }), true).model_info).toEqual({ team_id: "team-1" });
     expect(fusionConfigError(validValue(), true)).toBe("Select a team to continue.");
