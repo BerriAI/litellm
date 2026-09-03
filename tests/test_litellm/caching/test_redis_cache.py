@@ -1,8 +1,10 @@
 import asyncio
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_cache import RedisCache
 
 
@@ -522,6 +524,102 @@ def test_circuit_breaker_opens_when_sync_batch_get_cache_swallows_redis_failure(
 
     with pytest.raises(Exception, match="circuit breaker is open"):
         sync_batch_redis_cache.batch_get_cache(key_list=["lit6729"])
+
+
+@pytest.fixture
+def sync_batch_cache_with_service_logger(redis_no_ping: None) -> Iterator[tuple[RedisCache, ServiceLogging]]:
+    service_logger = ServiceLogging(mock_testing=True)
+    failing_client = MagicMock()
+    failing_client.mget.side_effect = OSError("redis unavailable")
+    with patch(  # test-quality-ok: RedisCache.__init__ builds its client eagerly, with no injection point
+        "litellm._redis.get_redis_client", return_value=failing_client
+    ):
+        cache = RedisCache(host="127.0.0.1", port=6379, service_logger_obj=service_logger)
+    yield cache, service_logger
+
+
+@pytest.mark.asyncio
+async def test_sync_batch_get_cache_reports_a_failed_read_from_a_running_loop(
+    sync_batch_cache_with_service_logger: tuple[RedisCache, ServiceLogging],
+):
+    """A swallowed Redis failure must still be reported as a service failure event.
+
+    The routing strategies call this blocking read from inside the request's event loop,
+    and the read hides the Redis error by returning an empty dict. Without an emitted
+    failure event, litellm_redis_failed_requests_total stops moving during a Redis
+    outage while the success path keeps reporting, so the dashboards read healthy.
+    """
+    cache, service_logger = sync_batch_cache_with_service_logger
+
+    assert cache.batch_get_cache(key_list=["lit6729"]) == {}
+    await asyncio.sleep(0.05)
+
+    assert service_logger.mock_testing_sync_failure_hook == 1
+    assert service_logger.mock_testing_async_failure_hook == 1
+
+
+def test_sync_batch_get_cache_reports_a_failed_read_from_a_worker_thread(
+    sync_batch_cache_with_service_logger: tuple[RedisCache, ServiceLogging],
+):
+    """The same report must reach the async hook when the caller has no event loop at all."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    cache, service_logger = sync_batch_cache_with_service_logger
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        assert pool.submit(cache.batch_get_cache, key_list=["lit6729"]).result() == {}
+
+    assert service_logger.mock_testing_async_failure_hook == 1
+
+
+def test_sync_batch_get_cache_reports_a_failed_read_on_an_idle_event_loop(
+    sync_batch_cache_with_service_logger: tuple[RedisCache, ServiceLogging],
+):
+    """The report must also go out when the caller holds an open loop that is not running."""
+    cache, service_logger = sync_batch_cache_with_service_logger
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        assert cache.batch_get_cache(key_list=["lit6729"]) == {}
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+
+    assert service_logger.mock_testing_async_failure_hook == 1
+
+
+def test_sync_batch_get_cache_survives_a_service_callback_that_raises(
+    sync_batch_cache_with_service_logger: tuple[RedisCache, ServiceLogging],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A failing service callback must not replace the swallowed Redis failure.
+
+    A misconfigured callback raises while emitting (a datadog callback with no
+    DD_API_KEY raises at construction), and the failure event is emitted from inside
+    the except block that swallows the Redis error. If that exception escapes, a Redis
+    outage surfaces to routing as a callback error and the circuit breaker never
+    records the failed read.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    import litellm
+
+    from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
+
+    cache, service_logger = sync_batch_cache_with_service_logger
+    monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
+    monkeypatch.setattr(
+        service_logger,
+        "init_prometheus_services_logger_if_none",
+        AsyncMock(side_effect=Exception("callback is misconfigured")),
+    )
+
+    for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            assert pool.submit(cache.batch_get_cache, key_list=["lit6729"]).result() == {}
+
+    with pytest.raises(Exception, match="circuit breaker is open"):
+        cache.batch_get_cache(key_list=["lit6729"])
 
 
 def test_call_stack_info_skips_breaker_guard_frames():

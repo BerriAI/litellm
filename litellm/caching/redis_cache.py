@@ -1193,13 +1193,13 @@ class RedisCache(BaseCache):
         """
         key_value_dict = {}
         _key_list: Final = [key for key in key_list if key is not None]
+        start_time: Final = time.time()
 
         try:
             _keys: Final = []
             for cache_key in _key_list:
                 cache_key = self.check_and_fix_namespace(key=cache_key or "")
                 _keys.append(cache_key)
-            start_time: Final = time.time()
             results: Final = self._run_redis_mget_operation(keys=_keys)
             end_time: Final = time.time()
             _duration: Final = end_time - start_time
@@ -1225,6 +1225,16 @@ class RedisCache(BaseCache):
 
             return decoded_results
         except Exception as e:
+            failed_at: Final = time.time()
+            self.service_logger_obj.service_failure_hook(
+                service=ServiceTypes.REDIS,
+                duration=failed_at - start_time,
+                error=e,
+                call_type=f"batch_get_cache <- {_get_call_stack_info()}",
+                start_time=start_time,
+                end_time=failed_at,
+                parent_otel_span=parent_otel_span,
+            )
             verbose_logger.error("Error occurred in batch get cache - %s", e)
             _record_swallowed_redis_failure(self._circuit_breaker, e)
             return key_value_dict
