@@ -11,6 +11,43 @@ Related issue: https://github.com/BerriAI/litellm/issues/21305
 import pytest
 
 
+class TestBudgetLimitsOpenAPISchema:
+    def test_descriptions_use_budget_limit_entry_field_names(self):
+        from fastapi.openapi.utils import get_openapi
+
+        from litellm.proxy.management_endpoints.internal_user_endpoints import (
+            router as user_router,
+        )
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            router as key_router,
+        )
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            router as team_router,
+        )
+
+        schema = get_openapi(
+            title="LiteLLM",
+            version="test",
+            routes=[*key_router.routes, *user_router.routes, *team_router.routes],
+        )
+
+        for path in (
+            "/key/generate",
+            "/key/update",
+            "/user/new",
+            "/user/update",
+            "/team/new",
+            "/team/update",
+        ):
+            description = schema["paths"][path]["post"]["description"]
+            budget_limits_line = next(line for line in description.splitlines() if "budget_limits:" in line)
+
+            assert "max_budget and budget_duration" in budget_limits_line
+            assert '{"budget_duration": "24h", "max_budget": 10.0}' in budget_limits_line
+            assert '"budget_limit"' not in budget_limits_line
+            assert '"time_period"' not in budget_limits_line
+
+
 class TestSpendCalculateOpenAPISchema:
     """Test /spend/calculate response schema is valid OpenAPI 3.x."""
 
