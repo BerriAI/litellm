@@ -68,13 +68,16 @@
   },
   "openai_family": {
     "label": "OpenAI Family",
-    "description": "Routes across the GPT model family: gpt-5.4-nano for simple queries, gpt-5.4-mini for medium, gpt-5.4 for complex, o3 for reasoning-heavy requests.",
+    "description": "Routes across the GPT model family: Luna for simple queries, Terra for medium, Sol for complex, Sol at xhigh thinking for reasoning.",
     "complexity_router_config": {
       "tiers": {
-        "SIMPLE": ["gpt-5.4-nano"],
-        "MEDIUM": ["gpt-5.4-mini"],
-        "COMPLEX": ["gpt-5.4"],
-        "REASONING": ["o3"]
+        "SIMPLE": ["gpt-5.6-luna"],
+        "MEDIUM": ["gpt-5.6-terra"],
+        "COMPLEX": ["gpt-5.6-sol"],
+        "REASONING": ["gpt-5.6-sol"]
+      },
+      "tier_model_configs": {
+        "REASONING": [{ "model_name": "gpt-5.6-sol", "litellm_params": { "reasoning_effort": "xhigh" } }]
       },
       "classifier_type": "heuristic",
       "escalation_keywords": ["LITELLM ESCALATE"],
