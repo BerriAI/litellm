@@ -121,7 +121,11 @@ def test_kagent_stream_finishes_on_completed_state():
         pytest.param(["O", "OK", "OKAY"], "OKAY", id="cumulative_snapshots"),
         pytest.param(["O", "K", "OK"], "OK", id="deltas_then_final_snapshot"),
         pytest.param(["O", "K", "OK", "OK"], "OK", id="deltas_then_repeated_snapshots"),
-        pytest.param(["a", "a", "a"], "aaa", id="genuinely_repeated_deltas"),
+        pytest.param(["OK", "OK"], "OK", id="one_delta_then_equal_snapshot"),
+        # Known limitation: A2A marks no event as delta-or-snapshot, so a delta that
+        # exactly reproduces the accumulated text is indistinguishable from a snapshot
+        # and collapses. Duplicating a whole reply is the worse failure of the two.
+        pytest.param(["a", "a", "a"], "a", id="identical_deltas_collapse"),
         pytest.param(["Hello", "world", "Hello world"], "Helloworld", id="multipart_snapshot_respaced"),
         pytest.param(
             ["Hello", "world", "Hello world again"],
@@ -153,3 +157,19 @@ def test_multipart_snapshot_is_not_re_emitted():
     iterator = _iterator()
     rendered = "".join(iterator.chunk_parser(e)["text"] for e in MULTIPART_SNAPSHOT_STREAM)
     assert rendered == "Helloworld"
+
+
+# A one-token reply: a single delta followed by the terminal cumulative snapshot. This is
+# the ordinary shape of a short A2A answer, so the snapshot must not be forwarded again.
+SINGLE_DELTA_STREAM = [
+    _status_update(text="Reply with exactly: OK", role="user", state="submitted"),
+    _status_update(text="OK"),
+    _artifact_update("OK"),
+    _status_update(state="completed", final=True),
+]
+
+
+def test_single_delta_then_snapshot_is_not_duplicated():
+    """Regression: snapshot suppression must not depend on how many deltas preceded it."""
+    iterator = _iterator()
+    assert "".join(iterator.chunk_parser(e)["text"] for e in SINGLE_DELTA_STREAM) == "OK"

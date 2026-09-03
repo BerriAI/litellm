@@ -56,7 +56,6 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
         self.model = model
         # Text already emitted downstream, used to collapse cumulative snapshots.
         self._emitted_text: str = ""
-        self._delta_count: int = 0
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
         """
@@ -121,6 +120,12 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
 
         Handles both streaming styles: servers that send deltas ("O", "K") and servers that
         send growing snapshots ("O", "OK") collapse to the same output.
+
+        A2A marks no event as delta-or-snapshot, so an event whose text equals everything
+        emitted so far is necessarily ambiguous. It is read as a snapshot, because servers
+        repeating the whole reply at the end of a stream are common while a delta that
+        exactly reproduces the accumulated text is not, and duplicating a reply is far
+        worse for a reader than dropping one repeated fragment.
         """
         if not text:
             return ""
@@ -129,18 +134,13 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
         text_key: Final = _ignoring_whitespace(text)
 
         if emitted_key and text_key.startswith(emitted_key):
+            # A cumulative snapshot: emit only its tail, which is empty when the snapshot
+            # just repeats everything sent so far.
             suffix: Final = text[_index_after(text, len(emitted_key)) :]
-            if suffix.strip():
-                self._emitted_text += suffix
-                return suffix
-            # Same content as everything emitted so far: a snapshot repeat, except while
-            # only a single delta has been emitted, where a genuinely repeated delta is
-            # still indistinguishable from one.
-            if self._delta_count > 1:
-                return ""
+            self._emitted_text += suffix
+            return suffix
 
         self._emitted_text += text
-        self._delta_count += 1
         return text
 
     def _get_finish_reason(self, chunk: dict) -> str | None:
