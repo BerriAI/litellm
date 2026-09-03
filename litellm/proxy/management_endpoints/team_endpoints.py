@@ -1346,7 +1346,7 @@ async def new_team(
                 detail="License is over limit. Please contact support@berri.ai to upgrade your license.",
             )
 
-        if data.team_id is None or not data.team_id.strip():
+        if data.team_id is None:
             data.team_id = str(uuid.uuid4())
         else:
             if data.team_id == UI_TEAM_ID:
