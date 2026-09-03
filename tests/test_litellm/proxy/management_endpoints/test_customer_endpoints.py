@@ -473,11 +473,22 @@ def test_block_customer_success_with_prisma_row_object(mock_prisma_client, mock_
     BlockUsersResponse must serialize them without raising 500.
     """
     class MockPrismaRow:
-        def __init__(self, user_id: str, blocked: bool, spend: float | None = None) -> None:
-            self.user_id = user_id
-            self.blocked = blocked
-            self.spend = spend
-            self.alias = None
+        user_id: str
+        blocked: bool
+        spend: float | None
+        alias: str | None
+
+        def __init__(
+            self,
+            user_id: str,
+            blocked: bool,
+            spend: float | None = None,
+            alias: str | None = None,
+        ) -> None:
+            self.user_id: str = user_id
+            self.blocked: bool = blocked
+            self.spend: float | None = spend
+            self.alias: str | None = alias
 
     blocked_row = MockPrismaRow(user_id="blocked-prisma-1", blocked=True, spend=None)
     mock_prisma_client.db.litellm_endusertable.upsert = AsyncMock(return_value=blocked_row)

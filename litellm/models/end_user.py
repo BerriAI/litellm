@@ -5,7 +5,7 @@ Canonical definition for ``litellm_endusertable``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -28,16 +28,18 @@ class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="before")
     @classmethod
-    def set_model_info(cls, values):
+    def set_model_info(cls, values: Any) -> Any:
         if isinstance(values, BaseModel):
-            raw = values.model_dump()  # rebind-ok: normalize model input
+            normalized = values.model_dump()
         elif hasattr(values, "__dict__") and not isinstance(values, dict):
-            raw = dict(values.__dict__)  # rebind-ok: normalize object input  # mutable-ok: object normalization
+            normalized = dict(values.__dict__)
+        elif isinstance(values, dict):
+            normalized = dict(values)
         else:
-            raw = values  # rebind-ok: preserve input
+            return values
 
-        if isinstance(raw, dict) and raw.get("spend") is None:
-            raw.update({"spend": 0.0})  # mutable-ok: default spend value
-        return raw
+        if normalized.get("spend") is None:
+            normalized["spend"] = 0.0
+        return normalized
 
     model_config = ConfigDict(protected_namespaces=())

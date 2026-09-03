@@ -307,6 +307,11 @@ class TestUser:
 
     def test_user_from_object_with_attributes(self):
         class MockPrismaUser:
+            user_id: str
+            spend: float | None
+            models: list[str] | None
+            teams: list[str] | None
+
             def __init__(
                 self,
                 user_id: str,
@@ -341,6 +346,10 @@ class TestUser:
         assert user.spend == 0.0
         assert user.models == []
         assert user.teams == []
+
+    def test_user_from_invalid_type_raises_validation_error(self):
+        with pytest.raises(ValidationError):
+            LiteLLM_UserTable.model_validate(123)
 
     def test_password_hash_excluded_from_serialization(self):
         from litellm.proxy._types import LiteLLM_UserTableWithKeyCount
@@ -457,6 +466,10 @@ class TestTagTable:
 
     def test_tag_from_object_with_attributes(self):
         class MockPrismaTag:
+            tag_name: str
+            spend: float | None
+            models: list[str] | None
+
             def __init__(
                 self,
                 tag_name: str,
@@ -485,6 +498,10 @@ class TestTagTable:
         assert tag.spend == 0.0
         assert tag.models == []
 
+    def test_tag_from_invalid_type_raises_validation_error(self):
+        with pytest.raises(ValidationError):
+            LiteLLM_TagTable.model_validate(123)
+
 
 class TestEndUserTable:
     def test_end_user_creation(self):
@@ -506,6 +523,11 @@ class TestEndUserTable:
 
     def test_end_user_from_object_with_attributes(self):
         class MockPrismaEndUser:
+            user_id: str
+            blocked: bool
+            spend: float | None
+            alias: str | None
+
             def __init__(
                 self,
                 user_id: str,
@@ -535,6 +557,10 @@ class TestEndUserTable:
         assert eu.user_id == "eu4"
         assert eu.blocked is False
         assert eu.spend == 0.0
+
+    def test_end_user_from_invalid_type_raises_validation_error(self):
+        with pytest.raises(ValidationError):
+            LiteLLM_EndUserTable.model_validate(123)
 
 
 class TestBudgetTableFull:
