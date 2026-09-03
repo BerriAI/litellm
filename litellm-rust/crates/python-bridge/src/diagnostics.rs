@@ -9,6 +9,17 @@ fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
     Ok(stats.into_any().unbind())
 }
 
+#[pyfunction]
+fn build_info(py: Python<'_>) -> PyResult<Py<PyAny>> {
+    let info = PyDict::new(py);
+    info.set_item("profile", env!("LITELLM_NATIVE_PROFILE"))?;
+    info.set_item("pyo3", env!("LITELLM_PYO3_VERSION"))?;
+    info.set_item("abi3", cfg!(Py_LIMITED_API))?;
+    info.set_item("gil_disabled", cfg!(Py_GIL_DISABLED))?;
+    info.set_item("debug_assertions", cfg!(debug_assertions))?;
+    Ok(info.into_any().unbind())
+}
+
 #[cfg(feature = "panic-test")]
 #[pyfunction]
 fn _panic_for_test() {
@@ -17,6 +28,7 @@ fn _panic_for_test() {
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
+    module.add_function(wrap_pyfunction!(build_info, module)?)?;
     #[cfg(feature = "panic-test")]
     module.add_function(wrap_pyfunction!(_panic_for_test, module)?)?;
     Ok(())

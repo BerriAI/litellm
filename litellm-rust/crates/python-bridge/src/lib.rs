@@ -68,6 +68,7 @@ mod _native {
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        module.add("__version__", env!("CARGO_PKG_VERSION"))?;
         super::errors::register(module)?;
         super::routes::register(module)?;
         module.add_class::<super::ResponsesWebSocketConnection>()?;
@@ -107,6 +108,7 @@ mod tests {
                 "achat_completions",
                 "ResponsesWebSocketConnection",
                 "gil_stats",
+                "build_info",
             ];
 
             let public_names: Vec<String> = module
@@ -118,6 +120,58 @@ mod tests {
                 .filter(|name| !name.starts_with("__"))
                 .collect();
             assert_eq!(public_names, expected);
+
+            let version = module
+                .getattr("__version__")
+                .expect("module should expose __version__")
+                .extract::<String>()
+                .expect("__version__ should be a string");
+            assert_eq!(version, env!("CARGO_PKG_VERSION"));
+        });
+    }
+
+    #[test]
+    fn version_and_build_info_report_expected_shape() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = pyo3::wrap_pymodule!(_native)(py).into_bound(py);
+
+            let version = module
+                .getattr("__version__")
+                .expect("module should expose __version__")
+                .extract::<String>()
+                .expect("__version__ should be a string");
+            let segments: Vec<&str> = version.split('.').collect();
+            assert_eq!(segments.len(), 3, "__version__ should be x.y.z: {version}");
+            for segment in segments {
+                assert!(
+                    !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit()),
+                    "__version__ segments should be numeric: {version}"
+                );
+            }
+
+            let build_info = module
+                .getattr("build_info")
+                .expect("module should expose build_info")
+                .call0()
+                .expect("build_info should be callable")
+                .cast_into::<PyDict>()
+                .expect("build_info should return a dict");
+            let mut keys: Vec<String> = build_info
+                .keys()
+                .extract::<Vec<String>>()
+                .expect("build_info keys should be strings");
+            keys.sort();
+            assert_eq!(
+                keys,
+                [
+                    "abi3",
+                    "debug_assertions",
+                    "gil_disabled",
+                    "profile",
+                    "pyo3"
+                ]
+            );
         });
     }
 
