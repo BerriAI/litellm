@@ -8,6 +8,7 @@ import textwrap
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -4958,12 +4959,13 @@ def test_apply_overrides_feature_flag_disabled_by_default():
     "env_value, expected",
     [("true", True), ("True", True), ("false", False), (None, False)],
 )
-def test_credential_overrides_flag_reads_env_var_at_import(env_value, expected):
+def test_credential_overrides_flag_reads_env_var_at_import(env_value: str | None, expected: bool):
     """LITELLM_ENABLE_MODEL_CONFIG_CREDENTIAL_OVERRIDES is read at import, so check it in a fresh interpreter."""
-    env = {k: v for k, v in os.environ.items() if k != "LITELLM_ENABLE_MODEL_CONFIG_CREDENTIAL_OVERRIDES"}
-    if env_value is not None:
-        env["LITELLM_ENABLE_MODEL_CONFIG_CREDENTIAL_OVERRIDES"] = env_value
-    result = subprocess.run(
+    base_env: Final = {k: v for k, v in os.environ.items() if k != "LITELLM_ENABLE_MODEL_CONFIG_CREDENTIAL_OVERRIDES"}
+    env: Final = (
+        base_env if env_value is None else {**base_env, "LITELLM_ENABLE_MODEL_CONFIG_CREDENTIAL_OVERRIDES": env_value}
+    )
+    result: Final = subprocess.run(
         [
             sys.executable,
             "-c",
