@@ -167,8 +167,7 @@ class Authenticator:
                 message=(
                     "ChatGPT authentication required, but interactive device-code login "
                     "cannot run in a non-interactive/headless environment (such as the LiteLLM proxy). "
-                    "Please authenticate beforehand using the CLI or mount the auth token at "
-                    f"\x27{self.auth_file}\x27."
+                    "Please authenticate beforehand using the CLI or provision the auth token file."
                 ),
                 status_code=401,
             )

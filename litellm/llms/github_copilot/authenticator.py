@@ -366,8 +366,7 @@ class Authenticator:
                 message=(
                     "GitHub Copilot authentication required, but interactive device-code login "
                     "cannot run in a non-interactive/headless environment (such as the LiteLLM proxy). "
-                    "Please authenticate beforehand using the CLI or mount the token at "
-                    f"\x27{self.access_token_file}\x27."
+                    "Please authenticate beforehand using the CLI or provision the access token file."
                 ),
                 status_code=401,
             )
