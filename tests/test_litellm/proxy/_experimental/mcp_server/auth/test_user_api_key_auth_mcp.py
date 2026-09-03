@@ -6005,6 +6005,44 @@ class TestMCPDcrBridgeDelegateAdmission:
                 await MCPRequestHandler.process_mcp_request(scope)
 
         assert exc_info.value.status_code == 503
+        assert exc_info.value.detail == (
+            "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."
+        )
+
+    async def test_user_subject_envelope_permanent_db_fault_is_503_not_worded_as_transient(self):
+        """A query engine fault that never heals (a missing engine binary) still fails admission with 503,
+        but the detail must not call the database "temporarily unreachable" or ask the client to retry: the
+        DCR client would loop on a retry that can never succeed. The fault reaches the handler wrapped in
+        get_user_object's bare ValueError, so the wording has to be picked off the wrapped cause."""
+        from prisma.engine.errors import BinaryNotFoundError
+
+        envelope = self._mint_bridge_envelope(user_id="sso-user-7")
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
+        }
+        with (
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling admission tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+            patch(  # test-quality-ok: the envelope opener reads master_key off the proxy module, no injection seam
+                "litellm.proxy.proxy_server.master_key", self._MASTER_KEY
+            ),
+            self._patch_user_reload(
+                side_effect=self._wrapped_user_lookup_error(BinaryNotFoundError("query engine binary not found"))
+            ),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 503
+        assert "temporarily unreachable" not in exc_info.value.detail
+        assert "retry shortly" not in exc_info.value.detail.lower()
+        assert "BinaryNotFoundError" in exc_info.value.detail
+        assert "will not clear by retrying" in exc_info.value.detail
 
     async def test_user_subject_envelope_scim_deactivated_user_fails_closed_401(self):
         """SCIM-deactivating the envelope's user revokes it immediately: the reloaded user carries

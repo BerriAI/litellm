@@ -36,6 +36,7 @@ from pydantic import ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.management_endpoints.types import CustomOpenID, get_litellm_user_role
 from litellm.proxy.utils import get_custom_url
 
@@ -131,7 +132,7 @@ class SAMLAuthHandler:
 
     @staticmethod
     def _is_https(request: Request) -> bool:
-        return SAMLAuthHandler._base_url(request).startswith("https")
+        return IPAddressUtils.is_request_https(request)
 
     @staticmethod
     def _acs_url(request: Request) -> str:
