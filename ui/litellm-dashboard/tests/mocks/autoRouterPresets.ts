@@ -4,11 +4,8 @@ import { vi } from "vitest";
 import { hydratePresets, type AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 
 // Derived from the real bundled catalog so a preset edit there flows into test expectations
-// instead of redding on a stale copy. Read at runtime rather than imported as a module: the
-// catalog lives outside ui/litellm-dashboard, so a module import fails `next build`'s type
-// check inside the UI Docker image, whose build context is only this package.
-// Exported as vi.fn so a test can override the query state.
-const CATALOG_PATH = resolve(process.cwd(), "../../litellm/proxy/public_endpoints/autorouter_presets.json");
+// instead of redding on a stale copy. Exported as vi.fn so a test can override the query state.
+const CATALOG_PATH = resolve(__dirname, "../../../../litellm/proxy/public_endpoints/autorouter_presets.json");
 
 export const BUNDLED_PRESETS = hydratePresets(
   JSON.parse(readFileSync(CATALOG_PATH, "utf8")) as AutoRouterPresetsResponse,
