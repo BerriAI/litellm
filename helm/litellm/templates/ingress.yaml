@@ -5,6 +5,10 @@
 {{- $gatewayPort := .Values.gateway.service.port -}}
 {{- $backendPort := .Values.backend.service.port -}}
 {{- $uiPort := .Values.ui.service.port -}}
+{{- $controller := .Values.ingress.controller | default "alb" -}}
+{{- if not (has $controller (list "alb" "nginx")) }}
+{{- fail (printf "ingress.controller: unknown controller %q, expected one of alb, nginx" $controller) }}
+{{- end }}
 {{/*
   Backends addressable from ingress.extraPaths, keyed by the `service` field.
 */}}
@@ -27,10 +31,11 @@
   /litellm-asset-prefix, so without /*.txt they fall to the backend catch-all
   → 404 → client-side navigation never settles and the login flow spins in an
   infinite redirect loop (/ ⇄ /ui/login). ui/nginx.conf already serves *.txt
-  from the export; the rule only routes the request to it. Needs an ingress
-  controller whose ImplementationSpecific path is a wildcard pattern
-  (AWS ALB: `*` = 0+ chars); this chart targets the AWS Load Balancer
-  Controller.
+  from the export; the rule only routes the request to it. It needs an
+  ingress controller whose ImplementationSpecific path is a wildcard pattern
+  (AWS ALB: `*` = 0+ chars), so it is rendered for ingress.controller=alb
+  only: ingress-nginx serves ImplementationSpecific as a literal prefix
+  location, where /*.txt can never match.
 */}}
 {{- $uiPaths := list
     (dict "path" "/" "pathType" "Exact")
@@ -38,8 +43,10 @@
     (dict "path" "/litellm-asset-prefix" "pathType" "Prefix")
     (dict "path" "/_next" "pathType" "Prefix")
     (dict "path" "/ui" "pathType" "Prefix")
-    (dict "path" "/*.txt" "pathType" "ImplementationSpecific")
 -}}
+{{- if eq $controller "alb" }}
+{{- $uiPaths = append $uiPaths (dict "path" "/*.txt" "pathType" "ImplementationSpecific") }}
+{{- end }}
 {{/*
   Gateway data-plane prefixes — must mirror gateway/routes/allowlist.py.
   Versioned paths are listed explicitly to avoid routing management routes
@@ -83,12 +90,6 @@
   adding to it.
 */}}
 {{- $builtinPathKeys := list "/test|Exact" "/|Prefix" -}}
-{{- range $uiPaths }}
-{{- $builtinPathKeys = append $builtinPathKeys (printf "%s|%s" .path .pathType) }}
-{{- end }}
-{{- range $gatewayPrefixes }}
-{{- $builtinPathKeys = append $builtinPathKeys (printf "%s|Prefix" .) }}
-{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -115,8 +116,10 @@ spec:
         paths:
           # --- UI (Next.js static export) ---
           {{- range $uiPaths }}
+          {{- $pathType := include "litellm.ingress.pathType" (dict "controller" $controller "path" .path "pathType" .pathType) }}
+          {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|%s" .path $pathType) }}
           - path: {{ .path }}
-            pathType: {{ .pathType }}
+            pathType: {{ $pathType }}
             backend:
               service:
                 name: {{ $uiName }}
@@ -134,8 +137,10 @@ spec:
                 port:
                   number: {{ $gatewayPort }}
           {{- range $gatewayPrefixes }}
+          {{- $pathType := include "litellm.ingress.pathType" (dict "controller" $controller "path" . "pathType" "Prefix") }}
+          {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|%s" . $pathType) }}
           - path: {{ . }}
-            pathType: Prefix
+            pathType: {{ $pathType }}
             backend:
               service:
                 name: {{ $gatewayName }}
@@ -147,10 +152,11 @@ spec:
             Rendered after every built-in path so an entry can never take
             precedence over a default, and before the backend catch-all.
             Position only decides the match on controllers that honour manifest
-            order: the AWS Load Balancer Controller this chart targets sorts
-            Exact paths first and Prefix paths longest-first, but keeps
+            order: the AWS Load Balancer Controller (ingress.controller=alb)
+            sorts Exact paths first and Prefix paths longest-first, but keeps
             ImplementationSpecific paths in manifest order, which is what the
-            /*.txt rule above already depends on.
+            /*.txt rule above already depends on. ingress-nginx ignores order
+            and serves the longest matching location.
           */}}
           {{- range $idx, $extra := .Values.ingress.extraPaths }}
           {{- if not (kindIs "map" $extra) }}
