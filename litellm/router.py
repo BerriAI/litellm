@@ -9981,6 +9981,17 @@ class Router:
             coerce_token_limit(model_info.get("max_output_tokens")),
         )
 
+    def get_configured_mode(self, model_name: str) -> "str | None":
+        """Return the mode explicitly configured for a concrete deployment."""
+        deployment: Final = self.get_deployment_by_model_group_name(model_group_name=model_name)
+        if deployment is None:
+            return None
+
+        mode: Final = deployment.model_info.get("mode")
+        if isinstance(mode, str) and mode.strip():
+            return mode
+        return None
+
     def get_configured_display_name(self, model_name: str) -> "str | None":
         """
         Return the display_name explicitly configured in a concrete deployment's

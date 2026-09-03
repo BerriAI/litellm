@@ -428,7 +428,7 @@ def _coerce_off_peak_rate(value: object, default: float) -> float:
     return default
 
 
-def _apply_off_peak_pricing(
+def apply_off_peak_pricing(
     model_info: ModelInfo,
     current_time: datetime | None,
     prompt_base_cost: float,
@@ -462,7 +462,7 @@ def _apply_off_peak_to_base_costs(
     has no field for them.
     """
     prompt, completion, cache_creation, cache_creation_above_1hr, cache_read = base_costs
-    off_peak_prompt, off_peak_completion, off_peak_cache_read = _apply_off_peak_pricing(
+    off_peak_prompt, off_peak_completion, off_peak_cache_read = apply_off_peak_pricing(
         model_info, current_time, prompt, completion, cache_read
     )
     return (off_peak_prompt, off_peak_completion, cache_creation, cache_creation_above_1hr, off_peak_cache_read)
