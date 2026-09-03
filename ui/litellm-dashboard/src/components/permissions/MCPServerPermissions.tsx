@@ -5,12 +5,14 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { fetchMCPServers, fetchMCPToolsets } from "../networking";
 import { MCPServer, MCPToolset } from "../mcp_tools/types";
 import { ALL_PROXY_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
+import { InheritedGrant, inheritedGrantTooltip } from "./inheritedGrants";
 
 interface MCPServerPermissionsProps {
   mcpServers: string[];
   mcpAccessGroups?: string[];
   mcpToolPermissions?: Record<string, string[]>;
   mcpToolsets?: string[];
+  inheritedMcpServers?: InheritedGrant[];
   accessToken?: string | null;
 }
 
@@ -19,6 +21,7 @@ export function MCPServerPermissions({
   mcpAccessGroups = [],
   mcpToolPermissions = {},
   mcpToolsets = [],
+  inheritedMcpServers = [],
   accessToken,
 }: MCPServerPermissionsProps) {
   const [mcpServerDetails, setMCPServerDetails] = useState<MCPServer[]>([]);
@@ -50,10 +53,16 @@ export function MCPServerPermissions({
     });
   };
 
+  const directServerIds = mcpServers.filter(
+    (server) => server !== NO_MCP_SERVERS_SENTINEL && server !== ALL_PROXY_MCP_SERVERS_SENTINEL,
+  );
+  const inheritedOnlyServers = inheritedMcpServers.filter((grant) => !mcpServers.includes(grant.id));
+  const serverIdCount = directServerIds.length + inheritedOnlyServers.length;
+
   // Fetch MCP server details when component mounts
   useEffect(() => {
     const fetchMCPServerDetails = async () => {
-      if (accessToken && mcpServers.length > 0) {
+      if (accessToken && serverIdCount > 0) {
         try {
           const response = await fetchMCPServers(accessToken);
           if (response && Array.isArray(response)) {
@@ -67,7 +76,7 @@ export function MCPServerPermissions({
       }
     };
     fetchMCPServerDetails();
-  }, [accessToken, mcpServers.length]);
+  }, [accessToken, serverIdCount]);
 
   // Fetch toolset details
   useEffect(() => {
@@ -98,12 +107,14 @@ export function MCPServerPermissions({
   const blocksAllMcpServers = mcpServers.includes(NO_MCP_SERVERS_SENTINEL);
   const grantsAllProxyMcpServers = mcpServers.includes(ALL_PROXY_MCP_SERVERS_SENTINEL);
 
-  // Merge servers and access groups into one list
   const mergedItems = [
-    ...mcpServers
-      .filter((server) => server !== NO_MCP_SERVERS_SENTINEL && server !== ALL_PROXY_MCP_SERVERS_SENTINEL)
-      .map((server) => ({ type: "server", value: server })),
-    ...mcpAccessGroups.map((group) => ({ type: "accessGroup", value: group })),
+    ...directServerIds.map((server) => ({ type: "server", value: server, tooltip: `Full ID: ${server}` })),
+    ...inheritedOnlyServers.map((grant) => ({
+      type: "server",
+      value: grant.id,
+      tooltip: inheritedGrantTooltip(grant),
+    })),
+    ...mcpAccessGroups.map((group) => ({ type: "accessGroup", value: group, tooltip: "" })),
   ];
   const totalCount = mergedItems.length + mcpToolsets.length;
 
@@ -153,7 +164,7 @@ export function MCPServerPermissions({
                             {getMCPServerDisplayName(item.value)}
                           </span>
                         </TooltipTrigger>
-                        <TooltipContent>{`Full ID: ${item.value}`}</TooltipContent>
+                        <TooltipContent>{item.tooltip}</TooltipContent>
                       </Tooltip>
                     ) : (
                       <div className="inline-flex items-center gap-2 min-w-0">
