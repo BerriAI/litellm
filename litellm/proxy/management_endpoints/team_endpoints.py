@@ -2422,7 +2422,6 @@ def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
     elif data.budget_duration is not None or (
         "budget_duration" in updated_kv and updated_kv["budget_duration"] is None
     ):
-        updated_kv["budget_duration"] = None
         updated_kv["budget_reset_at"] = None
 
     if data.budget_limits is not None and len(data.budget_limits) > 0:

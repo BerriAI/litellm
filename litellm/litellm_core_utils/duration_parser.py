@@ -134,24 +134,30 @@ def get_next_standardized_reset_time(
     current_time, _ = _setup_timezone(current_time, timezone_str)
 
     value, unit = _parse_duration(_normalize_duration(duration))
-    if value is None or unit not in {"s", "m", "h", "d", "w", "mo"}:
+    if value is None:
         raise ValueError(
             f"Invalid budget_duration {duration!r}. Use the <int><unit> format (e.g. '1h', '7d', '30d', '1mo')."
         )
 
     base_midnight: Final = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    if unit == "d":
-        return _handle_day_reset(current_time, base_midnight, value, reset_time_of_day)
-    elif unit == "w":
-        return _handle_day_reset(current_time, base_midnight, value * 7, reset_time_of_day)
-    elif unit == "h":
-        return _handle_hour_reset(current_time, base_midnight, value)
-    elif unit == "m":
-        return _handle_minute_reset(current_time, base_midnight, value)
-    elif unit == "s":
-        return _handle_second_reset(current_time, base_midnight, value)
-    return _handle_month_reset(current_time, base_midnight, value, reset_time_of_day)
+    match unit:
+        case "d":
+            return _handle_day_reset(current_time, base_midnight, value, reset_time_of_day)
+        case "w":
+            return _handle_day_reset(current_time, base_midnight, value * 7, reset_time_of_day)
+        case "h":
+            return _handle_hour_reset(current_time, base_midnight, value)
+        case "m":
+            return _handle_minute_reset(current_time, base_midnight, value)
+        case "s":
+            return _handle_second_reset(current_time, base_midnight, value)
+        case "mo":
+            return _handle_month_reset(current_time, base_midnight, value, reset_time_of_day)
+        case _:
+            raise ValueError(
+                f"Invalid budget_duration {duration!r}. Use the <int><unit> format (e.g. '1h', '7d', '30d', '1mo')."
+            )
 
 
 def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> tuple[datetime, tzinfo]:
