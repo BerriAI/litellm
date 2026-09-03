@@ -223,7 +223,7 @@ describe("AddAutoRouterTab", () => {
       ),
     };
     mockFetchAvailableModels.mockResolvedValue([{ model_group: "smart-group", mode: "chat" }]);
-    vi.mocked(useAutoRouterRecommendation).mockReturnValue({
+    const recommendationQuery = {
       data: {
         quality_level: "max",
         optimize_for: "task_completion_speed",
@@ -250,7 +250,8 @@ describe("AddAutoRouterTab", () => {
       isError: false,
       error: null,
       refetch: vi.fn(),
-    });
+    };
+    vi.mocked(useAutoRouterRecommendation).mockReturnValue(recommendationQuery);
 
     renderWithProviders(<Harness />);
     await user.click(screen.getByTestId("configure-automatically-button"));
@@ -288,11 +289,11 @@ describe("AddAutoRouterTab", () => {
       ...EMPTY_RECOMMENDATION_QUERY,
       isPending: true,
     });
-    const { container } = renderWithProviders(<Harness />);
+    renderWithProviders(<Harness />);
 
     openAutoSetup();
     fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "early-router" } });
-    fireEvent.submit(container.querySelector("form")!);
+    fireEvent.submit(screen.getByRole("form", { name: "Add auto router" }));
 
     await waitFor(() =>
       expect(toast.fromError).toHaveBeenCalledWith("Building the best setup for your available models"),

@@ -570,7 +570,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     <TooltipProvider>
       <Card>
         <CardContent>
-          <form onSubmit={form.handleSubmit(() => handleAutoRouterSubmit())} noValidate>
+          <form aria-label="Add auto router" onSubmit={form.handleSubmit(() => handleAutoRouterSubmit())} noValidate>
             <FieldGroup>
               <FormField
                 control={form.control}
