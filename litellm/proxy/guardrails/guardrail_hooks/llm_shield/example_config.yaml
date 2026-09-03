@@ -1,0 +1,57 @@
+# Example LiteLLM Proxy configuration for LLM Shield
+# LLM Shield is a self-hosted PII gateway: https://github.com/ninadphalak/LLM-Shield-Proxy
+#
+# Unlike a masking guardrail, LLM Shield's substitution is reversible. Personal data is
+# replaced with placeholders before the request goes to the provider, and the original
+# values are put back into the model's reply, so the end user still sees real data while
+# the provider never received it.
+
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  # Both modes belong on ONE entry. pre_call redacts the outbound request and post_call
+  # restores the reply; listing only pre_call would send placeholders back to the user.
+  - guardrail_name: "llm-shield"
+    litellm_params:
+      guardrail: llm_shield
+      mode: ["pre_call", "post_call"]
+      default_on: true
+      # Your own LLM Shield deployment. Defaults to http://localhost:8000, and also reads
+      # LLM_SHIELD_API_BASE from the environment.
+      api_base: "http://localhost:8000"
+      # A virtual key configured on that deployment. Also reads LLM_SHIELD_API_KEY.
+      api_key: os.environ/LLM_SHIELD_API_KEY
+
+# Usage:
+#
+# 1. Run LLM Shield somewhere the proxy can reach:
+#      pip install llm-shield-proxy
+#      llm-shield-proxy serve
+#
+# 2. Point this config at it and start the proxy:
+#      export LLM_SHIELD_API_KEY="your-virtual-key"
+#      litellm --config example_config.yaml
+#
+# 3. Send a request containing personal data:
+#      curl http://localhost:4000/v1/chat/completions \
+#        -H "Authorization: Bearer sk-1234" \
+#        -H "Content-Type: application/json" \
+#        -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Email jane.doe@example.com the invoice"}]}'
+#
+#    The provider receives a stand-in value in place of the address. The reply you get
+#    back carries the real address again.
+#
+# Notes:
+#
+# - Requests are refused if LLM Shield is unreachable or returns an error, rather than
+#   being forwarded. Sending them on would hand the provider exactly the data this
+#   guardrail exists to withhold.
+# - Restoring a value requires the request and the reply to share a session. LiteLLM's
+#   session id is used when present; otherwise one is generated per request.
+# - Streaming replies are restored as chunks arrive. A placeholder split across two
+#   chunks is held back until it is complete, so partial values are never emitted.
+# - Only text is redacted; images and audio pass through untouched.

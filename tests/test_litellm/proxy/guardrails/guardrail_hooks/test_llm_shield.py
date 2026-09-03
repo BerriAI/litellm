@@ -10,6 +10,7 @@ from litellm.proxy.guardrails.guardrail_hooks.llm_shield.llm_shield import (
     LLMShieldGuardrail,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
 
@@ -81,6 +82,19 @@ class TestLLMShieldInitialization:
 
     def test_trailing_slash_is_stripped(self):
         assert _guardrail(api_base="http://shield.test/").api_base == "http://shield.test"
+
+    def test_both_modes_can_be_enabled_on_one_entry(self):
+        """Redaction and restoration are two halves of one config entry.
+
+        A deployment that lists only pre_call would redact the request and then hand
+        the placeholders straight back to the end user.
+        """
+        guardrail = _guardrail(event_hook=["pre_call", "post_call"])
+        data: dict = {"messages": []}
+
+        assert guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call) is True
+        assert guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call) is True
+        assert guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.during_call) is False
 
 
 class TestRedaction:
