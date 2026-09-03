@@ -41,7 +41,9 @@ from litellm.litellm_core_utils.get_provider_specific_headers import (
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
 )
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import CredentialItem
 
 
@@ -7735,16 +7737,18 @@ def _request_for(path: str) -> MagicMock:
     return request
 
 
-def _spend_log_session_id(data: dict) -> str:
+def _spend_log_session_id(data: dict[str, object]) -> str:
     """Resolve session_id the way LiteLLM_SpendLogs does: standard_logging_payload.trace_id."""
     from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_session_id_for_spend_log
 
+    metadata = data["metadata"]
+    assert isinstance(metadata, dict)
     litellm_params = get_litellm_params(
-        litellm_session_id=data.get("litellm_session_id"),
-        litellm_trace_id=data.get("litellm_trace_id"),
-        metadata=data["metadata"],
+        litellm_session_id=str(data["litellm_session_id"]) if "litellm_session_id" in data else None,
+        litellm_trace_id=str(data["litellm_trace_id"]) if "litellm_trace_id" in data else None,
+        metadata=metadata,
     )
     trace_id = StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
         logging_obj=SimpleNamespace(litellm_trace_id="per-call-random-trace-id"),
@@ -7756,10 +7760,11 @@ def _spend_log_session_id(data: dict) -> str:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("request_correlation_in_logs", [False, True])
 async def test_missing_session_id_generate_makes_spend_log_and_callback_session_ids_agree(
-    monkeypatch, request_correlation_in_logs: bool
+    monkeypatch: pytest.MonkeyPatch, request_correlation_in_logs: bool
 ):
     """Without a session header, SpendLogs.session_id and the metadata.session_id that Langfuse logs
-    must be the same generated id, so cross-referencing the two by session_id works."""
+    must be the same generated id, so cross-referencing the two by session_id works. The id is marked
+    as generated so affinity consumers (Fireworks x-session-affinity, router session pins) skip it."""
     monkeypatch.setattr(litellm, "request_correlation_in_logs", request_correlation_in_logs)
     data = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
 
@@ -7774,6 +7779,10 @@ async def test_missing_session_id_generate_makes_spend_log_and_callback_session_
     callback_session_id = updated["metadata"]["session_id"]
     assert isinstance(callback_session_id, str) and len(callback_session_id) == 36
     assert _spend_log_session_id(updated) == callback_session_id
+    assert updated["metadata"][SESSION_ID_GENERATED_METADATA_KEY] is True
+    assert get_fireworks_session_id(
+        {"litellm_session_id": updated["litellm_session_id"], "metadata": updated["metadata"]}
+    ) is None
 
 
 @pytest.mark.asyncio
@@ -7826,6 +7835,11 @@ async def test_missing_session_id_policy_keeps_client_supplied_session_id(policy
     assert updated["litellm_session_id"] == "client-session-1"
     assert updated["metadata"]["session_id"] == "client-session-1"
     assert _spend_log_session_id(updated) == "client-session-1"
+    assert SESSION_ID_GENERATED_METADATA_KEY not in updated["metadata"]
+    assert (
+        get_fireworks_session_id({"litellm_session_id": "client-session-1", "metadata": updated["metadata"]})
+        == "client-session-1"
+    )
 
 
 @pytest.mark.asyncio

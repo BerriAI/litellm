@@ -24,6 +24,7 @@ from litellm.constants import (
     OTEL_SERVICE_NAME_METADATA_KEYS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+    SESSION_ID_GENERATED_METADATA_KEY,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
@@ -746,6 +747,7 @@ def apply_missing_session_id_policy(
             data["litellm_session_id"] = session_id  # rebind-ok: data is an out-param
             data.setdefault("litellm_trace_id", session_id)
             metadata["session_id"] = session_id
+            metadata[SESSION_ID_GENERATED_METADATA_KEY] = True
         case "reject":
             raise ProxyException(
                 message=(
