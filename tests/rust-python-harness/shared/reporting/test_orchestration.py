@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from time import monotonic
 from typing import Final
@@ -9,8 +9,14 @@ from typing import Final
 from .models import CaseResult, Coverage, HarnessCase, HarnessRun, RunStatus, Strategy
 from .orchestration import run_strategies
 from .rendering import ReportSection, StrategyRenderer, render_outcomes
-from .strategy import ModuleCaseSpec, StrategyDefinition, UpdateCallback
-from .ui import _HarnessOutputFilter, _final_report
+from .strategy import (
+    CaseDefinition,
+    ModuleCaseSpec,
+    NotImplementedCaseSpec,
+    StrategyDefinition,
+    UpdateCallback,
+)
+from .ui import HarnessOutputFilter, final_report
 
 
 def _run_cases(
@@ -22,25 +28,42 @@ def _run_cases(
     del repo_root, runner_args
     run: Final = HarnessRun.from_cases(cases)
     for case in cases:
-        result: Final = run.results[case.key]
-        nodeid: Final = f"check:{case.strategy_id}:{case.sdk_function}"
-        result.collected.add(nodeid)
-        failed: Final = isinstance(case.spec, ModuleCaseSpec) and case.spec.module == "fail"
-        result.record(nodeid, RunStatus.FAILED if failed else RunStatus.PASSED)
-        if failed:
-            run.failures.append((nodeid, "comparison failed"))
-        on_update(run)
+        _record_case(run, case, on_update)
     run.finished_at = monotonic()
     return int(bool(run.failures)), run
 
 
+def _record_case(run: HarnessRun, case: HarnessCase, on_update: UpdateCallback) -> None:
+    result: Final = run.results[case.key]
+    nodeid: Final = f"check:{case.strategy_id}:{case.sdk_function}"
+    result.collected.add(nodeid)
+    failed: Final = isinstance(case.spec, ModuleCaseSpec) and case.spec.module == "fail"
+    result.record(nodeid, RunStatus.FAILED if failed else RunStatus.PASSED)
+    if failed:
+        run.failures.append((nodeid, "comparison failed"))
+    on_update(run)
+
+
 def _strategy(name: str, module: str, *, render: StrategyRenderer = render_outcomes) -> Strategy:
-    definition: Final = StrategyDefinition(Path.cwd(), ModuleCaseSpec, _run_cases, render)
+    case_definition: Final = CaseDefinition(
+        "sdk", "ocr", ModuleCaseSpec(coverage=Coverage.COMPLETE, module=module)
+    )
+    definition: Final = StrategyDefinition(
+        id=name,
+        order=1,
+        label=name,
+        description="Example strategy",
+        directory=Path.cwd(),
+        runnable_spec=ModuleCaseSpec,
+        cases=(case_definition,),
+        run=_run_cases,
+        render=render,
+    )
     case: Final = HarnessCase(
         strategy_id=name,
         strategy_label=name,
         sdk_function="ocr",
-        spec=ModuleCaseSpec(coverage=Coverage.COMPLETE, module=module),
+        spec=case_definition.spec,
     )
     return Strategy(1, name, name, "", Path.cwd(), (case,), definition)
 
@@ -53,30 +76,54 @@ def test_combines_strategy_reports_and_delegates_rendering() -> None:
     assert code == 1
     assert report.results["first:ocr"].status is RunStatus.FAILED
     assert report.results["second:ocr"].status is RunStatus.PASSED
-    assert report.completed_tests == 2
-    final_report: Final = _final_report(report, code, strategies)
-    assert "Status: FAILED" in final_report
-    assert "first\n- sdk/ocr: failed, 1/1 tests, complete coverage" in final_report
-    assert "second\n- sdk/ocr: passed, 1/1 tests, complete coverage" in final_report
-    assert "Failures (showing 1 of 1)" in final_report
-    assert "Port confidence" not in final_report
-    assert "Slowest tests" not in final_report
+    assert report.completed_checks == 2
+    rendered: Final = final_report(report, code, strategies)
+    assert "Status: FAILED" in rendered
+    assert "first\n- sdk/ocr: failed, 1/1 checks, complete coverage" in rendered
+    assert "second\n- sdk/ocr: passed, 1/1 checks, complete coverage" in rendered
+    assert "Failures (showing 1 of 1)" in rendered
+    assert "Port confidence" not in rendered
+    assert "Slowest tests" not in rendered
 
 
 def test_strategy_can_replace_the_generic_result_view() -> None:
-    def render_custom(_results: Sequence[CaseResult]) -> tuple[ReportSection, ...]:
+    def render_custom(results: Sequence[CaseResult]) -> tuple[ReportSection, ...]:
+        del results
         return (ReportSection("Custom comparison", ("domain-owned diff",)),)
 
     strategy: Final = _strategy("custom", "pass", render=render_custom)
     code, report = run_strategies((strategy,), Path.cwd(), lambda _: None)
 
-    final_report: Final = _final_report(report, code, (strategy,))
-    assert "Custom comparison\ndomain-owned diff" in final_report
-    assert "sdk/ocr" not in final_report
+    rendered: Final = final_report(report, code, (strategy,))
+    assert "Custom comparison\ndomain-owned diff" in rendered
+    assert "sdk/ocr" not in rendered
+
+
+def test_not_implemented_case_makes_a_successful_report_incomplete() -> None:
+    runnable: Final = _strategy("mixed", "pass")
+    unavailable: Final = HarnessCase(
+        strategy_id="mixed",
+        strategy_label="mixed",
+        sdk_function="messages",
+        spec=NotImplementedCaseSpec(reason="No Messages case is registered."),
+    )
+    code, executed = run_strategies((runnable,), Path.cwd(), lambda _: None)
+    unavailable_run: Final = HarnessRun.from_cases((unavailable,))
+    combined: Final = HarnessRun(
+        results={**executed.results, **unavailable_run.results},
+        started_at=executed.started_at,
+        finished_at=executed.finished_at,
+    )
+
+    rendered: Final = final_report(combined, code, (runnable,))
+
+    assert code == 0
+    assert "Status: INCOMPLETE" in rendered
+    assert "Cases: 2 selected, 1 not implemented, 0 skipped" in rendered
 
 
 def test_harness_output_filter_suppresses_only_ocr_cost_warnings() -> None:
-    output_filter: Final = _HarnessOutputFilter()
+    output_filter: Final = HarnessOutputFilter()
     ocr_cost_warning: Final = logging.LogRecord(
         "LiteLLM",
         logging.WARNING,

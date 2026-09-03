@@ -9,10 +9,15 @@ import sys
 import tempfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 
-import pytest
+from pluggy import HookimplMarker
 from pydantic import BaseModel, ConfigDict
+
+if TYPE_CHECKING:
+    import pytest
+
+hookimpl: Final = HookimplMarker("pytest")
 
 Backend = Literal["python", "rust"]
 
@@ -35,6 +40,15 @@ class BackendSpec(BaseModel):
     probe: str = ""
 
 
+class WorkerArgs(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    backend: Backend
+    probe: str
+    output: Path
+    pytest_args: tuple[str, ...]
+
+
 class ResultPlugin:
     def __init__(self, backend: Backend, probe: Callable[[], object] | None) -> None:
         self.backend: Final = backend
@@ -50,7 +64,7 @@ class ResultPlugin:
     def pytest_collection_finish(self, session: pytest.Session) -> None:
         self.tests = tuple(item.nodeid for item in session.items)
 
-    @pytest.hookimpl(tryfirst=True)
+    @hookimpl(tryfirst=True)
     def pytest_runtest_call(self, item: pytest.Item) -> None:
         del item
         self.verify()
@@ -136,12 +150,15 @@ def _load_probe(reference: str) -> Callable[[], object] | None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    import pytest
+
     parser: Final = argparse.ArgumentParser()
     parser.add_argument("--backend", required=True, choices=("python", "rust"))
     parser.add_argument("--probe", default="")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("pytest_args", nargs=argparse.REMAINDER)
-    args: Final = parser.parse_args(argv)
+    namespace: Final = parser.parse_args(argv)
+    args: Final = WorkerArgs.model_validate(vars(namespace))
     try:
         plugin: Final = ResultPlugin(args.backend, _load_probe(args.probe))
         plugin.verify()

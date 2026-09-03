@@ -38,9 +38,9 @@ from .....shared.parity.runner import (
     execution_worker_pair,
     parity_worker_main,
 )
+from ...runner import E2ECheck
 from .fixtures.config import configured_fixture_directory
 from .fixtures.models import OcrParityCase, OcrSdkInput
-from ...runner import E2ECheck
 
 API_KEY: Final = "test-key"
 PYTHON_HTTP_SENTINEL: Final = "python-ocr-parity-fallback"

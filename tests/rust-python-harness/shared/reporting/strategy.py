@@ -3,58 +3,61 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Protocol, TypeAlias
+from typing import Annotated, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, StringConstraints
 
-from .models import Coverage, HarnessCase, HarnessRun
+from .models import CaseDisposition, Coverage, HarnessCase, HarnessRun, SdkFunction, Surface
 from .rendering import StrategyRenderer
 
-_INERT_COVERAGE: Final = frozenset({Coverage.PLANNED, Coverage.NOT_APPLICABLE})
 UpdateCallback: TypeAlias = Callable[[HarnessRun], None]
+NonBlankString: TypeAlias = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class SuiteCaseSpec(BaseModel):
-    """A JSON-suite-driven strategy cell configured with a suite path."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    disposition: Literal[CaseDisposition.RUNNABLE] = CaseDisposition.RUNNABLE
     coverage: Coverage
-    suite: str | None = None
+    suite: NonBlankString
     note: str = ""
-
-    @property
-    def configured(self) -> bool:
-        return self.suite is not None
-
-    @model_validator(mode="after")
-    def _validate_inert_coverage(self) -> SuiteCaseSpec:
-        if self.coverage in _INERT_COVERAGE and self.suite is not None:
-            raise ValueError(f"{self.coverage.value} case cannot configure tests")
-        return self
 
 
 class ModuleCaseSpec(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    disposition: Literal[CaseDisposition.RUNNABLE] = CaseDisposition.RUNNABLE
     coverage: Coverage
-    module: str | None = None
+    module: NonBlankString
     note: str = ""
 
-    @property
-    def configured(self) -> bool:
-        return self.module is not None
 
-    @model_validator(mode="after")
-    def _validate_inert_coverage(self) -> ModuleCaseSpec:
-        if self.coverage in _INERT_COVERAGE and self.module is not None:
-            raise ValueError(f"{self.coverage.value} case cannot configure a module")
-        if self.module is not None and not self.module.strip():
-            raise ValueError("case module cannot be blank")
-        return self
+class NotImplementedCaseSpec(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    disposition: Literal[CaseDisposition.NOT_IMPLEMENTED] = CaseDisposition.NOT_IMPLEMENTED
+    coverage: None = None
+    reason: NonBlankString
 
 
-CaseSpec: TypeAlias = SuiteCaseSpec | ModuleCaseSpec
+class SkippedCaseSpec(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    disposition: Literal[CaseDisposition.SKIPPED] = CaseDisposition.SKIPPED
+    coverage: None = None
+    reason: NonBlankString
+
+
+RunnableCaseSpec: TypeAlias = SuiteCaseSpec | ModuleCaseSpec
+UnavailableCaseSpec: TypeAlias = NotImplementedCaseSpec | SkippedCaseSpec
+CaseSpec: TypeAlias = RunnableCaseSpec | UnavailableCaseSpec
+
+
+@dataclass(frozen=True, slots=True)
+class CaseDefinition:
+    surface: Surface
+    sdk_function: SdkFunction
+    spec: CaseSpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,8 +85,13 @@ class StrategyChecker(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class StrategyDefinition:
+    id: str
+    order: int
+    label: str
+    description: str
     directory: Path
-    case_spec: type[SuiteCaseSpec] | type[ModuleCaseSpec]
+    runnable_spec: type[SuiteCaseSpec] | type[ModuleCaseSpec]
+    cases: tuple[CaseDefinition, ...]
     run: StrategyRunner
     render: StrategyRenderer
     check: StrategyChecker | None = None

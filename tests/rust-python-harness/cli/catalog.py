@@ -3,32 +3,18 @@ from __future__ import annotations
 import hashlib
 import importlib
 import importlib.util
-import json
 import pkgutil
 import sys
 from pathlib import Path
 from types import ModuleType
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
-
 from .. import strategies as _strategies_package
-from ..shared.reporting.models import SDK_FUNCTIONS, HarnessCase, SdkFunction, Strategy
+from ..shared.reporting.models import SDK_FUNCTIONS, SURFACES, CaseDisposition, HarnessCase, Strategy
 from ..shared.reporting.strategy import StrategyDefinition
 
 _STRATEGIES_PACKAGE: Final = _strategies_package
 STRATEGIES_ROOT: Final = Path(_STRATEGIES_PACKAGE.__path__[0])
-
-
-class StrategySpec(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    order: int
-    id: str
-    label: str
-    description: str
-    functions: dict[SdkFunction, dict[str, object]]
-    gateway: dict[SdkFunction, dict[str, object]] = {}
 
 
 def _load_strategy_module(name: str, folder: Path, prefix: str | None) -> ModuleType:
@@ -57,47 +43,49 @@ def _synthetic_module_name(folder: Path) -> str:
 
 def _load_strategy(name: str, folder: Path, prefix: str | None) -> Strategy:
     module: Final = _load_strategy_module(name, folder, prefix)
-    definition = getattr(module, "STRATEGY", None)
+    definition: Final = getattr(module, "STRATEGY", None)
     if not isinstance(definition, StrategyDefinition):
         raise ValueError(f"{folder}: __init__.py must export STRATEGY: StrategyDefinition")
-    manifest: Final = definition.directory / "strategy.json"
-    if not manifest.exists():
-        raise ValueError(f"{definition.directory}: missing strategy.json")
-    try:
-        data: Final = StrategySpec.model_validate_json(manifest.read_text(encoding="utf-8"))
-        adapter: Final = TypeAdapter(dict[SdkFunction, definition.case_spec])
-        functions: Final = adapter.validate_python(data.functions)
-        gateway: Final = adapter.validate_python(data.gateway)
-    except (ValidationError, json.JSONDecodeError) as error:
-        raise ValueError(f"{manifest}: {error}") from error
-    if data.id != name:
-        raise ValueError(f"{manifest}: manifest id {data.id!r} must match folder name {name!r}")
-    if set(functions) != set(SDK_FUNCTIONS):
-        raise ValueError(f"{manifest}: functions must exactly match {SDK_FUNCTIONS}")
-    cases: Final = (
-        *(
-            HarnessCase(
-                strategy_id=data.id,
-                strategy_label=data.label,
-                sdk_function=function,
-                spec=functions[function],
-                surface="sdk",
-            )
-            for function in SDK_FUNCTIONS
-        ),
-        *(
-            HarnessCase(
-                strategy_id=data.id,
-                strategy_label=data.label,
-                sdk_function=function,
-                spec=spec,
-                surface="gateway",
-            )
-            for function, spec in gateway.items()
-        ),
+    if definition.id != name:
+        raise ValueError(f"{folder}: strategy id {definition.id!r} must match folder name {name!r}")
+    if definition.directory.resolve() != folder.resolve():
+        raise ValueError(f"{folder}: strategy directory must be {folder}")
+    keys: Final = tuple((case.surface, case.sdk_function) for case in definition.cases)
+    duplicates: Final = tuple(sorted(key for key in set(keys) if keys.count(key) > 1))
+    if duplicates:
+        raise ValueError(f"{folder}: duplicate strategy cases: {duplicates}")
+    expected: Final = frozenset((surface, function) for surface in SURFACES for function in SDK_FUNCTIONS)
+    actual: Final = frozenset(keys)
+    if actual != expected:
+        missing: Final = tuple(sorted(expected - actual))
+        extra: Final = tuple(sorted(actual - expected))
+        raise ValueError(f"{folder}: strategy cases must exactly match the harness matrix; missing={missing}, extra={extra}")
+    incompatible: Final = tuple(
+        (case.surface, case.sdk_function)
+        for case in definition.cases
+        if case.spec.disposition is CaseDisposition.RUNNABLE
+        and not isinstance(case.spec, definition.runnable_spec)
+    )
+    if incompatible:
+        raise ValueError(f"{folder}: runnable cases do not match {definition.runnable_spec.__name__}: {incompatible}")
+    cases: Final = tuple(
+        HarnessCase(
+            strategy_id=definition.id,
+            strategy_label=definition.label,
+            sdk_function=case.sdk_function,
+            spec=case.spec,
+            surface=case.surface,
+        )
+        for case in definition.cases
     )
     return Strategy(
-        data.order, data.id, data.label, data.description, definition.directory, cases, definition
+        definition.order,
+        definition.id,
+        definition.label,
+        definition.description,
+        definition.directory,
+        cases,
+        definition,
     )
 
 

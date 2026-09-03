@@ -1,65 +1,67 @@
 from __future__ import annotations
 
 import importlib
-import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Final
 
 import pytest
 
-from ..shared.reporting.models import SDK_FUNCTIONS, HarnessRun, Strategy
-from ..shared.reporting.strategy import StrategyDefinition
+from ..shared.reporting.models import SDK_FUNCTIONS, SURFACES, CaseDisposition, HarnessRun, Strategy
+from ..shared.reporting.strategy import NotImplementedCaseSpec, SkippedCaseSpec, StrategyDefinition
 from . import main
 from .catalog import STRATEGIES_ROOT, load_catalog
 from .selection import pick_values, select
 
-_MODULE_STRATEGY_INIT: Final = (
-    "import importlib\n"
-    "from pathlib import Path\n"
-    "strategy = importlib.import_module('tests.rust-python-harness.shared.reporting.strategy')\n"
-    "runner = importlib.import_module('tests.rust-python-harness.strategies.trace_parity.runner')\n"
-    "rendering = importlib.import_module('tests.rust-python-harness.shared.reporting.rendering')\n"
-    "STRATEGY = strategy.StrategyDefinition(Path(__file__).parent, strategy.ModuleCaseSpec, runner.run_trace_cases, rendering.render_outcomes)\n"
-)
-_SUITE_STRATEGY_INIT: Final = (
-    "import importlib\n"
-    "from pathlib import Path\n"
-    "strategy = importlib.import_module('tests.rust-python-harness.shared.reporting.strategy')\n"
-    "runner = importlib.import_module('tests.rust-python-harness.strategies.trace_parity.runner')\n"
-    "rendering = importlib.import_module('tests.rust-python-harness.shared.reporting.rendering')\n"
-    "STRATEGY = strategy.StrategyDefinition(Path(__file__).parent, strategy.SuiteCaseSpec, runner.run_trace_cases, rendering.render_outcomes)\n"
-)
-
-
-def _manifest(
-    *, id: str = "example", drop_function: str | None = None, **cells: object
-) -> dict[str, object]:
-    functions = {
-        function: cells.get(function, {"coverage": "planned"})
+def _strategy_source(
+    *,
+    strategy_id: str = "example",
+    drop: tuple[str, str] | None = None,
+    duplicate: tuple[str, str] | None = None,
+    incompatible: tuple[str, str] | None = None,
+) -> str:
+    cells: Final = tuple(
+        (surface, function)
+        for surface in SURFACES
         for function in SDK_FUNCTIONS
-        if function != drop_function
-    }
-    return {
-        "order": 1,
-        "id": id,
-        "label": "Example strategy",
-        "description": "Example description",
-        "functions": functions,
-    }
+        if (surface, function) != drop
+    )
+    definitions: Final = tuple(
+        (
+            f"strategy.CaseDefinition({surface!r}, {function!r}, "
+            "strategy.ModuleCaseSpec(coverage=models.Coverage.COMPLETE, module='tests.example'))"
+            if (surface, function) == incompatible
+            else (
+                f"strategy.CaseDefinition({surface!r}, {function!r}, "
+                "strategy.NotImplementedCaseSpec(reason='Not implemented yet'))"
+            )
+        )
+        for surface, function in (*cells, *((duplicate,) if duplicate is not None else ()))
+    )
+    return (
+        "import importlib\n"
+        "from pathlib import Path\n"
+        "strategy = importlib.import_module('tests.rust-python-harness.shared.reporting.strategy')\n"
+        "models = importlib.import_module('tests.rust-python-harness.shared.reporting.models')\n"
+        "runner = importlib.import_module('tests.rust-python-harness.strategies.trace_parity.runner')\n"
+        "rendering = importlib.import_module('tests.rust-python-harness.shared.reporting.rendering')\n"
+        f"CASES = ({','.join(definitions)},)\n"
+        "STRATEGY = strategy.StrategyDefinition("
+        f"id={strategy_id!r}, order=1, label='Example strategy', description='Example description', "
+        "directory=Path(__file__).parent, runnable_spec=strategy.SuiteCaseSpec, cases=CASES, "
+        "run=runner.run_trace_cases, render=rendering.render_outcomes)\n"
+    )
 
 
 def _write_strategy_folder(
     root: Path,
     name: str = "example",
     *,
-    manifest: dict[str, object],
-    init_source: str = _MODULE_STRATEGY_INIT,
+    init_source: str | None = None,
 ) -> Path:
-    folder = root / name
+    folder: Final = root / name
     folder.mkdir(parents=True)
-    (folder / "__init__.py").write_text(init_source, encoding="utf-8")
-    (folder / "strategy.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (folder / "__init__.py").write_text(init_source or _strategy_source(), encoding="utf-8")
     return folder
 
 
@@ -74,10 +76,8 @@ def test_should_load_the_five_harness_strategies_in_order() -> None:
         "unit_tests_rust",
     ]
     assert all(
-        tuple(
-            case.sdk_function for case in strategy.cases if case.surface == "sdk"
-        )
-        == SDK_FUNCTIONS
+        tuple((case.surface, case.sdk_function) for case in strategy.cases)
+        == tuple((surface, function) for surface in SURFACES for function in SDK_FUNCTIONS)
         for strategy in strategies
     )
 
@@ -95,54 +95,56 @@ def test_every_strategy_folder_complies() -> None:
         definition = strategy.definition
         assert isinstance(definition, StrategyDefinition)
         assert definition.directory == strategy.directory
-        assert (strategy.directory / "strategy.json").exists()
+        assert not (strategy.directory / "strategy.json").exists()
         assert (strategy.directory / "AGENTS.md").exists()
         for case in strategy.cases:
-            assert isinstance(case.spec, definition.case_spec)
+            if case.spec.disposition is CaseDisposition.RUNNABLE:
+                assert isinstance(case.spec, definition.runnable_spec)
 
 
-def test_should_reject_a_manifest_missing_an_sdk_function(tmp_path: Path) -> None:
-    _write_strategy_folder(tmp_path, manifest=_manifest(drop_function="count_tokens"))
+def test_should_reject_a_registry_missing_a_matrix_cell(tmp_path: Path) -> None:
+    _write_strategy_folder(tmp_path, init_source=_strategy_source(drop=("sdk", "count_tokens")))
 
-    with pytest.raises(ValueError, match="functions must exactly match"):
+    with pytest.raises(ValueError, match="must exactly match the harness matrix"):
+        load_catalog(tmp_path)
+
+
+def test_should_reject_a_duplicate_matrix_cell(tmp_path: Path) -> None:
+    _write_strategy_folder(tmp_path, init_source=_strategy_source(duplicate=("sdk", "ocr")))
+
+    with pytest.raises(ValueError, match="duplicate strategy cases"):
         load_catalog(tmp_path)
 
 
 def test_should_reject_a_folder_without_a_strategy_definition(tmp_path: Path) -> None:
-    _write_strategy_folder(
-        tmp_path, manifest=_manifest(), init_source=""
-    )
+    folder: Final = tmp_path / "example"
+    folder.mkdir()
+    (folder / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="STRATEGY"):
         load_catalog(tmp_path)
 
 
-def test_should_reject_a_manifest_id_that_differs_from_its_folder(tmp_path: Path) -> None:
-    _write_strategy_folder(tmp_path, manifest=_manifest(id="other"))
+def test_should_reject_a_strategy_id_that_differs_from_its_folder(tmp_path: Path) -> None:
+    _write_strategy_folder(tmp_path, init_source=_strategy_source(strategy_id="other"))
 
     with pytest.raises(ValueError, match="must match folder name"):
         load_catalog(tmp_path)
 
 
-def test_should_reject_modules_in_a_suite_strategy_manifest(tmp_path: Path) -> None:
-    _write_strategy_folder(
-        tmp_path,
-        manifest=_manifest(ocr={"coverage": "partial", "module": "tests.example"}),
-        init_source=_SUITE_STRATEGY_INIT,
-    )
+def test_should_reject_a_runnable_case_incompatible_with_the_strategy(tmp_path: Path) -> None:
+    _write_strategy_folder(tmp_path, init_source=_strategy_source(incompatible=("sdk", "ocr")))
 
-    with pytest.raises(ValueError, match="module"):
+    with pytest.raises(ValueError, match="runnable cases do not match SuiteCaseSpec"):
         load_catalog(tmp_path)
 
 
-def test_should_reject_a_planned_cell_that_configures_a_module(tmp_path: Path) -> None:
-    _write_strategy_folder(
-        tmp_path,
-        manifest=_manifest(ocr={"coverage": "planned", "module": "tests.example"}),
-    )
-
-    with pytest.raises(ValueError, match="planned case cannot configure a module"):
-        load_catalog(tmp_path)
+@pytest.mark.parametrize("case_type", (NotImplementedCaseSpec, SkippedCaseSpec))
+def test_should_reject_an_unavailable_case_with_a_blank_reason(
+    case_type: type[NotImplementedCaseSpec] | type[SkippedCaseSpec],
+) -> None:
+    with pytest.raises(ValueError, match="at least 1 character"):
+        case_type(reason=" ")
 
 
 def test_should_filter_the_catalog_by_strategy_and_sdk_function() -> None:
@@ -150,8 +152,10 @@ def test_should_filter_the_catalog_by_strategy_and_sdk_function() -> None:
 
     cases = select(strategies, {"e2e_parity"}, {"messages"})
 
-    assert len(cases) == 1
-    assert cases[0].key == "e2e_parity:messages"
+    assert tuple(case.key for case in cases) == (
+        "e2e_parity:messages",
+        "e2e_parity:gateway:messages",
+    )
 
 
 def test_should_filter_the_catalog_by_surface() -> None:
@@ -159,13 +163,19 @@ def test_should_filter_the_catalog_by_surface() -> None:
 
     cases = select(strategies, set(), set(), "gateway")
 
-    assert cases == ()
+    assert len(cases) == len(strategies) * len(SDK_FUNCTIONS)
+    assert all(case.surface == "gateway" for case in cases)
     assert select(strategies, {"e2e_parity"}, set(), "sdk")[0].surface == "sdk"
 
 
 def test_should_reject_an_unknown_strategy() -> None:
     with pytest.raises(ValueError, match="Unknown strategy"):
         select(load_catalog(), {"not-real"}, set())
+
+
+def test_should_reject_an_empty_selection() -> None:
+    with pytest.raises(ValueError, match="matched no harness cases"):
+        select((), set(), set())
 
 
 def test_should_pick_multiple_interactive_filters() -> None:
@@ -192,20 +202,44 @@ def test_list_honors_strategy_and_function_filters(
     assert "messages" not in captured.out
 
 
-def test_run_reports_planned_cells_as_success(capsys: pytest.CaptureFixture[str]) -> None:
+def test_list_describes_an_unavailable_case(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code: Final = main(
+        ["list", "--strategy", "e2e_parity", "--surface", "sdk", "--function", "messages"]
+    )
+
+    captured: Final = capsys.readouterr()
+    assert exit_code == 0
+    assert "sdk/messages" in captured.out
+    assert "not_implemented" in captured.out
+    assert "no standalone end-to-end parity case is registered" in captured.out
+
+
+def test_run_reports_not_implemented_cells_as_incomplete(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = main(["run", "--strategy", "trace_parity", "--surface", "gateway", "--plain"])
 
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "Rust <-> Python parity report" in captured.out
-    assert "Status: PASSED" in captured.out
+    assert "Status: INCOMPLETE" in captured.out
+    assert "Cases: 6 selected, 6 not implemented, 0 skipped" in captured.out
     assert "Exit code: 0" in captured.out
-    assert "Trace comparisons" not in captured.out
+    assert "Trace: NOT IMPLEMENTED" in captured.out
+    assert "No gateway OCR trace-parity case is registered." in captured.out
     assert "Port confidence" not in captured.out
     assert "Slowest tests" not in captured.out
     assert "Strategy × API" not in captured.out
     assert "╭" not in captured.out
     assert "✓" not in captured.out
+
+
+def test_run_reports_skipped_only_cells_as_skipped(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code: Final = main(["run", "--strategy", "unit_tests_rust", "--surface", "gateway", "--plain"])
+
+    captured: Final = capsys.readouterr()
+    assert exit_code == 0
+    assert "Status: SKIPPED" in captured.out
+    assert "Cases: 6 selected, 0 not implemented, 6 skipped" in captured.out
+    assert "Native Rust unit tests are not gateway execution." in captured.out
 
 
 def test_run_rejects_an_unknown_strategy(
@@ -245,7 +279,7 @@ def test_keyboard_interrupt_exits_cleanly(
 
     monkeypatch.setattr(cli, "load_catalog", interrupt)
 
-    exit_code: Final = cli.main(["list"])
+    exit_code: Final = main(["list"])
 
     captured: Final = capsys.readouterr()
     assert exit_code == 130

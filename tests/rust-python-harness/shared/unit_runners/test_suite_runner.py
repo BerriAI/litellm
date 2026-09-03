@@ -6,7 +6,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from ..reporting.models import Coverage, HarnessCase, RunStatus
-from ..reporting.strategy import SuiteCaseSpec
+from ..reporting.strategy import CaseSpec, NotImplementedCaseSpec, SuiteCaseSpec
 from .suite_runner import run_suites
 
 
@@ -25,7 +25,7 @@ def _execute(
     return suite.problems
 
 
-def _case(spec: SuiteCaseSpec) -> HarnessCase:
+def _case(spec: CaseSpec) -> HarnessCase:
     return HarnessCase(
         strategy_id="example",
         strategy_label="Example",
@@ -34,13 +34,13 @@ def _case(spec: SuiteCaseSpec) -> HarnessCase:
     )
 
 
-def test_planned_cell_finalizes_without_running(tmp_path: Path) -> None:
-    case = _case(SuiteCaseSpec(coverage=Coverage.PLANNED))
+def test_not_implemented_cell_finalizes_without_running(tmp_path: Path) -> None:
+    case = _case(NotImplementedCaseSpec(reason="No suite is registered."))
 
     code, report = run_suites((case,), tmp_path, lambda _: None, (), load=_load, execute=_execute)
 
     assert code == 0
-    assert report.results[case.key].status is RunStatus.PLANNED
+    assert report.results[case.key].status is RunStatus.NOT_IMPLEMENTED
     assert not report.failures
 
 

@@ -1,17 +1,11 @@
 from __future__ import annotations
 
 import importlib
-import os
-import subprocess
-import sys
-from pathlib import Path
 from typing import Final
 
 import pytest
 
-catalog = importlib.import_module("tests.rust-python-harness.cli.catalog")
 models = importlib.import_module("tests.rust-python-harness.shared.reporting.models")
-runner = importlib.import_module("tests.rust-python-harness.shared.reporting.pytest_runner")
 strategy_module = importlib.import_module("tests.rust-python-harness.shared.reporting.strategy")
 ui = importlib.import_module("tests.rust-python-harness.shared.reporting.ui")
 ledger_module = importlib.import_module("tests.rust-python-harness.shared.parity.ledger")
@@ -19,7 +13,6 @@ mapping_validator = importlib.import_module(
     "tests.rust-python-harness.strategies.unit_tests_mapping.mapping_validator"
 )
 
-load_catalog = catalog.load_catalog
 load_ledger = ledger_module.load_ledger
 ledger_path_for = mapping_validator.ledger_path_for
 REPO_ROOT = mapping_validator.REPO_ROOT
@@ -30,132 +23,63 @@ Coverage = models.Coverage
 HarnessCase = models.HarnessCase
 HarnessRun = models.HarnessRun
 RunStatus = models.RunStatus
-SDK_FUNCTIONS = models.SDK_FUNCTIONS
-section_confidence = models.section_confidence
-run_pytest = runner.run_pytest
-runnable_selectors = runner.runnable_selectors
-selector_matches_node = runner.selector_matches_node
-SelectorCaseSpec = strategy_module.SelectorCaseSpec
+ModuleCaseSpec = strategy_module.ModuleCaseSpec
+NotImplementedCaseSpec = strategy_module.NotImplementedCaseSpec
+SkippedCaseSpec = strategy_module.SkippedCaseSpec
 _format_duration = ui._format_duration
-_rerun_command = ui._rerun_command
 _summary = ui._summary
 
 
-def _case(
-    *, selectors: tuple[str, ...] = (), coverage: Coverage = Coverage.COMPLETE
-) -> HarnessCase:
+def _case(module: str = "tests.example") -> HarnessCase:
     return HarnessCase(
         strategy_id="example",
         strategy_label="Example",
         sdk_function="messages",
-        spec=SelectorCaseSpec(coverage=coverage, selectors=selectors),
+        spec=ModuleCaseSpec(coverage=Coverage.COMPLETE, module=module),
     )
 
 
 @pytest.mark.parametrize(
-    ("selector", "nodeid", "matches"),
+    "module",
     [
-        ("tests/test_parity.py", "tests/test_parity.py::test_one", True),
-        ("tests/test_parity.py::test_one", "tests/test_parity.py::test_one", True),
-        (
-            "tests/test_parity.py::test_one",
-            "tests/test_parity.py::test_one[value]",
-            True,
-        ),
-        ("tests/test_parity.py::test_one", "tests/test_parity.py::test_two", False),
-        ("tests/ocr_tests/", "tests/ocr_tests/test_ocr_mistral.py::test_one", True),
-        ("tests/ocr_tests/", "tests/other_tests/test_ocr_mistral.py::test_one", False),
+        "tests.rust-python-harness.strategies.e2e_parity.sdk.ocr.test_sdk_parity",
+        "tests.rust-python-harness.strategies.trace_parity.sdk.ocr.test_trace_parity",
+        "tests.rust-python-harness.strategies.trace_parity.sdk.messages.test_trace_parity",
+        "tests.rust-python-harness.strategies.trace_parity.sdk.chat_completions.test_trace_parity",
+        "tests.rust-python-harness.strategies.trace_parity.sdk.transcription.test_trace_parity",
     ],
 )
-def test_should_match_pytest_file_and_node_selectors(
-    selector: str, nodeid: str, matches: bool
-) -> None:
-    assert selector_matches_node(selector, nodeid) is matches
+def test_implemented_namespace_case_modules_remain_importable(module: str) -> None:
+    assert importlib.import_module(module)
 
 
-def test_should_only_return_selectors_whose_files_exist(tmp_path: Path) -> None:
-    existing = tmp_path / "tests" / "test_parity.py"
-    existing.parent.mkdir()
-    existing.write_text("", encoding="utf-8")
-    case = _case(
-        selectors=("tests/test_parity.py", "tests/test_missing.py::test_missing")
+def test_should_mark_not_implemented_and_skipped_cases_without_running() -> None:
+    not_implemented: Final = CaseResult(
+        case=HarnessCase(
+            strategy_id="example",
+            strategy_label="Example",
+            sdk_function="messages",
+            spec=NotImplementedCaseSpec(reason="No case is registered."),
+        )
+    )
+    skipped: Final = CaseResult(
+        case=HarnessCase(
+            strategy_id="example",
+            strategy_label="Example",
+            sdk_function="messages",
+            spec=SkippedCaseSpec(reason="The surface does not apply."),
+        )
     )
 
-    assert runnable_selectors((case,), tmp_path) == ("tests/test_parity.py",)
+    not_implemented.set_initial_status()
+    skipped.set_initial_status()
 
-
-def test_should_treat_an_existing_folder_selector_as_runnable(tmp_path: Path) -> None:
-    (tmp_path / "tests" / "ocr_tests").mkdir(parents=True)
-    case = _case(selectors=("tests/ocr_tests/",))
-
-    assert runnable_selectors((case,), tmp_path) == ("tests/ocr_tests/",)
-
-
-def test_should_mark_planned_and_not_applicable_cases_without_running() -> None:
-    planned = CaseResult(case=_case(coverage=Coverage.PLANNED))
-    not_applicable = CaseResult(case=_case(coverage=Coverage.NOT_APPLICABLE))
-
-    planned.set_initial_status()
-    not_applicable.set_initial_status()
-
-    assert planned.status is RunStatus.PLANNED
-    assert not_applicable.status is RunStatus.NOT_APPLICABLE
-
-
-def test_should_treat_an_all_planned_filtered_run_as_success(tmp_path: Path) -> None:
-    exit_code, run = run_pytest(
-        cases=(_case(coverage=Coverage.PLANNED),),
-        repo_root=tmp_path,
-        on_update=lambda _: None,
-    )
-
-    assert exit_code == 0
-    assert next(iter(run.results.values())).status is RunStatus.PLANNED
-
-
-@pytest.mark.parametrize("strategy_id", ("e2e_parity", "trace_parity"))
-def test_should_run_namespace_package_relative_imports(tmp_path: Path, strategy_id: str) -> None:
-    package: Final = tmp_path / "manual_suite" / "relative-tests"
-    package.mkdir(parents=True)
-    (package / "__init__.py").write_text("", encoding="utf-8")
-    (package / "values.py").write_text("ANSWER = 42\n", encoding="utf-8")
-    (package / "test_relative.py").write_text(
-        "from .values import ANSWER\n\ndef test_answer():\n    assert ANSWER == 42\n",
-        encoding="utf-8",
-    )
-    result: Final = subprocess.run(
-        (
-            sys.executable,
-            "-c",
-            "import importlib\n"
-            "from pathlib import Path\n"
-            f"strategy = importlib.import_module('tests.rust-python-harness.strategies.{strategy_id}').STRATEGY\n"
-            "models = importlib.import_module('tests.rust-python-harness.shared.reporting.models')\n"
-            "specs = importlib.import_module('tests.rust-python-harness.shared.reporting.strategy')\n"
-            "case = models.HarnessCase(strategy_id=" + repr(strategy_id) + ", strategy_label='Example', "
-            "sdk_function='ocr', spec=specs.SelectorCaseSpec(coverage=models.Coverage.COMPLETE, "
-            "selectors=('manual_suite/relative-tests/',)))\n"
-            "code, run = strategy.run((case,), Path.cwd(), lambda _: None)\n"
-            "assert code == 0, code\n"
-            "assert next(iter(run.results.values())).passed == 1\n",
-        ),
-        cwd=tmp_path,
-        env={
-            **os.environ,
-            "PYTHONPATH": os.pathsep.join((str(tmp_path), str(Path(__file__).resolve().parents[1]))),
-            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
-        },
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert not_implemented.status is RunStatus.NOT_IMPLEMENTED
+    assert skipped.status is RunStatus.SKIPPED
 
 
 def test_should_finalize_a_fully_passing_case() -> None:
-    result = CaseResult(case=_case(selectors=("tests/test_parity.py",)))
+    result = CaseResult(case=_case())
     result.set_initial_status()
     result.collected.update({"one", "two"})
     result.completed.update({"one", "two"})
@@ -167,7 +91,7 @@ def test_should_finalize_a_fully_passing_case() -> None:
 
 
 def test_should_replace_a_pass_with_a_teardown_error() -> None:
-    result = CaseResult(case=_case(selectors=("tests/test_parity.py",)))
+    result = CaseResult(case=_case())
     result.set_initial_status()
     result.collected.add("one")
 
@@ -181,41 +105,13 @@ def test_should_replace_a_pass_with_a_teardown_error() -> None:
 
 
 def test_should_format_developer_facing_run_context() -> None:
-    run = HarnessRun.from_cases((_case(selectors=("tests/test_parity.py",)),))
+    run = HarnessRun.from_cases((_case(),))
     result = next(iter(run.results.values()))
     result.collected.add("tests/test_parity.py::test_one")
     result.record("tests/test_parity.py::test_one", RunStatus.PASSED, 1.25)
 
     assert _summary(run) == (1, 0, 0, 0)
     assert _format_duration(1.25) == "1.2s"
-    assert _rerun_command("tests/test_parity.py::test_one") == (
-        "poetry run pytest tests/test_parity.py::test_one -q -o consider_namespace_packages=true"
-    )
-    assert _rerun_command("tests/test_parity.py::test_one[value with spaces]") == (
-        "poetry run pytest 'tests/test_parity.py::test_one[value with spaces]' -q -o consider_namespace_packages=true"
-    )
-    assert _rerun_command("suite:unit_tests_mapping:ocr:ledgers/ocr/suite.json") == (
-        "python -m tests.rust-python-harness run --strategy unit_tests_mapping --function ocr --plain"
-    )
-
-
-def test_should_report_confidence_for_each_sdk_section() -> None:
-    strategies = load_catalog()
-    cases = tuple(case for strategy in strategies for case in strategy.cases)
-    run = HarnessRun.from_cases(cases)
-    passing = run.results["e2e_parity:responses"]
-    passing.collected.add("tests/test_parity.py::test_one")
-    passing.record("tests/test_parity.py::test_one", RunStatus.PASSED)
-
-    scores = {
-        score.sdk_function: score for score in section_confidence(run, strategies)
-    }
-
-    assert scores["responses"].verified_strategies == 1
-    assert scores["responses"].required_strategies == 5
-    assert scores["responses"].level.value == "MEDIUM"
-    assert scores["count_tokens"].percentage == 0
-    assert scores["count_tokens"].level.value == "LOW"
 
 
 def test_should_report_no_ledger_for_a_function_without_one() -> None:

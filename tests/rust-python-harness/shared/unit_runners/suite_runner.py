@@ -18,7 +18,7 @@ SuiteExecutor = Callable[[S, Path, Sequence[str]], tuple[str, ...]]
 
 def suite_nodeid(case: HarnessCase) -> str:
     spec = case.spec
-    suite = spec.suite if isinstance(spec, SuiteCaseSpec) else None
+    suite = spec.suite if isinstance(spec, SuiteCaseSpec) else "invalid"
     return f"suite:{case.strategy_id}:{case.sdk_function}:{suite}"
 
 
@@ -35,8 +35,7 @@ def run_suites(
     for case in cases:
         result = report.results[case.key]
         spec = case.spec
-        if not isinstance(spec, SuiteCaseSpec) or spec.suite is None:
-            result.finalize()
+        if not isinstance(spec, SuiteCaseSpec):
             continue
         nodeid = suite_nodeid(case)
         result.collected.add(nodeid)

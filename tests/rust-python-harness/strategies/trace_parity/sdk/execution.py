@@ -8,7 +8,7 @@ from typing import Final, Literal, Protocol, cast
 
 from ....shared.parity.recorded_http import RecordedHttpResponse
 from ....shared.parity.replay import replay_server
-from ....shared.reporting.models import SdkFunction
+from ....shared.reporting.models import SdkFunction, Surface
 from ....shared.tracing.native import native_trace_events
 from ....shared.tracing.profiler import FunctionTraceEvent, profile_python
 from ....shared.tracing.steps import Engine, Step, pipeline_issues, pipeline_steps
@@ -67,14 +67,14 @@ def _entrypoint(spec: RouteSpec, engine: Engine, *, asynchronous: bool) -> SdkCa
     from litellm.rust_bridge import get_native_bridge
 
     if engine == "rust":
-        bridge: Final = get_native_bridge()
+        bridge: Final = cast(object | None, get_native_bridge())
         if bridge is None:
             return TraceExecutionFailure("rust", "native Rust bridge is required for trace parity")
-        trace_bridge: Final = getattr(bridge, "_trace", None)
+        trace_bridge: Final[object | None] = getattr(bridge, "_trace", None)
         if trace_bridge is None:
             return TraceExecutionFailure("rust", "native Rust bridge must include the trace-parity feature")
         entrypoint: Final = spec.rust_entrypoints[int(asynchronous)]
-        function: Final = getattr(trace_bridge, entrypoint, None)
+        function: Final[object | None] = getattr(trace_bridge, entrypoint, None)
         if function is None:
             return TraceExecutionFailure("rust", f"native Rust trace bridge does not expose {entrypoint}")
         return cast(SdkCall, function)
@@ -119,7 +119,9 @@ def collect_trace(
     return events
 
 
-def execute_trace(case: TraceCase, mode: TraceMode) -> TraceComparisonArtifact | TraceExecutionFailure:
+def execute_trace(
+    case: TraceCase, mode: TraceMode, surface: Surface
+) -> TraceComparisonArtifact | TraceExecutionFailure:
     asynchronous: Final = mode == "async"
     python_trace: Final = collect_trace(case.route, "python", asynchronous=asynchronous)
     if isinstance(python_trace, TraceExecutionFailure):
@@ -130,7 +132,7 @@ def execute_trace(case: TraceCase, mode: TraceMode) -> TraceComparisonArtifact |
     python: Final = pipeline_steps("python", python_trace, case.steps)
     rust: Final = pipeline_steps("rust", rust_trace, case.steps)
     return TraceComparisonArtifact.from_traces(
-        surface="sdk",
+        surface=surface,
         sdk_function=case.route.route,
         mode=mode,
         python=python,

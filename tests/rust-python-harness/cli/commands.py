@@ -3,13 +3,18 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Final, Literal
+from typing import Final, Literal, assert_never
 
 from pydantic import BaseModel, ConfigDict
 
 from ..shared.reporting.models import HarnessCase, SdkFunction, Strategy, Surface
 from ..shared.reporting.orchestration import run_strategies
-from ..shared.reporting.strategy import ModuleCaseSpec, SuiteCaseSpec
+from ..shared.reporting.strategy import (
+    ModuleCaseSpec,
+    NotImplementedCaseSpec,
+    SkippedCaseSpec,
+    SuiteCaseSpec,
+)
 from ..shared.reporting.ui import make_dashboard
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
@@ -83,13 +88,16 @@ def run_command(
     return exit_code
 
 
-def _case_detail(case: HarnessCase) -> str:
-    spec = case.spec
-    if isinstance(spec, SuiteCaseSpec) and spec.suite is not None:
-        return spec.suite
-    if isinstance(spec, ModuleCaseSpec) and spec.module is not None:
-        return spec.module
-    return "no test configured"
+def _case_summary(case: HarnessCase) -> tuple[str, str]:
+    spec: Final = case.spec
+    match spec:
+        case SuiteCaseSpec():
+            return spec.coverage.value, spec.suite
+        case ModuleCaseSpec():
+            return spec.coverage.value, spec.module
+        case NotImplementedCaseSpec() | SkippedCaseSpec():
+            return spec.disposition.value, spec.reason
+    assert_never(spec)
 
 
 def list_command(
@@ -107,8 +115,9 @@ def list_command(
             continue
         print(f"{strategy.id:20} {strategy.label}")
         for case in selected:
+            state, detail = _case_summary(case)
             print(
-                f"  {case.surface}/{case.sdk_function:12} {case.coverage.value:14} {_case_detail(case)}"
+                f"  {case.surface}/{case.sdk_function:12} {state:16} {detail}"
             )
     return 0
 

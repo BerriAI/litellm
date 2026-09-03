@@ -165,7 +165,10 @@ class _RecordingHandler(LocalHttpHandler):
         self.send_header("transfer-encoding", "chunked")
         self.end_headers()
         chunks: Final = tuple(self._relay_chunks(upstream.iter_bytes()))
-        self.finish_chunked()
+        try:
+            self.finish_chunked()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
         return RecordedHttpStreamResponse(
             kind="http_stream",
             status_code=upstream.status_code,

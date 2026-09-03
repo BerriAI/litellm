@@ -47,14 +47,15 @@ tests/rust-python-harness/
         └── suite_runner.py
 ```
 
-- A strategy is a folder under `strategies/` with a `strategy.json` manifest, a one-line `AGENTS.md`, and an `__init__.py` exporting exactly one `STRATEGY: StrategyDefinition`; the manifest id must equal the folder name
-- `shared/reporting/strategy.py` is the contract: case specs (`SelectorCaseSpec` for pytest-driven cells, `SuiteCaseSpec` for JSON-suite-driven cells), the runner/checker protocols, and `StrategyDefinition`
+- A strategy is a folder under `strategies/` with a one-line `AGENTS.md` and an `__init__.py` exporting exactly one `STRATEGY: StrategyDefinition`; its id must equal the folder name
+- `shared/reporting/strategy.py` is the contract: runnable module/suite specs, not-implemented/skipped specs, the runner/checker protocols, and `StrategyDefinition`
+- Every `STRATEGY` explicitly classifies the complete SDK/gateway by SDK-function matrix; catalog loading rejects missing, duplicate, extra, or runner-incompatible cells
 - Run locally only; no CI integration
 - `python -m tests.rust-python-harness run|list|check` selects strategies, lists the catalog, or runs per-strategy consistency checks; every verb shares `--strategy`, `--function`, `--surface`, and `-i`, for example `run --strategy e2e_parity --surface sdk --function ocr --plain`, `list --strategy unit_tests_mapping`, or `check --strategy unit_tests_mapping --function ocr`
-- `cli/catalog.py` discovers strategies, validates each manifest against its declared case spec, and orders them; `cli/selection.py` filters and drives the interactive picker; `cli/commands.py` implements the verbs
+- `cli/catalog.py` discovers strategies, validates their Python definitions, and orders them; `cli/selection.py` filters and drives the interactive picker; `cli/commands.py` implements the verbs
 - `e2e_parity/` compares SDK objects, exceptions, callbacks, and streams, or gateway HTTP responses
 - `trace_parity/` compares mapped operations, call counts, and required execution ordering
-- E2E and trace strategies run pytest through `shared/reporting/pytest_runner.py`; surface-specific execution lives in their folders
+- E2E and trace strategies load their registered module cases and run surface-specific execution from their folders
 - `unit_tests_mapping/runner.py` keeps the suite model and suite execution; `unit_tests_mapping/ledger_report.py` turns ledger reports into check output; `unit_tests_mapping/mapping_validator.py` matches Python/Rust tests by agreed names or annotations and reports missing or ambiguous counterparts
 - `unit_tests_parity/runner.py` runs existing Python unit tests with `LITELLM_RUST=0` and `LITELLM_RUST=1` in separate processes and requires matching outcomes, including failures
 - `unit_tests_rust/runner.py` runs Cargo tests; native Rust unit tests stay beside their implementation

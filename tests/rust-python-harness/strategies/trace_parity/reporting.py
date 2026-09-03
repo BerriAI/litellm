@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from ...shared.reporting.models import CaseResult, RunStatus, SdkFunction, Surface
 from ...shared.reporting.rendering import ReportSection
+from ...shared.reporting.strategy import NotImplementedCaseSpec, SkippedCaseSpec
 from ...shared.tracing.profiler import FunctionTraceEvent
 from ...shared.tracing.steps import TraceDiff, trace_diff
 
@@ -184,12 +185,31 @@ def _node_blocks(result: CaseResult, nodeid: str, status: RunStatus) -> tuple[st
     return (_unavailable(result, nodeid, status),)
 
 
+def _inert_block(result: CaseResult) -> str | None:
+    spec: Final = result.case.spec
+    if isinstance(spec, NotImplementedCaseSpec):
+        return (
+            f"Trace comparison: {result.case.surface}/{result.case.sdk_function}\n"
+            "Trace: NOT IMPLEMENTED\n"
+            f"Reason: {spec.reason}"
+        )
+    if isinstance(spec, SkippedCaseSpec):
+        return (
+            f"Trace comparison: {result.case.surface}/{result.case.sdk_function}\n"
+            "Trace: SKIPPED\n"
+            f"Reason: {spec.reason}"
+        )
+    return None
+
+
 def render_trace_results(results: Sequence[CaseResult]) -> tuple[ReportSection, ...]:
-    blocks: Final = tuple(
+    outcome_blocks: Final = tuple(
         block
         for result in results
         for nodeid, status in result.outcomes.items()
         for block in _node_blocks(result, nodeid, status)
     )
+    inert_blocks: Final = tuple(block for result in results if (block := _inert_block(result)) is not None)
+    blocks: Final = (*outcome_blocks, *inert_blocks)
     visible: Final = blocks or ("No runnable trace comparisons",)
     return (ReportSection("Trace comparisons", visible),)

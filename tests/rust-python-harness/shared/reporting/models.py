@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from time import monotonic
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, assert_never
 
 if TYPE_CHECKING:
     from .strategy import CaseSpec, StrategyDefinition
@@ -14,8 +14,12 @@ if TYPE_CHECKING:
 class Coverage(str, Enum):
     COMPLETE = "complete"
     PARTIAL = "partial"
-    PLANNED = "planned"
-    NOT_APPLICABLE = "not_applicable"
+
+
+class CaseDisposition(str, Enum):
+    RUNNABLE = "runnable"
+    NOT_IMPLEMENTED = "not_implemented"
+    SKIPPED = "skipped"
 
 
 class RunStatus(str, Enum):
@@ -27,12 +31,12 @@ class RunStatus(str, Enum):
     SKIPPED = "skipped"
     ERROR = "error"
     MISSING = "missing"
-    PLANNED = "planned"
-    NOT_APPLICABLE = "not_applicable"
+    NOT_IMPLEMENTED = "not_implemented"
 
 
 SdkFunction: TypeAlias = Literal["ocr", "messages", "responses", "count_tokens", "chat_completions", "transcription"]
 Surface: TypeAlias = Literal["sdk", "gateway"]
+SURFACES: Final[tuple[Surface, ...]] = ("sdk", "gateway")
 SDK_FUNCTIONS: Final[tuple[SdkFunction, ...]] = (
     "ocr",
     "messages",
@@ -60,7 +64,7 @@ class HarnessCase:
         )
 
     @property
-    def coverage(self) -> Coverage:
+    def coverage(self) -> Coverage | None:
         return self.spec.coverage
 
 
@@ -121,15 +125,21 @@ class CaseResult:
         self.durations[nodeid] = self.durations.get(nodeid, 0.0) + duration
 
     def set_initial_status(self) -> None:
-        if self.case.spec.coverage is Coverage.NOT_APPLICABLE:
-            self.status = RunStatus.NOT_APPLICABLE
-        elif self.case.spec.configured:
-            self.status = RunStatus.QUEUED
-        else:
-            self.status = RunStatus.PLANNED
+        disposition: Final = self.case.spec.disposition
+        match disposition:
+            case CaseDisposition.RUNNABLE:
+                self.status = RunStatus.QUEUED
+                return
+            case CaseDisposition.NOT_IMPLEMENTED:
+                self.status = RunStatus.NOT_IMPLEMENTED
+                return
+            case CaseDisposition.SKIPPED:
+                self.status = RunStatus.SKIPPED
+                return
+        assert_never(disposition)
 
     def finalize(self) -> None:
-        if self.status in {RunStatus.NOT_APPLICABLE, RunStatus.PLANNED}:
+        if self.status in {RunStatus.NOT_IMPLEMENTED, RunStatus.SKIPPED} and not self.collected:
             return
         if not self.collected:
             self.status = RunStatus.MISSING
@@ -163,13 +173,13 @@ class HarnessRun:
         return (self.finished_at or monotonic()) - self.started_at
 
     @property
-    def unique_tests(self) -> int:
+    def unique_checks(self) -> int:
         return len(
             {nodeid for result in self.results.values() for nodeid in result.collected}
         )
 
     @property
-    def completed_tests(self) -> int:
+    def completed_checks(self) -> int:
         return len(
             {nodeid for result in self.results.values() for nodeid in result.completed}
         )
@@ -180,4 +190,3 @@ class HarnessRun:
         for result in results.values():
             result.set_initial_status()
         return cls(results=results)
-

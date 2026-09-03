@@ -5,9 +5,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
-from typing import Final
+from typing import Final, cast
 
-from ...shared.reporting.models import HarnessCase, HarnessRun, RunStatus
+from ...shared.reporting.models import CaseResult, HarnessCase, HarnessRun, RunStatus
 from ...shared.reporting.strategy import ModuleCaseSpec, UpdateCallback
 
 
@@ -25,15 +25,64 @@ class E2ELoadFailure:
 def _load_checks(reference: str) -> tuple[E2ECheck, ...] | E2ELoadFailure:
     try:
         module: Final = importlib.import_module(reference)
-        factory: Final = getattr(module, "parity_checks", None)
-        if not callable(factory):
+        factory_value: Final[object] = getattr(module, "parity_checks", None)
+        if not callable(factory_value):
             return E2ELoadFailure(f"{reference} must export parity_checks()")
-        checks: Final = factory()
+        factory: Final = cast(Callable[[], object], factory_value)
+        checks_value: Final = factory()
     except Exception as error:
         return E2ELoadFailure(f"cannot load {reference}: {type(error).__name__}: {error}")
-    if not isinstance(checks, tuple) or not all(isinstance(check, E2ECheck) for check in checks):
+    if not isinstance(checks_value, tuple):
         return E2ELoadFailure(f"{reference}.parity_checks() must return tuple[E2ECheck, ...]")
-    return checks
+    untyped_checks: Final = cast(tuple[object, ...], checks_value)
+    if not all(isinstance(check, E2ECheck) for check in untyped_checks):
+        return E2ELoadFailure(f"{reference}.parity_checks() must return tuple[E2ECheck, ...]")
+    return cast(tuple[E2ECheck, ...], untyped_checks)
+
+
+def _run_check(
+    run: HarnessRun,
+    result: CaseResult,
+    check: E2ECheck,
+    nodeid: str,
+    on_update: UpdateCallback,
+) -> None:
+    started_at: Final = monotonic()
+    try:
+        check.execute()
+    except Exception as error:
+        result.record(nodeid, RunStatus.FAILED, monotonic() - started_at)
+        run.failures.append((nodeid, f"{type(error).__name__}: {error}"))
+    else:
+        result.record(nodeid, RunStatus.PASSED, monotonic() - started_at)
+    on_update(run)
+
+
+def _run_case(run: HarnessRun, harness_case: HarnessCase, on_update: UpdateCallback) -> None:
+    result: Final = run.results[harness_case.key]
+    spec: Final = harness_case.spec
+    if not isinstance(spec, ModuleCaseSpec):
+        return
+    loaded: Final = _load_checks(spec.module)
+    if isinstance(loaded, E2ELoadFailure):
+        load_nodeid: Final = f"e2e:{harness_case.surface}:{harness_case.sdk_function}:load"
+        result.collected.add(load_nodeid)
+        result.record(load_nodeid, RunStatus.ERROR)
+        run.failures.append((load_nodeid, loaded.message))
+        on_update(run)
+        return
+    nodeids: Final = tuple(
+        (check, f"e2e:{harness_case.surface}:{harness_case.sdk_function}:{check.name}") for check in loaded
+    )
+    result.collected.update(nodeid for _, nodeid in nodeids)
+    if not nodeids:
+        result.status = RunStatus.SKIPPED
+        on_update(run)
+        return
+    result.status = RunStatus.RUNNING
+    on_update(run)
+    for check, nodeid in nodeids:
+        _run_check(run, result, check, nodeid, on_update)
 
 
 def run_e2e_cases(
@@ -45,37 +94,7 @@ def run_e2e_cases(
     del repo_root, runner_args
     run: Final = HarnessRun.from_cases(cases)
     for harness_case in cases:
-        result: Final = run.results[harness_case.key]
-        spec: Final = harness_case.spec
-        if not isinstance(spec, ModuleCaseSpec) or spec.module is None:
-            result.finalize()
-            continue
-        loaded: Final = _load_checks(spec.module)
-        if isinstance(loaded, E2ELoadFailure):
-            nodeid: Final = f"e2e:{harness_case.surface}:{harness_case.sdk_function}:load"
-            result.collected.add(nodeid)
-            result.record(nodeid, RunStatus.ERROR)
-            run.failures.append((nodeid, loaded.message))
-            on_update(run)
-            continue
-        nodeids: Final = tuple((check, f"e2e:{harness_case.surface}:{harness_case.sdk_function}:{check.name}") for check in loaded)
-        result.collected.update(nodeid for _, nodeid in nodeids)
-        if not nodeids:
-            result.status = RunStatus.SKIPPED
-            on_update(run)
-            continue
-        result.status = RunStatus.RUNNING
-        on_update(run)
-        for check, nodeid in nodeids:
-            started_at: Final = monotonic()
-            try:
-                check.execute()
-            except Exception as error:
-                result.record(nodeid, RunStatus.FAILED, monotonic() - started_at)
-                run.failures.append((nodeid, f"{type(error).__name__}: {error}"))
-            else:
-                result.record(nodeid, RunStatus.PASSED, monotonic() - started_at)
-            on_update(run)
+        _run_case(run, harness_case, on_update)
     run.finished_at = monotonic()
     on_update(run)
     failed: Final = any(

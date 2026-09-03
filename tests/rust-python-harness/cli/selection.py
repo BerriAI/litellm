@@ -59,7 +59,7 @@ def select(
     unknown: Final = strategy_ids - known_ids
     if unknown:
         raise ValueError(f"Unknown strategy: {', '.join(sorted(unknown))}")
-    return tuple(
+    selected: Final = tuple(
         case
         for strategy in strategies
         if not strategy_ids or strategy.id in strategy_ids
@@ -67,3 +67,6 @@ def select(
         if (not sdk_functions or case.sdk_function in sdk_functions)
         and (surface is None or case.surface == surface)
     )
+    if not selected:
+        raise ValueError("Selection matched no harness cases")
+    return selected
