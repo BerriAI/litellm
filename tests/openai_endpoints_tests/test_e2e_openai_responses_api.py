@@ -153,6 +153,15 @@ def test_cancel_response():
             raise e
 
 
+def _response_ids_until_first(stream):
+    """Yield each streamed chunk's response id, stopping at the first chunk that carries one."""
+    for chunk in stream:
+        response_id = getattr(getattr(chunk, "response", None), "id", None)
+        yield response_id
+        if response_id is not None:
+            return
+
+
 def test_cancel_streaming_response():
     """Cancel a background streaming response while it is still generating.
 
@@ -169,15 +178,10 @@ def test_cancel_streaming_response():
         stream=True,
         background=True,
     ) as stream:
-        chunk_count = 0
-        response_id = None
-        for chunk in stream:
-            chunk_count += 1
-            response_id = getattr(getattr(chunk, "response", None), "id", None)
-            if response_id is not None:
-                break
+        streamed_ids = tuple(_response_ids_until_first(stream))
 
-    assert chunk_count > 0, "stream produced no chunks"
+    assert streamed_ids, "stream produced no chunks"
+    response_id = streamed_ids[-1]
     assert response_id is not None, "no streamed chunk carried a response id to cancel"
 
     cancel_response = client.responses.cancel(response_id)
