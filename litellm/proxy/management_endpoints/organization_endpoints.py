@@ -1033,6 +1033,9 @@ async def list_organization(
         )
     # if internal user - get orgs they are a member of (with optional filters)
     else:
+        # Prisma rejects a null `user_id` filter with MissingRequiredValueError.
+        if user_api_key_dict.user_id is None:
+            return []  # mutable-ok: no organization membership to return
         org_memberships: Final = await _table(OrganizationMembershipRepository(prisma_client)).find_many(
             where={"user_id": user_api_key_dict.user_id}
         )
