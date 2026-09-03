@@ -27,7 +27,9 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
+    aggregated_date_range_error,
     get_daily_activity,
+    get_daily_activity_aggregated,
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
 from litellm.repositories.model_repository import ModelRepository
@@ -57,6 +59,7 @@ if TYPE_CHECKING:
     from litellm.types.router import Deployment
 
 router: Final = APIRouter()
+_TAG_MANAGEMENT_TAGS: Final = ["tag management"]
 
 
 class _TagRecord(Protocol):
@@ -245,7 +248,7 @@ async def get_deployments_by_model(model: str, llm_router: "Router") -> list["De
 
 @router.post(
     "/tag/new",
-    tags=["tag management"],
+    tags=_TAG_MANAGEMENT_TAGS,
     dependencies=[Depends(user_api_key_auth)],
 )
 async def new_tag(
@@ -393,7 +396,7 @@ async def _add_tag_to_deployment(deployment: "Deployment", tag: str):
 
 @router.post(
     "/tag/update",
-    tags=["tag management"],
+    tags=_TAG_MANAGEMENT_TAGS,
     dependencies=[Depends(user_api_key_auth)],
 )
 async def update_tag(
@@ -484,7 +487,7 @@ async def update_tag(
 
 @router.post(
     "/tag/info",
-    tags=["tag management"],
+    tags=_TAG_MANAGEMENT_TAGS,
     dependencies=[Depends(user_api_key_auth)],
 )
 async def info_tag(
@@ -573,7 +576,7 @@ def _validate_tag_list_date_range(start_date: str | None, end_date: str | None) 
 
 @router.get(
     "/tag/list",
-    tags=["tag management"],
+    tags=_TAG_MANAGEMENT_TAGS,
     dependencies=[Depends(user_api_key_auth)],
 )
 async def list_tags(
@@ -684,7 +687,7 @@ async def list_tags(
 
 @router.post(
     "/tag/delete",
-    tags=["tag management"],
+    tags=_TAG_MANAGEMENT_TAGS,
     dependencies=[Depends(user_api_key_auth)],
 )
 async def delete_tag(
@@ -721,7 +724,7 @@ async def delete_tag(
 @router.get(
     "/tag/daily/activity",
     response_model=SpendAnalyticsPaginatedResponse,
-    tags=["tag management"],
+    tags=_TAG_MANAGEMENT_TAGS,
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_tag_daily_activity(
@@ -784,4 +787,70 @@ async def get_tag_daily_activity(
         # multiple tags are present.  The panel is primarily used to inspect
         # individual tags, making this trade-off acceptable.
         metadata_metrics_func=None,
+    )
+
+
+@router.get(
+    "/tag/daily/activity/aggregated",
+    response_model=SpendAnalyticsPaginatedResponse,
+    tags=_TAG_MANAGEMENT_TAGS,
+)
+async def get_tag_daily_activity_aggregated(
+    tags: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    timezone: int | None = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Daily activity for tags over the whole range in one response, with per-tag breakdown.
+
+    One SQL GROUPING SETS pass reads the range from a single snapshot, so callers never
+    walk pages of LiteLLM_DailyTagSpend and never re-count rows that the tag spend
+    scheduler shifted across a page boundary mid-walk. Same response shape as the
+    paginated endpoint with page metadata pinned to a single page.
+
+    Args:
+        tags (Optional[str]): Comma-separated list of tags to filter by. If not provided, returns data for all tags.
+        start_date (Optional[str]): Start date for the activity period (YYYY-MM-DD).
+        end_date (Optional[str]): End date for the activity period (YYYY-MM-DD).
+        model (Optional[str]): Filter by model name.
+        api_key (Optional[str]): Filter by API key.
+        timezone (Optional[int]): Timezone offset in minutes from UTC, matching JavaScript's Date.getTimezoneOffset() convention.
+
+    Returns:
+        SpendAnalyticsPaginatedResponse: Response containing all daily activity data for the range.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    range_error: Final = aggregated_date_range_error(start_date, end_date)
+    if range_error is not None:
+        raise HTTPException(status_code=400, detail=range_error)
+
+    tag_list: Final = tags.split(",") if tags else None
+    scoped_api_key_filter: Final = await _get_tag_daily_activity_api_key_filter(
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        requested_api_key=api_key,
+    )
+    if scoped_api_key_filter == []:
+        return SpendAnalyticsPaginatedResponse(results=[])
+
+    return await get_daily_activity_aggregated(
+        prisma_client=prisma_client,
+        table_name="litellm_dailytagspend",
+        entity_id_field="tag",
+        entity_id=tag_list,
+        entity_metadata_field=None,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=scoped_api_key_filter,
+        timezone_offset_minutes=timezone,
+        include_entity_breakdown=True,
     )
