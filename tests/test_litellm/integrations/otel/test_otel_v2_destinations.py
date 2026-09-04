@@ -727,7 +727,7 @@ class TestEvictionSafety:
         assert id(held) in fan_out._retired
 
         fan_out._release(held)
-        self._settle(fan_out)
+        self._settle(fan_out, held)
 
         assert held.shutdown_calls == 1
 
@@ -799,6 +799,20 @@ class TestEvictionSafety:
         finally:
             release.set()
             self._settle(fan_out, built[0])
+
+    def test_the_drain_workers_do_not_hold_the_process_open(self):
+        """Python joins a ThreadPoolExecutor's workers at interpreter exit, so one
+        unreachable tenant collector would hold the proxy open for its export
+        timeout on the way down."""
+        import threading
+
+        from litellm.integrations.otel.plumbing.providers import _drain_queue
+
+        _drain_queue()
+        workers = [t for t in threading.enumerate() if t.name.startswith("litellm-otel-destination-drain")]
+
+        assert workers, "no drain worker was started"
+        assert all(t.daemon for t in workers), "a non-daemon drain worker blocks interpreter exit"
 
     def test_a_retired_processor_is_still_closed_on_shutdown(self):
         from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
