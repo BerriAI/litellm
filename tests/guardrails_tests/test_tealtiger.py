@@ -141,3 +141,95 @@ async def test_apply_guardrail_session_id_falls_back_when_user_not_a_string():
         input_type="request",
     )
     assert result["texts"] == ["hello"]
+
+
+# ---------- coverage for _to_event_hook and _tool_call_name helpers ----------
+
+from litellm.proxy.guardrails.guardrail_hooks.tealtiger.tealtiger import (
+    _to_event_hook,
+    _tool_call_name,
+)
+from litellm.types.guardrails import GuardrailEventHooks
+
+
+def test_to_event_hook_passes_through_none():
+    assert _to_event_hook(None) is None
+
+
+def test_to_event_hook_passes_through_real_enum():
+    result = _to_event_hook(GuardrailEventHooks.pre_call)
+    assert result == GuardrailEventHooks.pre_call
+
+
+def test_to_event_hook_converts_bare_string():
+    result = _to_event_hook("pre_call")
+    assert result == GuardrailEventHooks.pre_call
+
+
+def test_to_event_hook_converts_list_of_strings():
+    result = _to_event_hook(["pre_call", "post_call"])
+    assert result == [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]
+
+
+def test_to_event_hook_converts_mixed_list():
+    result = _to_event_hook([GuardrailEventHooks.pre_call, "post_call"])
+    assert result == [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]
+
+
+def test_tool_call_name_from_dict_shape():
+    """ChatCompletionToolCallChunk-style: a plain dict."""
+    tool_call = {"id": "1", "type": "function", "function": {"name": "shell_exec"}, "index": 0}
+    assert _tool_call_name(tool_call) == "shell_exec"
+
+
+def test_tool_call_name_from_dict_shape_missing_function():
+    tool_call = {"id": "1", "type": "function", "index": 0}
+    assert _tool_call_name(tool_call) is None
+
+
+class _FakeFunction:
+    def __init__(self, name):
+        self.name = name
+
+
+class _FakeToolCallObject:
+    """Mimics ChatCompletionMessageToolCall's real shape: attribute access."""
+
+    def __init__(self, name):
+        self.function = _FakeFunction(name)
+        self.id = "1"
+        self.type = "function"
+
+
+def test_tool_call_name_from_object_shape():
+    """ChatCompletionMessageToolCall-style: a pydantic-like object."""
+    assert _tool_call_name(_FakeToolCallObject("calculator")) == "calculator"
+
+
+def test_tool_call_name_from_object_shape_missing_function():
+    class _Empty:
+        pass
+
+    assert _tool_call_name(_Empty()) is None
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_object_shaped_tool_call():
+    """The object-shaped (pydantic) tool_call variant should be checked too,
+    not just the dict-shaped one."""
+    policies = [
+        {"type": "pii", "action": "REDACT", "patterns": "all"},
+        {"type": "tool_auth", "action": "ENFORCE", "allowlist": ["search"]},
+    ]
+    guardrail = TealTigerGuardrail(policies=policies, policy_mode="ENFORCE")
+    inputs = {
+        "texts": ["run it"],
+        "images": [],
+        "tool_calls": [_FakeToolCallObject("shell_exec")],
+    }
+    with pytest.raises(ValueError, match="TOOL_NOT_ALLOWLISTED"):
+        await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={"model": "gpt-4"},
+            input_type="request",
+        )
