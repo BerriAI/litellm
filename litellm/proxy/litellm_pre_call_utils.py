@@ -1028,19 +1028,25 @@ def resolve_tenant_otel_destinations(
         if (callback := _get_validated_callback_metadata(item=item, source="otel-destination")) is not None
         if callback.callback_type != "failure"
     )
-    merged: Final = {
-        name: {
-            var: value
-            for callback in callbacks
-            if callback.callback_name == name
-            for var, value in callback.callback_vars.items()
-        }
-        for name in dict.fromkeys(callback.callback_name for callback in callbacks)
-    }
     return tuple(
         destination
-        for name, callback_vars in merged.items()
-        if (destination := destination_for(name, _tenant_otel_params(callback_vars))) is not None
+        for name in dict.fromkeys(callback.callback_name for callback in callbacks)
+        if (
+            destination := destination_for(
+                name,
+                _tenant_otel_params(
+                    MappingProxyType(
+                        {
+                            var: value
+                            for callback in callbacks
+                            if callback.callback_name == name
+                            for var, value in callback.callback_vars.items()
+                        }
+                    )
+                ),
+            )
+        )
+        is not None
     )
 
 
