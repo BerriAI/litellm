@@ -293,13 +293,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             elif isinstance(inner, str):
                                 output_text = inner
                             elif isinstance(inner, list):
-                                parts = [
+                                parts = (
                                     c.get("text", "")
                                     if c.get("type") == "text"
                                     else f"[Loaded tool: {c.get('tool_name', '')}]"
                                     for c in inner
                                     if isinstance(c, dict) and c.get("type") in {"text", "tool_reference"}
-                                ]
+                                )
                                 output_text = "\n".join(parts)
                                 image_candidates = tuple(
                                     self._translate_anthropic_image_source_to_url(c.get("source"))
