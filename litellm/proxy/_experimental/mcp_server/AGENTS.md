@@ -85,6 +85,10 @@ module materially harder to understand.
   permissions, no-accessible-server rejection, per-request auth headers, server
   scope, error to `isError` conversion, and spend logging. Reuse `_list_mcp_tools`
   and `execute_mcp_tool` rather than reimplementing any of these checks.
+- The same flag also drives the Responses API / chat completions `type: "mcp"`
+  tools that point at `litellm_proxy/`. That bridge lives in
+  `litellm/responses/mcp/tool_search_bridge.py` and calls `handle_mcp_tool_search`
+  / `handle_mcp_tool_call` here; keep those two entry points backwards compatible.
 
 ## Tests
 
