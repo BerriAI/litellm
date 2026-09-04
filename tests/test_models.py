@@ -6,6 +6,7 @@ import asyncio
 import aiohttp
 import os
 import dotenv
+from typing import Final
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -487,9 +488,6 @@ async def test_get_personal_models_for_user():
 async def test_model_group_info_e2e():
     """
     Test /model/group/info endpoint
-
-    The proxy config declares a wildcard "anthropic/*" deployment, and the endpoint resolves
-    wildcards into the concrete models they cover, so the raw pattern is never returned.
     """
     async with aiohttp.ClientSession() as session:
         models = await get_models(session=session, key="sk-1234")
@@ -498,7 +496,7 @@ async def test_model_group_info_e2e():
         model_group_info = await get_model_group_info(session=session, key="sk-1234")
         print(model_group_info)
 
-        model_groups = [m["model_group"] for m in model_group_info["data"]]
+        model_groups: Final = [m["model_group"] for m in model_group_info["data"]]
 
         assert "anthropic/*" not in model_groups, (
             f"Expected 'anthropic/*' to be expanded, but it was returned verbatim: {model_groups}"
