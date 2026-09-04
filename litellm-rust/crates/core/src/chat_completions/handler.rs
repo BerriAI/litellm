@@ -88,7 +88,7 @@ pub(super) async fn signed_headers(
     use std::collections::BTreeMap;
     use std::time::SystemTime;
 
-    use crate::providers::bedrock::aws_base::{
+    use crate::providers::bedrock::auth::{
         aws_auth_config, aws_signature_headers, host_supplied_credentials,
         is_sigv4_computed_header, resolve_credentials, sign_bedrock_post,
     };

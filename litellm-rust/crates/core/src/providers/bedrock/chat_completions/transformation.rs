@@ -13,8 +13,9 @@ use crate::chat_completions::types::{
 };
 use crate::error::Error;
 
+use super::super::auth::{BedrockAuth, resolve_bedrock_auth};
 use super::super::aws_base::{bedrock_model_id_and_region, resolve_bedrock_region};
-use super::super::constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE};
+use super::super::constants::BEDROCK_RUNTIME_ENDPOINT_TEMPLATE;
 
 /// Converse parameter names, post `map_openai_params`, that the Rust path can
 /// place verbatim in `inferenceConfig`.
@@ -139,24 +140,10 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ChatCompletionsAuth, Error> {
-        // Python reads `api_key` as the Bedrock bearer token and consults the
-        // env only when the caller passed none, so a caller-supplied empty key
-        // falls through to SigV4 without reaching for the environment. An
-        // all-whitespace token stays a bearer token here because Python sends
-        // it too: treating it as absent would sign as the host principal
-        // instead, which is the identity swap this branch exists to prevent.
-        let bearer = match api_key {
-            Some(key) => Some(key.to_string()),
-            None => env_lookup(AWS_BEARER_TOKEN_BEDROCK),
+        match resolve_bedrock_auth(api_key, model, optional_params, env_lookup)? {
+            BedrockAuth::Bearer(token) => Ok(ChatCompletionsAuth::Bearer { token }),
+            BedrockAuth::SigV4 { region, .. } => Ok(ChatCompletionsAuth::AwsSigV4 { region }),
         }
-        .filter(|token| !token.is_empty());
-        if let Some(token) = bearer {
-            return Ok(ChatCompletionsAuth::Bearer { token });
-        }
-        let (_, model_region) = bedrock_model_id_and_region(model);
-        Ok(ChatCompletionsAuth::AwsSigV4 {
-            region: resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup),
-        })
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {

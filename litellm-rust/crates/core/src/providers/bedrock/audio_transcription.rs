@@ -8,8 +8,9 @@ use crate::audio_transcription::types::{
 };
 use crate::error::{Error, json_type_name};
 
+use super::auth::{BedrockAuth, resolve_bedrock_auth};
 pub use super::aws_base::{aws_auth_config, bedrock_model_id_and_region, resolve_bedrock_region};
-use super::constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE};
+use super::constants::BEDROCK_RUNTIME_ENDPOINT_TEMPLATE;
 
 const SUPPORTED_PARAMS: &[&str] = &["language", "prompt", "temperature", "response_format"];
 
@@ -133,15 +134,17 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
 
     fn auth_strategy(
         &self,
+        api_key: Option<&str>,
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<AudioTranscriptionAuth, Error> {
-        let (_, model_region) = bedrock_model_id_and_region(model);
-        Ok(AudioTranscriptionAuth::AwsSigV4 {
-            region: resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup),
-            service: BEDROCK_SERVICE,
-        })
+        match resolve_bedrock_auth(api_key, model, optional_params, env_lookup)? {
+            BedrockAuth::Bearer(token) => Ok(AudioTranscriptionAuth::Bearer { token }),
+            BedrockAuth::SigV4 { region, service } => {
+                Ok(AudioTranscriptionAuth::AwsSigV4 { region, service })
+            }
+        }
     }
 }
 

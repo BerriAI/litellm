@@ -5,7 +5,9 @@ use super::types::{AudioTranscriptionRequestData, AudioTranscriptionResponseData
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AudioTranscriptionAuth {
-    Bearer,
+    Bearer {
+        token: String,
+    },
     AwsSigV4 {
         region: String,
         service: &'static str,
@@ -50,6 +52,7 @@ pub trait AudioTranscriptionProviderConfig: Sync {
 
     fn auth_strategy(
         &self,
+        api_key: Option<&str>,
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,

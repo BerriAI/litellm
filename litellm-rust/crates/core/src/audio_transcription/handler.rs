@@ -52,7 +52,7 @@ async fn signed_headers(
 
     use crate::audio_transcription::transformation::AudioTranscriptionAuth;
     use crate::providers::bedrock::audio_transcription::aws_auth_config;
-    use crate::providers::bedrock::aws_base::{resolve_credentials, sign_bedrock_post};
+    use crate::providers::bedrock::auth::{resolve_credentials, sign_bedrock_post};
 
     let AudioTranscriptionAuth::AwsSigV4 { region, .. } = &request.auth else {
         return Ok(request.upstream_headers.clone());
@@ -86,6 +86,6 @@ async fn signed_headers(
         AudioTranscriptionAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
             "AWS SigV4 requires the bedrock-auth feature",
         )),
-        AudioTranscriptionAuth::Bearer => Ok(request.upstream_headers.clone()),
+        AudioTranscriptionAuth::Bearer { .. } => Ok(request.upstream_headers.clone()),
     }
 }

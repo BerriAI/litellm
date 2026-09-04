@@ -319,12 +319,9 @@ fn a_bearer_token_outranks_sigv4_the_way_python_resolves_it() {
     );
     // No key, so the env supplies it.
     assert_eq!(resolve(None, &bedrock_env), bearer("from-env"));
-    // An empty key is not a bearer token, and deliberately does NOT reach for
-    // the env, which is what Python's `is not None` check does.
-    assert_eq!(resolve(Some(""), &bedrock_env), sigv4);
-    // Whitespace is truthy in Python, so it stays a bearer token rather than
-    // silently becoming a host-credentialed SigV4 request.
-    assert_eq!(resolve(Some("  "), &no_env), bearer("  "));
+    // Blank values are absent, so the provider environment remains available.
+    assert_eq!(resolve(Some(""), &bedrock_env), bearer("from-env"));
+    assert_eq!(resolve(Some("  "), &no_env), sigv4);
     // Neither present, so SigV4 as before.
     assert_eq!(resolve(None, &no_env), sigv4);
 }

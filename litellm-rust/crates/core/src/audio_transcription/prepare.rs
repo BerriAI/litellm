@@ -40,12 +40,15 @@ pub fn prepare_audio_transcription_provider_call(
         .ok_or_else(|| Error::InvalidProvider(provider_info.custom_llm_provider.to_string()))?;
     let env_lookup = |key: &str| std::env::var(key).ok();
     let mut headers = string_headers("audio transcription", request.extra_headers)?;
-    let auth = config.auth_strategy(&model, &request.optional_params, &env_lookup)?;
-    if matches!(auth, AudioTranscriptionAuth::Bearer)
-        && !has_header(&headers, "authorization")
-        && let Some(api_key) = request.api_key
-    {
-        headers.push(("Authorization".to_string(), format!("Bearer {api_key}")));
+    let auth = config.auth_strategy(
+        request.api_key,
+        &model,
+        &request.optional_params,
+        &env_lookup,
+    )?;
+    if let AudioTranscriptionAuth::Bearer { token } = &auth {
+        headers.retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
+        headers.push(("Authorization".to_string(), format!("Bearer {token}")));
     }
     if !has_header(&headers, "content-type") {
         headers.push(("Content-Type".to_string(), "application/json".to_string()));

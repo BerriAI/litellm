@@ -8,6 +8,7 @@ use super::audio_transcription;
 use super::types::AudioTranscriptionRequest;
 
 #[tokio::test]
+#[cfg(feature = "bedrock-auth")]
 async fn bedrock_request_is_signed_and_contains_audio() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
     let address = listener.local_addr().expect("address");
@@ -41,6 +42,42 @@ async fn bedrock_request_is_signed_and_contains_audio() {
         custom_llm_provider: Some("bedrock"),
         extra_headers: None,
         optional_params,
+        timeout: None,
+    })
+    .await
+    .expect("transcription");
+    assert_eq!(response, json!({"text": "hello"}));
+    server.join().expect("server");
+}
+
+#[tokio::test]
+#[cfg(feature = "bedrock-auth")]
+async fn bedrock_transcription_bearer_bypasses_sigv4() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("connection");
+        let mut buffer = [0_u8; 16_384];
+        let count = stream.read(&mut buffer).expect("request");
+        let request = String::from_utf8_lossy(&buffer[..count]);
+        assert!(request.contains("authorization: Bearer deployment-token"));
+        assert!(!request.contains("AWS4-HMAC-SHA256"));
+        let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 53\r\nConnection: close\r\n\r\n{\"output\":{\"message\":{\"content\":[{\"text\":\"hello\"}]}}}";
+        stream.write_all(response).expect("response");
+    });
+
+    let api_base = format!("http://{address}");
+    let response = audio_transcription(AudioTranscriptionRequest {
+        model: "mistral.voxtral-mini-3b-2507",
+        audio: json!({"data": "AQI=", "format": "wav", "filename": "audio.wav"}),
+        api_key: Some("deployment-token"),
+        api_base: Some(&api_base),
+        custom_llm_provider: Some("bedrock"),
+        extra_headers: Some(Map::from_iter([(
+            "Authorization".to_string(),
+            json!("Bearer forwarded"),
+        )])),
+        optional_params: Map::new(),
         timeout: None,
     })
     .await

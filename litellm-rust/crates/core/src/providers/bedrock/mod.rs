@@ -4,6 +4,7 @@
 
 #[cfg(feature = "bedrock-auth")]
 pub mod audio_transcription;
+pub mod auth;
 pub mod aws_base;
 pub mod chat_completions;
 mod constants;
