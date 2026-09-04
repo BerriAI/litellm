@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+base64.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -34,5 +35,6 @@ bedrock-auth = [
 observability = ["dep:tracing-subscriber"]
 
 [dev-dependencies]
+rstest.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber.workspace = true

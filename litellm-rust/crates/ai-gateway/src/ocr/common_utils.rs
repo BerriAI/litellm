@@ -12,6 +12,7 @@ use litellm_core::providers::azure_ai::ocr::transformation::{
     AZURE_AI_OCR_CONFIG, AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG,
 };
 use litellm_core::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
+use litellm_core::providers::reducto::ocr::transformation as reducto;
 use litellm_core::providers::vertex_ai::ocr::transformation as vertex_ai;
 use litellm_core::providers::vertex_ai::ocr::transformation::{
     VERTEX_AI_DEEPSEEK_OCR_CONFIG, VERTEX_AI_OCR_CONFIG,
@@ -39,6 +40,7 @@ pub(super) fn ocr_provider_config(
 ) -> Option<&'static dyn OcrProviderConfig> {
     match provider {
         "mistral" => Some(&MISTRAL_OCR_CONFIG),
+        "reducto" => reducto::config_for_model(model),
         "azure_ai" if is_azure_document_intelligence_model(model) => {
             Some(&AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG)
         }

@@ -48,25 +48,15 @@ fn parse_response() -> Value {
     })
 }
 
-#[fixture]
-fn no_env() -> impl Fn(&str) -> Option<String> {
-    |_| None
-}
-
 #[rstest]
-fn test_parse_v3_file_upload_and_response_mapping(
-    parse_response: Value,
-    no_env: impl Fn(&str) -> Option<String>,
-) {
+fn test_parse_v3_file_upload_and_response_mapping(parse_response: Value) {
     let source = classify_document_source("data:application/pdf;base64,JVBERi0xLjQ=")
         .expect("PDF data URI should be valid");
     let upload = build_upload_request(
         source,
-        Some("test-key"),
+        "Bearer test-key",
         Some("https://platform.reducto.ai"),
-        &no_env,
     )
-    .expect("upload request should build")
     .expect("data URI should require upload");
     assert_eq!(upload.url, "https://platform.reducto.ai/upload");
     assert_eq!(upload.authorization, "Bearer test-key");
@@ -123,11 +113,7 @@ fn test_parse_v3_reducto_id_passthrough_skips_upload(parse_response: Value) {
         "document_url": "reducto://already-uploaded.pdf",
     });
     let source = extract_document_source(&document).expect("Reducto ID should be valid");
-    assert!(
-        build_upload_request(source.clone(), Some("test-key"), None, &|_| None)
-            .expect("ID source should be accepted")
-            .is_none()
-    );
+    assert!(build_upload_request(source.clone(), "Bearer test-key", None).is_none());
     assert_eq!(
         source,
         ReductoDocumentSource::FileId("reducto://already-uploaded.pdf".to_string())
@@ -175,16 +161,14 @@ fn test_parse_legacy_wraps_enhance_under_options() {
 }
 
 #[rstest]
-fn test_parse_v3_image_data_uri_upload_uses_image_mime(no_env: impl Fn(&str) -> Option<String>) {
+fn test_parse_v3_image_data_uri_upload_uses_image_mime() {
     let source = classify_document_source("data:image/png;base64,iVBORw0KGgo=")
         .expect("PNG data URI should be valid");
     let upload = build_upload_request(
         source,
-        Some("programmatic-key"),
+        "Bearer programmatic-key",
         Some("https://custom.reducto.test/"),
-        &no_env,
     )
-    .expect("upload request should build")
     .expect("data URI should require upload");
     assert_eq!(upload.url, "https://custom.reducto.test/upload");
     assert_eq!(upload.authorization, "Bearer programmatic-key");

@@ -140,22 +140,20 @@ pub fn classify_document_source(source: &str) -> Result<ReductoDocumentSource, E
 
 pub fn build_upload_request(
     source: ReductoDocumentSource,
-    api_key: Option<&str>,
+    authorization: &str,
     api_base: Option<&str>,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<Option<ReductoUploadRequest>, Error> {
+) -> Option<ReductoUploadRequest> {
     let ReductoDocumentSource::Upload { bytes, mime_type } = source else {
-        return Ok(None);
+        return None;
     };
-    let api_key = resolve_api_key(api_key, env_lookup)?;
 
-    Ok(Some(ReductoUploadRequest {
+    Some(ReductoUploadRequest {
         url: upload_url(api_base),
-        authorization: format!("Bearer {api_key}"),
+        authorization: authorization.to_string(),
         file_name: "document",
         bytes,
         mime_type,
-    }))
+    })
 }
 
 pub fn extract_upload_file_id(response_json: &Value) -> Result<&str, Error> {
