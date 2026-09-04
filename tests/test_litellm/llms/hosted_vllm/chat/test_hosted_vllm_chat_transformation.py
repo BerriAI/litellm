@@ -1,7 +1,6 @@
 import json
 from unittest.mock import MagicMock, patch
 
-
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
