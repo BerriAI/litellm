@@ -60,9 +60,8 @@ _MAX_CONCURRENT_SHADOW_TASKS: Final = 16
 _MAX_JUDGE_RESPONSE_CHARS: Final = 8_000
 _MAX_JUDGE_PROMPT_CHARS: Final = 24_000
 
-# The judge answers with a small JSON object, but the cap covers reasoning tokens too: a
-# judge deployment carrying an elevated reasoning_effort spends a tight cap before it ever
-# answers, and the truncated reply is recorded as an unparseable verdict.
+# Covers the judge's reasoning tokens as well as its small JSON answer: a judge deployment
+# carrying an elevated reasoning_effort spends a tight cap before it ever answers.
 JUDGE_MAX_OUTPUT_TOKENS: Final = 4096
 
 _MAX_ERROR_CHARS: Final = 500
