@@ -1390,6 +1390,20 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             return value.model_dump()
         return value
 
+    @field_validator("truncation", mode="before")
+    @classmethod
+    def validate_truncation(cls, value) -> Literal["auto", "disabled"] | None:
+        """Normalize empty-string truncation to None.
+
+        Some providers (e.g. the OpenCode gateway) return ``"truncation": ""``
+        which is not a valid OpenAI literal. Treat it as unset rather than
+        failing validation (which would silently drop the response output via
+        the model_construct fallback).
+        """
+        if value == "":
+            return None
+        return value
+
     @field_validator("usage", mode="before")
     @classmethod
     def validate_usage(cls, value):

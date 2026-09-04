@@ -3441,5 +3441,41 @@
       }
     ],
     "default_model_placeholder": "cursor/claude-4-sonnet"
+  },
+  {
+    "provider": "OpenCode_Go",
+    "provider_display_name": "OpenCode Go",
+    "litellm_provider": "opencode_go",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "opencode_go/gpt-5.6-luna"
+  },
+  {
+    "provider": "OpenCode_Zen",
+    "provider_display_name": "OpenCode Zen",
+    "litellm_provider": "opencode_zen",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "opencode_zen/gpt-5.6-luna"
   }
 ]

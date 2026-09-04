@@ -61,6 +61,41 @@ def test_get_provider_create_fields():
     ), "Expected at least one provider to have detailed credential fields"
 
 
+def test_provider_create_fields_contains_opencode_providers():
+    """Assert that both OpenCode Go and OpenCode Zen appear in the
+    provider_create_fields JSON so the dashboard renders them in
+    the Add Model dropdown (Issue 05 of the OpenCode providers feature)."""
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    client = TestClient(app_instance)
+
+    response = client.get("/public/providers/fields")
+    assert response.status_code == 200
+
+    providers = response.json()
+    slugs = {p["litellm_provider"] for p in providers}
+
+    assert "opencode_go" in slugs
+    assert "opencode_zen" in slugs
+
+    go_entry = next(p for p in providers if p["litellm_provider"] == "opencode_go")
+    zen_entry = next(p for p in providers if p["litellm_provider"] == "opencode_zen")
+
+    # ``provider`` holds the provider_map key (underscore) that the dashboard
+    # uses to resolve the litellm provider slug; ``provider_display_name`` is
+    # the human-readable label rendered in the dropdown.
+    for entry, provider_key, display_name in (
+        (go_entry, "OpenCode_Go", "OpenCode Go"),
+        (zen_entry, "OpenCode_Zen", "OpenCode Zen"),
+    ):
+        assert entry["provider"] == provider_key
+        assert entry["provider_display_name"] == display_name
+        assert isinstance(entry["credential_fields"], list)
+        assert len(entry["credential_fields"]) > 0
+        assert any(f["key"] == "api_key" for f in entry["credential_fields"])
+        assert "default_model_placeholder" in entry
+
+
 def test_get_litellm_model_cost_map_returns_cost_map():
     app = FastAPI()
     app.include_router(router)

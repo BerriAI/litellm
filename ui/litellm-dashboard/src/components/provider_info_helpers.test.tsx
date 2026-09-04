@@ -130,6 +130,18 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe("");
     });
 
+    it("should map opencode_go provider value to OpenCode Go display name and logo", () => {
+      const result = getProviderLogoAndName("opencode_go");
+      expect(result.displayName).toBe(Providers.OpenCode_Go);
+      expect(result.logo).toBe(providerLogoMap[Providers.OpenCode_Go]);
+    });
+
+    it("should map opencode_zen provider value to OpenCode Zen display name and logo", () => {
+      const result = getProviderLogoAndName("opencode_zen");
+      expect(result.displayName).toBe(Providers.OpenCode_Zen);
+      expect(result.logo).toBe(providerLogoMap[Providers.OpenCode_Zen]);
+    });
+
     it("should map provider_map values to valid display names", () => {
       const uniqueProviderValues = new Set(Object.values(provider_map));
       uniqueProviderValues.forEach((providerValue) => {
@@ -241,6 +253,14 @@ describe("provider_info_helpers", () => {
 
     it("should return deepinfra placeholder for DeepInfra provider", () => {
       expect(getPlaceholder(Providers.DeepInfra)).toBe("deepinfra/<any-model-on-deepinfra>");
+    });
+
+    it("should return opencode_go/gpt-5.6-luna placeholder for OpenCode Go provider", () => {
+      expect(getPlaceholder(Providers.OpenCode_Go)).toBe("opencode_go/gpt-5.6-luna");
+    });
+
+    it("should return opencode_zen/gpt-5.6-sol placeholder for OpenCode Zen provider", () => {
+      expect(getPlaceholder(Providers.OpenCode_Zen)).toBe("opencode_zen/gpt-5.6-sol");
     });
 
     it("should return fal_ai placeholder for FalAI provider", () => {
@@ -407,6 +427,36 @@ describe("provider_info_helpers", () => {
       const result = getProviderModels("FireworksAI" as Providers, modelMap);
       expect(result).toContain("fireworks-base");
       expect(result).toContain("fireworks-embed");
+      expect(result).not.toContain("openai-model");
+    });
+
+    it("should include opencode_go models when called with 'OpenCode_Go' provider key", () => {
+      // The backend provider_create_fields JSON carries the provider_map key
+      // ("OpenCode_Go"), not the display value, so the dropdown populates.
+      const modelMap = {
+        "opencode_go/gpt-5.6-luna": { litellm_provider: "opencode_go" },
+        "opencode_go/glm-5": { litellm_provider: "opencode_go" },
+        "opencode_zen/gpt-5.6-sol": { litellm_provider: "opencode_zen" },
+        "openai-model": { litellm_provider: "openai" },
+      };
+      const result = getProviderModels("OpenCode_Go" as Providers, modelMap);
+      expect(result).toContain("opencode_go/gpt-5.6-luna");
+      expect(result).toContain("opencode_go/glm-5");
+      expect(result).not.toContain("opencode_zen/gpt-5.6-sol");
+      expect(result).not.toContain("openai-model");
+    });
+
+    it("should include opencode_zen models when called with 'OpenCode_Zen' provider key", () => {
+      const modelMap = {
+        "opencode_zen/gpt-5.6-sol": { litellm_provider: "opencode_zen" },
+        "opencode_zen/claude-sonnet-5": { litellm_provider: "opencode_zen" },
+        "opencode_go/gpt-5.6-luna": { litellm_provider: "opencode_go" },
+        "openai-model": { litellm_provider: "openai" },
+      };
+      const result = getProviderModels("OpenCode_Zen" as Providers, modelMap);
+      expect(result).toContain("opencode_zen/gpt-5.6-sol");
+      expect(result).toContain("opencode_zen/claude-sonnet-5");
+      expect(result).not.toContain("opencode_go/gpt-5.6-luna");
       expect(result).not.toContain("openai-model");
     });
 
