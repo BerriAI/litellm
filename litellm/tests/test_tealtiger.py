@@ -7,6 +7,7 @@ These import from the vendored litellm/proxy/guardrails/guardrail_hooks/
 tealtiger/ package. Placed inside an actual litellm checkout, no path
 changes should be needed since the tests import via the standard package path.
 """
+
 import pytest
 
 from litellm.proxy.guardrails.guardrail_hooks.tealtiger.engine import (
@@ -234,7 +235,9 @@ async def test_apply_guardrail_blocks_object_shaped_tool_call():
             input_type="request",
         )
 
+
 # ---------- Additional Edge Cases & Error Handling Coverage ----------
+
 
 def test_engine_pii_types_and_no_match():
     """Verify engine handles clean text and custom regex rules cleanly."""
@@ -316,9 +319,7 @@ async def test_apply_guardrail_response_input_type():
 async def test_async_pre_call_hook():
     """Directly test async_pre_call_hook method if exposed by TealTigerGuardrail."""
     guardrail = TealTigerGuardrail(policies=DEFAULT_POLICIES, policy_mode="ENFORCE")
-    data = {
-        "messages": [{"role": "user", "content": "Contact me at test@example.com"}]
-    }
+    data = {"messages": [{"role": "user", "content": "Contact me at test@example.com"}]}
 
     if hasattr(guardrail, "async_pre_call_hook"):
         res = await guardrail.async_pre_call_hook(
@@ -335,9 +336,7 @@ async def test_async_pre_call_hook():
 async def test_async_post_call_success_hook():
     """Directly test async_post_call_success_hook method if exposed by TealTigerGuardrail."""
     guardrail = TealTigerGuardrail(policies=DEFAULT_POLICIES, policy_mode="ENFORCE")
-    response_obj = {
-        "choices": [{"message": {"content": "SSN: 123-45-6789"}}]
-    }
+    response_obj = {"choices": [{"message": {"content": "SSN: 123-45-6789"}}]}
 
     if hasattr(guardrail, "async_post_call_success_hook"):
         # Pass data, user_api_key_dict, and response_obj positionally
@@ -353,4 +352,4 @@ def test_tool_call_name_invalid_types():
     """Verify _tool_call_name gracefully handles primitives or None."""
     assert _tool_call_name(None) is None
     assert _tool_call_name("invalid_str") is None
-    assert _tool_call_name(12345) is None       
+    assert _tool_call_name(12345) is None
