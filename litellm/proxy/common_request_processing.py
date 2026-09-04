@@ -61,6 +61,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
     wrap_sse_stream_with_keepalive_pings,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
+from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
@@ -2003,6 +2004,12 @@ class ProxyBaseLLMRequestProcessing:
             llm_router=llm_router,
             trust_client_model_info=False,
         )
+
+        # An auto router with its own compression policy is authoritative for this
+        # request: suppress every other compression guardrail and arm whichever one
+        # the policy names for the model call, before those guardrails get a chance
+        # to run below.
+        self.data = await _arm_auto_router_compression(data=self.data, llm_router=llm_router)
 
         self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,

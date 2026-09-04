@@ -48,6 +48,8 @@ import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
 import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
+import CompressionControls from "./CompressionControls";
+import { type AutoRouterCompressionState, DEFAULT_AUTO_ROUTER_COMPRESSION } from "./buildAutoRouterCompression";
 
 export type { DimensionWeights, TierBoundaries, TokenThresholds };
 export type { CustomTierSet, TierRow } from "./tier_rows";
@@ -490,6 +492,10 @@ interface ComplexityRouterConfigProps {
   onMatchThresholdChange?: (threshold: number) => void;
   escalationKeywords?: string[];
   onEscalationKeywordsChange?: (keywords: string[]) => void;
+  // Optional: not part of complexity_router_config, since it applies to every
+  // pre-routing strategy, not just the complexity router.
+  autoRouterCompression?: AutoRouterCompressionState;
+  onAutoRouterCompressionChange?: (state: AutoRouterCompressionState) => void;
   showValidationErrors?: boolean;
 }
 
@@ -611,6 +617,8 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onMatchThresholdChange = () => {},
   escalationKeywords = [],
   onEscalationKeywordsChange,
+  autoRouterCompression = DEFAULT_AUTO_ROUTER_COMPRESSION,
+  onAutoRouterCompressionChange,
   showValidationErrors = false,
 }) => {
   const customTierSet = value.custom_tier_set;
@@ -871,6 +879,32 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                     <Restricted by={restrictedBy(value, "escalation")}>
                       <EscalationKeywords keywords={escalationKeywords} onChange={onEscalationKeywordsChange} />
                     </Restricted>
+                  ),
+                },
+              ]
+            : []),
+          ...(onAutoRouterCompressionChange
+            ? [
+                {
+                  key: "compression",
+                  label: <strong className="text-foreground font-semibold">Advanced: Compression</strong>,
+                  children: (
+                    <CompressionControls
+                      routing={autoRouterCompression.routing}
+                      onRoutingChange={(routing) =>
+                        onAutoRouterCompressionChange({
+                          ...autoRouterCompression,
+                          routing,
+                          sameAsRouting: routing === undefined ? true : autoRouterCompression.sameAsRouting,
+                        })
+                      }
+                      sameAsRouting={autoRouterCompression.sameAsRouting}
+                      onSameAsRoutingChange={(sameAsRouting) =>
+                        onAutoRouterCompressionChange({ ...autoRouterCompression, sameAsRouting })
+                      }
+                      model={autoRouterCompression.model}
+                      onModelChange={(model) => onAutoRouterCompressionChange({ ...autoRouterCompression, model })}
+                    />
                   ),
                 },
               ]

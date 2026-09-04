@@ -18,6 +18,7 @@ import pytest
 import litellm
 from litellm import Router
 from litellm.exceptions import MidStreamFallbackError
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
@@ -9993,6 +9994,156 @@ class TestModelGroupAliasReachesPreRoutingStrategies:
             router.get_available_deployment(
                 model="smart-route", messages=self._messages(), request_kwargs={"metadata": {}}
             )
+
+
+class TestAutoRouterCompressionDecoupling:
+    """An auto router's `auto_router_routing_compression` / `auto_router_model_compression`
+    decouple what the routing decision sees from what the model call sees. The one
+    assertion that must hold under any mutation: the strategy can be routed on
+    compressed text while the caller's own `messages` list - the one that would reach
+    the model - is never touched."""
+
+    class _RecordingStrategy:
+        """Echoes back whatever `messages` it was handed, like every real strategy does."""
+
+        def __init__(self):
+            self.received_messages: list[dict] | None = None
+
+        async def async_pre_routing_hook(
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+        ):
+            from litellm.types.router import PreRoutingHookResponse
+
+            self.received_messages = messages
+            return PreRoutingHookResponse(model="gemini-flash", messages=messages)
+
+    class _CompressingGuardrail(CustomGuardrail):
+        def __init__(self, guardrail_name: str):
+            super().__init__(guardrail_name=guardrail_name)
+            self.call_count = 0
+
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            self.call_count += 1
+            structured_messages = inputs.get("structured_messages") or []
+            compressed = [
+                {**m, "content": f"[COMPRESSED] {m.get('content')}"} for m in structured_messages
+            ]
+            return {**inputs, "structured_messages": compressed}
+
+    @staticmethod
+    def _messages() -> list[dict[str, str]]:
+        return [{"role": "user", "content": "What is the capital of France?"}]
+
+    def _router(self, marker_litellm_params: dict) -> tuple[litellm.Router, "_RecordingStrategy"]:
+        from litellm.types.router import TaggedPreRoutingStrategy
+
+        tiers = dict.fromkeys(("SIMPLE", "MEDIUM", "COMPLEX", "REASONING"), "gemini-flash")
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {"tiers": tiers},
+                        "complexity_router_default_model": "gemini-flash",
+                        **marker_litellm_params,
+                    },
+                },
+                {
+                    "model_name": "gemini-flash",
+                    "litellm_params": {"model": "gemini/gemini-3.6-flash", "mock_response": "routed by the tier"},
+                },
+            ],
+        )
+        for name in ("auto_routers", "complexity_routers", "adaptive_routers", "quality_routers"):
+            setattr(router, name, {})
+        strategy = self._RecordingStrategy()
+        router.complexity_routers = {"smart-router": [TaggedPreRoutingStrategy(tags=(), strategy=strategy)]}
+        return router, strategy
+
+    @pytest.fixture
+    def registered_guardrail(self):
+        guardrail = self._CompressingGuardrail(guardrail_name="fake-compress")
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        yield guardrail
+        litellm.logging_callback_manager.remove_callback_from_all_lists(guardrail)
+
+    @pytest.mark.asyncio
+    async def test_routing_side_compression_never_reaches_the_caller_messages(self, registered_guardrail):
+        router, strategy = self._router(
+            {
+                "auto_router_routing_compression": "fake-compress",
+                "auto_router_model_compression": "none",
+            }
+        )
+        original_messages = self._messages()
+
+        response = await router.async_pre_routing_hook(
+            model="smart-router", request_kwargs={"metadata": {}}, messages=original_messages
+        )
+
+        assert strategy.received_messages == [
+            {"role": "user", "content": "[COMPRESSED] What is the capital of France?"}
+        ]
+        assert response.messages == original_messages
+
+    @pytest.mark.asyncio
+    async def test_model_side_compression_alone_leaves_routing_uncompressed(self, registered_guardrail):
+        router, strategy = self._router(
+            {
+                "auto_router_routing_compression": "none",
+                "auto_router_model_compression": "fake-compress",
+            }
+        )
+        original_messages = self._messages()
+
+        response = await router.async_pre_routing_hook(
+            model="smart-router", request_kwargs={"metadata": {}}, messages=original_messages
+        )
+
+        assert strategy.received_messages == original_messages
+        assert response.messages == original_messages
+        assert registered_guardrail.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_same_compression_on_both_hops_compresses_once(self, registered_guardrail):
+        """The same/different distinction exists so a shared choice does not pay for
+        compression twice: by the time the router runs, `messages` already reflects
+        whatever the ordinary pre-call guardrail pipeline did for the model call, so
+        the routing decision must reuse it rather than calling the guardrail again."""
+        router, strategy = self._router(
+            {
+                "auto_router_routing_compression": "fake-compress",
+                "auto_router_model_compression": "fake-compress",
+            }
+        )
+        # Stands in for what the proxy's ordinary pre-call guardrail pipeline would
+        # have already produced for the model call, since `auto_router_model_compression`
+        # names a guardrail: the router never triggers that pipeline itself.
+        already_compressed_messages = [
+            {"role": "user", "content": "[COMPRESSED] What is the capital of France?"}
+        ]
+
+        response = await router.async_pre_routing_hook(
+            model="smart-router", request_kwargs={"metadata": {}}, messages=already_compressed_messages
+        )
+
+        assert strategy.received_messages == already_compressed_messages
+        assert response.messages == already_compressed_messages
+        assert registered_guardrail.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_no_policy_is_fully_unaffected(self, registered_guardrail):
+        router, strategy = self._router({})
+        original_messages = self._messages()
+
+        response = await router.async_pre_routing_hook(
+            model="smart-router", request_kwargs={"metadata": {}}, messages=original_messages
+        )
+
+        assert strategy.received_messages is original_messages
+        assert response.messages == original_messages
+        assert registered_guardrail.call_count == 0
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
