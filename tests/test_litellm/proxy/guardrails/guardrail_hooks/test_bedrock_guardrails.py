@@ -5095,17 +5095,30 @@ def test_build_tracing_detail_surfaces_usage_counters_and_cost(monkeypatch):
     detail = guardrail._build_tracing_detail(
         {
             "action": "GUARDRAIL_INTERVENED",
-            "usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 2, "wordPolicyUnits": 0, "oddball": "not-an-int"},
+            "usage": {
+                "topicPolicyUnits": 1,
+                "contentPolicyUnits": 2,
+                "wordPolicyUnits": 0,
+                "someFutureCounter": 3,
+                "oddball": "not-an-int",
+            },
         },
         aws_region_name="us-east-1",
     )
 
-    assert detail["guardrail_usage"] == {"topicPolicyUnits": 1, "contentPolicyUnits": 2, "wordPolicyUnits": 0}
+    assert detail["guardrail_usage"] == {
+        "topicPolicyUnits": 1,
+        "contentPolicyUnits": 2,
+        "wordPolicyUnits": 0,
+        "someFutureCounter": 3,
+    }
     assert detail["guardrail_cost"] == pytest.approx(0.00045)
     by_unit = detail["guardrail_cost_by_unit"]
     assert by_unit is not None and by_unit.keys() == detail["guardrail_usage"].keys()
     assert by_unit["topicPolicyUnits"] == pytest.approx(0.00015)
     assert by_unit["contentPolicyUnits"] == pytest.approx(0.0003)
+    assert by_unit["wordPolicyUnits"] == 0.0
+    assert by_unit["someFutureCounter"] is None
     assert by_unit["wordPolicyUnits"] == 0.0
 
 

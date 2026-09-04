@@ -3142,10 +3142,11 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     provider hook. Summed into the request's ``response_cost`` so it counts against
     spend and budgets like token cost, unless ``guardrail_cost_in_spend`` is False."""
 
-    guardrail_cost_by_unit: ReadOnly[Mapping[str, float] | None]
+    guardrail_cost_by_unit: ReadOnly[Mapping[str, float | None] | None]
     """``guardrail_cost`` split per ``guardrail_usage`` counter, so the daily
     per-counter usage rollup can carry cost at its own grain. Absent when the
-    hook had no pricing for the invocation."""
+    hook had no pricing for the invocation; a counter is None when the pricing
+    entry has no price for it, which the rollup stores as unknown rather than $0."""
 
     guardrail_cost_in_spend: ReadOnly[bool | None]
     """Whether ``guardrail_cost`` participates in the request's ``response_cost`` and
@@ -3198,7 +3199,7 @@ class GuardrailTracingDetail(TypedDict, total=False):
     guardrail_action: str | None
     guardrail_usage: ReadOnly[Mapping[str, int] | None]
     guardrail_cost: ReadOnly[float | None]
-    guardrail_cost_by_unit: ReadOnly[Mapping[str, float] | None]
+    guardrail_cost_by_unit: ReadOnly[Mapping[str, float | None] | None]
     guardrail_cost_in_spend: ReadOnly[bool | None]
 
 
