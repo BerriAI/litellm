@@ -1238,6 +1238,18 @@ def test_health_liveness_endpoint(proxy_client):
     print(f"\n/health/liveness response time: {duration_ms:.2f}ms")
 
 
+def test_health_backlog_includes_admission_control_stats(proxy_client):
+    response = proxy_client.get("/health/backlog")
+
+    assert response.status_code == 200, response.text
+    assert set(response.json()) == {
+        "in_flight_requests",
+        "admitted_requests",
+        "queued_requests",
+        "rejected_requests",
+    }
+
+
 def test_health_readiness(proxy_client):
     """
     Test /health/readiness endpoint.

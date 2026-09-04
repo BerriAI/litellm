@@ -197,6 +197,7 @@ from litellm.router_utils.router_callbacks.track_deployment_metrics import (
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionToolParam,
     FileTypes,
     OpenAIFileObject,
     OpenAIFilesPurpose,
@@ -9545,6 +9546,7 @@ class Router:
             public_model_name for _, public_model_name in self.team_model_to_deployment_indices
         )
 
+        self.pattern_router.remove_deployment(model_id)
         for team_id in list(self.team_pattern_routers.keys()):
             team_pattern_router = self.team_pattern_routers[team_id]
             team_pattern_router.remove_deployment(model_id)
@@ -11762,7 +11764,7 @@ class Router:
         self,
         messages: list[dict[str, str]] | None,
         input: str | list | None,
-        instructions: str | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
     ) -> int:
         """
         Count input tokens for context-window pre-call checks.
@@ -11772,9 +11774,28 @@ class Router:
         The Responses payload is normalized to chat messages via the shared
         LiteLLMCompletionResponsesConfig transform so the same token_counter path covers
         both API surfaces and `instructions` tokens are included in the count.
+
+        Prompt content the message list never carries is read from `request_kwargs`:
+        `tools` (Chat Completions, Responses and Anthropic Messages shapes) and the
+        Anthropic Messages top-level `system` block.
         """
+        from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+            anthropic_system_to_openai_message,
+        )
+
+        extras: Final = request_kwargs if request_kwargs is not None else MappingProxyType({})
+        raw_instructions: Final = extras.get("instructions")
+        instructions: Final = raw_instructions if isinstance(raw_instructions, str) else None
+        raw_tools: Final = extras.get("tools")
+        tools: Final = (
+            cast(list[ChatCompletionToolParam], raw_tools)  # cast-ok: token_counter formats any tool dict shape
+            if isinstance(raw_tools, list) and raw_tools
+            else None
+        )
+        system_message: Final = anthropic_system_to_openai_message(extras.get("system"))
         if messages is not None:
-            return litellm.token_counter(messages=messages)
+            counted_messages: Final = (system_message, *messages) if system_message is not None else messages
+            return litellm.token_counter(messages=counted_messages, tools=tools)
         if input is not None:
             from openai.types.responses.response_create_params import ResponseInputParam
 
@@ -11787,7 +11808,10 @@ class Router:
                 input=typed_input,
                 responses_api_request={"instructions": instructions} if instructions is not None else {},
             )
-            return litellm.token_counter(messages=cast(list, input_messages))  # cast-ok: transformed chat messages
+            return litellm.token_counter(
+                messages=cast(list, input_messages),  # cast-ok: transformed chat messages
+                tools=tools,
+            )
         raise ValueError("Either messages or input must be provided to count tokens")
 
     def _deployment_max_input_tokens(self, model: str, deployment: Mapping[str, object]) -> int | None:
@@ -11833,14 +11857,13 @@ class Router:
         """
         if messages is None and input is None:
             return None
-        raw_instructions: Final = request_kwargs.get("instructions") if request_kwargs else None
         try:
             if not self._pre_call_checks_need_token_count(model, healthy_deployments):
                 return None
             return await asyncify(self._count_pre_call_check_tokens)(
                 messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
                 input=cast(str | list | None, input),  # cast-ok: forwarded to the sync counter
-                instructions=raw_instructions if isinstance(raw_instructions, str) else None,
+                request_kwargs=request_kwargs,
             )
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.error(
@@ -11887,8 +11910,6 @@ class Router:
         _rate_limit_error = False
         parent_otel_span: Final = _get_parent_otel_span_from_kwargs(request_kwargs)
 
-        raw_instructions: Final = request_kwargs.get("instructions") if request_kwargs else None
-        instructions: Final = raw_instructions if isinstance(raw_instructions, str) else None
         has_countable_input: Final = messages is not None or input is not None
 
         ## get model group RPM ##
@@ -11919,7 +11940,7 @@ class Router:
                             return _returned_deployments
                         try:
                             input_tokens = self._count_pre_call_check_tokens(
-                                messages=messages, input=input, instructions=instructions
+                                messages=messages, input=input, request_kwargs=request_kwargs
                             )
                         except Exception as e:
                             verbose_router_logger.error(

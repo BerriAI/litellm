@@ -28,12 +28,15 @@ from litellm.proxy.list_api.common import (
     PROBLEM_TYPE_BASE,
     ManagementProblem,
     build_list_links,
+    build_page_links,
     escape_like,
     unknown_query_param_problem,
 )
 from litellm.types.proxy.management_endpoints.management_v1 import (
+    FacetListResponse,
     ListMeta,
     ListResponse,
+    PageMeta,
     ProblemDetail,
 )
 
@@ -184,6 +187,13 @@ class ListExecutor(Protocol[TRow_co]):
     async def count(self, where: tuple[Predicate, ...]) -> int: ...
 
     async def find_many(self, plan: QueryPlan) -> Sequence[TRow_co]: ...
+
+
+class FacetExecutor(Protocol):
+    """The half of a facet that knows the rows. Separate from `ListExecutor` so a SQL
+    executor is not forced to implement `distinct` to keep serving entity lists."""
+
+    async def distinct(self, field: str, where: tuple[Predicate, ...]) -> Sequence[str]: ...
 
 
 def order_by_sql(order: tuple[SortKey, ...]) -> str:
@@ -512,6 +522,78 @@ def build_query_plan(
         order=sort + (SortKey(field=spec.tiebreaker, descending=False),),
         skip=(page - 1) * page_size,
         take=page_size,
+    )
+
+
+def _facet_allowed_params(spec: ListSpec[TRow, TOut]) -> tuple[str, ...]:
+    """A facet's values are always ascending, so `sort` is not one of its parameters."""
+    return tuple(name for name in _allowed_params(spec) if name != SORT_PARAM)
+
+
+def _facet_where(
+    spec: ListSpec[TRow, TOut],
+    params: Mapping[str, str],
+    caller: UserAPIKeyAuth,
+) -> tuple[Predicate, ...] | ProblemDetail:
+    scope_predicates: Final = _scope_predicates(spec.scope(caller))
+    if isinstance(scope_predicates, ProblemDetail):
+        return scope_predicates
+    filters: Final = _parse_filters(spec, params)
+    if isinstance(filters, ProblemDetail):
+        return filters
+    search: Final = _search_predicate(spec, params)
+    return scope_predicates + filters + ((search,) if search is not None else ())
+
+
+async def handle_facet(
+    spec: ListSpec[TRow, TOut],
+    executor: FacetExecutor,
+    request: Request,
+    caller: UserAPIKeyAuth,
+    field: str,
+) -> FacetListResponse:
+    """The distinct values one column takes over a filtered query on a resource.
+
+    Carries the parent's parameters so a filter dropdown offers exactly the values the
+    table can show, and `has_more` rather than a total, which would cost a COUNT(*) over
+    the whole match set on every keystroke.
+    """
+    params: Final = request.query_params
+    unknown: Final = tuple(sorted(name for name in params if name == SORT_PARAM or not _is_known_param(spec, name)))
+    if unknown:
+        raise ManagementProblem(unknown_query_param_problem(unknown=unknown, allowed=_facet_allowed_params(spec)))
+
+    duplicates: Final = _duplicate_params(request)
+    if duplicates:
+        raise ManagementProblem(
+            _problem(
+                "duplicate-query-parameter",
+                "Duplicate query parameter",
+                400,
+                f"Repeated query parameter(s): {', '.join(duplicates)}. Each may appear once; "
+                f"use a comma-separated list for multiple filter values.",
+            )
+        )
+
+    page: Final = _parse_page(params)
+    if isinstance(page, ProblemDetail):
+        raise ManagementProblem(page)
+    page_size: Final = _parse_page_size(spec, params)
+    if isinstance(page_size, ProblemDetail):
+        raise ManagementProblem(page_size)
+
+    where: Final = _facet_where(spec, params, caller)
+    if isinstance(where, ProblemDetail):
+        raise ManagementProblem(where)
+
+    values: Final = await executor.distinct(field, where)
+    skip: Final = (page - 1) * page_size
+    window: Final = values[skip : skip + page_size + 1]
+    has_more: Final = len(window) > page_size
+    return FacetListResponse(
+        data=tuple(window[:page_size]),
+        meta=PageMeta(page=page, page_size=page_size, has_more=has_more),
+        links=build_page_links(request=request, page=page, has_more=has_more),
     )
 
 
