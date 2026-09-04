@@ -903,7 +903,7 @@ class FusionRouter:
                 )
                 if isinstance(result, BaseModel):
                     result = result.model_dump()  # rebind-ok: orchestration branch state
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001  # provider search failures become advisory tool results
                 result = {  # mutable-ok: local provider payload
                     "status": "error",
                     "error": type(exc).__name__,
@@ -1071,7 +1071,7 @@ class FusionRouter:
                 ),
                 timeout=self.config.panel_timeout_seconds,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  # one provider failure must not cancel the parallel panel
             return FusionPanelFailure(model=model, error_type=type(exc).__name__, failure_reason=_failure_reason(exc))
         if not isinstance(response, ModelResponse) or (content := _response_text(response)) is None:
             return FusionPanelFailure(
@@ -1116,7 +1116,7 @@ class FusionRouter:
                 ),
                 timeout=self.config.panel_timeout_seconds,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001  # analysis is optional when its provider call fails
             return None
         return _parse_analysis(_response_text(response)) if isinstance(response, ModelResponse) else None
 

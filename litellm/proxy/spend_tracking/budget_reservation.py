@@ -1200,7 +1200,7 @@ def _estimate_fusion_search_cost(
                 optional_params=optional_params,
             )
             estimates.append(maximum_searches * (input_cost + output_cost))
-    except Exception:
+    except Exception:  # noqa: BLE001  # unknown search pricing makes the reservation estimate unavailable
         verbose_proxy_logger.debug(
             "Unable to load Fusion search cost info for budget reservation",
             exc_info=True,
