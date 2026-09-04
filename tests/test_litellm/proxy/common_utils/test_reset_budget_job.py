@@ -4,7 +4,7 @@ import sys
 import types
 from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -1497,10 +1497,10 @@ def test_budget_table_reset_invalidates_every_tag_not_just_the_first(reset_budge
 
 def test_budget_table_reset_invalidates_enduser_counter_and_cache(reset_budget_job, mock_prisma_client, monkeypatch):
     """When an end user's budget resets, its Redis spend counter is zeroed and its management cache is evicted."""
-    counter_cache = _make_counter_invalidation_job(monkeypatch)
-    budget = _budget_row(budget_id="budget-1")
+    counter_cache: Final = _make_counter_invalidation_job(monkeypatch)
+    budget: Final = _budget_row(budget_id="budget-1")
     mock_prisma_client.data["budget"] = [budget]
-    test_enduser = type(
+    test_enduser: Final = type(
         "LiteLLM_EndUserTable",
         (),
         {
@@ -1516,7 +1516,7 @@ def test_budget_table_reset_invalidates_enduser_counter_and_cache(reset_budget_j
 
     counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:end_user:customer-42", value=0.0, ttl=60)
     counter_cache.redis_cache.async_set_cache.assert_any_await(key="spend:end_user:customer-42", value=0.0, ttl=60)
-    deleted = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
+    deleted: Final = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
     assert "end_user_id:customer-42" in deleted
 
 

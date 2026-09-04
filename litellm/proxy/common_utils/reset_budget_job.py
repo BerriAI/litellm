@@ -189,7 +189,7 @@ def _enduser_cache_keys(row: _EndUserRow) -> tuple[str, ...]:
 def _enduser_carried_spend(row: _EndUserRow, caps: Mapping[str, float]) -> float:
     if not caps:
         return 0.0
-    effective_budget_id = row.budget_id or litellm.max_end_user_budget_id
+    effective_budget_id: Final[str | None] = row.budget_id or litellm.max_end_user_budget_id
     return _carried_spend(row.spend, caps.get(effective_budget_id) if effective_budget_id is not None else None)
 
 
