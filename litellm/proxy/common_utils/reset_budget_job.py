@@ -32,7 +32,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     compute_budget_reset_at,
     get_budget_reset_settings,
 )
-from litellm.proxy.common_utils.user_api_key_cache import tag_cache_key
+from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key, tag_cache_key
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -120,6 +120,14 @@ def _tag_counter_key(row: _TagRow) -> str:
 
 def _tag_cache_keys(row: _TagRow) -> tuple[str, ...]:
     return (tag_cache_key(row.tag_name),)
+
+
+def _enduser_counter_key(row: _EndUserRow) -> str:
+    return f"spend:end_user:{row.user_id}"
+
+
+def _enduser_cache_keys(row: _EndUserRow) -> tuple[str, ...]:
+    return (end_user_cache_key(row.user_id),)
 
 
 def _budget_link_where(
@@ -522,6 +530,7 @@ class ResetBudgetJob:
             where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
             log_subject="tags",
         )
+        endusers: Final[tuple[_EndUserRow, ...]] = await self._collect_endusers_to_reset(budget_ids)
         return _BudgetCascade(
             budgets=tuple(budgets_to_reset),
             budget_ids=budget_ids,
@@ -533,18 +542,20 @@ class ResetBudgetJob:
                 for b in budgets_to_reset
                 if b.budget_id is not None and b.budget_duration is not None
             ),
-            endusers=await self._collect_endusers_to_reset(budget_ids),
+            endusers=endusers,
             counter_keys=(
                 *(_team_membership_counter_key(row) for row in team_memberships),
                 *(_key_counter_key(row) for row in keys),
                 *(_org_counter_key(row) for row in orgs),
                 *(_tag_counter_key(row) for row in tags),
+                *(_enduser_counter_key(row) for row in endusers),
             ),
             cache_keys=(
                 *(key for row in team_memberships for key in _team_membership_cache_keys(row)),
                 *(key for row in keys for key in _key_cache_keys(row)),
                 *(key for row in orgs for key in _org_cache_keys(row)),
                 *(key for row in tags for key in _tag_cache_keys(row)),
+                *(key for row in endusers for key in _enduser_cache_keys(row)),
             ),
         )
 
