@@ -439,7 +439,7 @@ class AmazonConverseConfig(BaseConfig):
             reasoning_config: Final = self._transform_reasoning_effort_to_reasoning_config(reasoning_effort)
             optional_params.update(reasoning_config)
         else:
-            mapped_thinking: Final = AnthropicConfig._map_reasoning_effort(
+            mapped_thinking = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort,
                 model=model,
                 custom_llm_provider="bedrock",
