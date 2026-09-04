@@ -2125,7 +2125,7 @@ def _validate_soft_budget_value(soft_budget: float | None) -> None:
 
 
 async def _update_key_soft_budget(
-    prisma_client: PrismaClient,
+    db: "Prisma",
     existing_key_row: LiteLLM_VerificationToken,
     soft_budget: float | None,
     changed_by: str,
@@ -2137,7 +2137,7 @@ async def _update_key_soft_budget(
             "updated_by": changed_by,
         }
         budget_where: Final[prisma_types.LiteLLM_BudgetTableWhereUniqueInput] = {"budget_id": existing_budget_id}
-        await BudgetRepository(prisma_client).table.update(where=budget_where, data=budget_update)
+        await db.litellm_budgettable.update(where=budget_where, data=budget_update)
         return existing_budget_id
     if soft_budget is None:
         return None
@@ -2146,24 +2146,20 @@ async def _update_key_soft_budget(
         "created_by": changed_by,
         "updated_by": changed_by,
     }
-    created_budget: Final[prisma_models.LiteLLM_BudgetTable] = await BudgetRepository(prisma_client).table.create(
-        data=budget_create
-    )
+    created_budget: Final[prisma_models.LiteLLM_BudgetTable] = await db.litellm_budgettable.create(data=budget_create)
     return created_budget.budget_id
 
 
 async def _apply_soft_budget_update(
     data: UpdateKeyRequest,
     non_default_values: Mapping[str, object],
-    prisma_client: PrismaClient,
+    db: "Prisma",
     existing_key_row: LiteLLM_VerificationToken,
     changed_by: str,
 ) -> Mapping[str, object]:
-    if "soft_budget" not in data.model_fields_set:
-        return non_default_values
     remaining: Final = MappingProxyType({k: v for k, v in non_default_values.items() if k != "soft_budget"})
     updated_budget_id: Final = await _update_key_soft_budget(
-        prisma_client=prisma_client,
+        db=db,
         existing_key_row=existing_key_row,
         soft_budget=data.soft_budget,
         changed_by=changed_by,
@@ -2171,6 +2167,30 @@ async def _apply_soft_budget_update(
     if updated_budget_id is not None and existing_key_row.budget_id is None:
         return MappingProxyType({**remaining, "budget_id": updated_budget_id})
     return remaining
+
+
+async def _update_key_row_with_soft_budget(
+    prisma_client: PrismaClient,
+    key: str,
+    data: UpdateKeyRequest,
+    non_default_values: Mapping[str, object],
+    existing_key_row: LiteLLM_VerificationToken,
+    changed_by: str,
+) -> dict[str, object]:
+    hashed_token: Final = _hash_token_if_needed(key)
+    async with prisma_client.tx() as tx:
+        update_values: Final = await _apply_soft_budget_update(
+            data=data,
+            non_default_values=non_default_values,
+            db=tx,
+            existing_key_row=existing_key_row,
+            changed_by=changed_by,
+        )
+        updated_row: Final = await tx.litellm_verificationtoken.update(
+            where={"token": hashed_token},
+            data=with_settings_updated_at(prisma_client.jsonify_object({**update_values, "token": hashed_token})),
+        )
+    return {"token": hashed_token, "data": updated_row.model_dump() if updated_row is not None else {}}
 
 
 async def prepare_key_update_data(
@@ -3043,16 +3063,19 @@ async def update_key_fn(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        update_values: Final = await _apply_soft_budget_update(
-            data=data,
-            non_default_values=non_default_values,
-            prisma_client=prisma_client,
-            existing_key_row=existing_key_row,
-            changed_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+        changed_by: Final = user_api_key_dict.user_id or litellm_proxy_admin_name
+        response: Final = (
+            await _update_key_row_with_soft_budget(
+                prisma_client=prisma_client,
+                key=key,
+                data=data,
+                non_default_values=non_default_values,
+                existing_key_row=existing_key_row,
+                changed_by=changed_by,
+            )
+            if "soft_budget" in data.model_fields_set
+            else await prisma_client.update_data(token=key, data={**non_default_values, "token": key})
         )
-
-        _data: Final = {**update_values, "token": key}
-        response: Final = await prisma_client.update_data(token=key, data=_data)
 
         # Delete - key from cache, since it's been updated!
         # key updated - a new model could have been added to this key. it should not block requests after this is done
