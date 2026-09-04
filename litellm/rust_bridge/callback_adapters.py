@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from typing import Final, Protocol
 
@@ -16,7 +16,7 @@ class PreCallArguments(TypedDict):
 
 
 class ProviderLogging(Protocol):
-    model_call_details: dict[str, object]
+    model_call_details: MutableMapping[str, object]  # mutable-ok: legacy logger stores provider error details
 
     def pre_call(self, *, input: object, api_key: str | None, additional_args: PreCallArguments) -> None: ...
 
