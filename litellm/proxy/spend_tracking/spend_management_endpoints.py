@@ -3,7 +3,8 @@ import collections
 import json
 import os
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from itertools import groupby
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -16,7 +17,6 @@ from typing import (
     TypeAlias,
     TypedDict,
     TypeVar,
-    cast,  # noqa: TID251  # prisma group_by returns untyped aggregate mappings
 )
 
 import fastapi
@@ -201,16 +201,12 @@ class _SessionSpendStats(NamedTuple):
 _SessionSpendMap: TypeAlias = Mapping[tuple[str, str], _SessionSpendStats]
 
 
-class _SpendSumAggregate(TypedDict, total=False):
-    spend: ReadOnly[float]
-
-
-class _SpendGroupByRow(TypedDict):
+class _SpendDailySummaryRow(TypedDict):
+    day: ReadOnly[str]
     api_key: ReadOnly[str]
     user: ReadOnly[str | None]
     model: ReadOnly[str]
-    startTime: ReadOnly[object]
-    _sum: ReadOnly[_SpendSumAggregate]
+    spend: ReadOnly[float]
 
 
 async def _query_raw(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT]:
@@ -249,6 +245,66 @@ def _team_table(prisma_client: PrismaClient) -> _TeamTable:
 
 def _verification_token_table(prisma_client: PrismaClient) -> _VerificationTokenTable:
     return VerificationTokenRepository(prisma_client).table
+
+
+def _spend_logs_daily_summary_sql(
+    *,
+    start_date_iso: str,
+    end_date_iso: str,
+    api_key: str | None,
+    request_id: str | None,
+    user_id: str | None,
+) -> tuple[str, tuple[object, ...]]:
+    filter_params: Final[tuple[tuple[str, object], ...]] = tuple(
+        (column, value)
+        for column, value in (
+            ("api_key", api_key),
+            ("request_id", request_id),
+            ('"user"', user_id),
+        )
+        if value is not None
+    )
+    filter_clauses: Final[tuple[str, ...]] = tuple(
+        f"AND {column} = ${index}" for index, (column, _) in enumerate(filter_params, start=3)
+    )
+    filter_sql: Final = "\n".join(filter_clauses)
+    sql_query: Final = f"""
+SELECT
+    to_char(date_trunc('day', "startTime"), 'YYYY-MM-DD') AS day,
+    api_key,
+    "user",
+    model,
+    SUM(spend) AS spend
+FROM "LiteLLM_SpendLogs"
+WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC') AND "startTime" <= ($2::timestamptz AT TIME ZONE 'UTC')
+{filter_sql}
+GROUP BY 1, 2, 3, 4
+ORDER BY 1
+"""
+    params: Final[tuple[object, ...]] = (
+        start_date_iso,
+        end_date_iso,
+        *(value for _, value in filter_params),
+    )
+    return sql_query, params
+
+
+def _sum_spend_by(
+    rows: Sequence[_SpendDailySummaryRow], column: Literal["api_key", "user", "model"]
+) -> Mapping[str | None, float]:
+    keys: Final = frozenset(row[column] for row in rows)
+    return {key: sum(float(row["spend"]) for row in rows if row[column] == key) for key in keys}
+
+
+def _daily_summary_item(summary_date: date, rows: Sequence[_SpendDailySummaryRow]) -> Mapping[str, object]:
+    api_key_spend: Final = {key: value for key, value in _sum_spend_by(rows, "api_key").items() if key is not None}
+    return {
+        **api_key_spend,
+        "startTime": summary_date,
+        "spend": sum(float(row["spend"]) for row in rows),
+        "users": _sum_spend_by(rows, "user"),
+        "models": _sum_spend_by(rows, "model"),
+    }
 
 
 async def _find_spend_logs(
@@ -2229,6 +2285,31 @@ async def calculate_spend(request: SpendCalculateRequest):
         )
 
 
+class _SpendLogSearchCondition(NamedTuple):
+    sql: str
+    params: tuple[object, ...]
+
+
+def _build_spend_log_search_condition(
+    search: str,
+    start_date: datetime,
+    end_date: datetime,
+    next_param_index: int,
+) -> _SpendLogSearchCondition:
+    """request_id (indexed) matches across all time; the unindexed id columns only inside the window."""
+    raw: Final = f"${next_param_index}"
+    window_start: Final = f"${next_param_index + 1}"
+    window_end: Final = f"${next_param_index + 2}"
+    sql: Final = (
+        f"(request_id = {raw} OR ("
+        f"\"startTime\" >= ({window_start}::timestamptz AT TIME ZONE 'UTC') "
+        f"AND \"startTime\" <= ({window_end}::timestamptz AT TIME ZONE 'UTC') "
+        f'AND (api_key = {raw} OR team_id = {raw} OR "user" = {raw} OR end_user = {raw} '
+        f"OR session_id = {raw} OR model_id = {raw})))"
+    )
+    return _SpendLogSearchCondition(sql=sql, params=(search, start_date, end_date))
+
+
 @router.get(
     "/spend/logs/v2",
     tags=["Budget & Spend Tracking"],
@@ -2329,6 +2410,14 @@ async def ui_view_spend_logs(
             "UI route only, honored when sorting by startTime"
         ),
     ),
+    search: str | None = fastapi.Query(
+        default=None,
+        description=(
+            "Match a log whose request_id, api_key (hash), team_id, user, end_user, "
+            "session_id, or model_id equals this value. request_id matches across all time; the other columns "
+            "match inside start_date/end_date, which stay required"
+        ),
+    ),
 ):
     """
     View spend logs with pagination support.
@@ -2392,8 +2481,10 @@ async def ui_view_spend_logs(
     try:
         is_admin_view: Final = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
         is_request_id_lookup: Final = request_id is not None and not is_v2
+        is_search_lookup: Final = search is not None
+        search_owns_window: Final = is_search_lookup and not is_v2
 
-        if is_request_id_lookup:
+        if is_request_id_lookup and not is_search_lookup:
             # request_id is the @id primary key: it identifies a single row, so a
             # time window is meaningless. The dashboard always sends a default 24h
             # window, which hid ids copied from an older page (LIT-3981). Drop the
@@ -2576,13 +2667,24 @@ async def ui_view_spend_logs(
         # Date range. Wrap the param side with `AT TIME ZONE 'UTC'` so comparison
         # against the plain `timestamp` column does not depend on the DB session
         # timezone (see #22529). Absent for a request_id-only lookup (see above).
-        if start_date_obj is not None and end_date_obj is not None:
+        if start_date_obj is not None and end_date_obj is not None and not search_owns_window:
             sql_conditions.append(f"\"startTime\" >= (${p}::timestamptz AT TIME ZONE 'UTC')")
             sql_params.append(start_date_obj)
             p += 1
             sql_conditions.append(f"\"startTime\" <= (${p}::timestamptz AT TIME ZONE 'UTC')")
             sql_params.append(end_date_obj)
             p += 1
+
+        if search is not None and start_date_obj is not None and end_date_obj is not None:
+            search_condition: Final = _build_spend_log_search_condition(
+                search=search,
+                start_date=start_date_obj,
+                end_date=end_date_obj,
+                next_param_index=p,
+            )
+            sql_conditions.append(search_condition.sql)
+            sql_params.extend(search_condition.params)
+            p += len(search_condition.params)  # rebind-ok: advances the file's shared $N placeholder counter
 
         # Equality filters - read effective values from where_conditions (post-authorization)
         for sql_col, wc_key in [
@@ -2662,7 +2764,13 @@ async def ui_view_spend_logs(
             sql_params.append(f"%{error_message}%")
             p += 1
 
-        if group_by_session is True and not is_v2 and not is_request_id_lookup and sort_by == "startTime":
+        if (
+            group_by_session is True
+            and not is_v2
+            and not is_request_id_lookup
+            and not is_search_lookup
+            and sort_by == "startTime"
+        ):
             return await _ui_session_grouped_spend_logs(
                 prisma_client=prisma_client,
                 sql_conditions=sql_conditions,
@@ -2696,7 +2804,7 @@ async def ui_view_spend_logs(
             _order_expr = order_column
 
         joined_conditions: Final = " AND ".join(sql_conditions)
-        session_grouping: Final = group_by_session is True
+        session_grouping: Final = group_by_session is True and not is_search_lookup
         count_group_clause: Final = f"GROUP BY {_SESSION_GROUP_KEY_SQL}" if session_grouping else ""
         count_query: Final = f"""
             SELECT COUNT(*) AS total_count
@@ -3214,18 +3322,22 @@ async def view_spend_logs(
             start_date_iso: Final = start_date_obj.isoformat()
             end_date_iso: Final = end_date_obj.isoformat()
 
-            filter_query: Final = {
+            filter_query: Final[
+                dict[str, object]
+            ] = {  # mutable-ok: legacy filters are extended for optional parameters
                 "startTime": {
                     "gte": start_date_iso,  # Greater than or equal to Start Date
                     "lte": end_date_iso,  # Less than or equal to End Date
                 }
             }
 
+            summary_api_key: Final[str | None] = (
+                prisma_client.hash_token(token=api_key)
+                if api_key is not None and api_key.startswith("sk-")
+                else api_key
+            )
             if api_key is not None and isinstance(api_key, str):
-                if api_key.startswith("sk-"):
-                    filter_query["api_key"] = prisma_client.hash_token(token=api_key)
-                else:
-                    filter_query["api_key"] = api_key
+                filter_query["api_key"] = summary_api_key
             if request_id is not None and isinstance(request_id, str):
                 filter_query["request_id"] = request_id
             if user_id is not None and isinstance(user_id, str):
@@ -3244,58 +3356,34 @@ async def view_spend_logs(
                 return data
 
             # Legacy behavior: return summarized data (when summarize=true)
-            # SQL query
-            response: Final = await SpendLogsRepository(prisma_client).table.group_by(
-                by=["api_key", "user", "model", "startTime"],
-                where=filter_query,
-                sum={
-                    "spend": True,
-                },
+            summary_sql_and_params: Final = _spend_logs_daily_summary_sql(
+                start_date_iso=start_date_iso,
+                end_date_iso=end_date_iso,
+                api_key=summary_api_key,
+                request_id=request_id,
+                user_id=user_id,
             )
+            sql_query, params = summary_sql_and_params
+            rows: Final[Sequence[_SpendDailySummaryRow]] = await _query_raw(prisma_client, sql_query, *params)
+            if len(rows) == 0:
+                return []  # pyright: ignore[reportUnknownVariableType]  # empty summary has no element type
 
-            if isinstance(response, list) and len(response) > 0 and isinstance(response[0], dict):
-                spend_rows: Final = cast(Sequence[_SpendGroupByRow], response)  # cast-ok: by/sum fix the shape
-                result: Final[dict] = {}
-                for record in spend_rows:
-                    dt_object = datetime.strptime(str(record["startTime"]), "%Y-%m-%dT%H:%M:%S.%fZ")
-                    date = dt_object.date()
-                    if date not in result:
-                        result[date] = {"users": {}, "models": {}}
-                    api_key = record["api_key"]
-                    user_id = record["user"]
-                    model = record["model"]
-                    result[date]["spend"] = result[date].get("spend", 0) + record.get("_sum", {}).get("spend", 0)
-                    result[date][api_key] = result[date].get(api_key, 0) + record.get("_sum", {}).get("spend", 0)
-                    result[date]["users"][user_id] = result[date]["users"].get(user_id, 0) + record.get("_sum", {}).get(
-                        "spend", 0
-                    )
-                    result[date]["models"][model] = result[date]["models"].get(model, 0) + record.get("_sum", {}).get(
-                        "spend", 0
-                    )
-                return_list: Final = []
-                final_date = None
-                for k, v in sorted(result.items()):
-                    return_list.append({**v, "startTime": k})
-                    final_date = k
-
-                end_date_date: Final = end_date_obj.date()
-                if final_date is not None and final_date < end_date_date:
-                    current_date = final_date + timedelta(days=1)
-                    while current_date <= end_date_date:
-                        # Represent current_date as string because original response has it this way
-                        return_list.append(
-                            {
-                                "startTime": current_date,
-                                "spend": 0,
-                                "users": {},
-                                "models": {},
-                            }
-                        )  # If no data, will stay as zero
-                        current_date += timedelta(days=1)  # Move on to the next day
-
-                return return_list
-
-            return response
+            summary_items: Final = tuple(
+                _daily_summary_item(date.fromisoformat(day), tuple(day_rows))
+                for day, day_rows in groupby(rows, key=lambda row: row["day"])
+            )
+            final_date: Final = date.fromisoformat(rows[-1]["day"])
+            end_date_date: Final = end_date_obj.date()
+            padding: Final[tuple[Mapping[str, object], ...]] = tuple(
+                {
+                    "startTime": final_date + timedelta(days=offset),
+                    "spend": 0,
+                    "users": {},
+                    "models": {},
+                }
+                for offset in range(1, (end_date_date - final_date).days + 1)
+            )
+            return [*summary_items, *padding]
 
         else:
             scoped_filter: Final[dict[str, str]] = {}

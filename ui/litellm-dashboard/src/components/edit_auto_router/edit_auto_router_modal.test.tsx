@@ -550,6 +550,49 @@ describe("EditAutoRouterModal deployment affinity", () => {
     expect(savedConfig().deployment_affinity).toBe(false);
   });
 
+  it("preserves an idle TTL through an untouched save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, session_affinity_ttl_seconds: 300 });
+
+    await user.click(await screen.findByText("Advanced: Affinity"));
+    expect(await screen.findByLabelText("How long a pin survives idle (seconds)")).toHaveValue("300");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().session_affinity_ttl_seconds).toBe(300);
+  });
+
+  it("persists an edited idle TTL", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig(STORED_CONFIG);
+
+    await user.click(await screen.findByText("Advanced: Affinity"));
+    const ttl = await screen.findByLabelText("How long a pin survives idle (seconds)");
+    fireEvent.change(ttl, { target: { value: "300" } });
+    fireEvent.blur(ttl);
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().session_affinity_ttl_seconds).toBe(300);
+  });
+
+  it("removes the idle TTL when cleared", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, session_affinity_ttl_seconds: 300 });
+
+    await user.click(await screen.findByText("Advanced: Affinity"));
+    const ttl = await screen.findByLabelText("How long a pin survives idle (seconds)");
+    fireEvent.change(ttl, { target: { value: "" } });
+    fireEvent.blur(ttl);
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig()).not.toHaveProperty("session_affinity_ttl_seconds");
+  });
+
   // modality_pin_override is a managed key, so the modal rewrites it from form state on save. A
   // hydration gap would silently turn a stored override off on the next untouched save.
   it("shows a stored modality_pin_override=true as on and preserves it through an untouched save", async () => {
