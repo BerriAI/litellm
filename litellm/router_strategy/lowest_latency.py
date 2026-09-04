@@ -412,18 +412,30 @@ class LowestLatencyLoggingHandler(CustomLogger):
             if _deployment is None:
                 continue  # skip to next one
 
-            _deployment_tpm = (
-                _deployment.get("tpm", None)
-                or _deployment.get("litellm_params", {}).get("tpm", None)
-                or _deployment.get("model_info", {}).get("tpm", None)
-                or float("inf")
+            _deployment_tpm: Final = next(
+                (
+                    limit
+                    for limit in (
+                        _deployment.get("tpm", None),
+                        _deployment.get("litellm_params", {}).get("tpm", None),
+                        _deployment.get("model_info", {}).get("tpm", None),
+                    )
+                    if limit is not None
+                ),
+                float("inf"),
             )
 
-            _deployment_rpm = (
-                _deployment.get("rpm", None)
-                or _deployment.get("litellm_params", {}).get("rpm", None)
-                or _deployment.get("model_info", {}).get("rpm", None)
-                or float("inf")
+            _deployment_rpm: Final = next(
+                (
+                    limit
+                    for limit in (
+                        _deployment.get("rpm", None),
+                        _deployment.get("litellm_params", {}).get("rpm", None),
+                        _deployment.get("model_info", {}).get("rpm", None),
+                    )
+                    if limit is not None
+                ),
+                float("inf"),
             )
             item_latency = item_map.get("latency", [])
             item_ttft_latency = item_map.get("time_to_first_token", [])

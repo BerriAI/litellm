@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 
 import pytest
 
-
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
@@ -58,9 +57,9 @@ def test_sync_embedding_latency_is_json_serializable():
 
     latencies = _recorded_latencies(cache)
     assert latencies, "expected a latency entry to be recorded"
-    assert all(
-        not isinstance(value, timedelta) for value in latencies
-    ), f"raw timedelta leaked into latency list: {latencies}"
+    assert all(not isinstance(value, timedelta) for value in latencies), (
+        f"raw timedelta leaked into latency list: {latencies}"
+    )
     assert latencies[-1] == pytest.approx(2.0)
     # the exact failure mode from production: redis cache sync json.dumps
     json.dumps({"latency": latencies})
@@ -84,9 +83,9 @@ async def test_async_embedding_latency_is_json_serializable():
 
     latencies = _recorded_latencies(cache)
     assert latencies, "expected a latency entry to be recorded"
-    assert all(
-        not isinstance(value, timedelta) for value in latencies
-    ), f"raw timedelta leaked into latency list: {latencies}"
+    assert all(not isinstance(value, timedelta) for value in latencies), (
+        f"raw timedelta leaked into latency list: {latencies}"
+    )
     assert latencies[-1] == pytest.approx(3.0)
     json.dumps({"latency": latencies})
 
@@ -163,3 +162,23 @@ def test_sync_chat_zero_completion_tokens_falls_back_to_seconds():
     assert latencies and latencies[-1] == pytest.approx(2.0)
     assert not isinstance(latencies[-1], timedelta)
     json.dumps({"latency": latencies})
+
+
+@pytest.mark.parametrize("limit_name", ["tpm", "rpm"])
+def test_zero_capacity_excludes_deployment(limit_name: str):
+    handler = LowestLatencyLoggingHandler(router_cache=DualCache())
+    deployment_id = "zero-capacity"
+    deployment = {
+        "model_name": "test-model",
+        "litellm_params": {"model": "openai/test-model", limit_name: 0},
+        "model_info": {"id": deployment_id},
+    }
+
+    selected = handler._get_available_deployments(
+        model_group="test-model",
+        healthy_deployments=[deployment],
+        input="hello",
+        request_count_dict={deployment_id: {"latency": [0.1]}},
+    )
+
+    assert selected is None
