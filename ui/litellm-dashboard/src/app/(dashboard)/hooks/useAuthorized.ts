@@ -50,6 +50,7 @@ const useAuthorized = () => {
     isViewOnly: isViewOnlySessionRole(decoded?.user_role),
     premiumUser: decoded?.premium_user ?? null,
     disabledPersonalKeyCreation: decoded?.disabled_non_admin_personal_key_creation ?? null,
+    loginMethod: decoded?.login_method ?? null,
     showSSOBanner: decoded?.login_method === "username_password",
   };
 };
