@@ -7836,3 +7836,76 @@ def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_
     records = [r for r in caplog.records if "_handle_llm_api_exception(): Exception occured" in r.getMessage()]
     assert len(records) == 1
     assert (records[0].exc_info is not None) is expect_traceback
+
+
+class _RecordingDeferredLoggingObj:
+    def __init__(self) -> None:
+        self.dispatched: list[tuple[object, object]] = []
+        self._on_deferred_stream_complete: Callable | None = None
+        self._deferred_stream_complete_args: tuple | None = None
+
+    async def dispatch_success_handlers(
+        self,
+        result: object = None,
+        start_time: object = None,
+        end_time: object = None,
+        cache_hit: object = None,
+        prefer_async_handlers: bool = False,
+    ) -> None:
+        self.dispatched.append((result, cache_hit))
+
+
+class TestArmDeferredStreamDispatchFallback:
+    """The anthropic_messages fallback closure must accept both stored args shapes.
+
+    A bridged /v1/messages stream (non-Anthropic model behind the Anthropic
+    adapter) is a plain async generator, so arming falls through to the
+    fallback closure, but its inner CustomStreamWrapper stores
+    (assembled_response, cache_hit). Before the fix the 1-arg closure raised
+    TypeError on fire, which reached clients as a trailing SSE error frame and
+    dropped the request's spend log.
+    """
+
+    def _arm(self, logging_obj: _RecordingDeferredLoggingObj) -> None:
+        async def bridged_sse_stream() -> AsyncGenerator[bytes, None]:
+            yield b"event: message_stop\n\n"
+
+        ProxyBaseLLMRequestProcessing(data={})._arm_deferred_stream_dispatch(
+            response=bridged_sse_stream(),
+            route_type="anthropic_messages",
+            user_api_key_dict=ProxyUserAPIKeyAuth(),
+            logging_obj=logging_obj,
+        )
+        assert logging_obj._on_deferred_stream_complete is not None
+
+    @pytest.mark.asyncio
+    async def test_bridged_messages_args_shape_dispatches_success_logging(self):
+        logging_obj = _RecordingDeferredLoggingObj()
+        self._arm(logging_obj)
+
+        assembled_response: Final = object()
+        logging_obj._deferred_stream_complete_args = (assembled_response, False)
+        ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert logging_obj.dispatched == [(assembled_response, False)]
+        assert logging_obj._on_deferred_stream_complete is None
+        assert logging_obj._deferred_stream_complete_args is None
+
+    @pytest.mark.asyncio
+    async def test_native_coroutine_shape_still_enqueues_to_logging_worker(self):
+        logging_obj = _RecordingDeferredLoggingObj()
+        self._arm(logging_obj)
+
+        ran: Final = asyncio.Event()
+
+        async def native_logging_coroutine() -> None:
+            ran.set()
+
+        callback = logging_obj._on_deferred_stream_complete
+        assert callback is not None
+        await callback(native_logging_coroutine())
+
+        await asyncio.wait_for(ran.wait(), timeout=5)
+        assert logging_obj.dispatched == []
