@@ -5165,8 +5165,8 @@ def response_schema_prompt(model: str, response_schema: dict) -> str:
     if custom_prompt_details is not None:
         return custom_prompt(
             role_dict=custom_prompt_details["roles"],
-            initial_prompt_value=custom_prompt_details["initial_prompt_value"],
-            final_prompt_value=custom_prompt_details["final_prompt_value"],
+            initial_prompt_value=custom_prompt_details.get("initial_prompt_value", ""),
+            final_prompt_value=custom_prompt_details.get("final_prompt_value", ""),
             messages=response_schema_as_message,
         )
     else:
