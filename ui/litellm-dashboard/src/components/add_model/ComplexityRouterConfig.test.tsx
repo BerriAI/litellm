@@ -166,8 +166,29 @@ describe("ComplexityRouterConfig", () => {
 
     expect(screen.getByText("Classifier Model")).toBeInTheDocument();
     expect(screen.getByLabelText("Timeout (ms)")).toHaveValue("750");
+    expect(screen.getByRole("switch", { name: "Classifier circuit breaker" })).toBeChecked();
+    expect(screen.getByLabelText("Circuit breaker cooldown (seconds)")).toHaveValue("30");
     expect(screen.getByLabelText("Context Window Size")).toHaveValue("5");
     expect(screen.queryByText("Context Per-Turn Character Limit")).not.toBeInTheDocument();
+  });
+
+  it("should allow the default-on classifier circuit breaker to be disabled", () => {
+    const onChange = vi.fn();
+    const llmValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    };
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    fireEvent.click(screen.getByRole("switch", { name: "Classifier circuit breaker" }));
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classifier_llm_config: expect.objectContaining({ circuit_breaker_enabled: false }),
+      }),
+    );
   });
 
   it("should default the context window and budget when llm is selected", () => {
@@ -278,6 +299,17 @@ describe("ComplexityRouterConfig", () => {
 
   it.each([
     ["Timeout (ms)", "7", { classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 7 } }],
+    [
+      "Circuit breaker cooldown (seconds)",
+      "45",
+      {
+        classifier_llm_config: {
+          model: "gpt-3.5-turbo",
+          timeout_ms: 3000,
+          circuit_breaker_cooldown_seconds: 45,
+        },
+      },
+    ],
     ["Context Window Size", "0", { classifier_context_window_size: 0 }],
     ["Context Character Budget", "7", { classifier_context_budget_chars: 7 }],
   ])("keeps %s empty while it is being edited, then commits %s", (label, replacement, expected) => {
