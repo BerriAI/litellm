@@ -2,18 +2,20 @@
 Unit tests for OCR spend tracking in get_logging_payload.
 
 This test file verifies that OCR/AOCR calls correctly extract usage_info
-and populate the spend logs payload with pages_processed instead of token counts.
+and populate spend logs with page or token billing usage.
 """
 
-import pytest
+import json
 from datetime import datetime, timezone
-from unittest.mock import Mock
-from pydantic import BaseModel
 from typing import Optional
+from unittest.mock import Mock
+
+import pytest
+from pydantic import BaseModel
 
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
-    get_logging_payload,
     _extract_usage_for_ocr_call,
+    get_logging_payload,
 )
 
 
@@ -50,9 +52,7 @@ class TestExtractUsageForOCRCall:
     def test_extract_usage_from_pydantic_model(self):
         """Test extracting usage from Pydantic model response"""
         usage_info = MockUsageInfo(pages_processed=10, doc_size_bytes=1024)
-        response_obj = MockOCRResponse(
-            id="ocr-123", object="ocr", model="test-ocr-model", usage_info=usage_info
-        )
+        response_obj = MockOCRResponse(id="ocr-123", object="ocr", model="test-ocr-model", usage_info=usage_info)
         response_obj_dict = response_obj.model_dump()
 
         usage = _extract_usage_for_ocr_call(response_obj, response_obj_dict)
@@ -102,6 +102,42 @@ class TestExtractUsageForOCRCall:
         assert usage.get("total_tokens") == 0
         assert usage.get("pages_processed") == 0
 
+    def test_extract_usage_preserves_token_billed_ocr(self):
+        response_obj_dict = {
+            "usage_info": {
+                "prompt_tokens": 281,
+                "completion_tokens": 6,
+                "total_tokens": 287,
+            }
+        }
+
+        usage = _extract_usage_for_ocr_call(response_obj_dict, response_obj_dict)
+
+        assert usage == {
+            "prompt_tokens": 281,
+            "completion_tokens": 6,
+            "total_tokens": 287,
+        }
+
+    def test_extract_usage_keeps_zero_token_defaults_for_page_billed_ocr(self):
+        response_obj_dict = {
+            "usage_info": {
+                "pages_processed": 5,
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "total_tokens": None,
+            }
+        }
+
+        usage = _extract_usage_for_ocr_call(response_obj_dict, response_obj_dict)
+
+        assert usage == {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "pages_processed": 5,
+        }
+
 
 class TestGetLoggingPayloadOCR:
     """Test get_logging_payload with OCR call types"""
@@ -144,8 +180,6 @@ class TestGetLoggingPayloadOCR:
         assert payload["spend"] == 0.05
 
         # Verify pages_processed is in additional_usage_values
-        import json
-
         metadata = json.loads(payload["metadata"])
         assert "additional_usage_values" in metadata
         assert metadata["additional_usage_values"]["pages_processed"] == 7
@@ -175,8 +209,6 @@ class TestGetLoggingPayloadOCR:
         assert payload["total_tokens"] == 0
 
         # Verify pages_processed is in additional_usage_values
-        import json
-
         metadata = json.loads(payload["metadata"])
         assert "additional_usage_values" in metadata
         assert metadata["additional_usage_values"]["pages_processed"] == 12
@@ -223,8 +255,6 @@ class TestGetLoggingPayloadOCR:
         assert payload["total_tokens"] == 0
 
         # Verify pages_processed is 0
-        import json
-
         metadata = json.loads(payload["metadata"])
         assert metadata["additional_usage_values"]["pages_processed"] == 0
 
@@ -289,8 +319,32 @@ class TestGetLoggingPayloadOCR:
         assert payload["completion_tokens"] == 0
 
         # Verify pages_processed and doc_size_bytes are both in additional_usage_values
-        import json
-
         metadata = json.loads(payload["metadata"])
         assert metadata["additional_usage_values"]["pages_processed"] == 5
         assert metadata["additional_usage_values"]["doc_size_bytes"] == 1024
+
+    def test_token_billed_ocr_maps_usage_without_pages(self, mock_datetime, base_kwargs):
+        response_obj = {
+            "id": "ocr-token-billed",
+            "object": "ocr",
+            "model": "deepseek-ocr-maas",
+            "usage_info": {
+                "prompt_tokens": 281,
+                "completion_tokens": 6,
+                "total_tokens": 287,
+            },
+        }
+
+        payload = get_logging_payload(
+            kwargs=base_kwargs,
+            response_obj=response_obj,
+            start_time=mock_datetime,
+            end_time=mock_datetime,
+        )
+
+        assert payload["prompt_tokens"] == 281
+        assert payload["completion_tokens"] == 6
+        assert payload["total_tokens"] == 287
+
+        metadata = json.loads(payload["metadata"])
+        assert "pages_processed" not in metadata["additional_usage_values"]
