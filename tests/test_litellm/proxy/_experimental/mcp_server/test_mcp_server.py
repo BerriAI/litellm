@@ -8227,12 +8227,12 @@ class TestSingleServerPreflightReachesIdJag:
         from litellm.proxy._experimental.mcp_server import server as server_module
 
         with (
-            patch.object(
+            patch.object(  # test-quality-ok: route wiring must use the manager's configured server
                 server_module.global_mcp_server_manager,
                 "get_mcp_server_by_name",
                 return_value=server,
             ),
-            patch.object(
+            patch.object(  # test-quality-ok: route wiring must invoke the manager preflight
                 server_module.global_mcp_server_manager,
                 "preflight_token_exchange",
                 preflight,
@@ -8287,12 +8287,12 @@ class TestSingleServerPreflightReachesIdJag:
         preflight = AsyncMock()
 
         with (
-            patch.object(
+            patch.object(  # test-quality-ok: route wiring must use the manager's configured server
                 server_module.global_mcp_server_manager,
                 "get_mcp_server_by_name",
                 return_value=token_exchange,
             ),
-            patch.object(
+            patch.object(  # test-quality-ok: route wiring must invoke the manager preflight
                 server_module.global_mcp_server_manager,
                 "preflight_token_exchange",
                 preflight,
