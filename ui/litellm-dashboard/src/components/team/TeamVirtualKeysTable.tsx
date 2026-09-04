@@ -443,7 +443,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
   }, []);
 
   return (
-    <div className="w-full h-full overflow-hidden">
+    <div className="w-full">
       {selectedKey ? (
         <KeyInfoView
           keyId={selectedKey.token}
@@ -453,7 +453,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           onDelete={refetch}
         />
       ) : (
-        <div className="py-4 flex-1 overflow-hidden">
+        <div className="py-4">
           <DataTable
             data={displayKeys}
             columns={columns}
@@ -471,7 +471,6 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
             columnResizeMode="onChange"
             isLoading={isLoading || isFetching}
             loadingMessage="Loading keys..."
-            maxBodyHeight="75vh"
             size="compact"
             toolbar={(table) => (
               <>
