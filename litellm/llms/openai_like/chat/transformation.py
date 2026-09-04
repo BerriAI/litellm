@@ -76,7 +76,6 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
                 if key.endswith("_tokens") and value is None:
                     usage[key] = 0
 
-            # Normalize prompt caching tokens into prompt_tokens_details for OpenAI compatibility
             if "prompt_tokens_details" not in usage or not usage.get("prompt_tokens_details"):
                 prompt_tokens_details = {}
                 if "cache_read_input_tokens" in usage and isinstance(usage["cache_read_input_tokens"], int):
@@ -135,7 +134,6 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         if base_model is not None:
             returned_response._hidden_params["model"] = base_model
 
-        # Preserve cache tokens directly on usage object if provided
         if hasattr(returned_response, "usage") and returned_response.usage is not None:
             raw_usage = response_json.get("usage") or {}
             if "cache_read_input_tokens" in raw_usage and raw_usage["cache_read_input_tokens"] is not None:
