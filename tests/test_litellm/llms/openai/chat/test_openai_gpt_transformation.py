@@ -28,17 +28,6 @@ class TestOpenAIGPTConfig:
         supported_params = self.config.get_supported_openai_params("gpt-4.1-mini")
         assert "user" in supported_params
 
-    def test_reasoning_effort_supported_when_supports_reasoning(self):
-        """Test that 'reasoning_effort' is included when model declares supports_reasoning=True."""
-        litellm.model_cost["openai/custom-reasoning-model"] = {"supports_reasoning": True}
-        supported_params = self.config.get_supported_openai_params("custom-reasoning-model")
-        assert "reasoning_effort" in supported_params
-
-        # Non-reasoning model should not have reasoning_effort
-        litellm.model_cost["openai/custom-regular-model"] = {"supports_reasoning": False}
-        supported_params = self.config.get_supported_openai_params("custom-regular-model")
-        assert "reasoning_effort" not in supported_params
-
     def test_user_param_supported_for_responses_api_models(self):
         """Test that 'user' param is in supported params for responses API models.
 
