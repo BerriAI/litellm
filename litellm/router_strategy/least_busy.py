@@ -62,11 +62,13 @@ class LeastBusyLoggingHandler(CustomLogger):
 
                 request_count_api_key: Final = f"{model_group}_request_count"
                 # decrement count in cache
-                request_count_dict: Final = self.router_cache.get_cache(key=request_count_api_key) or {}
+                request_count_dict: Final = self.router_cache.get_cache(key=request_count_api_key)
+                if request_count_dict is None:
+                    return
                 request_count_value: Final[int | None] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
-                request_count_dict[id] = request_count_value - 1
+                request_count_dict[id] = max(0, request_count_value - 1)
                 self.router_cache.set_cache(key=request_count_api_key, value=request_count_dict)
 
                 ### TESTING ###
@@ -89,11 +91,13 @@ class LeastBusyLoggingHandler(CustomLogger):
 
                 request_count_api_key: Final = f"{model_group}_request_count"
                 # decrement count in cache
-                request_count_dict: Final = self.router_cache.get_cache(key=request_count_api_key) or {}
+                request_count_dict: Final = self.router_cache.get_cache(key=request_count_api_key)
+                if request_count_dict is None:
+                    return
                 request_count_value: Final[int | None] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
-                request_count_dict[id] = request_count_value - 1
+                request_count_dict[id] = max(0, request_count_value - 1)
                 self.router_cache.set_cache(key=request_count_api_key, value=request_count_dict)
 
                 ### TESTING ###
@@ -117,11 +121,13 @@ class LeastBusyLoggingHandler(CustomLogger):
 
                 request_count_api_key: Final = f"{model_group}_request_count"
                 # decrement count in cache
-                request_count_dict: Final = await self.router_cache.async_get_cache(key=request_count_api_key) or {}
+                request_count_dict: Final = await self.router_cache.async_get_cache(key=request_count_api_key)
+                if request_count_dict is None:
+                    return
                 request_count_value: Final[int | None] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
-                request_count_dict[id] = request_count_value - 1
+                request_count_dict[id] = max(0, request_count_value - 1)
                 await self.router_cache.async_set_cache(key=request_count_api_key, value=request_count_dict)
 
                 ### TESTING ###
@@ -144,11 +150,13 @@ class LeastBusyLoggingHandler(CustomLogger):
 
                 request_count_api_key: Final = f"{model_group}_request_count"
                 # decrement count in cache
-                request_count_dict: Final = await self.router_cache.async_get_cache(key=request_count_api_key) or {}
+                request_count_dict: Final = await self.router_cache.async_get_cache(key=request_count_api_key)
+                if request_count_dict is None:
+                    return
                 request_count_value: Final[int | None] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
-                request_count_dict[id] = request_count_value - 1
+                request_count_dict[id] = max(0, request_count_value - 1)
                 await self.router_cache.async_set_cache(key=request_count_api_key, value=request_count_dict)
 
                 ### TESTING ###
@@ -169,23 +177,13 @@ class LeastBusyLoggingHandler(CustomLogger):
             ## if healthy deployment not yet used
             if d["model_info"]["id"] not in all_deployments:
                 all_deployments[d["model_info"]["id"]] = 0
-        # map deployment to id
-        # pick least busy deployment
-        min_traffic = float("inf")
-        min_deployment = None
-        for k, v in all_deployments.items():
-            if v < min_traffic:
-                min_traffic = v
-                min_deployment = k
-        if min_deployment is not None:
-            ## check if min deployment is a string, if so, cast it to int
-            for m in healthy_deployments:
-                if m["model_info"]["id"] == min_deployment:
-                    return m
-            min_deployment = random.choice(healthy_deployments)
-        else:
-            min_deployment = random.choice(healthy_deployments)
-        return min_deployment
+        healthy_by_id: Final = {d["model_info"]["id"]: d for d in healthy_deployments}
+        candidates: Final = {k: v for k, v in all_deployments.items() if k in healthy_by_id}
+        if not candidates:
+            return random.choice(healthy_deployments)
+        min_traffic: Final = min(candidates.values())
+        least_busy_ids: Final = tuple(k for k, v in candidates.items() if v == min_traffic)
+        return healthy_by_id[random.choice(least_busy_ids)]
 
     def get_available_deployments(
         self,
