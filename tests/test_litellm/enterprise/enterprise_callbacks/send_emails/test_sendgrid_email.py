@@ -133,3 +133,46 @@ async def test_send_email_multiple_recipients(mock_env_vars, mock_async_client):
         {"email": "recipient1@example.com"},
         {"email": "recipient2@example.com"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_send_email_sets_reply_to_when_configured(monkeypatch, mock_async_client):
+    """SENDGRID_REPLY_TO_EMAIL is sent as the payload's reply_to and leaves from alone."""
+    monkeypatch.setenv("SENDGRID_API_KEY", "test_api_key")
+    monkeypatch.delenv("SENDGRID_SENDER_EMAIL", raising=False)
+    monkeypatch.setenv("SENDGRID_REPLY_TO_EMAIL", "litellm-alerts@example.com")
+
+    logger = SendGridEmailLogger()
+    logger.async_httpx_client = mock_async_client
+
+    await logger.send_email(
+        from_email="no-reply@example.com",
+        to_email=["recipient@example.com"],
+        subject="Test Subject",
+        html_body="<p>Test email body</p>",
+    )
+
+    payload = mock_async_client.post.call_args[1]["json"]
+    assert payload["reply_to"] == {"email": "litellm-alerts@example.com"}
+    assert payload["from"] == {"email": "no-reply@example.com"}
+
+
+@pytest.mark.asyncio
+async def test_send_email_omits_reply_to_when_not_configured(monkeypatch, mock_async_client):
+    """With SENDGRID_REPLY_TO_EMAIL unset the key is absent, not null, so SendGrid
+    keeps defaulting Reply-To to the sender."""
+    monkeypatch.setenv("SENDGRID_API_KEY", "test_api_key")
+    monkeypatch.delenv("SENDGRID_REPLY_TO_EMAIL", raising=False)
+
+    logger = SendGridEmailLogger()
+    logger.async_httpx_client = mock_async_client
+
+    await logger.send_email(
+        from_email="no-reply@example.com",
+        to_email=["recipient@example.com"],
+        subject="Test Subject",
+        html_body="<p>Test email body</p>",
+    )
+
+    payload = mock_async_client.post.call_args[1]["json"]
+    assert "reply_to" not in payload
