@@ -60810,7 +60810,8 @@
         "output_cost_per_token": 4.4e-06,
         "source": "https://www.baseten.co/pricing/",
         "supported_modalities": [
-            "text"
+            "text",
+            "image"
         ],
         "supported_output_modalities": [
             "text"
@@ -60818,7 +60819,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_vision": true
     },
     "openrouter/minimax/minimax-m3": {
         "input_cost_per_token": 3e-07,

@@ -54,7 +54,8 @@ def test_baseten_glm_5_3_specs():
     assert info["supports_prompt_caching"] is True
     assert info["supports_response_schema"] is True
     assert info["supports_tool_choice"] is True
-    assert info["supported_modalities"] == ["text"]
+    assert info["supports_vision"] is True
+    assert info["supported_modalities"] == ["text", "image"]
     assert info["supported_output_modalities"] == ["text"]
 
     routed_model, provider, _, _ = get_llm_provider(model=MODEL)
