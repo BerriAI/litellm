@@ -224,6 +224,35 @@ class TestRequestCoverage:
         assert data["messages"][0]["tool_calls"][0]["function"]["arguments"] == '{"email": "[EMAIL_1]"}'
 
     @pytest.mark.asyncio
+    async def test_responses_api_instructions_are_redacted(self):
+        """`instructions` is provider-bound text that sits outside `messages`."""
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail, {"texts": ["contact [EMAIL_1]"]})
+
+        data = {"instructions": "contact jane.doe@example.com", "input": ""}
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="aresponses")
+
+        assert mock.call_args_list[0].kwargs["json"]["texts"] == ["contact jane.doe@example.com"]
+        assert data["instructions"] == "contact [EMAIL_1]"
+
+    @pytest.mark.asyncio
+    async def test_legacy_function_call_arguments_are_redacted(self):
+        guardrail = _guardrail()
+        _mock_post(guardrail, {"texts": ['{"email": "[EMAIL_1]"}']})
+
+        data = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "function_call": {"name": "send", "arguments": '{"email": "jane.doe@example.com"}'},
+                }
+            ]
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
+
+        assert data["messages"][0]["function_call"]["arguments"] == '{"email": "[EMAIL_1]"}'
+
+    @pytest.mark.asyncio
     async def test_every_shape_in_one_request_is_redacted(self):
         guardrail = _guardrail()
         mock = _mock_post(guardrail, {"texts": ["a", "b", "c", "d"]})
@@ -332,6 +361,59 @@ class TestRestoration:
 
         assert result["content"][0]["text"] == "a@b.com"
         assert result["content"][1] == {"type": "tool_use", "id": "t1", "name": "lookup", "input": {}}
+
+
+class TestVaultIsolation:
+    """The vault id must never be something a caller can choose.
+
+    The vault holds the plaintext behind every placeholder. If a caller could name
+    the vault, they could send a placeholder, have the model echo it back, and get
+    another caller's value restored into their own reply.
+    """
+
+    @pytest.mark.asyncio
+    async def test_caller_supplied_session_id_is_not_used(self):
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail, {"texts": ["[EMAIL_1]"]})
+
+        data = {
+            "messages": [{"role": "user", "content": "a@b.com"}],
+            "metadata": {"llm_shield_session_id": "victim-session"},
+            "litellm_session_id": "victim-session",
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
+
+        used = mock.call_args_list[0].kwargs["headers"]["X-Session-ID"]
+        assert used != "victim-session"
+        assert data["metadata"]["llm_shield_session_id"] == used
+
+    @pytest.mark.asyncio
+    async def test_restore_ignores_a_foreign_session_id(self):
+        """A reply is left unrestored rather than resolved against another vault."""
+        guardrail = _guardrail(event_hook="post_call")
+        mock = _mock_post(guardrail, {"texts": ["[EMAIL_1]"]})
+
+        data = {"metadata": {"llm_shield_session_id": "victim-session"}}
+        response = ModelResponse(choices=[Choices(index=0, message=Message(role="assistant", content="[EMAIL_1]"))])
+        await guardrail.async_post_call_success_hook(data=data, user_api_key_dict=None, response=response)
+
+        assert mock.call_args_list[0].kwargs["headers"]["X-Session-ID"] != "victim-session"
+
+    @pytest.mark.asyncio
+    async def test_each_request_gets_its_own_vault(self):
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail, {"texts": ["[EMAIL_1]"]}, {"texts": ["[EMAIL_1]"]})
+
+        for _ in range(2):
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=None,
+                cache=None,
+                data={"messages": [{"role": "user", "content": "a@b.com"}]},
+                call_type="completion",
+            )
+
+        seen = {call.kwargs["headers"]["X-Session-ID"] for call in mock.call_args_list}
+        assert len(seen) == 2
 
 
 class TestFailClosed:
