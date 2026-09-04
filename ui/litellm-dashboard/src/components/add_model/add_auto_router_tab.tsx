@@ -544,7 +544,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 <div>
                   <div className="text-sm font-medium text-foreground">Start with a recommended setup</div>
                   <div className="text-xs text-muted-foreground">
-                    Uses your available models and their listed prices. You can review and edit everything before
+                    Uses your available models and our recommended setups. You can review and edit everything before
                     saving.
                   </div>
                 </div>
