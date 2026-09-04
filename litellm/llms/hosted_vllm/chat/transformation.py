@@ -8,6 +8,7 @@ from typing import Any, Final, Literal, cast, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
+    demote_or_drop_midturn_system_messages,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import _parse_mime_type
 from litellm.litellm_core_utils.reasoning_effort_utils import (
@@ -234,6 +235,13 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                                 replaced_content_items.append((idx, content_item))
                     for idx, content_item in replaced_content_items:
                         message_content[idx] = self._convert_file_to_video_url(content_item)
+
+        # vLLM chat templates commonly reject a system row that isn't first
+        # (Qwen3: "System message must be at the beginning."). Opt-in via
+        # LITELLM_DEMOTE_MIDTURN_SYSTEM — the same flag the Anthropic bridge
+        # honors — so OpenAI-SDK clients that send a mid-turn / trailing system
+        # message don't 400 here. No-op unless the flag is set.
+        messages = demote_or_drop_midturn_system_messages(messages)  # rebind-ok: normalized list to super()
 
         if is_async:
             return super()._transform_messages(messages, model, is_async=cast(Literal[True], True))

@@ -99,6 +99,7 @@ def create_tool_name_mapping(
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    demote_or_drop_midturn_system_messages,
     parse_tool_call_arguments,
     reasoning_content_from_thinking_blocks,
     with_prompt_cache_breakpoint,
@@ -870,6 +871,16 @@ class LiteLLMAnthropicMessagesAdapter:
             text_parts.append(self._add_prompt_cache_breakpoint_if_present(block, text_obj))
         return ChatCompletionSystemMessage(role="system", content=text_parts) if text_parts else None
 
+    def _demote_midturn_system_messages(
+        self,
+        new_messages: list[AllMessageValues],  # mutable-ok: matches ChatCompletionRequest.messages
+    ) -> list[AllMessageValues]:  # mutable-ok: ChatCompletionRequest.messages requires a list
+        """Opt-in demotion/dropping of in-sequence system rows on the Anthropic
+        bridge. Delegates to the shared helper so the OpenAI /chat/completions
+        path (hosted_vllm) honors the same LITELLM_DEMOTE_MIDTURN_SYSTEM flag;
+        see litellm_core_utils.prompt_templates.common_utils."""
+        return demote_or_drop_midturn_system_messages(new_messages)
+
     def _add_system_message_to_messages(
         self,
         new_messages: list[AllMessageValues],
@@ -1167,10 +1178,11 @@ class LiteLLMAnthropicMessagesAdapter:
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES
         self._add_system_message_to_messages(new_messages, anthropic_message_request)
+        final_messages: Final = self._demote_midturn_system_messages(new_messages)
 
         new_kwargs: Final[ChatCompletionRequest] = {
             "model": anthropic_message_request["model"],
-            "messages": new_messages,
+            "messages": final_messages,
         }
         ## CONVERT METADATA (user_id + litellm metadata)
         self._translate_metadata_to_openai(

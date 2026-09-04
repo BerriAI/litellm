@@ -5,6 +5,7 @@ Common utility functions used for translating messages across providers
 import io
 import json
 import mimetypes
+import os
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from itertools import groupby
@@ -33,6 +34,7 @@ from litellm.types.llms.openai import (
     ChatCompletionReasoningSummaryTextBlock,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
+    ChatCompletionSystemMessage,
     ChatCompletionTextObject,
     ChatCompletionThinkingBlock,
     ChatCompletionToolParam,
@@ -131,6 +133,65 @@ def strip_none_values_from_message(message: AllMessageValues) -> AllMessageValue
     Strips None values from message
     """
     return cast(AllMessageValues, {k: v for k, v in message.items() if v is not None})
+
+
+DEMOTE_MIDTURN_SYSTEM_ENV: Final = "LITELLM_DEMOTE_MIDTURN_SYSTEM"
+
+
+def demote_or_drop_midturn_system_messages(
+    messages: list[AllMessageValues],  # mutable-ok: mirrors ChatCompletionRequest.messages
+) -> list[AllMessageValues]:  # mutable-ok: ChatCompletionRequest.messages requires a list
+    """Opt-in normalization of ``system`` rows that appear after index 0.
+
+    OpenAI accepts ``system`` messages anywhere in a conversation, but many
+    OpenAI-compatible backends enforce chat templates that reject a non-leading
+    system row (e.g. Qwen3 served by vLLM: "System message must be at the
+    beginning."). Clients that send mid-conversation system messages — Claude
+    Code's reminder turns, or an SDK that appends a JSON-schema/output
+    instruction as a trailing system row — 400 against such backends.
+
+    Gated on the ``LITELLM_DEMOTE_MIDTURN_SYSTEM`` env var:
+
+    - ``"true"`` / ``"demote"`` — rewrite each in-sequence system row as a
+      ``user`` row (preserving its content), matching how such reminders were
+      historically delivered.
+    - ``"drop"`` — remove them entirely, for backends where the content is not
+      wanted and a stable leading prefix caches better.
+    - anything else (default) — return ``messages`` unchanged.
+
+    The leading system row (index 0) is always preserved. Idempotent: after one
+    pass there are no non-leading system rows, so re-running is a no-op — safe
+    to call on paths that may already have been normalized.
+
+    Caveat — ``drop`` is content-lossy by design. If a server-side hook
+    (e.g. a guardrail) injects a trusted advisory as a *mid-sequence* system
+    row before this runs, ``drop`` removes it along with client reminders,
+    which can weaken a downstream policy that relies on that advisory. This
+    only affects non-leading system rows: an advisory prepended to the leading
+    system message (index 0) is always kept. When such hook-injected content
+    must survive, use ``demote`` (or ``true``) instead — it preserves every
+    system row's content, relocated to a ``user`` row. Both modes are opt-in
+    and off by default, so neither changes behavior unless explicitly enabled.
+    """
+    mode: Final = os.environ.get(DEMOTE_MIDTURN_SYSTEM_ENV, "").strip().lower()
+    if mode not in ("true", "demote", "drop"):
+        return messages
+    if mode == "drop":
+        return [  # mutable-ok: ChatCompletionRequest.messages requires a list
+            message for index, message in enumerate(messages) if index == 0 or message.get("role") != "system"
+        ]
+    return [  # mutable-ok: ChatCompletionRequest.messages requires a list
+        ChatCompletionUserMessage(
+            role="user",
+            content=cast(  # cast-ok: the role == "system" guard narrows this row
+                ChatCompletionSystemMessage, message
+            ).get("content")
+            or "",
+        )
+        if index > 0 and message.get("role") == "system"
+        else message
+        for index, message in enumerate(messages)
+    ]
 
 
 def extract_search_results_text(search_results: object) -> str:
