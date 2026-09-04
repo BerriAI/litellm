@@ -100,23 +100,38 @@ MAX_TIER_DEFINITIONS: Final[int] = 8
 MAX_TIER_NAME_CHARS: Final[int] = 64
 MAX_TIER_DESCRIPTION_CHARS: Final[int] = 500
 MAX_CLASSIFICATION_PROMPT_CHARS: Final[int] = 2000
+# Roomier than the instructions because the shipped example blocks an operator starts from are
+# themselves ~2.6k characters, so the instruction cap would reject an edited copy of one.
+MAX_CLASSIFICATION_EXAMPLES_CHARS: Final[int] = 4000
+
+CALIBRATION_EXAMPLES_HEADING: Final[str] = "Calibration examples:"
 
 
-def normalize_classification_prompt(value: str | None) -> str | None:
-    """Strip, reject blank, and cap an operator-written classifier preamble.
+def _normalize_operator_section(value: str | None, field: str, cap: int) -> str | None:
+    """Strip, reject blank, and cap one operator-written section of the classifier rubric.
 
     The single owner of the rule, so the dashboard's prompt preview normalizes exactly what the
     write gate stores: previewing the raw value would render leading whitespace the router strips,
-    or an over-long prompt the write then rejects.
+    or an over-long section the write then rejects.
     """
     if value is None:
         return None
     stripped: Final = value.strip()
     if not stripped:
         raise ValueError("must be non-empty; omit the field instead")
-    if len(stripped) > MAX_CLASSIFICATION_PROMPT_CHARS:
-        raise ValueError(f"classification_prompt exceeds {MAX_CLASSIFICATION_PROMPT_CHARS} characters")
+    if len(stripped) > cap:
+        raise ValueError(f"{field} exceeds {cap} characters")
     return stripped
+
+
+def normalize_classification_prompt(value: str | None) -> str | None:
+    """Normalize the operator-written classification instructions."""
+    return _normalize_operator_section(value, "classification_prompt", MAX_CLASSIFICATION_PROMPT_CHARS)
+
+
+def normalize_classification_examples(value: str | None) -> str | None:
+    """Normalize the operator-written calibration examples, which carry no heading of their own."""
+    return _normalize_operator_section(value, "classification_examples", MAX_CLASSIFICATION_EXAMPLES_CHARS)
 
 
 class TierDefinition(BaseModel):
@@ -560,12 +575,23 @@ class ComplexityRouterConfig(BaseModel):
     classification_prompt: str | None = Field(
         default=None,
         description=(
-            "Replaces the opening instructions of the LLM classifier rubric (the judging-criteria "
-            "prose) for a custom tier set. The per-tier bullets and the trust-boundary paragraph "
-            "telling the classifier to ignore tier requests embedded in quoted caller text are "
-            "always appended after it and cannot be overridden. Requires tier_definitions; a "
-            "built-in-tier router customizes its prompt via classifier_llm_config.system_prompt "
-            "or classification_rubric instead."
+            "Replaces the classification instructions that open the LLM classifier rubric, and nothing else. The "
+            "per-tier bullets follow it, the calibration examples follow those, and the trust-boundary paragraph "
+            "telling the classifier to ignore tier requests embedded in quoted caller text is always appended "
+            "after them and cannot be overridden. Requires an LLM classifier and cannot be combined with "
+            "classifier_llm_config.system_prompt. With built-in tiers the rubric preset still supplies the tier "
+            "criteria and, unless classification_examples replaces them, the calibration examples."
+        ),
+    )
+    classification_examples: str | None = Field(
+        default=None,
+        description=(
+            "Replaces the calibration examples of the LLM classifier rubric, and nothing else. Written as example "
+            "lines only: the router renders the 'Calibration examples:' heading above them, after the per-tier "
+            "bullets. Requires an LLM classifier and cannot be combined with classifier_llm_config.system_prompt. "
+            "With built-in tiers the rubric preset still supplies the tier criteria and, unless "
+            "classification_prompt replaces them, the classification instructions; a custom tier set ships no "
+            "examples of its own, so the section renders only when this is set."
         ),
     )
     tier_labels: dict[ComplexityTier, str] = Field(
@@ -1222,6 +1248,11 @@ class ComplexityRouterConfig(BaseModel):
     def _normalize_classification_prompt_field(cls, value: str | None) -> str | None:
         return normalize_classification_prompt(value)
 
+    @field_validator("classification_examples")
+    @classmethod
+    def _normalize_classification_examples_field(cls, value: str | None) -> str | None:
+        return normalize_classification_examples(value)
+
     @property
     def has_custom_tiers(self) -> bool:
         """True when the operator replaced the built-in tier set via tier_definitions."""
@@ -1253,6 +1284,35 @@ class ComplexityRouterConfig(BaseModel):
             return self.tier_for_label(label)
         folded: Final = label.strip().casefold()
         return next((name for name in self.tier_names() if name.casefold() == folded), None)
+
+    def _built_in_opening_conflicts(self) -> tuple[str, ...]:
+        """Error messages for mutually exclusive built-in classifier prompt settings.
+
+        The two sections are independent, so each is checked on its own name: an operator who wrote
+        only examples must not read an error naming the instructions field they never set.
+        """
+        written: Final = tuple(
+            field
+            for field, value in (
+                ("classification_prompt", self.classification_prompt),
+                ("classification_examples", self.classification_examples),
+            )
+            if value is not None
+        )
+        if not written:
+            return ()
+        llm_config: Final = self.classifier_llm_config
+        if llm_config is not None and llm_config.system_prompt is not None:
+            return tuple(
+                f"{field} cannot be combined with classifier_llm_config.system_prompt: choose the section-shaped "
+                "rubric or the legacy wholesale prompt"
+                for field in written
+            )
+        if not self.uses_llm_classifier:
+            return tuple(
+                f"{field} requires an LLM classifier, got classifier_type={self.classifier_type!r}" for field in written
+            )
+        return ()
 
     def _tier_definition_conflicts(self) -> tuple[str, ...]:
         """Error messages for config features that cannot coexist with a custom tier set."""
@@ -1304,19 +1364,10 @@ class ComplexityRouterConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_tier_definitions(self) -> "ComplexityRouterConfig":
         if self.tier_definitions is None:
-            orphaned: Final = next(
-                (
-                    field
-                    for field, value in (
-                        ("fallback_tier", self.fallback_tier),
-                        ("classification_prompt", self.classification_prompt),
-                    )
-                    if value is not None
-                ),
-                None,
-            )
-            if orphaned is not None:
-                raise ValueError(f"{orphaned} requires tier_definitions")
+            if self.fallback_tier is not None:
+                raise ValueError("fallback_tier requires tier_definitions")
+            for message in self._built_in_opening_conflicts():
+                raise ValueError(message)
             return self
         names: Final = tuple(definition.name for definition in self.tier_definitions)
         if not 2 <= len(names) <= MAX_TIER_DEFINITIONS:

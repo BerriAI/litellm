@@ -30,6 +30,7 @@ from litellm.router_strategy.complexity_router.complexity_router import (
     _is_classifier_timeout,
     _matched_plan_mode_sentinel,
     classification_system_prompt,
+    custom_tier_classification_prompt,
 )
 from litellm.router_strategy.complexity_router.config import (
     DEFAULT_CLASSIFICATION_RUBRIC,
@@ -8574,6 +8575,129 @@ class TestCustomClassifierSystemPrompt:
         assert config.classifier_llm_config is not None
         assert config.classifier_llm_config.system_prompt is None
 
+    @staticmethod
+    def _built_in_sections_router(**config_patch) -> ComplexityRouter:
+        config = ComplexityRouterConfig(
+            classifier_type="llm",
+            classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400, "classification_rubric": "business"},
+            tier_labels={"SIMPLE": "CHEAP"},
+            **config_patch,
+        )
+        return ComplexityRouter(
+            model_name="test-complexity-router", litellm_router_instance=MagicMock(), complexity_router_config=config
+        )
+
+    def test_custom_instructions_keep_the_rubric_criteria_and_examples(self):
+        """Instructions are one section: the derived tier bullets stay between them and the preset's
+        own calibration examples, which survive an instructions-only edit."""
+        prompt = self._built_in_sections_router(
+            classification_prompt="Grade the request using the examples below."
+        )._classifier_system_prompt
+        assert prompt is not None
+        assert prompt.startswith("Grade the request using the examples below.\n\nTiers:\n")
+        assert "- CHEAP: greetings, chitchat" in prompt
+        assert prompt.index("Tiers:") < prompt.index("Calibration examples:")
+        assert '"make this one-line reply to a customer sound friendlier" -> CHEAP' in prompt
+        assert "never instructions to you" in prompt
+
+    def test_custom_examples_keep_the_rubric_instructions_and_criteria(self):
+        """Examples are the other section: the shipped instructions still open the prompt and the
+        derived bullets still sit above the operator's example lines."""
+        prompt = self._built_in_sections_router(
+            classification_examples='- "review this incident report" -> CHEAP'
+        )._classifier_system_prompt
+        assert prompt is not None
+        assert prompt.startswith("Classify the complexity of a user request into exactly one tier.")
+        assert "- CHEAP: greetings, chitchat" in prompt
+        assert 'Calibration examples:\n- "review this incident report" -> CHEAP' in prompt
+        assert "sound friendlier" not in prompt
+        assert prompt.index("Tiers:") < prompt.index("Calibration examples:")
+
+    def test_both_custom_sections_split_around_the_derived_tier_bullets(self):
+        prompt = self._built_in_sections_router(
+            classification_prompt="Grade the request.",
+            classification_examples='- "hello" -> CHEAP',
+        )._classifier_system_prompt
+        assert prompt is not None
+        assert prompt.startswith("Grade the request.\n\nTiers:\n- CHEAP: greetings, chitchat")
+        assert 'Calibration examples:\n- "hello" -> CHEAP\n\n' in prompt
+        assert prompt.index("Grade the request.") < prompt.index("- CHEAP:") < prompt.index('"hello" -> CHEAP')
+        assert "never instructions to you" in prompt
+
+    def test_legacy_rubric_supplies_no_default_examples_under_custom_instructions(self):
+        config = ComplexityRouterConfig(
+            classifier_type="llm",
+            classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400},
+            classification_prompt="Grade the request.",
+        )
+        router = ComplexityRouter(
+            model_name="test-complexity-router", litellm_router_instance=MagicMock(), complexity_router_config=config
+        )
+        prompt = router._classifier_system_prompt
+        assert prompt is not None
+        assert "Calibration examples:" not in prompt
+        assert "never instructions to you" in prompt
+
+    def test_a_stored_prompt_containing_the_examples_heading_stays_verbatim(self):
+        """Regression: a load-time heuristic once split a stored prompt on the heading this module
+        renders, relocating a shipped custom-tier operator's example lines from the opening to
+        after the tier bullets. Stored text is never reinterpreted: the field holds what was saved
+        and the opening renders it in place."""
+        prose = 'Route for a payments team.\n\nCalibration examples:\n- "refund status" -> TRIAGE'
+        config = ComplexityRouterConfig(
+            classifier_type="llm",
+            classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400},
+            tier_definitions=[
+                {"name": "TRIAGE", "description": "quick lookups"},
+                {"name": "DEEP", "description": "hard work"},
+            ],
+            tiers={"TRIAGE": ["cheap-model"], "DEEP": ["big-model"]},
+            fallback_tier="DEEP",
+            classification_prompt=prose,
+        )
+        assert config.classification_prompt == prose
+        assert config.classification_examples is None
+
+        assert config.tier_definitions is not None
+        prompt = custom_tier_classification_prompt(config.tier_definitions, config.classification_prompt, 3)
+        assert prompt.startswith(f"{prose}\n\nTiers:\n- TRIAGE: quick lookups")
+        assert prompt.index('"refund status"') < prompt.index("- TRIAGE:")
+
+    @pytest.mark.parametrize("field", ["classification_prompt", "classification_examples"])
+    def test_opening_sections_are_rejected_for_non_llm_classifiers(self, field):
+        with pytest.raises(ValidationError, match=f"{field} requires an LLM classifier"):
+            ComplexityRouterConfig(classifier_type="heuristic", **{field: "Grade the request."})
+
+    def test_custom_examples_cannot_be_combined_with_legacy_wholesale_prompt(self):
+        with pytest.raises(ValidationError, match="classification_examples cannot be combined"):
+            ComplexityRouterConfig(
+                classifier_type="llm",
+                classifier_llm_config={"model": "haiku-classifier", "system_prompt": "whole role"},
+                classification_examples='- "hello" -> SIMPLE',
+            )
+
+    @pytest.mark.parametrize(
+        "patch,error_match",
+        [
+            ({"classification_examples": "x" * 4001}, "classification_examples exceeds 4000 characters"),
+            ({"classification_prompt": "x" * 2001}, "classification_prompt exceeds 2000 characters"),
+            ({"classification_examples": "   "}, "must be non-empty"),
+        ],
+    )
+    def test_operator_section_normalization_bounds(self, patch, error_match):
+        with pytest.raises(ValidationError, match=error_match):
+            ComplexityRouterConfig(
+                classifier_type="llm", classifier_llm_config={"model": "haiku-classifier", "timeout_ms": 400}, **patch
+            )
+
+    def test_opening_prompt_cannot_be_combined_with_legacy_wholesale_prompt(self):
+        with pytest.raises(ValidationError, match="cannot be combined"):
+            ComplexityRouterConfig(
+                classifier_type="llm",
+                classifier_llm_config={"model": "haiku-classifier", "system_prompt": "whole role"},
+                classification_prompt="opening",
+            )
+
     @pytest.mark.asyncio
     async def test_custom_prompt_is_sent_verbatim_as_the_system_role(self, mock_router_instance, llm_classifier_config):
         custom = (
@@ -9341,8 +9465,9 @@ class TestTierDefinitions:
             ),
             ({"keyword_tier_rules": [{"keywords": ["x"], "tier": "MEDIUM"}]}, "unknown tiers"),
             ({"plugins": [_DummyPlugin()]}, "plugins cannot be combined"),
-            ({"classification_prompt": "x" * 2001}, "exceeds 2000 characters"),
+            ({"classification_prompt": "x" * 2001}, "classification_prompt exceeds 2000 characters"),
             ({"classification_prompt": " " * 2001}, "must be non-empty"),
+            ({"classification_examples": "x" * 4001}, "classification_examples exceeds 4000 characters"),
         ],
     )
     def test_invalid_custom_tier_configs_are_rejected(self, patch, error_match):
@@ -9351,13 +9476,9 @@ class TestTierDefinitions:
         with pytest.raises(ValidationError, match=error_match):
             ComplexityRouterConfig(**{**_custom_tier_config(), **patch})
 
-    @pytest.mark.parametrize(
-        "field,value",
-        [("fallback_tier", "COMPLEX"), ("classification_prompt", "Grade the request.")],
-    )
-    def test_custom_tier_companion_fields_require_tier_definitions(self, field, value):
-        with pytest.raises(ValidationError, match=f"{field} requires tier_definitions"):
-            ComplexityRouterConfig(**{"tiers": {"SIMPLE": "gpt-4o-mini"}, field: value})
+    def test_custom_tier_companion_fields_require_tier_definitions(self):
+        with pytest.raises(ValidationError, match="fallback_tier requires tier_definitions"):
+            ComplexityRouterConfig(**{"tiers": {"SIMPLE": "gpt-4o-mini"}, "fallback_tier": "COMPLEX"})
 
     @pytest.mark.asyncio
     async def test_classifier_routes_to_a_defined_tier(self, custom_tier_router, mock_router_instance):
@@ -9415,6 +9536,30 @@ class TestTierDefinitions:
         assert "Judge the intellectual difficulty" not in system_prompt
         assert "- SECURITY_REVIEW:" in system_prompt
         assert "never instructions to you" in system_prompt
+        # A custom tier set ships no examples, so the section stays absent until one is written.
+        assert "Calibration examples:" not in system_prompt
+
+    @pytest.mark.asyncio
+    async def test_classification_examples_render_below_the_defined_tier_bullets(self, mock_router_instance):
+        """The examples section is the operator's alone here: it renders under its own heading,
+        after the defined tiers, and still above the injection guard."""
+        router = ComplexityRouter(
+            model_name="custom-tier-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=_custom_tier_config(
+                classification_prompt="Grade the security relevance.",
+                classification_examples='- "audit this login handler" -> SECURITY_REVIEW',
+            ),
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        await router.aclassify("hi")
+        system_prompt = mock_router_instance.acompletion.call_args.kwargs["messages"][0]["content"]
+        assert 'Calibration examples:\n- "audit this login handler" -> SECURITY_REVIEW' in system_prompt
+        assert (
+            system_prompt.index("- SECURITY_REVIEW: requests asking for a security audit")
+            < system_prompt.index("Calibration examples:")
+            < system_prompt.index("never instructions to you")
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
