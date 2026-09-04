@@ -359,6 +359,43 @@ class TestRequestCoverage:
         assert mock.call_args_list[0].kwargs["json"]["texts"] == ["result"]
 
     @pytest.mark.asyncio
+    async def test_anthropic_tool_result_content_is_redacted(self):
+        """A tool_result nests its own content, as a string or as more blocks."""
+        guardrail = _guardrail()
+        _mock_post(guardrail, {"texts": ["[EMAIL_1]", "[EMAIL_2]"]})
+
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "t1", "content": "found jane.doe@example.com"},
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "t2",
+                            "content": [{"type": "text", "text": "also bob@example.com"}],
+                        },
+                    ],
+                }
+            ]
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
+
+        assert data["messages"][0]["content"][0]["content"] == "[EMAIL_1]"
+        assert data["messages"][0]["content"][1]["content"][0]["text"] == "[EMAIL_2]"
+
+    @pytest.mark.asyncio
+    async def test_completions_suffix_is_redacted(self):
+        """LiteLLM forwards the legacy `suffix` to providers that support it."""
+        guardrail = _guardrail()
+        _mock_post(guardrail, {"texts": ["signed [EMAIL_1]", "write to [EMAIL_1]"]})
+
+        data = {"prompt": "write to jane.doe@example.com", "suffix": "signed jane.doe@example.com"}
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="atext_completion")
+
+        assert data["suffix"] == "signed [EMAIL_1]"
+
+    @pytest.mark.asyncio
     async def test_every_shape_in_one_request_is_redacted(self):
         guardrail = _guardrail()
         mock = _mock_post(guardrail, {"texts": ["a", "b", "c", "d"]})
@@ -681,6 +718,44 @@ class TestStreamingRehydration:
         sent = [call.kwargs["json"] for call in mock.call_args_list]
         assert sent[2]["carry"] == "A-held", "choice 0 must get its own window back"
         assert sent[3]["carry"] == "B-held", "choice 1 must get its own window back"
+
+    @pytest.mark.asyncio
+    async def test_a_choice_missing_from_the_last_chunk_still_flushes(self):
+        """Held text must not be dropped because its choice ended earlier.
+
+        Choice 1 finishes and stops appearing, then the stream ends without a
+        finish_reason for choice 0. Flushing only the terminal chunk's choices would
+        discard whatever choice 1 was still holding and truncate its answer.
+        """
+        guardrail = _guardrail(event_hook="post_call")
+        _mock_post(
+            guardrail,
+            {"text": "", "carry": "held-0"},
+            {"text": "", "carry": "held-1"},
+            {"text": "zero-done", "carry": ""},
+            {"text": "one-done", "carry": ""},
+        )
+
+        async def stream():
+            yield ModelResponseStream(
+                choices=[
+                    StreamingChoices(index=0, delta=Delta(content="a")),
+                    StreamingChoices(index=1, delta=Delta(content="b")),
+                ]
+            )
+            yield ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=None))])
+
+        chunks = await _drain(
+            guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=None, response=stream(), request_data={"messages": []}
+            )
+        )
+
+        flushed = {
+            choice.index: choice.delta.content for chunk in chunks for choice in chunk.choices if choice.delta.content
+        }
+        assert flushed.get(1) == "one-done", "choice 1's held text was dropped"
+        assert flushed.get(0) == "zero-done"
 
     @pytest.mark.asyncio
     async def test_chunks_are_forwarded_as_they_arrive(self):

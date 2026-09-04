@@ -100,7 +100,8 @@ def _collect_entry(entries: MutableSeq, index: int, slots: _SlotSink) -> None:
 
 
 def _collect_prompt(data: MutableRequest, slots: _SlotSink) -> None:
-    """The Completions API sends its text in a top-level `prompt`."""
+    """The Completions API sends its text in `prompt`, and its tail in `suffix`."""
+    _collect(data, "suffix", slots)
     prompt: Final = data.get("prompt")
     if isinstance(prompt, str):
         _collect(data, "prompt", slots)
@@ -118,8 +119,13 @@ def _collect_content(container: MutableRequest, slots: _SlotSink) -> None:
         _collect(container, "content", slots)
         return
     for part in content if isinstance(content, list) else ():
-        if isinstance(part, dict):
-            _collect(part, "text", slots)
+        if not isinstance(part, dict):
+            continue
+        _collect(part, "text", slots)
+        # An Anthropic tool_result carries its own content, as a string or as more
+        # blocks. Image and audio parts have no text and fall through untouched.
+        if "content" in part:
+            _collect_content(part, slots)
 
 
 def _collect_participant_name(message: MutableRequest, slots: _SlotSink) -> None:
@@ -486,8 +492,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
 
         # A stream that ended without a finish_reason can still leave text held back.
         if last_chunk is not None and any(carries.values()):
-            trailing: Final = last_chunk.model_copy(deep=True)
-            if await self._flush_trailing(trailing, carries, session_id):
+            async for trailing in self._flush_trailing(last_chunk, carries, session_id):
                 yield trailing
 
     async def _restore_choice(self, choice: Any, carries: _CarryWindows, session_id: str) -> None:
@@ -513,23 +518,50 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         carries[index] = remaining  # rebind-ok: this choice's window advances.
         delta.content = emitted
 
-    async def _flush_trailing(self, trailing: Any, carries: _CarryWindows, session_id: str) -> bool:
-        """Empties every still-held window into a copy of the last chunk."""
-        emitted_any = False  # rebind-ok: set once any choice contributes text.
-        for choice in getattr(trailing, "choices", None) or ():
-            delta = getattr(choice, "delta", None)
-            if delta is None:
-                continue
-            index = _choice_index(choice)
-            carry = carries.get(index, "")
+    async def _flush_trailing(
+        self, last_chunk: Any, carries: _CarryWindows, session_id: str
+    ) -> AsyncGenerator[Any, None]:
+        """Empties every window still holding text, one chunk per choice.
+
+        Driven by the windows rather than by the last chunk's choices. A choice that
+        finished earlier is not present in the terminal chunk, and flushing only what
+        that chunk carries would drop its held text and truncate its answer.
+        """
+        for index in sorted(carries):
+            carry = carries[index]
             if not carry:
-                delta.content = None
                 continue
             text, remaining = await self._stream_step("", carry, True, session_id)
             carries[index] = remaining  # rebind-ok: this choice's window advances.
-            delta.content = text or None
-            emitted_any = emitted_any or bool(text)
-        return emitted_any
+            if not text:
+                continue
+            chunk = self._chunk_for_choice(last_chunk, index)
+            if chunk is None:
+                continue
+            chunk.choices[0].delta.content = text
+            yield chunk
+
+    @staticmethod
+    def _chunk_for_choice(last_chunk: Any, index: int) -> Any:
+        """A single-choice copy of the last chunk, carrying only `index`.
+
+        Emitting one choice per chunk keeps a flush from reading as content on a
+        choice it does not belong to.
+        """
+        chunk: Final = last_chunk.model_copy(deep=True)
+        raw_choices: Final = getattr(chunk, "choices", None)
+        if not raw_choices:
+            return None
+        choices: Final[tuple] = tuple(raw_choices)
+        matching: Final = tuple(choice for choice in choices if _choice_index(choice) == index)
+        kept: Final = matching[0] if matching else choices[0]
+        if getattr(kept, "delta", None) is None:
+            return None
+        kept.index = index
+        # The terminal signal, if there was one, already went out with the real chunk.
+        kept.finish_reason = None
+        chunk.choices = [kept]  # mutable-ok: the chunk model requires a list.
+        return chunk
 
     async def _stream_step(self, text: str, carry: str, final: bool, session_id: str) -> tuple[str, str]:
         """Returns ``(text safe to emit now, window still being held)``."""
