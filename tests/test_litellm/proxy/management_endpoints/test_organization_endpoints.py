@@ -821,7 +821,8 @@ async def test_v2_rejects_negative_integer_limits(monkeypatch: pytest.MonkeyPatc
     from litellm.proxy._types import LitellmUserRoles, OrganizationUpdateRequestV2, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.organization_endpoints import update_organization_v2
 
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", AsyncMock())
+    prisma_mock = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_mock)
 
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
     with pytest.raises(HTTPException) as exc:
@@ -832,6 +833,9 @@ async def test_v2_rejects_negative_integer_limits(monkeypatch: pytest.MonkeyPatc
         )
     assert exc.value.status_code == 422
     assert field in str(exc.value.detail)
+    prisma_mock.db.tx.assert_not_called()
+    prisma_mock.db.litellm_budgettable.update.assert_not_awaited()
+    prisma_mock.db.litellm_organizationtable.update.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -841,7 +845,8 @@ async def test_v2_rejects_unparseable_budget_duration(monkeypatch: pytest.Monkey
     from litellm.proxy._types import LitellmUserRoles, OrganizationUpdateRequestV2, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.organization_endpoints import update_organization_v2
 
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", AsyncMock())
+    prisma_mock = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_mock)
 
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
     with pytest.raises(HTTPException) as exc:
@@ -852,6 +857,9 @@ async def test_v2_rejects_unparseable_budget_duration(monkeypatch: pytest.Monkey
         )
     assert exc.value.status_code == 422
     assert "budget_duration" in str(exc.value.detail)
+    prisma_mock.db.tx.assert_not_called()
+    prisma_mock.db.litellm_budgettable.update.assert_not_awaited()
+    prisma_mock.db.litellm_organizationtable.update.assert_not_awaited()
 
 
 @pytest.mark.asyncio
