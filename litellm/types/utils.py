@@ -3074,7 +3074,9 @@ class GuardrailMode(TypedDict, total=False):
     default: str | list[str] | None
 
 
-GuardrailStatus = Literal["success", "guardrail_intervened", "guardrail_failed_to_respond", "not_run"]
+GuardrailStatus = Literal[
+    "success", "guardrail_flagged", "guardrail_intervened", "guardrail_failed_to_respond", "not_run"
+]
 
 
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
@@ -3264,6 +3266,7 @@ class StandardLoggingPayloadStatusFields(TypedDict, total=False):
     """
     Status of guardrail execution:
     - 'success': Guardrail ran and allowed content through
+    - 'guardrail_flagged': Guardrail allowed content through but recorded a non-blocking violation
     - 'guardrail_intervened': Guardrail blocked or modified content
     - 'guardrail_failed_to_respond': Guardrail had technical failure
     - 'not_run': No guardrail was run

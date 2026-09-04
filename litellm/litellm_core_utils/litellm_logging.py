@@ -5865,6 +5865,7 @@ def _get_status_fields(
     # Mapping for legacy guardrail status values to new GuardrailStatus values
     GUARDRAIL_STATUS_MAP: Final[dict[str, GuardrailStatus]] = {
         "success": "success",
+        "guardrail_flagged": "guardrail_flagged",
         "blocked": "guardrail_intervened",  # legacy
         "guardrail_intervened": "guardrail_intervened",  # direct
         "failure": "guardrail_failed_to_respond",  # legacy
@@ -5886,6 +5887,7 @@ def _get_status_fields(
     GUARDRAIL_STATUS_SEVERITY: Final[tuple[GuardrailStatus, ...]] = (
         "not_run",
         "success",
+        "guardrail_flagged",
         "guardrail_failed_to_respond",
         "guardrail_intervened",
     )
