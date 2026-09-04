@@ -65,7 +65,10 @@ const StallEscalationConfig: React.FC<{
       <div className="flex items-center gap-2 mb-2">
         <Switch
           checked={enabled}
-          disabled={blockedReason !== null}
+          // Blocked only prevents turning it on: an already-on router that just became
+          // blocked (e.g. session pinning turned on afterward) still needs a way to turn
+          // this back off, since the backend rejects saving both together.
+          disabled={blockedReason !== null && !enabled}
           onCheckedChange={toggle}
           aria-label="Escalate a stalled task to a stronger model"
         />

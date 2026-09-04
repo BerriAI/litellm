@@ -5991,6 +5991,33 @@ class TestStallEscalation:
         assert result.model == "claude-sonnet-4-20250514"  # SIMPLE -> MEDIUM (keyword) -> COMPLEX (stall)
 
     @pytest.mark.asyncio
+    async def test_a_keyword_forced_tier_still_escalates_when_stalled(self, mock_router_instance, basic_config):
+        """A keyword rule forces its tier and returns before any classification runs, so
+        without its own bump the one path that can pin a weak model to a whole conversation
+        would be the one path a stall could never lift."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "stall_escalation_enabled": True,
+                "keyword_tier_rules": [{"keywords": ["billing"], "tier": "SIMPLE"}],
+            },
+        )
+        healthy = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=[{"role": "user", "content": "a billing question"}]
+        )
+        assert healthy.model == "gpt-4o-mini"  # forced SIMPLE, nothing stuck
+
+        stalled = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[*_stalled_tool_history(), {"role": "user", "content": "a billing question"}],
+        )
+        assert stalled.model == "gpt-4o"  # forced SIMPLE bumped to MEDIUM
+        assert "stall_escalation" in stalled.routing_decision["signals"]
+
+    @pytest.mark.asyncio
     async def test_evidence_survives_a_new_human_ask(self, mock_router_instance, basic_config):
         """A plain follow-up like 'try again' must not erase the stall evidence that came
         before it: escalation still fires on the turn carrying that follow-up."""
