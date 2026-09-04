@@ -11945,24 +11945,24 @@ async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new
 
     publish_mock = AsyncMock()
     with (
-        patch(
+        patch(  # test-quality-ok: deterministic token; same pattern as sibling regenerate tests
             "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
             new_callable=AsyncMock,
             return_value="sk-newtoken1234ab12",
         ),
-        patch(
+        patch(  # test-quality-ok: grace-period path not under test; same pattern as sibling regenerate tests
             "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
             new_callable=AsyncMock,
         ),
-        patch(
+        patch(  # test-quality-ok: key-object eviction is separate from the mapping eviction under test
             "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
             new_callable=AsyncMock,
         ),
-        patch(
+        patch(  # test-quality-ok: background rotation hook is irrelevant to cache eviction
             "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
             new_callable=AsyncMock,
         ),
-        patch(
+        patch(  # test-quality-ok: captures the cross-worker broadcast without a redis instance
             "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
             publish_mock,
         ),
@@ -11998,7 +11998,7 @@ async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
         virtual_key_claim_field="sub", virtual_key_mapping_cache_ttl=300
     )
-    with patch(
+    with patch(  # test-quality-ok: DB-backed resolve; fake asserts it receives the rotated hash
         "litellm.proxy.auth.resolvers.store.IdentityStore.resolve",
         new_callable=AsyncMock,
         side_effect=fake_resolve,
