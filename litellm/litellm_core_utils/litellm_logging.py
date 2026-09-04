@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
@@ -414,6 +414,11 @@ def _resolve_vertex_location_for_cost(
     return VertexBase.get_vertex_region(configured_location, model)
 
 
+def _provider_response_id(source: object) -> str | None:
+    candidate: Final = source.get("id") if isinstance(source, dict) else getattr(source, "id", None)
+    return candidate if isinstance(candidate, str) and candidate else None
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -429,6 +434,7 @@ class Logging(LiteLLMLoggingBaseClass):
     custom_pricing: bool = False
     stream_options = None
     litellm_request_debug: bool = False
+    streamed_anthropic_message_id: str | None = None
 
     def __init__(
         self,
@@ -901,6 +907,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         request_kwargs: dict[str, object] | None = None,  # mutable-ok: marker stamped into live request kwargs
+        injected_for_every_deployment: bool = False,
     ) -> tuple[str, list[AllMessageValues], dict]:
         from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 
@@ -933,6 +940,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 AnthropicCacheControlHook.record_gateway_injection(
                     request_kwargs,
                     AnthropicCacheControlHook.count_request_cache_breakpoints(messages) - breakpoints_before,
+                    injected_for_every_deployment=injected_for_every_deployment,
                 )
         self.messages = messages
         return model, messages, non_default_params
@@ -950,6 +958,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         request_kwargs: dict[str, object] | None = None,  # mutable-ok: marker stamped into live request kwargs
+        injected_for_every_deployment: bool = False,
     ) -> tuple[str, list[AllMessageValues], dict]:
         from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 
@@ -985,6 +994,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 AnthropicCacheControlHook.record_gateway_injection(
                     request_kwargs,
                     AnthropicCacheControlHook.count_request_cache_breakpoints(messages) - breakpoints_before,
+                    injected_for_every_deployment=injected_for_every_deployment,
                 )
         self.messages = messages
         return model, messages, non_default_params
@@ -2132,7 +2142,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["cache_hit"] = cache_hit
 
             if self.call_type == CallTypes.anthropic_messages.value:
-                result = self._handle_anthropic_messages_response_logging(result=result)
+                result = self._anthropic_messages_logged_response(result=result)
             elif (
                 self.call_type == CallTypes.generate_content.value
                 or self.call_type == CallTypes.agenerate_content.value
@@ -3802,6 +3812,23 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         return None
 
+    def record_streamed_anthropic_message_id(self, message_id: str) -> None:
+        self.streamed_anthropic_message_id = message_id
+
+    def _anthropic_messages_logged_response(self, result: Any) -> ModelResponse:
+        """
+        The ModelResponse a /v1/messages spend_logs row is built from.
+
+        A streaming call bridged onto the Responses API is the one case where the `msg_` id the
+        caller was served is minted locally rather than issued upstream, so it is absent from the
+        response the row would otherwise be keyed on and has to be carried over here.
+        """
+        logged: Final = self._handle_anthropic_messages_response_logging(result=result)
+        streamed_message_id: Final = self.streamed_anthropic_message_id
+        if streamed_message_id is None:
+            return logged
+        return logged.model_copy(update={"id": streamed_message_id})
+
     def _handle_anthropic_messages_response_logging(self, result: Any) -> ModelResponse:
         """
         Handles logging for Anthropic messages responses.
@@ -3828,11 +3855,12 @@ class Logging(LiteLLMLoggingBaseClass):
         if isinstance(result, ResponsesAPIResponse):
             return self._translate_responses_api_response_to_model_response(result)
 
+        provider_response_id: Final = _provider_response_id(result)
         httpx_response: Final = self.model_call_details.get("httpx_response", None)
         if httpx_response and isinstance(httpx_response, httpx.Response):
             result = litellm.AnthropicConfig().transform_response(
                 raw_response=httpx_response,
-                model_response=litellm.ModelResponse(),
+                model_response=litellm.ModelResponse(id=provider_response_id),
                 model=self.model,
                 messages=[],
                 logging_obj=self,
@@ -3855,7 +3883,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     status_code=200,
                     headers={},
                 ),
-                model_response=litellm.ModelResponse(),
+                model_response=litellm.ModelResponse(id=provider_response_id),
                 json_mode=None,
                 speed=self.optional_params.get("speed") if self.optional_params else None,
             )
@@ -3878,7 +3906,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return LiteLLMResponsesTransformationHandler().transform_response(
                 model=self.model,
                 raw_response=result,
-                model_response=litellm.ModelResponse(),
+                model_response=litellm.ModelResponse(id=_provider_response_id(result)),
                 logging_obj=self,
                 request_data={},
                 messages=[],
@@ -3893,7 +3921,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "usage-only ModelResponse to keep the spend_logs row.",
                 str(e),
             )
-            model_response: Final = litellm.ModelResponse()
+            model_response: Final = litellm.ModelResponse(id=_provider_response_id(result))
             model_response.model = self.model
             usage: Final = getattr(result, "usage", None)
             if usage is not None and ResponseAPILoggingUtils._is_response_api_usage(usage):
@@ -4390,13 +4418,15 @@ def _init_custom_logger_compatible_class(
             from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
             if is_otel_v2_enabled():
-                from litellm.integrations.otel.logger import OpenTelemetryV2
+                from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger
+                from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 
                 for callback in _in_memory_loggers:
-                    if type(callback) is OpenTelemetryV2:
+                    if isinstance(callback, OpenTelemetryV2):
                         return callback
-                otel_logger_v2: Final = OpenTelemetryV2(
-                    **_get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
+                otel_settings: Final = _get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
+                otel_logger_v2: Final = build_otel_v2_logger(
+                    config=OpenTelemetryV2Config(**otel_settings), settings=otel_settings
                 )
                 _in_memory_loggers.append(otel_logger_v2)
                 _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
@@ -4759,7 +4789,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
 
     if not is_otel_v2_enabled():
         return None
-    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger
     from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
 
     preset_fn: Final = PRESET_BY_CALLBACK.get(callback_name)
@@ -4774,7 +4804,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
         # If env vars are missing or the preset raises, defer to the legacy path
         # so customers get the same error story they had before V2 landed.
         return None
-    v2_logger: Final = OpenTelemetryV2(config=config, callback_name=callback_name)
+    v2_logger: Final = build_otel_v2_logger(config=config, callback_name=callback_name)
     _in_memory_loggers.append(v2_logger)
     return v2_logger
 
@@ -5848,14 +5878,28 @@ def _get_status_fields(
     #########################################################
     # Map - guardrail_information.guardrail_status to guardrail_status
     #########################################################
-    guardrail_status: GuardrailStatus = "not_run"
-    if guardrail_information and isinstance(guardrail_information, list):
-        for information in guardrail_information:
-            if isinstance(information, dict):
-                raw_status = information.get("guardrail_status", "not_run")
-                if raw_status != "not_run":
-                    guardrail_status = GUARDRAIL_STATUS_MAP.get(raw_status, "not_run")
-                    break
+    # Severity order, least severe first. The status aggregates across ALL
+    # guardrail entries rather than taking the first non-"not_run" one: a
+    # pre_call guardrail that passed (e.g. a mask) records its entry before a
+    # later guardrail's block, and first-wins would report a blocked request
+    # as "success".
+    GUARDRAIL_STATUS_SEVERITY: Final[tuple[GuardrailStatus, ...]] = (
+        "not_run",
+        "success",
+        "guardrail_failed_to_respond",
+        "guardrail_intervened",
+    )
+    entries: Final[Sequence[object]] = guardrail_information if isinstance(guardrail_information, list) else ()
+    raw_statuses: Final[Iterator[object]] = (
+        entry.get("guardrail_status", "not_run") for entry in entries if isinstance(entry, dict)
+    )
+    # A guardrail is free to write any value here, and an unhashable one would
+    # raise TypeError on the mapping lookup and drop the whole payload.
+    guardrail_status: Final[GuardrailStatus] = max(
+        (GUARDRAIL_STATUS_MAP.get(raw_status, "not_run") for raw_status in raw_statuses if isinstance(raw_status, str)),
+        key=GUARDRAIL_STATUS_SEVERITY.index,
+        default="not_run",
+    )
 
     return StandardLoggingPayloadStatusFields(llm_api_status=llm_api_status, guardrail_status=guardrail_status)
 
