@@ -44,6 +44,7 @@ import litellm.proxy.proxy_server as proxy_server
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    BATCH_CREATE_HIDDEN_PARAM,
     encode_file_id_with_model,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -987,6 +988,64 @@ async def test_create__uses_acreate_batch_route_type(harness, openai_env_creds):
     await call_create(harness)
 
     assert harness.pre_call.call_args.kwargs["route_type"] == "acreate_batch"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"input_file_id": AZURE_FILE_ID},
+        {"input_file_id": "file-plain", "model": "vertex-model"},
+        {"input_file_id": "file-plain"},
+    ],
+    ids=["model_encoded_file_id", "model_param", "provider_fallback"],
+)
+async def test_create__marks_hook_response_as_batch_create(harness, openai_env_creds, body):
+    set_body(harness, {**body, "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+
+    await call_create(harness)
+
+    hook_response = harness.logging.post_call_success_hook.call_args.kwargs["response"]
+    assert hook_response._hidden_params[BATCH_CREATE_HIDDEN_PARAM] is True
+
+
+@pytest.mark.asyncio
+async def test_create__loadbalancing_marks_hook_response_as_batch_create(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "model": "lb-model",
+        },
+    )
+    harness.is_known_model.return_value = True
+    with patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", True):
+        await call_create(harness)
+
+    hook_response = harness.logging.post_call_success_hook.call_args.kwargs["response"]
+    assert hook_response._hidden_params[BATCH_CREATE_HIDDEN_PARAM] is True
+
+
+@pytest.mark.asyncio
+async def test_create__unified_file_id_marks_hook_response_as_batch_create(harness):
+    set_body(
+        harness,
+        {
+            "input_file_id": "litellm_proxy_unified_id",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    with (
+        patch.object(endpoints, "_is_base64_encoded_unified_file_id", return_value="unified-xyz"),
+        patch.object(endpoints, "get_models_from_unified_file_id", return_value=["gpt-4o-mini"]),
+    ):
+        await call_create(harness)
+
+    hook_response = harness.logging.post_call_success_hook.call_args.kwargs["response"]
+    assert hook_response._hidden_params[BATCH_CREATE_HIDDEN_PARAM] is True
 
 
 @pytest.mark.asyncio
