@@ -58585,7 +58585,10 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_adaptive_thinking": true,
+        "thinking_always_on": true,
+        "supports_sampling_params": false
     },
     "kyma/claude-fable-5.1": {
         "max_tokens": 128000,
@@ -58598,7 +58601,10 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": false,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_adaptive_thinking": true,
+        "thinking_always_on": true,
+        "supports_sampling_params": false
     },
     "kyma/claude-haiku-4-5": {
         "max_tokens": 64000,
@@ -58612,7 +58618,8 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "prompt_cache_min_tokens": 4096
     },
     "kyma/claude-opus-4-7": {
         "max_tokens": 128000,
@@ -58626,7 +58633,10 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_adaptive_thinking": true,
+        "supports_sampling_params": false,
+        "prompt_cache_min_tokens": 2048
     },
     "kyma/claude-opus-5": {
         "max_tokens": 128000,
@@ -58640,7 +58650,10 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_adaptive_thinking": true,
+        "supports_sampling_params": false,
+        "prompt_cache_min_tokens": 512
     },
     "kyma/claude-opus-5-fast": {
         "max_tokens": 128000,
@@ -58654,7 +58667,10 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_adaptive_thinking": true,
+        "supports_sampling_params": false,
+        "prompt_cache_min_tokens": 512
     },
     "kyma/claude-sonnet-4-6": {
         "max_tokens": 128000,
@@ -58668,7 +58684,9 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_adaptive_thinking": true,
+        "prompt_cache_min_tokens": 1024
     },
     "kyma/claude-sonnet-5": {
         "max_tokens": 128000,
@@ -58682,7 +58700,10 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
-        "supports_reasoning": true
+        "supports_reasoning": true,
+        "supports_adaptive_thinking": true,
+        "supports_sampling_params": false,
+        "prompt_cache_min_tokens": 1024
     },
     "kyma/deepseek-r1": {
         "max_tokens": 32768,
