@@ -32,7 +32,7 @@ class NativeBinding(Generic[BindingT]):
         self._override: BindingT | None | _Unset = _UNSET
 
     @classmethod
-    def callable(cls, route: str, attribute: str) -> NativeBinding[BindingT]:
+    def native(cls, route: str, attribute: str) -> NativeBinding[BindingT]:
         return cls(
             route,
             attribute,

@@ -136,6 +136,11 @@ ROUTE_CASES: Final = (
             "messages": [{"role": "user", "content": "hello-from-chat"}],
             "optional_params": {"max_tokens": 17},
             "api_key": "sk-native",
+            "request_context": {
+                "metadata": None,
+                "litellm_metadata": None,
+                "request_metadata_fields": [],
+            },
         },
         assert_request=assert_chat_completions_request,
         success_value=lambda response: response["choices"][0]["message"]["content"],

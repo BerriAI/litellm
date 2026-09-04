@@ -75,7 +75,7 @@ class EndpointBinding(Generic[BindingT]):
     ) -> EndpointBinding[BindingT]:
         binding: NativeBinding[BindingT] = cast(  # cast-ok: classmethod loses the caller's generic parameter
             NativeBinding[BindingT],
-            NativeBinding.callable(route, attribute),
+            NativeBinding.native(route, attribute),
         )
         return EndpointBinding(
             route=route,
