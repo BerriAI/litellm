@@ -1187,10 +1187,13 @@ def _estimate_fusion_search_cost(
     if not matching_tools:
         return None
 
-    estimates: list[float] = []
+    estimates: Final[list[float]] = []  # mutable-ok: accumulator spans configured search tools
     try:
         for tool in matching_tools:
-            optional_params = tool.get("litellm_params", {})
+            optional_params = tool.get(
+                "litellm_params",
+                {},  # mutable-ok: read-only empty provider-params fallback
+            )
             search_provider = optional_params.get("search_provider")
             if not search_provider:
                 return None
