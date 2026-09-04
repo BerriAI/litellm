@@ -38,7 +38,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Union, cast
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -82,6 +82,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamingResponse,
 )
 from litellm.types.responses.main import (
+    CustomToolCallOutputItem,
     GenericResponseOutputItem,
     OutputFunctionToolCall,
     OutputText,
@@ -154,8 +155,11 @@ def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapp
     return {**item, field: converted_value}  # mutable-ok: request input items must stay JSON-plain dicts
 
 
+_TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
+
+
 def _is_function_call_item(item: object) -> bool:
-    return isinstance(item, Mapping) and item.get("type") in ("function_call", "custom_tool_call")
+    return isinstance(item, Mapping) and item.get("type") in _TOOL_CALL_ITEM_TYPES
 
 
 def _last_message_role(messages: Sequence[object]) -> str | None:
@@ -825,7 +829,7 @@ class OpenAIResponsesHandler(BaseTranslation):
     def _completed_response_scan_key(response: object) -> StreamingScanKey:
         output_items: Final = stream_item_items(response, "output")
         message_items: Final = tuple(
-            item for item in output_items if stream_item_field(item, "type") != "function_call"
+            item for item in output_items if stream_item_field(item, "type") not in _TOOL_CALL_ITEM_TYPES
         )
         return StreamingScanKey(
             texts=tuple(
@@ -837,9 +841,24 @@ class OpenAIResponsesHandler(BaseTranslation):
             tool_calls=tuple(
                 stream_item_fingerprint(item)
                 for item in output_items
-                if stream_item_field(item, "type") == "function_call"
+                if stream_item_field(item, "type") in _TOOL_CALL_ITEM_TYPES
             ),
             stream_ended=True,
+        )
+
+    @staticmethod
+    def _custom_tool_call_to_chat_completion_tool_call(
+        item: CustomToolCallOutputItem,
+        index: int,
+    ) -> ChatCompletionToolCallChunk:
+        return cast(  # cast-ok: the constructed mapping matches the chat completion tool call shape
+            ChatCompletionToolCallChunk,
+            {
+                "id": LiteLLMCompletionResponsesConfig._tool_call_id_from_responses_item(item.id, item.call_id),
+                "function": {"name": item.name, "arguments": item.input},
+                "type": "function",
+                "index": index,
+            },
         )
 
     def build_stream_error_items(
@@ -947,6 +966,27 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Override this method to customize text/image/tool extraction logic.
         """
+
+        if isinstance(output_item, BaseModel) and getattr(output_item, "type", None) == "custom_tool_call":
+            if tool_calls_to_check is not None:
+                try:
+                    custom_tool_call_item: Final = CustomToolCallOutputItem.model_validate(output_item.model_dump())
+                    tool_calls_to_check.append(
+                        self._custom_tool_call_to_chat_completion_tool_call(custom_tool_call_item, output_idx)
+                    )
+                except ValidationError:
+                    pass
+            return
+        elif isinstance(output_item, dict) and output_item.get("type") == "custom_tool_call":
+            if tool_calls_to_check is not None:
+                try:
+                    dict_custom_tool_call_item: Final = CustomToolCallOutputItem.model_validate(output_item)
+                    tool_calls_to_check.append(
+                        self._custom_tool_call_to_chat_completion_tool_call(dict_custom_tool_call_item, output_idx)
+                    )
+                except ValidationError:
+                    pass
+            return
 
         # Check if this is a tool call (OutputFunctionToolCall)
         if isinstance(output_item, OutputFunctionToolCall) or (
