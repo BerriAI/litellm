@@ -28,8 +28,8 @@ class KeyNotFoundError(IdentityResolutionError, ProxyException):
     Also a ``ProxyException`` so the auth flow keeps mapping a missing key to the
     OpenAI 401 contract unchanged while callers migrate onto the typed hierarchy.
 
-    The message reaches unauthenticated callers verbatim, so the hash stays off it
-    and on ``hashed_token`` for the raise site to log.
+    Unauthenticated callers see the message verbatim, so the hash lives on
+    ``hashed_token`` rather than in it.
     """
 
     def __init__(self, hashed_token: str) -> None:

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 from typing import Dict, Optional
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
 from litellm.proxy._types import UserAPIKeyAuth, hash_token
 from litellm.proxy.auth.resolvers.exceptions import (
+    KeyNotFoundError,
     NoDatabaseConnectionError,
     PrincipalMissingSourceKeyError,
 )
@@ -68,3 +72,24 @@ async def test_resolve_raises_without_a_db_connection():
     store = IdentityStore(None, _FakeCache())
     with pytest.raises(NoDatabaseConnectionError):
         await store.resolve(hashed_token="missing")
+
+
+async def test_resolve_logs_the_hash_when_no_key_row_exists(caplog):
+    """Every path that resolves a key reaches this raise site, the JWT key-mapping
+    ones included, so it is the only place the operator's lookup detail can be logged
+    once the 401 itself stopped carrying it. Killing the log leaves a JWT-mapped miss
+    with nothing but a generic 401 in the operator's logs."""
+    missing = hash_token("sk-live-not-a-key")
+    store = IdentityStore(object(), _FakeCache())
+
+    with patch(
+        "litellm.proxy.auth.resolvers.store._fetch_key_object_from_db_with_reconnect",
+        new=AsyncMock(return_value=None),
+    ):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            with pytest.raises(KeyNotFoundError) as exc_info:
+                await store.resolve(hashed_token=missing)
+
+    assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
+    assert missing not in str(exc_info.value)
+    assert missing in caplog.text

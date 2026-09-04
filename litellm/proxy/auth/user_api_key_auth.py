@@ -1891,7 +1891,6 @@ async def _user_api_key_auth_builder(
                         type(api_key) if api_key is not None else "None"
                     )
                 )
-            abbreviated_api_key: Final = abbreviate_api_key(api_key=api_key)
             if api_key.startswith("sk-"):
                 api_key = hash_token(token=api_key)
 
@@ -1907,14 +1906,8 @@ async def _user_api_key_auth_builder(
                     )
             except ProxyException as e:
                 if e.code == 401 or e.code == "401":
-                    # Unauthenticated callers reach this branch, so the hash and how the
-                    # key was resolved go to the operator's log, never to the response.
-                    verbose_proxy_logger.warning(
-                        "litellm.proxy.proxy_server.user_api_key_auth(): no key row for "
-                        "Received API Key = %s, Key Hash (Token) = %s",
-                        abbreviated_api_key,
-                        api_key,
-                    )
+                    # Unauthenticated callers reach this branch; the lookup detail is logged
+                    # at the raise site instead of being returned.
                     e.message = INVALID_API_KEY_ERROR_MESSAGE
                 raise e
             # update end-user params on valid token

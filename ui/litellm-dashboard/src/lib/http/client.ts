@@ -95,12 +95,7 @@ export const extractProxyErrorMessage = (error: unknown): string => {
   return unwrapProxyErrorMessage(String(error));
 };
 
-/**
- * True when a rejection means the submitted key resolves to nothing, which the
- * dashboard treats as a dead session. Reads the structured error type, because the
- * proxy's 401 message is deliberately generic; the legacy text is still matched so
- * the dashboard keeps working against proxies that predate that.
- */
+/** The legacy text is still matched so the dashboard keeps working against older proxies. */
 export const isUnknownApiKeyError = (error: unknown): boolean => {
   const body =
     error instanceof ApiError && typeof error.body === "object" && error.body !== null
