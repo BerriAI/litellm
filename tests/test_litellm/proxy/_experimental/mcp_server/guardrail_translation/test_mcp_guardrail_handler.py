@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from mcp.types import CallToolResult, ImageContent, TextContent
 
 import litellm
+import litellm.llms as litellm_llms
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -15,7 +16,6 @@ from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import
 )
 from litellm.proxy._experimental.mcp_server.utils import MAX_STRUCTURED_CONTENT_SCAN_DEPTH
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import unified_guardrail
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -126,15 +126,15 @@ class ArgumentMaskingGuardrail(CustomGuardrail):
 def restore_callbacks(monkeypatch):
     """Restore the process-wide state driving pre_call_hook through unified_guardrail.
 
-    unified_guardrail memoizes its translation mappings in a module global, and
+    litellm.llms memoizes the guardrail translation mappings in a module global, and
     ProxyLogging caches callback capabilities keyed on id()s of litellm.callbacks,
     so leaving either populated leaks into unrelated tests in the same worker.
     """
     monkeypatch.setattr(litellm, "callbacks", litellm.callbacks)
     monkeypatch.setattr(
-        unified_guardrail,
+        litellm_llms,
         "endpoint_guardrail_translation_mappings",
-        unified_guardrail.endpoint_guardrail_translation_mappings,
+        litellm_llms.endpoint_guardrail_translation_mappings,
     )
     yield
     ProxyLogging._callback_capabilities_cache.clear()
