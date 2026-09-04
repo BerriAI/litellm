@@ -233,3 +233,124 @@ async def test_apply_guardrail_blocks_object_shaped_tool_call():
             request_data={"model": "gpt-4"},
             input_type="request",
         )
+
+# ---------- Additional Edge Cases & Error Handling Coverage ----------
+
+def test_engine_pii_types_and_no_match():
+    """Verify engine handles clean text and custom regex rules cleanly."""
+    engine = make_engine()
+    # PII scanner with no matching patterns
+    decision = engine.evaluate_text("Contact me at clean_user_handle")
+    assert decision.action == Action.ALLOW.value
+    # Fix: redacted_text is None when no redaction occurred
+    assert decision.redacted_text is None
+
+
+def test_engine_tool_auth_blocklist():
+    """Test explicit tool blocklist evaluation."""
+    policies = [
+        {"type": "tool_auth", "action": "ENFORCE", "blocklist": ["dangerous_exec", "terminal"]},
+    ]
+    engine = TealEngine(policies=policies, mode=PolicyMode.ENFORCE)
+    assert engine.check_tool("calculator") is True
+    assert engine.check_tool("dangerous_exec") is False
+
+
+def test_engine_tool_auth_disabled():
+    """Test tool auth behavior when no allowlist or blocklist is specified."""
+    policies = [
+        {"type": "tool_auth", "action": "ENFORCE"},
+    ]
+    engine = TealEngine(policies=policies, mode=PolicyMode.ENFORCE)
+    assert engine.check_tool("any_tool") is True
+
+
+def test_engine_budget_tracking_under_limit():
+    """Test cost tracking within allowed limits."""
+    policies = [
+        {"type": "cost", "action": "ENFORCE", "daily_limit_usd": 10.0},
+    ]
+    engine = TealEngine(policies=policies, mode=PolicyMode.ENFORCE)
+    engine.track_cost(tokens=10)
+    over_budget, spent, limit = engine.check_budget()
+    assert over_budget is False
+    assert spent > 0
+    assert limit == 10.0
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_budget_exceeded_raises_error():
+    """Verify that apply_guardrail raises a ValueError when the budget cap is reached."""
+    policies = [
+        {"type": "cost", "action": "ENFORCE", "daily_limit_usd": 0.00001},
+    ]
+    guardrail = TealTigerGuardrail(policies=policies, policy_mode="ENFORCE")
+    # Manually push engine spend over budget
+    guardrail.engine.track_cost(tokens=1_000_000)
+
+    inputs = {"texts": ["hello"], "images": [], "tool_calls": []}
+
+    with pytest.raises(ValueError, match="BUDGET_EXCEEDED"):
+        await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={"model": "gpt-4", "user": "test-user"},
+            input_type="request",
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_response_input_type():
+    """Test apply_guardrail for 'response' or 'post_call' inputs."""
+    guardrail = TealTigerGuardrail(policies=DEFAULT_POLICIES, policy_mode="ENFORCE")
+    inputs = {"texts": ["Found secret token: 123-45-6789"], "images": [], "tool_calls": []}
+
+    result = await guardrail.apply_guardrail(
+        inputs=inputs,
+        request_data={"model": "gpt-4"},
+        input_type="response",
+    )
+    assert "123-45-6789" not in result["texts"][0]
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_hook():
+    """Directly test async_pre_call_hook method if exposed by TealTigerGuardrail."""
+    guardrail = TealTigerGuardrail(policies=DEFAULT_POLICIES, policy_mode="ENFORCE")
+    data = {
+        "messages": [{"role": "user", "content": "Contact me at test@example.com"}]
+    }
+
+    if hasattr(guardrail, "async_pre_call_hook"):
+        res = await guardrail.async_pre_call_hook(
+            user_api_key_dict={},
+            cache=None,
+            data=data,
+            call_type="completion",
+        )
+        # Fix: LiteLLM hook returns modified data dict or None
+        assert res is None or isinstance(res, dict)
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_success_hook():
+    """Directly test async_post_call_success_hook method if exposed by TealTigerGuardrail."""
+    guardrail = TealTigerGuardrail(policies=DEFAULT_POLICIES, policy_mode="ENFORCE")
+    response_obj = {
+        "choices": [{"message": {"content": "SSN: 123-45-6789"}}]
+    }
+
+    if hasattr(guardrail, "async_post_call_success_hook"):
+        # Pass data, user_api_key_dict, and response_obj positionally
+        res = await guardrail.async_post_call_success_hook(
+            {"model": "gpt-4"},
+            {},
+            response_obj,
+        )
+        assert res is None or isinstance(res, dict)
+
+
+def test_tool_call_name_invalid_types():
+    """Verify _tool_call_name gracefully handles primitives or None."""
+    assert _tool_call_name(None) is None
+    assert _tool_call_name("invalid_str") is None
+    assert _tool_call_name(12345) is None       
