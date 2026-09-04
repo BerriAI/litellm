@@ -46,6 +46,12 @@ func resourceKey() *schema.Resource {
 			"team_id": {
 				Type:     schema.TypeString,
 				Optional: true,
+				// A LiteLLM key belongs to a team. Deleting/recreating the team
+				// cascade-deletes its keys, so changing team_id must replace the
+				// key (in dependency order) rather than issue an in-place update
+				// against a token that no longer exists. See
+				// https://github.com/BerriAI/terraform-provider-litellm/issues/12.
+				ForceNew: true,
 			},
 			"max_parallel_requests": {
 				Type:     schema.TypeInt,
