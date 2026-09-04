@@ -4339,3 +4339,32 @@ async def test_user_update_rejects_breached_password(_admin_prisma):
     assert exc_info.value.code == "400"
     assert "data breaches" in exc_info.value.message
     _admin_prisma.db.litellm_usertable.find_first.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_all_users_rejects_a_password(_admin_prisma):
+    """The all_users fast path writes user_updates straight to update_many,
+    bypassing _update_single_user_helper. A password riding along would be
+    stored as unvalidated plaintext on every row, so it must be rejected
+    before any DB access."""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UpdateUserRequestNoUserIDorEmail
+    from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+        BulkUpdateUserRequest,
+    )
+
+    data = BulkUpdateUserRequest(
+        all_users=True,
+        user_updates=UpdateUserRequestNoUserIDorEmail(password="Str0ng!Passw0rd"),
+    )
+    admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await bulk_user_update(data=data, user_api_key_dict=admin_caller)
+
+    assert exc_info.value.status_code == 400
+    assert "not supported" in str(exc_info.value.detail)
+    _admin_prisma.db.litellm_usertable.find_many.assert_not_called()
+    _admin_prisma.db.litellm_usertable.update_many.assert_not_called()

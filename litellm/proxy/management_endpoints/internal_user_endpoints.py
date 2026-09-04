@@ -1599,7 +1599,7 @@ async def user_update(
     Parameters:
         - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
         - user_email: Optional[str] - Specify a user email.
-        - password: Optional[str] - Specify a user password.
+        - password: Optional[str] - Set the user's password (admin only). Must satisfy the configured password policy. Users change their own password with POST /user/password/change.
         - user_alias: Optional[str] - A descriptive name for you to know who this user id refers to.
         - teams: Optional[list] - specify a list of team id's a user belongs to.
         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
@@ -1817,6 +1817,16 @@ async def bulk_user_update(
             raise HTTPException(
                 status_code=403,
                 detail="Only proxy admins can update all users at once.",
+            )
+        if data.user_updates.password is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        "Setting one password for all users is not supported. "
+                        "Use per-user updates via the 'users' list instead."
+                    )
+                },
             )
         # Optimized path for updating all users directly in database
         all_users_in_db: Final = await _user_table(prisma_client).find_many(order={"created_at": "desc"})

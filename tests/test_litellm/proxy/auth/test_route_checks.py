@@ -3544,3 +3544,70 @@ def test_agent_registry_route_gate_open_to_non_admin_roles(user_role, method, ro
         valid_token=valid_token,
         request_data={},
     )
+
+
+def test_proxy_admin_viewer_user_update_password_param_rejected():
+    """The self-service /user/update password carve-out is closed: non-admins
+    change their own password through /user/password/change, which verifies
+    the current password. Admin password sets don't pass through this check."""
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks._check_proxy_admin_viewer_access(
+            route="/user/update",
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            request_data={"password": "hunter2hunter2"},
+        )
+    assert exc_info.value.status_code == 403
+    assert "password" in str(exc_info.value.detail)
+
+
+def test_proxy_admin_viewer_user_update_user_email_still_allowed():
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+
+    allowed = RouteChecks._check_proxy_admin_viewer_access(
+        route="/user/update",
+        _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        request_data={"user_email": "viewer@example.com"},
+        request=request,
+    )
+
+    assert allowed is None
+
+
+def test_proxy_admin_viewer_can_change_own_password():
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+
+    allowed = RouteChecks._check_proxy_admin_viewer_access(
+        route="/user/password/change",
+        _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        request_data={"current_password": "a", "new_password": "b"},
+        request=request,
+    )
+
+    assert allowed is None
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+def test_non_admin_roles_can_change_own_password(user_role):
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=user_role)
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+    request.query_params = {}
+
+    allowed = RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=LiteLLM_UserTable(user_id="test_user", user_role=user_role),
+        _user_role=user_role,
+        route="/user/password/change",
+        request=request,
+        valid_token=valid_token,
+        request_data={"current_password": "a", "new_password": "b"},
+    )
+
+    assert allowed is None
