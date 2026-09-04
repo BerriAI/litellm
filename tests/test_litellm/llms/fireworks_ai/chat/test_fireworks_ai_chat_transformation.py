@@ -4,11 +4,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
-
-
 from litellm import get_model_info, supports_reasoning, supports_vision
-from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
+from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -371,6 +369,16 @@ def test_get_supported_openai_params_short_model_name_resolves_account_prefixed_
     )
 
     assert "tool_choice" in supported_params
+    assert "reasoning_effort" in supported_params
+
+
+def test_get_supported_openai_params_preserves_generic_reasoning_fallback():
+    config = FireworksAIConfig()
+
+    supported_params = config.get_supported_openai_params(
+        "fireworks_ai/accounts/fireworks/models/glm-5p3-flash"
+    )
+
     assert "reasoning_effort" in supported_params
 
 
