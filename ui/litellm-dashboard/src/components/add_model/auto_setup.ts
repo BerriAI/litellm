@@ -7,11 +7,20 @@ const TIER_NAMES = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"] as const;
 type TierName = (typeof TIER_NAMES)[number];
 export type PreferredTierModels = Record<TierName, string[]>;
 
-const ADDITIONAL_TIER_MODELS: PreferredTierModels = {
-  SIMPLE: ["gpt-4o-mini", "gpt-5-mini", "gemini-2.5-flash", "deepseek-chat"],
-  MEDIUM: ["gpt-5-mini", "gpt-4o", "claude-sonnet-4-5", "gemini-2.5-flash", "deepseek-chat"],
-  COMPLEX: ["gpt-5", "gpt-4o", "claude-sonnet-4-6", "gemini-2.5-pro", "grok-4"],
-  REASONING: ["o3", "deepseek-reasoner", "claude-opus-4-6", "gemini-2.5-pro", "gpt-5"],
+const CURRENT_TIER_MODELS: PreferredTierModels = {
+  SIMPLE: ["gpt-5.6-luna", "claude-haiku-4-5", "gemini-3.5-flash-lite", "deepseek-v4-flash"],
+  MEDIUM: ["gpt-5.6-terra", "claude-sonnet-5", "gemini-3.8-flash", "deepseek-v4-flash"],
+  COMPLEX: ["gpt-6-astra", "gpt-5.6-sol", "claude-opus-5", "gemini-3.1-pro-preview", "deepseek-v4-pro", "grok-4.6"],
+  REASONING: ["gpt-6-astra", "gpt-5.6-sol", "claude-opus-5", "gemini-3.1-pro-preview", "deepseek-v4-pro", "grok-4.6"],
+};
+
+const MAX_REASONING_EFFORT: Record<string, string> = {
+  "gpt-6-astra": "max",
+  "gpt-5.6-sol": "max",
+  "claude-opus-5": "max",
+  "gemini-3.1-pro-preview": "high",
+  "deepseek-v4-pro": "high",
+  "grok-4.6": "xhigh",
 };
 
 export const buildPreferredTierModels = (
@@ -24,8 +33,8 @@ export const buildPreferredTierModels = (
       Array.from(
         new Set(
           [
+            ...CURRENT_TIER_MODELS[tier],
             ...presets.flatMap((preset) => preset.complexity_router_config.tiers[tier]),
-            ...ADDITIONAL_TIER_MODELS[tier],
           ].flatMap((model) => {
             const resolved = resolveAvailableModel(model, availability);
             return resolved ? [resolved] : [];
@@ -54,6 +63,7 @@ export const buildAutomaticRouterConfig = (
   models: ModelGroup[],
   deployments: AutoRouterDeployment[],
   preferredByTier: PreferredTierModels,
+  availability?: ModelAvailability,
 ): ComplexityRouterConfigValue | null => {
   const autoRouterNames: ReadonlySet<string> = new Set(
     deployments
@@ -73,6 +83,12 @@ export const buildAutomaticRouterConfig = (
   const selected = selectPreferredTierModels(preferredByTier, usableNames);
   if (selected === null) return null;
 
+  const reasoningEffort =
+    availability &&
+    Object.entries(MAX_REASONING_EFFORT).find(
+      ([model]) => resolveAvailableModel(model, availability) === selected[3],
+    )?.[1];
+
   return {
     tiers: {
       SIMPLE: [selected[0]],
@@ -81,5 +97,8 @@ export const buildAutomaticRouterConfig = (
       REASONING: [selected[3]],
     },
     classifier_type: "heuristic_v2",
+    ...(reasoningEffort && {
+      tier_model_params: { REASONING: { [selected[3]]: { reasoning_effort: reasoningEffort } } },
+    }),
   };
 };

@@ -273,8 +273,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     [presets, availability],
   );
   const automaticRouterConfig = React.useMemo(
-    () => buildAutomaticRouterConfig(modelInfo, deployments ?? [], preferredTierModels),
-    [modelInfo, deployments, preferredTierModels],
+    () => buildAutomaticRouterConfig(modelInfo, deployments ?? [], preferredTierModels, availability),
+    [modelInfo, deployments, preferredTierModels, availability],
   );
 
   // A preset's models can only be trusted against a successfully loaded list. Selection and the

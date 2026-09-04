@@ -13,17 +13,37 @@ const tierModels = (config: ReturnType<typeof buildAutomaticRouterConfig>) =>
 
 describe("buildPreferredTierModels", () => {
   it("recognizes curated models that are not in a preset", () => {
-    const available = ["gpt-4o-mini", "claude-sonnet-4-5", "grok-4", "deepseek-reasoner"];
+    const available = ["gpt-5.6-luna", "claude-sonnet-5", "grok-4.6", "deepseek-v4-pro"];
     const availability = buildModelAvailability(available, []);
     const preferred = buildPreferredTierModels([], availability);
     const expected: PreferredTierModels = {
-      SIMPLE: ["gpt-4o-mini"],
-      MEDIUM: ["claude-sonnet-4-5"],
-      COMPLEX: ["grok-4"],
-      REASONING: ["deepseek-reasoner"],
+      SIMPLE: ["gpt-5.6-luna"],
+      MEDIUM: ["claude-sonnet-5"],
+      COMPLEX: ["deepseek-v4-pro", "grok-4.6"],
+      REASONING: ["deepseek-v4-pro", "grok-4.6"],
     };
 
     expect(preferred).toEqual(expected);
+  });
+
+  it("prefers the current model ladder over older preset entries", () => {
+    const availability = buildModelAvailability(["gpt-5.6-luna", "gpt-4o-mini"], []);
+    const preferred = buildPreferredTierModels(
+      [
+        {
+          key: "old",
+          label: "Old",
+          description: "Old model",
+          complexity_router_config: {
+            tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+            classifier_type: "heuristic_v2",
+          },
+        },
+      ],
+      availability,
+    );
+
+    expect(preferred.SIMPLE).toEqual(["gpt-5.6-luna", "gpt-4o-mini"]);
   });
 });
 
@@ -39,6 +59,49 @@ describe("buildAutomaticRouterConfig", () => {
     expect(
       tierModels(buildAutomaticRouterConfig(models("simple", "medium", "complex", "reasoning"), [], preferred)),
     ).toEqual(["simple", "medium", "complex", "reasoning"]);
+  });
+
+  it.each([
+    {
+      provider: "OpenAI",
+      available: ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-6-astra"],
+      expected: ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-6-astra", "gpt-6-astra"],
+      effort: "max",
+    },
+    {
+      provider: "Anthropic",
+      available: ["claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5"],
+      expected: ["claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5", "claude-opus-5"],
+      effort: "max",
+    },
+    {
+      provider: "Google",
+      available: ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.1-pro-preview"],
+      expected: ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview"],
+      effort: "high",
+    },
+    {
+      provider: "DeepSeek",
+      available: ["deepseek-v4-flash", "deepseek-v4-pro"],
+      expected: ["deepseek-v4-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-pro"],
+      effort: "high",
+    },
+    {
+      provider: "xAI",
+      available: ["grok-4.6"],
+      expected: ["grok-4.6", "grok-4.6", "grok-4.6", "grok-4.6"],
+      effort: "xhigh",
+    },
+  ])("uses the current $provider ladder and maximum reasoning effort", ({ available, expected, effort }) => {
+    const availability = buildModelAvailability(available, []);
+    const preferred = buildPreferredTierModels([], availability);
+
+    const config = buildAutomaticRouterConfig(models(...available), [], preferred, availability);
+
+    expect(tierModels(config)).toEqual(expected);
+    expect(config?.tier_model_params).toEqual({
+      REASONING: { [expected[3]]: { reasoning_effort: effort } },
+    });
   });
 
   it("reuses the closest available tier when a tier has no match", () => {
