@@ -80,6 +80,17 @@ def _qualified_name(frame: FrameType) -> str:
     native: Final = getattr(code, "co_qualname", None)
     if isinstance(native, str):
         return native
+    enclosing: Final = next(
+        (
+            name
+            for ancestor in _frame_ancestors(frame)
+            for declared_code, name in _declared_functions(ancestor.f_locals, frozenset())
+            if declared_code is code
+        ),
+        None,
+    )
+    if enclosing is not None:
+        return enclosing
     module_name: Final = frame.f_globals.get("__name__")
     if not isinstance(module_name, str):
         return code.co_name
