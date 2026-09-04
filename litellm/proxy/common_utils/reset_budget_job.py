@@ -547,11 +547,16 @@ class ResetBudgetJob:
         try:
             from litellm.proxy.proxy_server import spend_counter_cache
 
-            cache_kwargs: Final = {"key": counter_key, "value": new_spend, **({"ttl": ttl} if ttl is not None else {})}
-            spend_counter_cache.in_memory_cache.set_cache(**cache_kwargs)
+            if ttl is None:
+                spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=new_spend)
+            else:
+                spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=new_spend, ttl=ttl)
             if spend_counter_cache.redis_cache is not None:
                 try:
-                    await spend_counter_cache.redis_cache.async_set_cache(**cache_kwargs)
+                    if ttl is None:
+                        await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=new_spend)
+                    else:
+                        await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=new_spend, ttl=ttl)
                 except Exception as redis_err:
                     verbose_proxy_logger.warning(
                         "Failed to reset spend counter %s in Redis: %s. "
