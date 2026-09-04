@@ -169,6 +169,74 @@ async def test_outer_client_tool_call_is_returned_without_running_panel_or_secon
 
 
 @pytest.mark.asyncio
+async def test_tool_choice_none_allows_private_deliberation_but_never_client_tools() -> None:
+    completion = RecordingCompletion(
+        {
+            "outer": [_fusion_call(), _response("Final answer without a tool call")],
+            "panel-a": [_response("Panel A")],
+            "panel-b": [_response("Panel B")],
+            "analyst": [_response(_analysis())],
+        }
+    )
+    client_tool = {
+        "type": "function",
+        "function": {"name": "send_email", "parameters": {"type": "object"}},
+    }
+
+    response = await _router(completion).acompletion(
+        messages=[{"role": "user", "content": "Research this but do not send anything"}],
+        stream=False,
+        request_kwargs={"tools": [client_tool], "tool_choice": "none"},
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "Final answer without a tool call"
+    assert [call["model"] for call in completion.calls] == [
+        "outer",
+        "panel-a",
+        "panel-b",
+        "analyst",
+        "outer",
+    ]
+    initial = completion.calls[0]
+    assert [tool["function"]["name"] for tool in initial["tools"]] == [FUSION_TOOL_NAME]
+    assert initial["tool_choice"] == "auto"
+    final = completion.calls[-1]
+    assert final["tools"] == [client_tool]
+    assert final["tool_choice"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_named_client_tool_choice_is_preserved_and_bypasses_private_deliberation() -> None:
+    client_call = {
+        "id": "email-1",
+        "type": "function",
+        "function": {"name": "send_email", "arguments": '{"to":"user@example.com"}'},
+    }
+    completion = RecordingCompletion({"outer": [_response(None, [client_call])]})
+    client_tool = {
+        "type": "function",
+        "function": {"name": "send_email", "parameters": {"type": "object"}},
+    }
+    named_choice = {"type": "function", "function": {"name": "send_email"}}
+
+    response = await _router(completion).acompletion(
+        messages=[{"role": "user", "content": "Send the update"}],
+        stream=False,
+        request_kwargs={"tools": [client_tool], "tool_choice": named_choice},
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.tool_calls[0].function.name == "send_email"
+    assert [call["model"] for call in completion.calls] == ["outer"]
+    assert completion.calls[0]["tool_choice"] == named_choice
+    assert [tool["function"]["name"] for tool in completion.calls[0]["tools"]] == [
+        "send_email",
+        FUSION_TOOL_NAME,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_mixed_fusion_and_client_tool_calls_return_only_executable_client_calls() -> None:
     client_call = {
         "id": "email-1",
@@ -321,7 +389,7 @@ async def test_forced_fusion_runs_parallel_panel_then_analyst_then_outer() -> No
     assert analyst["metadata"]["user_api_key_budget_reservation"] is reservation
     final = completion.calls[4]
     assert final["tools"] == [client_tool]
-    assert final["tool_choice"] == "auto"
+    assert final["tool_choice"] == "required"
     continuation = final["messages"]
     assert continuation[0] == messages[0]
     assert continuation[1]["role"] == "developer"

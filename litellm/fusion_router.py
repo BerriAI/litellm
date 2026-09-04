@@ -982,8 +982,9 @@ class FusionRouter:
         kwargs: Final = _outer_kwargs(request_kwargs)
         kwargs.pop("litellm_metadata", None)
         kwargs["metadata"] = _fusion_call_metadata(request_kwargs, FUSION_INITIAL_CALL_ORIGIN)
+        client_tools: Final = _client_tools(request_kwargs.get("tools"))
         kwargs["tools"] = [  # mutable-ok: local provider payload
-            *_client_tools(request_kwargs.get("tools")),
+            *client_tools,
             _fusion_tool(),
         ]  # mutable-ok: local provider payload
         if self.config.invocation == "required":
@@ -993,6 +994,13 @@ class FusionRouter:
                     "name": FUSION_TOOL_NAME
                 },  # mutable-ok: local provider payload
             }  # mutable-ok: local provider payload
+        elif kwargs.get("tool_choice") == "none":
+            # The caller's tool policy applies to executable client tools, not
+            # to Fusion's private reasoning step. Let the outer model deliberate
+            # while keeping client tools unavailable until the final call, where
+            # the original `tool_choice="none"` is preserved.
+            kwargs["tools"] = [_fusion_tool()]  # mutable-ok: local provider payload
+            kwargs["tool_choice"] = "auto"
         elif kwargs.get("tool_choice") is None:
             kwargs["tool_choice"] = "auto"
         response: Final = await self._completion(
@@ -1198,14 +1206,11 @@ class FusionRouter:
         final_kwargs: Final = _outer_kwargs(request_kwargs)
         final_kwargs.pop("litellm_logging_obj", None)
         final_kwargs.pop("litellm_call_id", None)
-        # `required` has already been satisfied by the private Fusion call. Do
-        # not force the continuation into another tool call (or an impossible
-        # tool call when the caller supplied no client tools).
-        if request_kwargs.get("tool_choice") == "required":
-            if _client_tools(request_kwargs.get("tools")):
-                final_kwargs["tool_choice"] = "auto"
-            else:
-                final_kwargs.pop("tool_choice", None)
+        # A private Fusion call does not satisfy the caller's requirement for
+        # an executable tool call. Preserve `required` when client tools exist;
+        # only remove the impossible no-tools combination.
+        if request_kwargs.get("tool_choice") == "required" and not _client_tools(request_kwargs.get("tools")):
+            final_kwargs.pop("tool_choice", None)
         final_metadata: Final = _fusion_call_metadata(request_kwargs, FUSION_CONTINUATION_CALL_ORIGIN)
         final_kwargs.pop("litellm_metadata", None)
         final_kwargs["metadata"] = final_metadata
