@@ -4,7 +4,7 @@ import React from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import CopyButton from "@/components/shared/CopyButton";
@@ -12,6 +12,12 @@ import { AlertTriangle, ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
 import { Providers } from "@/components/provider_info_helpers";
 import type { AnthropicJwks } from "@/components/networking";
 import type { CreationResult } from "./wizardLogic";
+import {
+  ANTHROPIC_FEDERATION_FIELDS,
+  missingFederationFields,
+  type AnthropicFederationIds,
+  type AnthropicFederationKey,
+} from "./anthropicFederation";
 
 const CREATION_RESULT_CLASS_NAME: Record<CreationResult["status"], string> = {
   failed: "text-destructive",
@@ -72,8 +78,8 @@ export const ProviderStep: React.FC<ProviderStepProps> = ({
 interface JwksStepProps {
   jwks: AnthropicJwks | null;
   jwksError: string | null;
-  federationRuleId: string;
-  onFederationRuleIdChange: (value: string) => void;
+  federationIds: AnthropicFederationIds;
+  onFederationIdChange: (key: AnthropicFederationKey, value: string) => void;
   onBack: () => void;
   onNext: () => void;
 }
@@ -81,52 +87,65 @@ interface JwksStepProps {
 export const JwksStep: React.FC<JwksStepProps> = ({
   jwks,
   jwksError,
-  federationRuleId,
-  onFederationRuleIdChange,
+  federationIds,
+  onFederationIdChange,
   onBack,
   onNext,
-}) => (
-  <Card>
-    <CardContent className="space-y-4">
-      <Alert variant="info">
-        <AlertTitle>Register this JWKS with Anthropic</AlertTitle>
-        <AlertDescription>
-          Register this public JWKS as the inline issuer for your federation rule in the Anthropic Console, then paste
-          the resulting Federation Rule ID below.
-        </AlertDescription>
-      </Alert>
-      {jwksError && (
-        <Alert variant="destructive">
-          <AlertTriangle className="size-4" />
-          <AlertTitle>Could not load JWKS</AlertTitle>
-          <AlertDescription>{jwksError}</AlertDescription>
+}) => {
+  const missing = missingFederationFields(federationIds);
+  return (
+    <Card>
+      <CardContent className="space-y-4">
+        <Alert variant="info">
+          <AlertTitle>Register this JWKS with Anthropic</AlertTitle>
+          <AlertDescription>
+            In the Claude Console, open Settings {">"} Workload identity, click Connect workload, choose Custom OIDC and
+            paste this JWKS as the inline key set, using the Issuer URL and Subject from the previous step. Once the
+            rule and its service account exist, copy their ids below. Everything entered here is saved to this
+            credential before discovery runs.
+          </AlertDescription>
         </Alert>
-      )}
-      {jwks && (
-        <div className="relative rounded-md border bg-muted p-3">
-          <CopyButton value={JSON.stringify(jwks, null, 2)} label="Copy JWKS" className="absolute top-2 right-2" />
-          <pre className="overflow-x-auto text-xs">{JSON.stringify(jwks, null, 2)}</pre>
+        {jwksError && (
+          <Alert variant="destructive">
+            <AlertTriangle className="size-4" />
+            <AlertTitle>Could not load JWKS</AlertTitle>
+            <AlertDescription>{jwksError}</AlertDescription>
+          </Alert>
+        )}
+        {jwks && (
+          <div className="relative rounded-md border bg-muted p-3">
+            <CopyButton value={JSON.stringify(jwks, null, 2)} label="Copy JWKS" className="absolute top-2 right-2" />
+            <pre className="overflow-x-auto text-xs">{JSON.stringify(jwks, null, 2)}</pre>
+          </div>
+        )}
+        {ANTHROPIC_FEDERATION_FIELDS.map((field) => (
+          <Field key={field.key}>
+            <FieldLabel htmlFor={`add-provider-${field.key}`}>{field.label}</FieldLabel>
+            <Input
+              id={`add-provider-${field.key}`}
+              value={federationIds[field.key]}
+              aria-required={field.required || undefined}
+              aria-describedby={`add-provider-${field.key}-hint`}
+              onChange={(e) => onFederationIdChange(field.key, e.target.value)}
+            />
+            <FieldDescription id={`add-provider-${field.key}-hint`}>{field.hint}</FieldDescription>
+          </Field>
+        ))}
+        {missing.length > 0 && (
+          <p className="text-sm text-muted-foreground">Still needed before discovery: {missing.join(", ")}.</p>
+        )}
+        <div className="flex justify-between">
+          <Button type="button" variant="outline" onClick={onBack}>
+            <ArrowLeft className="mr-1 size-4" /> Back
+          </Button>
+          <Button disabled={missing.length > 0} onClick={onNext}>
+            Next <ArrowRight className="ml-1 size-4" />
+          </Button>
         </div>
-      )}
-      <Field>
-        <FieldLabel htmlFor="add-provider-federation-rule-id">Federation Rule ID</FieldLabel>
-        <Input
-          id="add-provider-federation-rule-id"
-          value={federationRuleId}
-          onChange={(e) => onFederationRuleIdChange(e.target.value)}
-        />
-      </Field>
-      <div className="flex justify-between">
-        <Button type="button" variant="outline" onClick={onBack}>
-          <ArrowLeft className="mr-1 size-4" /> Back
-        </Button>
-        <Button disabled={!federationRuleId} onClick={onNext}>
-          Next <ArrowRight className="ml-1 size-4" />
-        </Button>
-      </div>
-    </CardContent>
-  </Card>
-);
+      </CardContent>
+    </Card>
+  );
+};
 
 interface DiscoverStepProps {
   isDiscovering: boolean;

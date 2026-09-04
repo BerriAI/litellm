@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { useForm, FormProvider } from "react-hook-form";
+import { useForm, useWatch, FormProvider } from "react-hook-form";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -45,6 +45,7 @@ import {
   type DiscoveredModelRow,
   type ModelGroupAliasMap,
 } from "./wizardLogic";
+import { federationIdsUpdate, readFederationIds, withFederationIds } from "./anthropicFederation";
 import ReviewModelsStep from "./ReviewModelsStep";
 import { DiscoverStep, JwksStep, ProviderStep, ResultsStep } from "./WizardSteps";
 
@@ -92,7 +93,6 @@ export default function AddProviderPanel() {
   const [credentialName, setCredentialName] = React.useState("");
   const [savedCredential, setSavedCredential] = React.useState<{ name: string; provider: string } | null>(null);
   const [savedValues, setSavedValues] = React.useState<Record<string, unknown>>({});
-  const [federationRuleId, setFederationRuleId] = React.useState("");
   const [jwks, setJwks] = React.useState<AnthropicJwks | null>(null);
   const [jwksError, setJwksError] = React.useState<string | null>(null);
   const [discoveryError, setDiscoveryError] = React.useState<string | null>(null);
@@ -105,6 +105,7 @@ export default function AddProviderPanel() {
 
   const form = useForm<MountedFormValues>({ mode: "onChange" });
   const registry = useMountRegistry();
+  const federationIds = readFederationIds(useWatch({ control: form.control }));
 
   const providerOptions: SearchSelectOption[] = React.useMemo(
     () =>
@@ -168,9 +169,6 @@ export default function AddProviderPanel() {
       }
       setSavedValues(values);
       setSavedCredential({ name: credentialName, provider: litellmProvider });
-      setFederationRuleId(
-        typeof values.anthropic_federation_rule_id === "string" ? values.anthropic_federation_rule_id : "",
-      );
       queryClient.invalidateQueries({ queryKey: ["credentials"] });
       toast.success(`Credential "${credentialName}" saved`);
       if (values.anthropic_identity_source === ANTHROPIC_INTERNAL_ISSUER_DISCRIMINATOR) {
@@ -196,18 +194,24 @@ export default function AddProviderPanel() {
     }
   };
 
-  const confirmFederationRuleId = async () => {
+  const confirmFederationIds = async () => {
     if (!accessToken) return;
-    if (federationRuleId !== savedValues.anthropic_federation_rule_id) {
+    const ids = readFederationIds(form.getValues());
+    const update = federationIdsUpdate(savedValues, ids);
+    if (update !== null) {
+      const updatePayload = {
+        credential_name: credentialName,
+        credential_values: update.credential_values,
+        credential_info: { custom_llm_provider: litellmProvider },
+        ...(update.credential_values_to_delete.length > 0
+          ? { credential_values_to_delete: [...update.credential_values_to_delete] }
+          : {}),
+      };
       try {
-        await credentialUpdateCall(accessToken, credentialName, {
-          credential_name: credentialName,
-          credential_values: { anthropic_federation_rule_id: federationRuleId },
-          credential_info: { custom_llm_provider: litellmProvider },
-        });
-        setSavedValues((prev) => ({ ...prev, anthropic_federation_rule_id: federationRuleId }));
+        await credentialUpdateCall(accessToken, credentialName, updatePayload);
+        setSavedValues((prev) => withFederationIds(prev, ids));
       } catch (error) {
-        toast.fromError(`Failed to save the federation rule id: ${extractProxyErrorMessage(error)}`);
+        toast.fromError(`Failed to save the federation ids: ${extractProxyErrorMessage(error)}`);
         return;
       }
     }
@@ -342,10 +346,10 @@ export default function AddProviderPanel() {
         <JwksStep
           jwks={jwks}
           jwksError={jwksError}
-          federationRuleId={federationRuleId}
-          onFederationRuleIdChange={setFederationRuleId}
+          federationIds={federationIds}
+          onFederationIdChange={(key, value) => form.setValue(key, value, { shouldDirty: true })}
           onBack={() => goTo("credential")}
-          onNext={() => void confirmFederationRuleId()}
+          onNext={() => void confirmFederationIds()}
         />
       )}
 

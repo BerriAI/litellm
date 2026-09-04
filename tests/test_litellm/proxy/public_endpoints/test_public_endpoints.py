@@ -1268,11 +1268,14 @@ def test_credential_variants_rejects_optional_field_keys_the_variant_does_not_mo
         )
 
 
-def test_anthropic_internal_issuer_variant_relaxes_only_the_federation_rule_id():
-    """The federation rule id is read off the Anthropic Console only after the generated JWKS is
-    registered, and the JWKS only exists once the credential is saved, so demanding it up front
-    would deadlock first-time setup of the LiteLLM-signed variant. Every other variant collects it
-    on the one and only form it has, so there it stays required."""
+def test_anthropic_internal_issuer_variant_relaxes_only_the_ids_anthropic_generates_later():
+    """The federation rule id and organization id are read off the Anthropic Console only after
+    the generated JWKS is registered, and the JWKS only exists once the credential is saved, so
+    demanding them up front would deadlock first-time setup of the LiteLLM-signed variant; the
+    wizard's Register issuer step collects them instead. Every other variant collects them on the
+    one and only form it has, so there they stay required. The service account id and workspace
+    id are optional everywhere: Anthropic mints without the former when the rule targets a single
+    service account and needs the latter only when the rule is enabled in more than one workspace."""
     app_instance = FastAPI()
     app_instance.include_router(router)
     test_client = TestClient(app_instance)
@@ -1286,9 +1289,26 @@ def test_anthropic_internal_issuer_variant_relaxes_only_the_federation_rule_id()
     variants_by_id = {v["id"]: v for v in variants_block["variants"]}
 
     assert field_defs_by_key["anthropic_federation_rule_id"]["required"] is True
-    assert variants_by_id["wif_internal_issuer"]["optional_field_keys"] == ["anthropic_federation_rule_id"]
+    assert field_defs_by_key["anthropic_organization_id"]["required"] is True
+    assert field_defs_by_key["anthropic_service_account_id"]["required"] is False
+    assert field_defs_by_key["anthropic_workspace_id"]["required"] is False
+    assert "more than one workspace" in field_defs_by_key["anthropic_workspace_id"]["tooltip"]
+    assert variants_by_id["wif_internal_issuer"]["optional_field_keys"] == [
+        "anthropic_organization_id",
+        "anthropic_federation_rule_id",
+    ]
+    assert variants_by_id["wif_internal_issuer"]["field_keys"][-4:] == [
+        "anthropic_organization_id",
+        "anthropic_federation_rule_id",
+        "anthropic_service_account_id",
+        "anthropic_workspace_id",
+    ]
     for variant_id in ("api_key", "wif_token", "wif_token_file", "wif_keycloak"):
         assert variants_by_id[variant_id]["optional_field_keys"] == []
+    for variant_id in ("wif_token", "wif_token_file", "wif_keycloak"):
+        assert {"anthropic_organization_id", "anthropic_federation_rule_id"} <= set(
+            variants_by_id[variant_id]["field_keys"]
+        )
 
 
 

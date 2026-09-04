@@ -659,7 +659,9 @@ class TestErrorMappingExhaustive:
     )
     def test_every_variant_maps_to_authentication_error(self, error: ExchangeError):
         with pytest.raises(litellm.AuthenticationError) as exc_info:
-            _raise_anthropic_wif_error(error, model="claude-sonnet-4-5", workspace_id_set=False)
+            _raise_anthropic_wif_error(
+                error, model="claude-sonnet-4-5", workspace_id_set=False, service_account_id_set=False
+            )
 
         assert exc_info.value.llm_provider == "anthropic"
         assert exc_info.value.model == "claude-sonnet-4-5"
@@ -670,6 +672,7 @@ class TestErrorMappingExhaustive:
                 AssertionSourceError(kind="unreadable", source_ref="oidc/keycloak/abc123", detail="invalid_client"),
                 model="claude-sonnet-4-5",
                 workspace_id_set=True,
+                service_account_id_set=True,
             )
 
         assert "invalid_client" in exc_info.value.message
@@ -682,6 +685,7 @@ class TestErrorMappingExhaustive:
                 AssertionSourceError(kind="unreadable", source_ref="oidc/env/ANTHROPIC_IDENTITY_TOKEN"),
                 model="claude-sonnet-4-5",
                 workspace_id_set=True,
+                service_account_id_set=True,
             )
 
         assert exc_info.value.message == (
@@ -738,32 +742,59 @@ class TestErrorMappingExhaustive:
         assert ".." not in exc_info.value.message
 
 
-class TestWorkspaceHint:
-    def _raise_401(self, litellm_params: dict, monkeypatch: pytest.MonkeyPatch) -> str:
+class TestDenialHints:
+    """Anthropic answers every denied exchange with an opaque 401 and logs the reason
+    (workspace_id_required, jti_reused, ...) only in the Console, so the error must say where
+    to look and name whichever optional id is still unset."""
+
+    BASE_PARAMS: Final = {"anthropic_federation_rule_id": "fdrl_1", "anthropic_organization_id": "org-1"}
+
+    def _raise(self, litellm_params: dict, status_code: int, monkeypatch: pytest.MonkeyPatch) -> str:
         monkeypatch.setenv("ANTHROPIC_IDENTITY_TOKEN", "inline-jwt")
-        poster = ScriptedPoster([httpx.Response(401, json={"error": "invalid_grant"})])
+        poster = ScriptedPoster([httpx.Response(status_code, json={"error": "invalid_grant"})])
         engine = make_engine(poster)
         with pytest.raises(litellm.AuthenticationError) as exc_info:
             get_anthropic_wif_token(litellm_params, None, "claude-sonnet-4-5", engine)
-        assert len(poster.requests) == 2
         return exc_info.value.message
 
-    def test_hint_when_workspace_unset(self, monkeypatch: pytest.MonkeyPatch):
-        message = self._raise_401(
-            {"anthropic_federation_rule_id": "fdrl_1", "anthropic_organization_id": "org-1"}, monkeypatch
-        )
+    def test_401_points_at_console_authentication_history(self, monkeypatch: pytest.MonkeyPatch):
+        message = self._raise(self.BASE_PARAMS, 401, monkeypatch)
+        assert "authentication history" in message
+        assert "workspace_id_required" in message
+
+    def test_500_carries_no_denial_hints(self, monkeypatch: pytest.MonkeyPatch):
+        message = self._raise(self.BASE_PARAMS, 500, monkeypatch)
+        assert "authentication history" not in message
+        assert "ANTHROPIC_WORKSPACE_ID" not in message
+        assert "ANTHROPIC_SERVICE_ACCOUNT_ID" not in message
+
+    def test_hints_name_both_ids_when_both_unset(self, monkeypatch: pytest.MonkeyPatch):
+        message = self._raise(self.BASE_PARAMS, 401, monkeypatch)
+        assert "anthropic_workspace_id" in message
+        assert "ANTHROPIC_WORKSPACE_ID" in message
+        assert "anthropic_service_account_id" in message
+        assert "ANTHROPIC_SERVICE_ACCOUNT_ID" in message
+
+    def test_no_workspace_hint_when_workspace_set(self, monkeypatch: pytest.MonkeyPatch):
+        message = self._raise({**self.BASE_PARAMS, "anthropic_workspace_id": "wrkspc_1"}, 401, monkeypatch)
+        assert "ANTHROPIC_WORKSPACE_ID" not in message
+        assert "ANTHROPIC_SERVICE_ACCOUNT_ID" in message
+
+    def test_no_service_account_hint_when_service_account_set(self, monkeypatch: pytest.MonkeyPatch):
+        message = self._raise({**self.BASE_PARAMS, "anthropic_service_account_id": "svac_1"}, 401, monkeypatch)
+        assert "ANTHROPIC_SERVICE_ACCOUNT_ID" not in message
         assert "ANTHROPIC_WORKSPACE_ID" in message
 
-    def test_no_hint_when_workspace_set(self, monkeypatch: pytest.MonkeyPatch):
-        message = self._raise_401(
-            {
-                "anthropic_federation_rule_id": "fdrl_1",
-                "anthropic_organization_id": "org-1",
-                "anthropic_workspace_id": "wrkspc_1",
-            },
+    def test_only_console_pointer_when_both_set(self, monkeypatch: pytest.MonkeyPatch):
+        message = self._raise(
+            {**self.BASE_PARAMS, "anthropic_workspace_id": "wrkspc_1", "anthropic_service_account_id": "svac_1"},
+            401,
             monkeypatch,
         )
+        assert "authentication history" in message
         assert "ANTHROPIC_WORKSPACE_ID" not in message
+        assert "ANTHROPIC_SERVICE_ACCOUNT_ID" not in message
+        assert ".." not in message
 
 
 class TestFileRereadOnRefresh:
@@ -1069,6 +1100,67 @@ class TestIdentitySourceValidationFailsClosed:
             )
 
         assert secret_value not in exc_info.value.message
+
+
+class TestMissingIdsFailClosedWhenIdentitySourceConfigured:
+    """An explicit identity source is a request to federate. Without the rule or organization id
+    the exchange cannot even be attempted, so resolution must say which ids are missing instead
+    of returning None and letting the request die later as a missing API key."""
+
+    INTERNAL_ISSUER_FIELDS: Final = {
+        "anthropic_identity_source": "internal_issuer",
+        "anthropic_issuer_url": "https://issuer.internal.example",
+        "anthropic_issuer_subject": "workload-a",
+        "anthropic_issuer_signing_key_ref": ISSUER_SIGNING_KEY_REF,
+    }
+
+    def test_both_ids_missing_names_both(self):
+        with pytest.raises(litellm.AuthenticationError) as exc_info:
+            resolve_anthropic_wif_params(self.INTERNAL_ISSUER_FIELDS)
+
+        message = exc_info.value.message
+        assert "'internal_issuer'" in message
+        assert "anthropic_federation_rule_id and anthropic_organization_id are not set" in message
+        assert "Settings > Workload identity" in message
+        assert "ANTHROPIC_FEDERATION_RULE_ID" in message
+
+    def test_only_rule_id_missing_names_only_the_rule(self):
+        with pytest.raises(litellm.AuthenticationError) as exc_info:
+            resolve_anthropic_wif_params({**self.INTERNAL_ISSUER_FIELDS, "anthropic_organization_id": "org-1"})
+
+        assert "but anthropic_federation_rule_id is not set" in exc_info.value.message
+
+    def test_only_organization_id_missing_names_only_the_org(self):
+        with pytest.raises(litellm.AuthenticationError) as exc_info:
+            resolve_anthropic_wif_params({**self.INTERNAL_ISSUER_FIELDS, "anthropic_federation_rule_id": "fdrl_1"})
+
+        assert "but anthropic_organization_id is not set" in exc_info.value.message
+
+    def test_keycloak_source_fails_closed_too(self):
+        with pytest.raises(litellm.AuthenticationError, match="'keycloak', but anthropic_federation_rule_id"):
+            resolve_anthropic_wif_params(
+                {"anthropic_identity_source": "keycloak", "anthropic_organization_id": "org-1"}
+            )
+
+    def test_env_configured_source_fails_closed(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_SOURCE", "internal_issuer")
+        with pytest.raises(litellm.AuthenticationError, match="anthropic_organization_id is not set"):
+            resolve_anthropic_wif_params({"anthropic_federation_rule_id": "fdrl_1"})
+
+    def test_env_ids_satisfy_the_gate(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ANTHROPIC_FEDERATION_RULE_ID", "fdrl_env")
+        monkeypatch.setenv("ANTHROPIC_ORGANIZATION_ID", "org-env")
+        params = resolve_anthropic_wif_params(self.INTERNAL_ISSUER_FIELDS)
+        assert params is not None
+        assert params.federation_rule_id == "fdrl_env"
+
+    def test_unknown_source_with_missing_ids_reports_the_unknown_source(self):
+        with pytest.raises(litellm.AuthenticationError, match="must be one of internal_issuer, keycloak"):
+            resolve_anthropic_wif_params({"anthropic_identity_source": "bogus"})
+
+    def test_legacy_token_params_without_ids_still_return_none(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ANTHROPIC_IDENTITY_SOURCE", "internal_issuer")
+        assert resolve_anthropic_wif_params({"anthropic_identity_token": "oidc/env/TOK"}) is None
 
 
 class TestConfigYamlShapedIdentitySources:

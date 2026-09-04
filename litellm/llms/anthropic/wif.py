@@ -79,9 +79,22 @@ _KEYCLOAK_FIELD_MAP: Final[Mapping[str, str]] = MappingProxyType(
         "anthropic_keycloak_scope": "scope",
     }
 )
+_DENIAL_HINT: Final = (
+    " Anthropic answers every denied exchange with the same 401; the reason (for example"
+    " workspace_id_required or jti_reused) is only shown in the Claude Console under"
+    " Settings > Workload identity, in the rule's authentication history."
+)
 _WORKSPACE_HINT: Final = (
-    " If the federation rule is scoped to a workspace, set ANTHROPIC_WORKSPACE_ID"
-    " (or the anthropic_workspace_id litellm param) to that workspace id."
+    " If the federation rule is enabled in more than one workspace, set anthropic_workspace_id"
+    " (or ANTHROPIC_WORKSPACE_ID) to the wrkspc_ id of the workspace to mint tokens for, or to 'default'."
+)
+_SERVICE_ACCOUNT_HINT: Final = (
+    " Anthropic's reference lists service_account_id as required: set anthropic_service_account_id"
+    " (or ANTHROPIC_SERVICE_ACCOUNT_ID) to the svac_ id the federation rule targets."
+)
+_MISSING_IDS_HINT: Final = (
+    " Copy them from the federation rule's detail page under Settings > Workload identity in the"
+    " Claude Console, or set ANTHROPIC_FEDERATION_RULE_ID and ANTHROPIC_ORGANIZATION_ID."
 )
 _ALLOWLIST_HINT: Final = (
     " Identity token files must sit under an allowed credential directory"
@@ -112,6 +125,7 @@ def resolve_anthropic_wif_params(litellm_params: Mapping[str, object] | None) ->
     )
     organization_id: Final = _config_value(litellm_params, "anthropic_organization_id", "ANTHROPIC_ORGANIZATION_ID")
     if federation_rule_id is None or organization_id is None:
+        _raise_if_identity_source_configured(litellm_params, federation_rule_id, organization_id)
         return None
     identity_source: Final = _resolve_identity_source(litellm_params)
     if identity_source is None:
@@ -160,14 +174,47 @@ def _resolve_identity_source(
             keycloak_config: Final = _build_variant(KeycloakSource, params, _KEYCLOAK_FIELD_MAP)
             return identity_source_ref(keycloak_config), keycloak_assertion_source(keycloak_config)
         case _:
-            raise litellm.AuthenticationError(
-                message=(
-                    f"{_IDENTITY_SOURCE_PARAM} must be one of "
-                    f"{', '.join(kind.value for kind in AnthropicIdentitySourceKind)}; got {source_kind!r}."
-                ),
-                llm_provider="anthropic",
-                model="",
-            )
+            _raise_unknown_source_kind(source_kind)
+
+
+def _raise_unknown_source_kind(source_kind: str) -> NoReturn:
+    raise litellm.AuthenticationError(
+        message=(
+            f"{_IDENTITY_SOURCE_PARAM} must be one of "
+            f"{', '.join(kind.value for kind in AnthropicIdentitySourceKind)}; got {source_kind!r}."
+        ),
+        llm_provider="anthropic",
+        model="",
+    )
+
+
+def _raise_if_identity_source_configured(
+    litellm_params: Mapping[str, object] | None, federation_rule_id: str | None, organization_id: str | None
+) -> None:
+    """A configured identity source is an explicit request to federate, so a missing rule or
+    organization id fails closed with the ids named, rather than silently skipping federation
+    and surfacing later as a missing API key."""
+    source_kind: Final = _resolve_source_kind(litellm_params)
+    if source_kind is None:
+        return
+    if source_kind not in {kind.value for kind in AnthropicIdentitySourceKind}:
+        _raise_unknown_source_kind(source_kind)
+    missing: Final = tuple(
+        param
+        for param, value in (
+            ("anthropic_federation_rule_id", federation_rule_id),
+            ("anthropic_organization_id", organization_id),
+        )
+        if value is None
+    )
+    raise litellm.AuthenticationError(
+        message=(
+            f"{_IDENTITY_SOURCE_PARAM} is {source_kind!r}, but {' and '.join(missing)} "
+            f"{'is' if len(missing) == 1 else 'are'} not set.{_MISSING_IDS_HINT}"
+        ),
+        llm_provider="anthropic",
+        model="",
+    )
 
 
 def _resolve_source_kind(litellm_params: Mapping[str, object] | None) -> str | None:
@@ -280,7 +327,12 @@ def _token_from_result(result: ExchangeResult, model: str, params: AnthropicWifP
         case MintedToken():
             return result.access_token.get_secret_value()
         case _:
-            _raise_anthropic_wif_error(result, model=model, workspace_id_set=params.workspace_id is not None)
+            _raise_anthropic_wif_error(
+                result,
+                model=model,
+                workspace_id_set=params.workspace_id is not None,
+                service_account_id_set=params.service_account_id is not None,
+            )
 
 
 def resolve_anthropic_base(api_base: str | None) -> str:
@@ -404,15 +456,30 @@ def _validated_inline_ref(value: str) -> str:
     )
 
 
-def _raise_anthropic_wif_error(error: ExchangeError, model: str, workspace_id_set: bool) -> NoReturn:
+def _raise_anthropic_wif_error(
+    error: ExchangeError, model: str, workspace_id_set: bool, service_account_id_set: bool
+) -> NoReturn:
+    detail: Final = _error_detail(
+        error, workspace_id_set=workspace_id_set, service_account_id_set=service_account_id_set
+    )
     raise litellm.AuthenticationError(
-        message=f"Anthropic workload identity federation failed. {_error_detail(error, workspace_id_set)}",
+        message=f"Anthropic workload identity federation failed. {detail}",
         llm_provider="anthropic",
         model=model,
     )
 
 
-def _error_detail(error: ExchangeError, workspace_id_set: bool) -> str:
+def _denial_hints(workspace_id_set: bool, service_account_id_set: bool) -> str:
+    return "".join(
+        (
+            _DENIAL_HINT,
+            "" if workspace_id_set else _WORKSPACE_HINT,
+            "" if service_account_id_set else _SERVICE_ACCOUNT_HINT,
+        )
+    )
+
+
+def _error_detail(error: ExchangeError, workspace_id_set: bool, service_account_id_set: bool) -> str:
     match error:
         case AssertionSourceError() if error.kind == "disallowed_path":
             return f"Could not read the OIDC identity token from {error.source_ref}.{_ALLOWLIST_HINT}"
@@ -421,8 +488,9 @@ def _error_detail(error: ExchangeError, workspace_id_set: bool) -> str:
             return f"{base} {error.detail}" if error.detail else base
         case InsecureTokenUrl():
             return f"The token endpoint must use https; refusing to send the identity token to host {error.host!r}."
-        case TokenEndpointError() if error.status_code == 401 and not workspace_id_set:
-            return f"The token endpoint returned HTTP 401: {error.redacted_body}{_WORKSPACE_HINT}"
+        case TokenEndpointError() if error.status_code == 401:
+            hints: Final = _denial_hints(workspace_id_set, service_account_id_set)
+            return f"The token endpoint returned HTTP 401: {error.redacted_body}{hints}"
         case TokenEndpointError():
             return f"The token endpoint returned HTTP {error.status_code}: {error.redacted_body}"
         case TokenTransportError():
