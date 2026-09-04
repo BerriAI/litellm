@@ -14,7 +14,6 @@ from pydantic import ValidationError
 
 import litellm
 from litellm import Router
-from litellm.router_utils.auto_router_model_naming import count_heuristic_v2_routers
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
@@ -26,6 +25,7 @@ from litellm.router_strategy.complexity_router.complexity_router import (
     DimensionScore,
     KeywordOverride,
     _built_in_prompt,
+    _ClassifierCircuitBreaker,
     _matched_plan_mode_sentinel,
     classification_system_prompt,
 )
@@ -43,6 +43,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
     TierGlobalStatistic,
     TrainedTierArtifact,
 )
+from litellm.router_utils.auto_router_model_naming import count_heuristic_v2_routers
 from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
@@ -1718,6 +1719,13 @@ class TestLLMClassifierConfig:
         assert config.classifier_type == "heuristic"
         assert config.classifier_llm_config is None
 
+    def test_classifier_circuit_breaker_defaults_on_and_requires_positive_cooldown(self):
+        config = ClassifierLLMConfig(model="haiku-classifier")
+        assert config.circuit_breaker_enabled is True
+        assert config.circuit_breaker_cooldown_seconds == 30.0
+        with pytest.raises(ValidationError):
+            ClassifierLLMConfig(model="haiku-classifier", circuit_breaker_cooldown_seconds=0)
+
     @pytest.mark.parametrize("reasoning_effort", ["", "ultra"])
     def test_classifier_reasoning_effort_rejects_unsupported_values(self, reasoning_effort):
         with pytest.raises(ValidationError):
@@ -2031,8 +2039,11 @@ class TestLLMClassifier:
         )
 
         outcome = await router.aclassify("hi")
+        next_outcome = await router.aclassify("hi again")
 
         assert outcome.cause == "heuristic_scorer"
+        assert next_outcome.cause == "heuristic_scorer"
+        assert "classifier-circuit-open" in next_outcome.signals
         assert real_router.total_calls["openai/mock-classifier"] == 1
         assert real_router.total_calls["openai/mock-backup-classifier"] == 0
 
@@ -2064,6 +2075,79 @@ class TestLLMClassifier:
 
         assert outcome.cause == "heuristic_scorer"
         assert cancelled.is_set()
+
+    @pytest.mark.asyncio
+    async def test_timeout_opens_classifier_circuit_for_other_sessions(
+        self, mock_router_instance, llm_classifier_config
+    ):
+        """One classifier outage is deployment-wide, so a second session must not pay the timeout."""
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=llm_classifier_config,
+        )
+
+        first = await router.aclassify("first ask", request_kwargs={"metadata": {"session_id": "session-a"}})
+        second = await router.aclassify("second ask", request_kwargs={"metadata": {"session_id": "session-b"}})
+
+        assert first.cause == "heuristic_scorer"
+        assert second.cause == "heuristic_scorer"
+        assert "classifier-circuit-open" in second.signals
+        mock_router_instance.acompletion.assert_awaited_once()
+
+    def test_classifier_circuit_allows_one_probe_and_closes_on_success(self):
+        now = 100.0
+        breaker = _ClassifierCircuitBreaker(30.0, clock=lambda: now)
+
+        assert breaker.allow_request() is True
+        breaker.record_failure(is_timeout=True)
+        assert breaker.allow_request() is False
+
+        now = 130.0
+        assert breaker.allow_request() is True
+        assert breaker.allow_request() is False
+
+        breaker.record_success()
+        assert breaker.allow_request() is True
+
+    def test_failed_classifier_probe_restarts_cooldown(self):
+        now = 100.0
+        breaker = _ClassifierCircuitBreaker(30.0, clock=lambda: now)
+        breaker.record_failure(is_timeout=True)
+
+        now = 130.0
+        assert breaker.allow_request() is True
+        breaker.record_failure(is_timeout=False)
+        assert breaker.allow_request() is False
+
+        now = 160.0
+        assert breaker.allow_request() is True
+
+    @pytest.mark.asyncio
+    async def test_classifier_circuit_can_be_disabled(self, mock_router_instance, llm_classifier_config):
+        mock_router_instance.acompletion = AsyncMock(side_effect=TimeoutError("classifier timed out"))
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **llm_classifier_config,
+                "classifier_llm_config": {
+                    **llm_classifier_config["classifier_llm_config"],
+                    "circuit_breaker_enabled": False,
+                },
+            },
+        )
+
+        await router.aclassify("first ask")
+        await router.aclassify("second ask")
+
+        assert mock_router_instance.acompletion.await_count == 2
+
+    def test_non_timeout_failure_does_not_open_closed_classifier_circuit(self):
+        breaker = _ClassifierCircuitBreaker(30.0)
+        breaker.record_failure(is_timeout=False)
+        assert breaker.allow_request() is True
 
     @pytest.mark.asyncio
     async def test_aclassify_classifier_cost_is_none_when_call_is_unpriced(
@@ -8527,7 +8611,8 @@ class TestClassifierFallbackChoice:
     @pytest.mark.asyncio
     async def test_a_classifier_failure_does_not_pin_the_session_to_the_default_model(self, mock_router_instance):
         """One transient timeout must not hold a session on default_model for the whole affinity TTL:
-        that turn was never classified, so there is nothing worth pinning and the next turn retries."""
+        that turn was never classified, so there is nothing worth pinning. The circuit breaker is
+        disabled here so the next turn isolates and verifies the affinity contract."""
         router = ComplexityRouter(
             model_name="test-complexity-router",
             litellm_router_instance=mock_router_instance,
@@ -8539,7 +8624,11 @@ class TestClassifierFallbackChoice:
                     "REASONING": "o1-preview",
                 },
                 "classifier_type": "llm",
-                "classifier_llm_config": {"model": "haiku-classifier", "timeout_ms": 400},
+                "classifier_llm_config": {
+                    "model": "haiku-classifier",
+                    "timeout_ms": 400,
+                    "circuit_breaker_enabled": False,
+                },
                 "classifier_fallback": "default_model",
                 "default_model": "gpt-4o",
                 "session_affinity": True,
