@@ -64,8 +64,6 @@ class RequestIdentity:
     # completes (routing has picked a deployment), so it's absent from the
     # auth-time seed and filled only from the payload.
     provider_model: str | None = None
-    # The normalized proxy route (``/v1/chat/completions``), set by auth after the
-    # Baggage seed, so like ``provider_model`` it is only filled from the payload.
     request_route: str | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
 

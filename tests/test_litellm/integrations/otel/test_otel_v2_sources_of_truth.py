@@ -726,10 +726,10 @@ def test_llm_span_carries_proxy_request_route():
     """The LLM span records the proxy route the request arrived on, so it can be
     filtered by endpoint (``/v1/responses`` vs ``/v1/chat/completions``) without
     joining back to the root SERVER span's ``http.route``."""
-    data = LLMCallSpanData.from_standard_logging_payload(
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
         _sample_payload(metadata={"user_api_key_request_route": "/v1/responses"})
     )
-    attrs = GenAIMapper().map(data)
+    attrs: Final = GenAIMapper().map(data)
 
     assert data.identity.request_route == "/v1/responses"
     assert attrs[LiteLLM.REQUEST_ROUTE] == "/v1/responses"
@@ -737,7 +737,7 @@ def test_llm_span_carries_proxy_request_route():
 
 def test_llm_span_omits_request_route_off_the_proxy():
     """An SDK call has no inbound route, so the key is absent rather than empty."""
-    attrs = GenAIMapper().map(LLMCallSpanData.from_standard_logging_payload(_sample_payload(metadata={})))
+    attrs: Final = GenAIMapper().map(LLMCallSpanData.from_standard_logging_payload(_sample_payload(metadata={})))
 
     assert LiteLLM.REQUEST_ROUTE not in attrs
 
