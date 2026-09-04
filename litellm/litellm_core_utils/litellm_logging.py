@@ -78,7 +78,10 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
 from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
     InteractionsUsageObjectTransformation,
 )
-from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
+from litellm.litellm_core_utils.logging_utils import (
+    _truncate_base64_in_string,
+    truncate_base64_in_messages,
+)
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
@@ -5650,6 +5653,13 @@ class StandardLoggingPayloadSetup:
             error_message = explicit_message
         else:
             error_message = str(original_exception) if original_exception else ""
+
+        # A failed request carrying base64 file or image data URIs puts the raw
+        # payload in the exception message, and this field lands verbatim in
+        # SpendLogs.metadata.error_information.error_message. Messages already go
+        # through truncation, this field never did, so a single failed request
+        # could exceed the column size.
+        error_message = _truncate_base64_in_string(error_message)
 
         rate_limit_category: Final = validate_rate_limit_category(getattr(original_exception, "category", None))
         rate_limit_type: Final = validate_rate_limit_type(getattr(original_exception, "rate_limit_type", None))
