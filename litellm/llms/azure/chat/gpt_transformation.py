@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
@@ -6,11 +8,13 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_tool_reference_parts_from_tool_messages,
     hoist_images_from_tool_messages,
+    tool_with_flattened_parameters,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.openai.chat.gpt_5_transformation import GPT_REASONING_SERIES_MARKERS
 from litellm.types.llms.azure import (
     API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT,
     API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT,
@@ -30,6 +34,19 @@ if TYPE_CHECKING:
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+
+_NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def flattened_tools_update(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    tools: Final = optional_params.get("tools")
+    if not isinstance(tools, list):
+        return _NO_TOOLS_UPDATE
+    flattened: Final = [  # mutable-ok: request tools are a JSON list
+        tool_with_flattened_parameters(tool) if isinstance(tool, dict) else tool for tool in tools
+    ]
+    return MappingProxyType({"tools": flattened})
 
 
 class AzureOpenAIConfig(BaseConfig):
@@ -123,7 +140,7 @@ class AzureOpenAIConfig(BaseConfig):
         name family needs the rename, including the ``gpt-5-chat*`` models that are excluded from
         the reasoning path by https://github.com/BerriAI/litellm/issues/13781.
         """
-        return "gpt-5" in model or "gpt5_series" in model
+        return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) or "gpt5_series" in model
 
     def _is_response_format_supported_model(self, model: str) -> bool:
         """
@@ -261,6 +278,7 @@ class AzureOpenAIConfig(BaseConfig):
             "model": model,
             "messages": azure_messages,
             **optional_params,
+            **flattened_tools_update(optional_params),
         }
 
     def transform_response(

@@ -59,18 +59,22 @@ const noop = () => {};
 /**
  * Height-filling mode. The table still sizes to its rows; the parent's height is only a ceiling, so
  * a short table keeps its footer under the last row and a long one scrolls its rows instead of the
- * page. `table-container` is the Table primitive's own overflow-x wrapper; left as a scroll box it
- * captures the sticky header and the header scrolls away with the rows. And rows pass under that
- * header, which the semi-transparent header row tint alone would not hide.
+ * page.
  */
 const FILL_CLASSES = {
   outer: "flex max-h-full min-h-0 flex-col",
   frame: "flex min-h-0 flex-col",
-  body: "min-h-0 [&_[data-slot=table-container]]:overflow-visible",
+  body: "min-h-0",
+} as const;
+
+const NO_FILL_CLASSES = { outer: "", frame: "", body: "" } as const;
+
+const STICKY_CLASSES = {
+  body: "[&_[data-slot=table-container]]:overflow-visible",
   header: "bg-background",
 } as const;
 
-const NO_FILL_CLASSES = { outer: "", frame: "", body: "", header: "" } as const;
+const NO_STICKY_CLASSES = { body: "", header: "" } as const;
 
 function columnDefId<TData, TValue>(column: ColumnDef<TData, TValue>): string | undefined {
   if ("id" in column && typeof column.id === "string") {
@@ -195,8 +199,7 @@ function DataTableHeadCell<TData>({ header, size, stickyHeader, enableColumnResi
       )}
       {canResize && (
         <div
-          data-resizer
-          data-header-id={header.id}
+          data-testid={`column-resizer-${header.id}`}
           onMouseDown={header.getResizeHandler()}
           onTouchStart={header.getResizeHandler()}
           onDoubleClick={() => column.resetSize()}
@@ -534,6 +537,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
   const visibleColumnCount = table.getVisibleLeafColumns().length;
   const stickyHeader = maxBodyHeight !== undefined || fillHeight;
   const fill = fillHeight ? FILL_CLASSES : NO_FILL_CLASSES;
+  const sticky = stickyHeader ? STICKY_CLASSES : NO_STICKY_CLASSES;
   const tableStyle = enableColumnResizing ? { width: table.getTotalSize(), minWidth: "100%" } : undefined;
 
   const renderPagination = (): React.ReactNode => {
@@ -589,15 +593,19 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
   const paginationNode = renderPagination();
 
   return (
-    <div className={cn("w-full", fill.outer)}>
-      <div className={cn("overflow-hidden rounded-lg border border-border", fill.frame)}>
+    <div data-testid="data-table-root" className={cn("w-full", fill.outer)}>
+      <div data-testid="data-table-frame" className={cn("overflow-hidden rounded-lg border border-border", fill.frame)}>
         {toolbar !== undefined && <div className="shrink-0 border-b border-border px-4 py-3">{toolbar(table)}</div>}
         <div
-          className={cn(stickyHeader ? "overflow-auto" : "overflow-x-auto", fill.body)}
+          data-testid="data-table-scroller"
+          className={cn(stickyHeader ? "overflow-auto" : "overflow-x-auto", sticky.body, fill.body)}
           style={maxBodyHeight !== undefined ? { maxHeight: maxBodyHeight } : undefined}
         >
           <TableRoot className={enableColumnResizing ? "table-fixed" : ""} style={tableStyle}>
-            <TableHeader className={cn(stickyHeader ? "sticky top-0 z-sticky" : "", fill.header)}>
+            <TableHeader
+              data-testid="data-table-head"
+              className={cn(stickyHeader ? "sticky top-0 z-sticky" : "", sticky.header)}
+            >
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id} className="bg-muted/50">
                   {headerGroup.headers.map((header) => (

@@ -50,10 +50,12 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     MAX_FILE_LIST_LIMIT,
     _is_base64_encoded_unified_file_id,
     apply_unified_file_ids,
+    decode_model_from_file_id,
     ensure_batch_response_managed_file_ids,
     get_batch_id_from_unified_batch_id,
     get_content_type_from_file_object,
     get_model_id_from_unified_batch_id,
+    get_original_file_id,
     map_raw_file_ids_to_unified,
     normalize_mime_type_for_provider,
     resolve_managed_output_file_model_name,
@@ -180,6 +182,10 @@ class _ManagedObjectTableActions(Protocol):
     ) -> "PrismaManagedObjectRow": ...
 
     async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
+
+
+class _SchedulerWithJobLookup(Protocol):
+    def get_job(self, job_id: str) -> object: ...
 
 
 class _CursorPageArgs(TypedDict, total=False):
@@ -423,6 +429,103 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             detail=f"Object not found: {unified_object_id}",
         )
 
+    async def enforce_batch_object_access(
+        self, object_id: str, user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        """Deny access to a provider-format batch id owned by another caller.
+
+        Ids with no ownership row (batches created before ownership tracking,
+        or directly on the provider account) stay accessible so pass-through
+        reads keep working.
+        """
+        if self.prisma_client is None:
+            return
+        managed_object = (
+            await self.prisma_client.db.litellm_managedobjecttable.find_first(
+                where={"OR": [{"unified_object_id": object_id}, {"model_object_id": object_id}]}
+            )
+        )
+        if managed_object is None:
+            return
+        if not can_access_resource(
+            user_api_key_dict=user_api_key_dict,
+            created_by=managed_object.created_by,
+            resource_team_id=managed_object.team_id,
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=f"User {user_api_key_dict.user_id} does not have access to the object {object_id}",
+            )
+
+    async def enforce_provider_file_access(
+        self, file_id: str, user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        """Deny access to a provider-format file id owned by another caller.
+
+        Ownership rows for provider-format ids are written when a managed
+        batch's output/error files are first synced; ids with no row stay
+        accessible so pass-through reads keep working.
+        """
+        if self.prisma_client is None:
+            return
+        managed_file = (
+            await self.prisma_client.db.litellm_managedfiletable.find_first(
+                where={"OR": [{"unified_file_id": file_id}, {"flat_model_file_ids": {"has": file_id}}]}
+            )
+        )
+        if managed_file is None:
+            return
+        if not can_access_resource(
+            user_api_key_dict=user_api_key_dict,
+            created_by=managed_file.created_by,
+            resource_team_id=managed_file.team_id,
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
+            )
+
+    async def store_batch_output_file_ownership(
+        self, response: LiteLLMBatch, litellm_parent_otel_span: Optional[Span]
+    ) -> None:
+        """Record ownership rows for a batch's provider-format output/error
+        file ids, inherited from the owning batch row (never the caller), so
+        file reads can be isolation-checked."""
+        provider_file_ids = tuple(
+            file_id
+            for file_id in (
+                getattr(response, "output_file_id", None),
+                getattr(response, "error_file_id", None),
+            )
+            if file_id and not _is_base64_encoded_unified_file_id(file_id)
+        )
+        if not provider_file_ids:
+            return
+        if self.prisma_client is None:
+            return
+        batch_row = (
+            await self.prisma_client.db.litellm_managedobjecttable.find_first(
+                where={"unified_object_id": response.id}
+            )
+        )
+        if batch_row is None or (
+            batch_row.created_by is None and batch_row.team_id is None
+        ):
+            return
+        owner_identity = UserAPIKeyAuth(
+            user_id=batch_row.created_by, team_id=batch_row.team_id
+        )
+        for file_id in provider_file_ids:
+            model_name = decode_model_from_file_id(file_id)
+            raw_file_id = get_original_file_id(file_id)
+            await self.store_unified_file_id(
+                file_id=file_id,
+                file_object=None,
+                litellm_parent_otel_span=litellm_parent_otel_span,
+                model_mappings={model_name: raw_file_id} if model_name else {},
+                user_api_key_dict=owner_identity,
+            )
+
     async def list_user_batches(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -609,6 +712,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     status_code=403,
                     detail=f"User {user_api_key_dict.user_id} does not have access to the file {retrieve_file_id}",
                 )
+        if retrieve_file_id:
+            await self.enforce_provider_file_access(
+                retrieve_file_id, user_api_key_dict
+            )
         return False
 
     async def check_file_ids_access(self, file_ids: List[str], user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -761,6 +868,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     )
                 data["model"] = potential_model_id
                 data[accessor_key] = get_batch_id_from_unified_batch_id(potential_llm_object_id)
+            elif retrieve_object_id and accessor_key == "batch_id":
+                await self.enforce_batch_object_access(retrieve_object_id, user_api_key_dict)
         elif call_type == CallTypes.acreate_fine_tuning_job.value:
             input_file_id = cast(Optional[str], data.get("training_file"))
             if input_file_id:
@@ -853,7 +962,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                                 file_ids.append(file_id)
         return file_ids
 
-    def get_file_ids_from_responses_input(self, input: Union[str, List[Dict[str, Any]]]) -> List[str]:
+    def get_file_ids_from_responses_input(self, input: Union[str, List[Dict[str, object]]]) -> List[str]:
         """
         Gets file ids from responses API input.
 
@@ -878,7 +987,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             # Check for direct input_file type
             if item.get("type") == "input_file":
                 file_id = item.get("file_id")
-                if file_id:
+                if isinstance(file_id, str) and file_id:
                     file_ids.append(file_id)
 
             # Check for input_file in content array
@@ -887,7 +996,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 for content_item in content:
                     if isinstance(content_item, dict) and content_item.get("type") == "input_file":
                         file_id = content_item.get("file_id")
-                        if file_id:
+                        if isinstance(file_id, str) and file_id:
                             file_ids.append(file_id)
 
         return file_ids
@@ -1227,7 +1336,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
                 # Handle both output_file_id and error_file_id
                 for file_attr in ["output_file_id", "error_file_id"]:
-                    file_id_value = getattr(response, file_attr, None)
+                    file_id_value: str | None = getattr(response, file_attr, None)
                     if file_id_value and model_id:
                         decoded_output_file_id = _is_base64_encoded_unified_file_id(file_id_value)
                         if decoded_output_file_id and "llm_output_file_id," in decoded_output_file_id:
@@ -1293,7 +1402,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 user_api_key_dict=user_api_key_dict,
                 request_tags=request_tags_from_metadata(request_metadata if isinstance(request_metadata, dict) else {}),
                 persist_attribution=is_batch_create,
+                create_if_missing=is_batch_create,
             )
+            if not is_batch_create:
+                await self.store_batch_output_file_ownership(
+                    response=response,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
 
             # Only record batch creation metric on actual create (not retrieve/cancel).
             # unified_file_id in _hidden_params is only set by the create_batch endpoint.
@@ -1496,7 +1611,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             import litellm.proxy.proxy_server as proxy_server_module
 
             # Check if the scheduler has the batch cost checking job registered
-            scheduler = getattr(proxy_server_module, "scheduler", None)
+            scheduler: Final[_SchedulerWithJobLookup | None] = getattr(proxy_server_module, "scheduler", None)
             if scheduler is None:
                 return False
 
@@ -1542,7 +1657,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
         MAX_MATCHES_TO_RETURN = 10
 
-        batches = await self.prisma_client.db.litellm_managedobjecttable.find_many(
+        batches = await _managed_object_table(self.prisma_client).find_many(
             where={
                 "file_purpose": "batch",
                 "batch_processed": False,
@@ -1552,11 +1667,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             order={"created_at": "desc"},
         )
 
-        referencing_batches = []
+        referencing_batches: Final[list[dict[str, object]]] = []
         for batch in batches:
             try:
                 # Parse the batch file_object to check for file references
-                batch_data = json.loads(batch.file_object) if isinstance(batch.file_object, str) else batch.file_object
+                decoded_file_object = _decode_json_blob(batch.file_object)
+                batch_data: Mapping[str, object] = (
+                    decoded_file_object if isinstance(decoded_file_object, Mapping) else {}
+                )
 
                 # Extract file IDs from batch
                 # Batches typically reference the unified file ID in input_file_id

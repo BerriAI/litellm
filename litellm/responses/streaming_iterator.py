@@ -17,6 +17,7 @@ from typing_extensions import TypeIs
 
 import litellm
 from litellm.constants import (
+    EMPTY_MAPPING,
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
     STREAM_SSE_DONE_STRING,
 )
@@ -77,6 +78,16 @@ def _is_json_array(value: object) -> TypeIs[list[object]]:  # guard-ok: trivial 
     return isinstance(value, list)
 
 
+def _optional_str(value: object) -> str | None:
+    """Keep a JSON payload entry only when it is a string, since the wire format is caller-controlled."""
+    return value if isinstance(value, str) else None
+
+
+def _json_array_or_empty(value: object) -> Sequence[object]:
+    """Narrow a JSON payload entry that the caller iterates, tolerating a missing or malformed value."""
+    return value if _is_json_array(value) else ()
+
+
 def _is_str_mapping(value: object) -> TypeIs[dict[str, str]]:  # guard-ok: verifies every value is str
     return _is_json_object(value) and all(isinstance(item, str) for item in value.values())
 
@@ -94,10 +105,6 @@ class _MutableJsonObject(Protocol):
 
 class _GetsLitellmParams(Protocol):
     def __call__(self, key: str, default: Mapping[str, object], /) -> LiteLLM_Params: ...
-
-
-class _PopsOptionalStr(Protocol):
-    def __call__(self, key: str, default: None, /) -> str | None: ...
 
 
 class _UnmasksPiiText(Protocol):
@@ -124,10 +131,6 @@ class _HasPostStreamingDeploymentHook(Protocol):
 
 
 def _typed_gets_litellm_params(fn: _GetsLitellmParams) -> _GetsLitellmParams:
-    return fn
-
-
-def _typed_pops_optional_str(fn: _PopsOptionalStr) -> _PopsOptionalStr:
     return fn
 
 
@@ -271,6 +274,9 @@ class BaseResponsesAPIStreamingIterator:
         self._hidden_params["additional_headers"] = process_response_headers(
             self.response.headers or {}
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE
+        self._raw_response_headers: Mapping[str, str] = MappingProxyType(
+            dict(self.response.headers or {})  # mutable-ok: immediately frozen by MappingProxyType
+        )
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
@@ -342,7 +348,7 @@ class BaseResponsesAPIStreamingIterator:
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 ):
-                    _item: Final = getattr(openai_responses_api_chunk, "item", None)
+                    _item: Final[object] = getattr(openai_responses_api_chunk, "item", None)
                     if _item is not None:
                         ResponsesAPIRequestUtils._encode_container_id_on_output_item(
                             item=_item,
@@ -350,7 +356,7 @@ class BaseResponsesAPIStreamingIterator:
                             model_id=_stream_model_id,
                         )
                 elif _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED:
-                    _annotation: Final = getattr(openai_responses_api_chunk, "annotation", None)
+                    _annotation: Final[object] = getattr(openai_responses_api_chunk, "annotation", None)
                     if _annotation is not None:
                         ResponsesAPIRequestUtils._encode_container_id_on_output_item(
                             item=_annotation,
@@ -405,23 +411,7 @@ class BaseResponsesAPIStreamingIterator:
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
                     self.completed_response = openai_responses_api_chunk
-                    # Add cost to usage object if include_cost_in_streaming_usage is True
-                    if litellm.include_cost_in_streaming_usage and self.logging_obj is not None:
-                        response_obj: Final[ResponsesAPIResponse | None] = getattr(
-                            openai_responses_api_chunk, "response", None
-                        )
-                        if response_obj:
-                            usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
-                            if usage_obj is not None:
-                                try:
-                                    cost: Final[float | None] = self.logging_obj._response_cost_calculator(
-                                        result=response_obj
-                                    )
-                                    if cost is not None:
-                                        setattr(usage_obj, "cost", cost)
-                                except Exception:
-                                    # Best-effort usage cost annotation should not break stream replay.
-                                    pass
+                    _stamp_responses_usage_cost(getattr(openai_responses_api_chunk, "response", None), self.logging_obj)
 
                     if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED:
                         self._handle_logging_failed_response()
@@ -460,6 +450,7 @@ class BaseResponsesAPIStreamingIterator:
             except Exception:
                 # Fallback to original if serialization fails
                 pass
+        self._restore_provider_response_headers(logging_response)
 
         end_time: Final = datetime.now()
         if is_async:
@@ -493,6 +484,41 @@ class BaseResponsesAPIStreamingIterator:
                 end_time=end_time,
             )
         self._run_post_success_hooks(end_time=end_time)
+
+    def _restore_provider_response_headers(self, logging_response: object) -> None:
+        """Re-apply the provider's response headers to the copy handed to logging callbacks.
+
+        ``model_validate(model_dump())`` above drops pydantic private attributes, so the
+        ``_hidden_params`` the provider transform set on the nested response are lost. Returns early
+        when that copy fell back to the original event, so logging-only state never lands on the
+        object the caller is iterating.
+        """
+        if logging_response is self.completed_response:
+            return
+        target: Final[object] = getattr(logging_response, "response", None)
+        existing_hidden: Final[object] = getattr(target, "_hidden_params", None)
+        if not isinstance(existing_hidden, Mapping):
+            return
+        existing: Final[Mapping[str, object]] = existing_hidden
+        source_hidden: Final[object] = getattr(
+            getattr(self.completed_response, "response", None), "_hidden_params", None
+        )
+        source: Final[Mapping[str, object]] = source_hidden if isinstance(source_hidden, Mapping) else EMPTY_MAPPING
+        processed: Final[object] = source.get("additional_headers") or self._hidden_params.get("additional_headers")
+        raw: Final[object] = source.get("headers") or self._raw_response_headers
+        headers: Final[Mapping[str, object]] = processed if isinstance(processed, Mapping) else EMPTY_MAPPING
+        raw_headers: Final[Mapping[str, object]] = raw if isinstance(raw, Mapping) else EMPTY_MAPPING
+        # rebuild by value and let existing keys win: sharing the source dicts would alias what the proxy
+        # splats into the client's HTTP headers, and copying non-header keys would carry response_cost
+        setattr(  # noqa: B010  # target is typed object here, so a plain attribute store does not type check
+            target,
+            "_hidden_params",
+            {  # mutable-ok: the cost calculator writes optional_params into _hidden_params
+                "additional_headers": {**headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
+                "headers": {**raw_headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
+                **existing,
+            },
+        )
 
     def _handle_logging_completed_response(self):
         """Base implementation - should be overridden by subclasses"""
@@ -1021,7 +1047,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         transformed: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
     ) -> None:
-        self._events: list[ResponsesAPIStreamingResponse] = _build_synthetic_response_events(
+        self._events: Sequence[ResponsesAPIStreamingResponse] = build_synthetic_response_events(
             transformed=transformed,
             logging_obj=logging_obj,
             chunk_size=self.CHUNK_SIZE,
@@ -1088,7 +1114,7 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         transformed: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
     ) -> None:
-        self._events = _build_synthetic_response_events(
+        self._events = build_synthetic_response_events(
             transformed=transformed,
             logging_obj=logging_obj,
             chunk_size=MockResponsesAPIStreamingIterator.CHUNK_SIZE,
@@ -1272,22 +1298,32 @@ def _add_text_like_part_events(
         )
 
 
-def _build_synthetic_response_events(
+def _stamp_responses_usage_cost(
+    response_obj: ResponsesAPIResponse | None, logging_obj: LiteLLMLoggingObj | None
+) -> None:
+    if response_obj is None or logging_obj is None:
+        return
+    usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
+    if usage_obj is None:
+        return
+    if isinstance(getattr(usage_obj, "cost", None), (int, float)):
+        return
+    try:
+        cost: Final[float | None] = logging_obj._response_cost_calculator(result=response_obj)
+    except Exception:
+        return
+    if isinstance(cost, (int, float)) and cost > 0:
+        setattr(usage_obj, "cost", cost)
+
+
+def build_synthetic_response_events(
     *,
     transformed: ResponsesAPIResponse,
-    logging_obj: LiteLLMLoggingObj,
+    logging_obj: LiteLLMLoggingObj | None,
     chunk_size: int,
 ) -> list[ResponsesAPIStreamingResponse]:
     openai_types: Final = _get_openai_response_types()
-    if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-        usage_obj: Final = transformed.usage if hasattr(transformed, "usage") else None
-        if usage_obj is not None:
-            try:
-                cost: Final[float | None] = logging_obj._response_cost_calculator(result=transformed)
-                if cost is not None:
-                    setattr(usage_obj, "cost", cost)
-            except Exception:
-                pass
+    _stamp_responses_usage_cost(transformed, logging_obj)
 
     events: Final[list[ResponsesAPIStreamingResponse]] = [
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed),
@@ -1310,8 +1346,7 @@ def _build_synthetic_response_events(
         )
 
         if item_type == "message":
-            raw_content_parts = output_item_payload.get("content")
-            content_parts: Sequence[object] = raw_content_parts if _is_json_array(raw_content_parts) else []
+            content_parts: Sequence[object] = _json_array_or_empty(output_item_payload.get("content"))
             for content_index, part in enumerate(content_parts):
                 part_payload = _dump_response_object(part)
                 events.append(
@@ -1359,9 +1394,8 @@ def _build_synthetic_response_events(
                 )
             )
         elif item_type == "reasoning":
-            raw_summary_items = output_item_payload.get("summary")
-            summary_items: Sequence[object] = raw_summary_items if _is_json_array(raw_summary_items) else []
-            for summary_index, summary in enumerate(summary_items):
+            summaries: Sequence[object] = _json_array_or_empty(output_item_payload.get("summary"))
+            for summary_index, summary in enumerate(summaries):
                 summary_payload = _dump_response_object(summary)
                 summary_text = str(summary_payload.get("text") or "")
                 for i in range(0, len(summary_text), chunk_size):
@@ -2518,14 +2552,12 @@ class ManagedResponsesWebSocketHandler:
         # reuse the router-resolved self.model; passing the alias raw to
         # litellm.aresponses fails in get_llm_provider. A genuinely different
         # provider-prefixed per-frame model is still honored.
-        requested_model: Final[str | None] = _typed_pops_optional_str(call_kwargs.pop)("model", None)
+        requested_model: Final[str | None] = _optional_str(call_kwargs.pop("model", None))
         model: Final[str] = (
             self.model if requested_model is None or requested_model == self.model_group else requested_model
         )
 
-        previous_response_id: Final[str | None] = _typed_pops_optional_str(call_kwargs.pop)(
-            "previous_response_id", None
-        )
+        previous_response_id: Final[str | None] = _optional_str(call_kwargs.pop("previous_response_id", None))
         current_messages: Final = self._input_to_messages(call_kwargs.get("input"))
 
         # Fetch history once; reused in both _apply_history and _save_turn_history

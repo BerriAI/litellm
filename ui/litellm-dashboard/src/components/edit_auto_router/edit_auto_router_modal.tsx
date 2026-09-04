@@ -28,6 +28,7 @@ import {
   type BuildComplexityRouterConfigParams,
   buildComplexityRouterConfig,
   getClassifierModelError,
+  getClassifierReasoningEffortError,
   getKeywordTierRulesError,
   getMissingTiersError,
   getSemanticConfigError,
@@ -89,6 +90,7 @@ export interface StoredComplexityRouterConfig {
   plan_mode_min_tier?: unknown;
   classification_prompt?: unknown;
   heuristic_first_max_tier?: unknown;
+  hybrid_boundary_margin?: unknown;
   tier_labels?: unknown;
   classifier_type?: ClassifierType;
   classifier_llm_config?: ClassifierLLMConfig;
@@ -96,17 +98,23 @@ export interface StoredComplexityRouterConfig {
   classifier_context_budget_chars?: unknown;
   classifier_context_include_assistant_turns?: unknown;
   classifier_fallback?: unknown;
+  classification_mode?: unknown;
   tier_boundaries?: unknown;
   token_thresholds?: unknown;
   dimension_weights?: unknown;
   reasoning_override_min_score?: unknown;
   session_affinity?: unknown;
+  session_affinity_ttl_seconds?: unknown;
+  modality_routing?: unknown;
+  modality_pin_override?: unknown;
   deployment_affinity?: unknown;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
   adaptive_eligible?: AdaptiveEligible;
   return_raw_model_name?: boolean;
+  enable_context_window_escalation?: unknown;
+  context_window_escalation_buffer?: unknown;
 }
 
 /**
@@ -163,12 +171,26 @@ export const hydrateComplexityRouterConfig = (
       typeof parsedConfig.heuristic_first_max_tier === "string" && parsedConfig.heuristic_first_max_tier.trim() !== ""
         ? parsedConfig.heuristic_first_max_tier
         : undefined,
+    hybrid_boundary_margin:
+      typeof parsedConfig.hybrid_boundary_margin === "number" ? parsedConfig.hybrid_boundary_margin : undefined,
+    classification_mode:
+      parsedConfig.classification_mode === "user_turn" || parsedConfig.classification_mode === "every_request"
+        ? parsedConfig.classification_mode
+        : undefined,
     tier_boundaries: hydrateTierBoundaries(parsedConfig.tier_boundaries),
     token_thresholds: hydrateTokenThresholds(parsedConfig.token_thresholds),
     dimension_weights: hydrateDimensionWeights(parsedConfig.dimension_weights),
     reasoning_override_min_score: hydrateReasoningOverrideMinScore(parsedConfig.reasoning_override_min_score),
     session_affinity:
       typeof parsedConfig.session_affinity === "boolean" ? parsedConfig.session_affinity : DEFAULT_SESSION_AFFINITY,
+    session_affinity_ttl_seconds:
+      typeof parsedConfig.session_affinity_ttl_seconds === "number" &&
+      Number.isFinite(parsedConfig.session_affinity_ttl_seconds)
+        ? parsedConfig.session_affinity_ttl_seconds
+        : undefined,
+    modality_routing: typeof parsedConfig.modality_routing === "boolean" ? parsedConfig.modality_routing : false,
+    modality_pin_override:
+      typeof parsedConfig.modality_pin_override === "boolean" ? parsedConfig.modality_pin_override : false,
     deployment_affinity:
       typeof parsedConfig.deployment_affinity === "boolean"
         ? parsedConfig.deployment_affinity
@@ -178,6 +200,14 @@ export const hydrateComplexityRouterConfig = (
     tier_distance_penalty: parsedConfig.tier_distance_penalty,
     adaptive_eligible: parsedConfig.adaptive_eligible || "all",
     return_raw_model_name: parsedConfig.return_raw_model_name || false,
+    enable_context_window_escalation:
+      typeof parsedConfig.enable_context_window_escalation === "boolean"
+        ? parsedConfig.enable_context_window_escalation
+        : undefined,
+    context_window_escalation_buffer:
+      typeof parsedConfig.context_window_escalation_buffer === "number"
+        ? parsedConfig.context_window_escalation_buffer
+        : undefined,
   };
 };
 
@@ -197,7 +227,12 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classifier_fallback",
   "classification_prompt",
   "heuristic_first_max_tier",
+  "hybrid_boundary_margin",
+  "classification_mode",
   "session_affinity",
+  "session_affinity_ttl_seconds",
+  "modality_routing",
+  "modality_pin_override",
   "deployment_affinity",
   "adaptive",
   "adaptive_weights",
@@ -208,6 +243,8 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "token_thresholds",
   "dimension_weights",
   "reasoning_override_min_score",
+  "enable_context_window_escalation",
+  "context_window_escalation_buffer",
 ]);
 
 // Managed only when the caller passes the corresponding state. A caller that does not render
@@ -282,6 +319,8 @@ export const buildUpdatedComplexityRouterConfig = (
     planModeMinTier: value.plan_mode_min_tier,
     classificationPrompt: value.classification_prompt,
     heuristicFirstMaxTier: value.heuristic_first_max_tier,
+    hybridBoundaryMargin: value.hybrid_boundary_margin,
+    classificationMode: value.classification_mode,
     tierLabels: value.tier_labels,
     classifierType: value.classifier_type,
     classifierLlmConfig: value.classifier_llm_config,
@@ -290,6 +329,9 @@ export const buildUpdatedComplexityRouterConfig = (
     classifierContextIncludeAssistantTurns: value.classifier_context_include_assistant_turns,
     classifierFallback: value.classifier_fallback,
     sessionAffinity: value.session_affinity ?? DEFAULT_SESSION_AFFINITY,
+    sessionAffinityTtlSeconds: value.session_affinity_ttl_seconds,
+    modalityRouting: value.modality_routing ?? false,
+    modalityPinOverride: value.modality_pin_override ?? false,
     deploymentAffinity: value.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
     customTechnicalKeywords: customTechnicalKeywords ?? [],
     keywordTierRules: keywordMatching?.keywordTierRules ?? [],
@@ -307,6 +349,8 @@ export const buildUpdatedComplexityRouterConfig = (
     dimensionWeights: value.dimension_weights,
     reasoningOverrideMinScore: value.reasoning_override_min_score,
     tierModelParams: value.tier_model_params,
+    enableContextWindowEscalation: value.enable_context_window_escalation,
+    contextWindowEscalationBuffer: value.context_window_escalation_buffer,
   };
   const built = buildComplexityRouterConfig(builderParams);
 
@@ -523,6 +567,12 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       if (classifierError) {
         setShowValidationErrors(true);
         toast.fromError(classifierError);
+        return;
+      }
+      const classifierEffortError = getClassifierReasoningEffortError(complexityRouterConfig, modelInfo);
+      if (classifierEffortError) {
+        setShowValidationErrors(true);
+        toast.fromError(classifierEffortError);
         return;
       }
       // Same guards the create form applies (add_auto_router_tab.tsx). The backend rejects a

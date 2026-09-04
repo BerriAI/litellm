@@ -4555,3 +4555,114 @@ def test_create_file_async_pre_call_hook_rejection_blocks_upload(monkeypatch, ll
     assert response.status_code == 400, response.text
     assert "file upload not allowed" in response.text
     assert provider_route.call_count == 0
+
+
+def test_create_file_non_batch_over_max_file_size_mb_rejected_before_forwarding(monkeypatch, llm_router: Router):
+    """max_file_size_mb applies to every purpose, unlike the batch-only max_batch_file_size_mb."""
+    import litellm.proxy.proxy_server as ps
+
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    monkeypatch.setitem(ps.general_settings, "max_file_size_mb", 1)
+
+    oversized = b"x" * (2 * 1024 * 1024)
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("labels.jsonl", oversized, "application/octet-stream")},
+            data={"purpose": "user_data"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 413, response.text
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] == "file"
+    assert "max_file_size_mb" in error["message"]
+    assert "1 MB" in error["message"]
+    assert forwarded_calls == []
+
+
+def test_create_file_non_batch_under_max_file_size_mb_forwards(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    monkeypatch.setitem(ps.general_settings, "max_file_size_mb", 1)
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("labels.jsonl", b"small content", "application/octet-stream")},
+            data={"purpose": "user_data"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 200, response.text
+    assert len(forwarded_calls) == 1
+
+
+def test_create_file_blocked_extension_rejected_before_forwarding(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+    monkeypatch.setitem(ps.general_settings, "blocked_file_extensions", [".exe", ".sh"])
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("payload.exe", b"MZ\x90\x00", "application/octet-stream")},
+            data={"purpose": "user_data"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] == "file"
+    assert ".exe" in error["message"]
+    assert "blocked_file_extensions" in error["message"]
+    assert forwarded_calls == []
+
+
+def test_create_file_blocked_extension_unset_allows_everything(monkeypatch, llm_router: Router):
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("payload.exe", b"MZ\x90\x00", "application/octet-stream")},
+            data={"purpose": "user_data"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 200, response.text
+    assert len(forwarded_calls) == 1
+
+
+def test_create_file_path_traversal_filename_rejected_before_forwarding(monkeypatch, llm_router: Router):
+    """A filename carrying a directory-traversal component must never reach storage or the provider."""
+    forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
+
+    try:
+        response = client.post(
+            "/v1/files",
+            files={"file": ("../../etc/passwd", b"malicious content", "text/plain")},
+            data={"purpose": "user_data"},
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        _teardown_batch_upload_endpoint()
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] == "file"
+    assert "traversal" in error["message"].lower()
+    assert forwarded_calls == []

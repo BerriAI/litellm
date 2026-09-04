@@ -7,6 +7,8 @@
 #
 # Running this pre-upgrade closes the window where new application pods would
 # otherwise serve traffic against the previous release's unmigrated schema.
+# Argo CD users can swap the Helm hook for a PreSync hook through
+# `migrationJob.hooks`, which re-runs the Job on every sync.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -14,10 +16,18 @@ metadata:
   labels:
     {{- include "litellm.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: migrations
+  {{- if or .Values.migrationJob.hooks.helm.enabled .Values.migrationJob.hooks.argocd.enabled }}
   annotations:
+    {{- if .Values.migrationJob.hooks.helm.enabled }}
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-delete-policy: before-hook-creation
-    helm.sh/hook-weight: "0"
+    helm.sh/hook-weight: {{ .Values.migrationJob.hooks.helm.weight | default "0" | quote }}
+    {{- end }}
+    {{- if .Values.migrationJob.hooks.argocd.enabled }}
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    {{- end }}
+  {{- end }}
 spec:
   backoffLimit: {{ .Values.migrationJob.backoffLimit }}
   ttlSecondsAfterFinished: {{ .Values.migrationJob.ttlSecondsAfterFinished }}

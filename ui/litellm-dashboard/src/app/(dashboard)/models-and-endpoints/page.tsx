@@ -80,7 +80,7 @@ const renderPanel = (key: string) => {
 };
 
 export default function ModelsAndEndpointsPage() {
-  const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
+  const { accessToken, userRole, userId: userID, premiumUser, isViewOnly } = useAuthorized();
   const { data: teams } = useTeams();
   const { data: uiSettings } = useUISettings();
   const queryClient = useQueryClient();
@@ -92,7 +92,7 @@ export default function ModelsAndEndpointsPage() {
 
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
   const canCreate = canCreateModels(
-    { userRole, userID },
+    { userRole, userID, isViewOnly },
     {
       teams: teams ?? null,
       disabledForInternalUsers:
@@ -182,6 +182,7 @@ export default function ModelsAndEndpointsPage() {
             accessToken={accessToken}
             userID={userID}
             userRole={userRole}
+            isViewOnly={isViewOnly}
             onModelUpdate={invalidateModels}
             modelAccessGroups={availableModelAccessGroups}
           />

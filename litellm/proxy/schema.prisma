@@ -1529,14 +1529,16 @@ model LiteLLM_AutoRouterSession {
 model LiteLLM_ShadowEvalJob {
   id                String   @id @default(cuid())
   group_id          String   // legs of one job share this; the API's job id
-  api_key_id        String   // hashed virtual key whose traffic this leg shadows
-  router_name       String   // the auto-router under evaluation, in either direction
+  target_type       String   @default("key") // key | team | user
+  target_id         String   // hashed virtual key, team_id, or user_id whose traffic this leg shadows
+  router_name       String   // first (often only) auto-router under evaluation; router_names is the full set
+  router_names      String[] @default([]) // all routers this job runs as shadow arms; empty on legacy rows, whose set is (router_name)
   direction         String   @default("forward") // forward | reverse
   baseline_model    String?  // reverse only: the fixed model the router is judged against
   judge_model       String
   shadow_percentage Float
   max_turns         Int      // sample-count ceiling: the whole budget on pre-max_budget jobs, the error-loop valve otherwise
-  max_budget        Float?   // per-key USD cap on the eval's own shadow + judge spend; null on jobs from before spend budgets
+  max_budget        Float?   // per-target USD cap on the eval's own shadow + judge spend; null on jobs from before spend budgets
   created_at        DateTime @default(now())
   created_by        String?
   ends_at           DateTime
@@ -1544,7 +1546,7 @@ model LiteLLM_ShadowEvalJob {
   stopped_by        String?  // operator who stopped it early; null when it ended on its own
 
   @@index([group_id])
-  @@index([api_key_id])
+  @@index([target_type, target_id])
   @@index([created_at])
 }
 
@@ -1554,6 +1556,7 @@ model LiteLLM_ShadowEvalAttempt {
   job_id       String
   request_id   String   // the judged real request
   outcome      String   // real | shadow | tie | error
+  router_name  String?  // the arm this verdict scores; NULL on legacy rows, meaning the job's own router
   tier         String?  // router's tier for the prompt, when classified
   real_model   String?
   shadow_model String?

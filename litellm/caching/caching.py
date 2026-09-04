@@ -12,6 +12,7 @@ import hashlib
 import json
 import time
 import traceback
+from collections.abc import Mapping
 from enum import Enum
 from typing import Any, Final
 
@@ -506,7 +507,7 @@ class Cache:
 
     def _get_cache_logic(
         self,
-        cached_result: Any | None,
+        cached_result: object | None,
         max_age: float | None,
     ):
         """
@@ -538,8 +539,8 @@ class Cache:
         return cached_result
 
     @staticmethod
-    def _get_safe_cache_lookup_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
-        cache_lookup_kwargs: Final[dict[str, Any]] = {}
+    def _get_safe_cache_lookup_kwargs(kwargs: Mapping[str, object]) -> dict[str, object]:
+        cache_lookup_kwargs: Final[dict[str, object]] = {}
         for prompt_kwarg in ("messages", "input"):
             if prompt_kwarg in kwargs:
                 cache_lookup_kwargs[prompt_kwarg] = kwargs[prompt_kwarg]
@@ -552,7 +553,7 @@ class Cache:
 
     @staticmethod
     def _update_metadata_from_cache_lookup_kwargs(
-        original_kwargs: dict[str, Any], cache_lookup_kwargs: dict[str, Any]
+        original_kwargs: Mapping[str, object], cache_lookup_kwargs: Mapping[str, object]
     ) -> None:
         original_metadata: Final = original_kwargs.get("metadata")
         cache_lookup_metadata: Final = cache_lookup_kwargs.get("metadata")

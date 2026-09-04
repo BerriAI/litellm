@@ -667,6 +667,44 @@ class TestMCPRequestHandler:
 
         assert result == []
 
+    async def test_db_default_empty_key_scope_keeps_org_substitution(self):
+        """A key whose object_permission row carries only the DB-default empty mcp_servers
+        list (e.g. a vector-stores-only key) places no lower-level MCP restriction: the org
+        list still substitutes with the flag off, while the access result stays scoped so
+        the opt-in allow-all ceiling can still bind"""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", org_id="org-1")
+        key_object_permission = self._toolset_only_object_permission([])
+        key_object_permission.mcp_toolsets = None
+        mock_manager = self._mock_manager_with_toolsets({})
+
+        with (
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=key_object_permission
+            ),
+            patch.object(  # test-quality-ok: team resolution has its own tests; pin it empty here
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_team", AsyncMock(return_value=[])
+            ),
+            patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_key_access_group_mcp_server_extras", AsyncMock(return_value=[])
+            ),
+            patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch.object(  # test-quality-ok: stub the level's perm loader; the resolver reads module globals with no injection seam
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_org",
+                AsyncMock(return_value=["server-x", "server-y"]),
+            ),
+        ):
+            access = await MCPRequestHandler.get_mcp_server_access(user_api_key_auth)
+
+        assert sorted(access.server_ids) == ["server-x", "server-y"]
+        assert access.scope == "scoped"
+
     async def test_team_dangling_toolset_denies_key_own_grants(self):
         """A team toolset that cannot be resolved must deny on the SERVER axis too,
         not silently drop the team ceiling and pass the key's own grants through"""
@@ -6005,6 +6043,44 @@ class TestMCPDcrBridgeDelegateAdmission:
                 await MCPRequestHandler.process_mcp_request(scope)
 
         assert exc_info.value.status_code == 503
+        assert exc_info.value.detail == (
+            "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."
+        )
+
+    async def test_user_subject_envelope_permanent_db_fault_is_503_not_worded_as_transient(self):
+        """A query engine fault that never heals (a missing engine binary) still fails admission with 503,
+        but the detail must not call the database "temporarily unreachable" or ask the client to retry: the
+        DCR client would loop on a retry that can never succeed. The fault reaches the handler wrapped in
+        get_user_object's bare ValueError, so the wording has to be picked off the wrapped cause."""
+        from prisma.engine.errors import BinaryNotFoundError
+
+        envelope = self._mint_bridge_envelope(user_id="sso-user-7")
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/bridge_delegate_server",
+            "headers": [(b"authorization", f"Bearer {envelope}".encode("latin-1"))],
+        }
+        with (
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling admission tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+            patch(  # test-quality-ok: the envelope opener reads master_key off the proxy module, no injection seam
+                "litellm.proxy.proxy_server.master_key", self._MASTER_KEY
+            ),
+            self._patch_user_reload(
+                side_effect=self._wrapped_user_lookup_error(BinaryNotFoundError("query engine binary not found"))
+            ),
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = self._bridge_delegate_server()
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+
+        assert exc_info.value.status_code == 503
+        assert "temporarily unreachable" not in exc_info.value.detail
+        assert "retry shortly" not in exc_info.value.detail.lower()
+        assert "BinaryNotFoundError" in exc_info.value.detail
+        assert "will not clear by retrying" in exc_info.value.detail
 
     async def test_user_subject_envelope_scim_deactivated_user_fails_closed_401(self):
         """SCIM-deactivating the envelope's user revokes it immediately: the reloaded user carries

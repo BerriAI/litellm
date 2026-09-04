@@ -14,6 +14,8 @@ from litellm.proxy.spend_tracking.savings import (
 from litellm.router import Router
 from litellm.types.utils import Usage
 
+pytestmark = pytest.mark.usefixtures("local_model_cost_map")
+
 
 def _anthropic_costs(model: str) -> tuple[float, float]:
     info = litellm.get_model_info(model=model, custom_llm_provider="anthropic")
