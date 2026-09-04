@@ -36,7 +36,7 @@ longer signal it.
 
 ### Fixed
 
-- **key**: `team_id` is now `ForceNew`; changing a key's team replaces the key instead of issuing an in-place update against a token already cascade-deleted along with its old team
+- **key**: an update that changes `team_id` and 404s because the key was already cascade-deleted along with its previous team now recovers by recreating the key under the new team, instead of failing outright. A `team_id` change between two teams that both still exist, or drift correction on a key that still exists, both remain a plain in-place update - unaffected
 - **team**: Read now decodes the `team_info` envelope `/team/info` actually returns, so team attributes refresh from the proxy instead of always falling back to the prior state
 - **key**: Read now unwraps the `info` envelope `/key/info` actually returns; previously reads mapped nothing back into state, so drift on a key was never detected
 - **key**: Updates no longer send an empty `budget_duration`, which the proxy rejects with a 400; any update to a key without a configured `budget_duration` previously failed outright
