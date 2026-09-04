@@ -331,6 +331,34 @@ class TestRequestCoverage:
         assert data["input"] == ["[EMAIL_1]", "[PHONE_1]"]
 
     @pytest.mark.asyncio
+    async def test_participant_name_is_redacted(self):
+        """`name` on a user turn identifies a person."""
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail, {"texts": ["hi", "[PERSON_1]"]})
+
+        data = {"messages": [{"role": "user", "name": "Jane Doe", "content": "hi"}]}
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
+
+        assert mock.call_args_list[0].kwargs["json"]["texts"] == ["hi", "Jane Doe"]
+        assert data["messages"][0]["name"] == "[PERSON_1]"
+
+    @pytest.mark.asyncio
+    async def test_tool_function_name_is_left_alone(self):
+        """On a tool turn the same field is the function name.
+
+        Redacting it would stop the call routing, so this asserts it is never sent
+        to the shield at all.
+        """
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail, {"texts": ["result"]})
+
+        data = {"messages": [{"role": "tool", "name": "get_weather", "content": "result"}]}
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
+
+        assert data["messages"][0]["name"] == "get_weather"
+        assert mock.call_args_list[0].kwargs["json"]["texts"] == ["result"]
+
+    @pytest.mark.asyncio
     async def test_every_shape_in_one_request_is_redacted(self):
         guardrail = _guardrail()
         mock = _mock_post(guardrail, {"texts": ["a", "b", "c", "d"]})

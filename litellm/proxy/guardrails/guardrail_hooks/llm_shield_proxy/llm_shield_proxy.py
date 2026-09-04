@@ -122,6 +122,18 @@ def _collect_content(container: MutableRequest, slots: _SlotSink) -> None:
             _collect(part, "text", slots)
 
 
+def _collect_participant_name(message: MutableRequest, slots: _SlotSink) -> None:
+    """Redacts `name` where it identifies a person, never where it names a function.
+
+    On a user or assistant turn `name` is the participant, which is personal data.
+    On a tool or function turn the same field carries the function's name and has
+    to reach the provider unchanged, or the call no longer routes.
+    """
+    if message.get("role") in ("tool", "function"):
+        return
+    _collect(message, "name", slots)
+
+
 def _collect_tool_arguments(message: MutableRequest, slots: _SlotSink) -> None:
     """Tool arguments carry the values a user asked the model to act on."""
     for tool_call in message.get("tool_calls") or ():
@@ -311,6 +323,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         for message in data.get("messages") or ():
             if isinstance(message, dict):
                 _collect_content(message, slots)
+                _collect_participant_name(message, slots)
                 _collect_tool_arguments(message, slots)
         _collect_responses_fields(data, slots)
         _collect_prompt(data, slots)
