@@ -5,7 +5,7 @@ import pytest
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.spend_tracking.budget_reservation import reserve_budget_for_request
+from litellm.proxy.spend_tracking.budget_reservation import estimate_request_max_cost, reserve_budget_for_request
 from litellm.proxy.utils import ProxyLogging
 
 TOKEN_COUNTING_ROUTES: Final = (
@@ -46,3 +46,32 @@ async def test_non_exempt_llm_route_still_reserves_budget():
 
     assert reservation is not None
     assert reservation["reserved_cost"] > 0
+
+
+BEDROCK_SONNET: Final = "us.anthropic.claude-sonnet-4-6"
+CONVERSE_BODY: Final = {
+    "messages": [{"role": "user", "content": [{"text": "Reply with one word: pong"}]}],
+    "inferenceConfig": {"maxTokens": 5},
+}
+INVOKE_BODY: Final = {
+    "anthropic_version": "bedrock-2023-05-31",
+    "max_tokens": 5,
+    "messages": [{"role": "user", "content": "Reply with one word: pong"}],
+}
+
+
+def test_bedrock_converse_body_reserves_the_prompt_not_the_context_window():
+    converse_cost: Final = estimate_request_max_cost(
+        request_body=CONVERSE_BODY,
+        route=f"/bedrock/model/{BEDROCK_SONNET}/converse",
+        llm_router=None,
+        input_token_counts={},
+    )
+    invoke_cost: Final = estimate_request_max_cost(
+        request_body=INVOKE_BODY,
+        route=f"/bedrock/model/{BEDROCK_SONNET}/invoke",
+        llm_router=None,
+        input_token_counts={},
+    )
+    assert converse_cost is not None and invoke_cost is not None
+    assert invoke_cost < converse_cost < 2 * invoke_cost
