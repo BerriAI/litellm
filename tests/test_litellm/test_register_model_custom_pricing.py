@@ -11,6 +11,8 @@ calculations for DB-sourced models with prompt caching pricing.
 
 import copy
 import os
+import sys
+from typing import Final
 
 import pytest
 
@@ -993,3 +995,72 @@ def test_completion_cost_applies_off_peak_only_deployment_pricing():
     finally:
         _restore_model_cost_entries(original_entries)
         del router
+
+
+def test_register_model_empty_payload_does_not_materialize_entry():
+    """An empty payload for a model with no built-in entry carries no
+    information, and ``register_model`` must not create a bare key for it in
+    ``litellm.model_cost``. Key existence is what cost lookup treats as
+    "mapped", so an empty entry flips ``completion_cost`` for an unmapped
+    model from a loud "model isn't mapped" error to a silent $0.0.
+    """
+    from litellm.utils import _runtime_registered_model_cost
+
+    model_key: Final = "deepinfra/fake-unmapped-model-empty-registration"
+    assert model_key not in litellm.model_cost
+    with pytest.raises(Exception, match="isn't mapped"):
+        litellm.completion_cost(model=model_key, prompt="hi", completion="there")
+
+    try:
+        litellm.register_model({model_key: {}})  # mutable-ok: registration payload under test
+
+        assert model_key not in litellm.model_cost, (
+            "register_model materialized an empty model_cost entry for an "
+            "unmapped model registered with an empty payload"
+        )
+        with pytest.raises(Exception, match="isn't mapped"):
+            litellm.completion_cost(model=model_key, prompt="hi", completion="there")
+    finally:
+        litellm.model_cost.pop(model_key, None)
+        _runtime_registered_model_cost.pop(model_key, None)
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_router_init_without_pricing_keeps_unmapped_model_cost_loud():
+    """``Router.__init__`` registers every deployment's backend key through
+    ``register_model`` (``_register_deployment_in_model_cost``, shared-backend
+    path). For a deployment whose model is not in the cost map and that
+    carries no pricing or ``model_info``, that registration used to
+    materialize an empty entry — after which ``litellm.completion_cost`` for
+    the unmapped model silently returned 0.0 process-wide instead of raising,
+    even for calls that never touch the router.
+    """
+    from litellm import Router
+
+    backend_model: Final = "deepinfra/fake-unmapped-router-model-empty-reg"
+    stripped_key: Final = backend_model.split("/", 1)[1]
+    assert backend_model not in litellm.model_cost
+
+    router: Final = Router(
+        model_list=[  # mutable-ok: Router constructor payload
+            {  # mutable-ok: deployment entry under test
+                "model_name": "my-unpriced-model",
+                "litellm_params": {"model": backend_model, "api_key": "fake-key"},  # mutable-ok: deployment params
+            }
+        ]
+    )
+
+    try:
+        assert backend_model not in litellm.model_cost, (
+            "Router.__init__ materialized an empty model_cost entry for an "
+            "unmapped deployment with no pricing"
+        )
+        with pytest.raises(Exception, match="isn't mapped"):
+            litellm.completion_cost(
+                model=backend_model, prompt="hi", completion="there"
+            )
+    finally:
+        del router
+        litellm.model_cost.pop(backend_model, None)
+        litellm.model_cost.pop(stripped_key, None)
+        _invalidate_model_cost_lowercase_map()
