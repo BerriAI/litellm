@@ -18,7 +18,7 @@ from litellm.fusion_router import (
     fusion_router_dependencies,
     validate_fusion_router_write,
 )
-from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
+from litellm.litellm_core_utils.fusion_budget import complete_fusion_budget_call
 from litellm.router import Router
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponseStream
@@ -94,6 +94,11 @@ class RecordingCompletion:
         response = self.responses[model].popleft()
         if isinstance(response, Exception):
             raise response
+        metadata = kwargs.get("metadata")
+        if isinstance(metadata, dict):
+            # The fake provider has no logging worker, so model the cost
+            # callback reaching the request-scoped Fusion ledger.
+            complete_fusion_budget_call(metadata, cost_known=True)
         return response
 
 
@@ -201,6 +206,37 @@ async def test_tool_choice_none_allows_private_deliberation_but_never_client_too
     initial = completion.calls[0]
     assert [tool["function"]["name"] for tool in initial["tools"]] == [FUSION_TOOL_NAME]
     assert initial["tool_choice"] == "auto"
+    final = completion.calls[-1]
+    assert final["tools"] == [client_tool]
+    assert final["tool_choice"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_required_fusion_hides_client_tools_when_tool_choice_is_none() -> None:
+    completion = RecordingCompletion(
+        {
+            "outer": [_fusion_call(), _response("Final answer without a tool call")],
+            "panel-a": [_response("Panel A")],
+            "panel-b": [_response("Panel B")],
+            "analyst": [_response(_analysis())],
+        }
+    )
+    client_tool = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object"}},
+    }
+
+    response = await _router(completion, invocation="required").acompletion(
+        messages=[{"role": "user", "content": "Explain the forecast without calling tools"}],
+        stream=False,
+        request_kwargs={"tools": [client_tool], "tool_choice": "none"},
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.tool_calls is None
+    initial = completion.calls[0]
+    assert [tool["function"]["name"] for tool in initial["tools"]] == [FUSION_TOOL_NAME]
+    assert initial["tool_choice"] == {"type": "function", "function": {"name": FUSION_TOOL_NAME}}
     final = completion.calls[-1]
     assert final["tools"] == [client_tool]
     assert final["tool_choice"] == "none"
@@ -680,6 +716,9 @@ async def test_configured_search_tool_is_private_to_panel_and_analyst() -> None:
 
     async def search(**kwargs: object) -> object:
         search_calls.append(dict(kwargs))
+        metadata = kwargs.get("litellm_metadata")
+        if isinstance(metadata, dict):
+            complete_fusion_budget_call(metadata, cost_known=True)
         return {"results": [{"title": "Source", "url": "https://example.com", "snippet": "Evidence"}]}
 
     research_call = _response(
@@ -999,7 +1038,7 @@ async def test_nested_fusion_dependency_fails_without_recursing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_proxy_fusion_authorizes_every_hidden_model(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_proxy_fusion_uses_virtual_model_as_authorization_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.auth import auth_checks
 
@@ -1013,59 +1052,41 @@ async def test_proxy_fusion_authorizes_every_hidden_model(monkeypatch: pytest.Mo
     )
     model_list[-1]["litellm_params"]["fusion_router_config"]["analyst_model"] = "analyst"
     router = Router(model_list=model_list)
-    authorize = AsyncMock(side_effect=[("outer-budget",), ("panel-budget",), ("analyst-budget",)])
+    authorize = AsyncMock(side_effect=AssertionError("hidden dependencies must not be re-authorized"))
     monkeypatch.setattr(auth_checks, "can_key_call_resolved_model", authorize)
 
-    auth = UserAPIKeyAuth(models=["*"], matched_model_access_groups=["fusion-budget"])
+    auth = UserAPIKeyAuth(models=["fusion/test"], matched_model_access_groups=["fusion-budget"])
     metadata: dict[str, object] = {"user_api_key_auth": auth}
-    await router._authorize_fusion_dependencies(  # pyright: ignore[reportPrivateUsage]
-        fusion_router=router.fusion_routers["fusion/test"],
+    router._validate_fusion_proxy_context(  # pyright: ignore[reportPrivateUsage]
         request_kwargs={
             "metadata": metadata,
             "proxy_server_request": {"body": {"model": "fusion/test"}},
         },
     )
 
-    assert [call.kwargs["model"] for call in authorize.await_args_list] == ["outer", "panel-a", "analyst"]
-    assert metadata[MODEL_ACCESS_GROUP_METADATA_KEY] == [
-        "fusion-budget",
-        "analyst-budget",
-        "outer-budget",
-        "panel-budget",
-    ]
-    assert auth.matched_model_access_groups == [
-        "fusion-budget",
-        "analyst-budget",
-        "outer-budget",
-        "panel-budget",
-    ]
+    authorize.assert_not_awaited()
+    assert auth.models == ["fusion/test"]
+    assert auth.matched_model_access_groups == ["fusion-budget"]
 
 
 @pytest.mark.asyncio
-async def test_proxy_fusion_denies_hidden_model_before_any_provider_call(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
-    from litellm.proxy.auth import auth_checks
+async def test_proxy_fusion_dispatches_with_only_virtual_model_grant(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
 
     router = Router(model_list=_router_model_list())
-    denial = ProxyException(
-        message="key not allowed to access model",
-        type=ProxyErrorTypes.key_model_access_denied,
-        param="model",
-        code=403,
-    )
-    monkeypatch.setattr(auth_checks, "can_key_call_resolved_model", AsyncMock(side_effect=denial))
     fusion_completion = AsyncMock()
+    fusion_completion.return_value = _response("Final")
     monkeypatch.setattr(router.fusion_routers["fusion/test"], "acompletion", fusion_completion)
 
-    with pytest.raises(ProxyException, match="key not allowed"):
-        await router.acompletion(
-            model="fusion/test",
-            messages=[{"role": "user", "content": "Answer"}],
-            metadata={"user_api_key_auth": UserAPIKeyAuth(models=["fusion/test"])},
-            proxy_server_request={"body": {"model": "fusion/test"}},
-        )
+    result = await router.acompletion(
+        model="fusion/test",
+        messages=[{"role": "user", "content": "Answer"}],
+        metadata={"user_api_key_auth": UserAPIKeyAuth(models=["fusion/test"])},
+        proxy_server_request={"body": {"model": "fusion/test"}},
+    )
 
-    fusion_completion.assert_not_awaited()
+    assert result.choices[0].message.content == "Final"
+    fusion_completion.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1128,9 +1149,11 @@ async def test_invoked_fusion_closes_suppressed_initial_stream(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
-async def test_fusion_search_checks_proxy_permissions_before_router_search(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fusion_search_uses_admin_configured_dependency_without_separate_grant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
-    from litellm.proxy._types import LiteLLM_TeamTable, ProxyException, UserAPIKeyAuth
+    from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
     from litellm.proxy.auth import auth_checks
 
     router = Router(model_list=[])
@@ -1147,15 +1170,20 @@ async def test_fusion_search_checks_proxy_permissions_before_router_search(monke
     monkeypatch.setattr(auth_checks, "get_team_object", get_team_object)
     monkeypatch.setattr(router, "asearch", raw_search)
 
-    with pytest.raises(ProxyException, match="Team not allowed to access search tool"):
-        await router._fusion_asearch(  # pyright: ignore[reportPrivateUsage]
-            model="restricted-search",
-            query="evidence",
-            litellm_metadata={"user_api_key_auth": user_api_key_auth.model_dump()},
-        )
+    result = await router._fusion_asearch(  # pyright: ignore[reportPrivateUsage]
+        model="restricted-search",
+        query="evidence",
+        litellm_metadata={"user_api_key_auth": user_api_key_auth.model_dump()},
+        _fusion_proxy_auth_required=True,
+    )
 
-    get_team_object.assert_awaited_once()
-    raw_search.assert_not_awaited()
+    assert result == {"results": []}
+    get_team_object.assert_not_awaited()
+    raw_search.assert_awaited_once_with(
+        model="restricted-search",
+        query="evidence",
+        litellm_metadata={"user_api_key_auth": user_api_key_auth.model_dump()},
+    )
 
 
 @pytest.mark.asyncio
@@ -1271,7 +1299,11 @@ async def test_router_responses_and_anthropic_adapters_stream_direct_outer_respo
 
     responses_stream = await router.aresponses(model="fusion/test", input="Answer", stream=True)
     response_events = [event async for event in responses_stream]
-    assert any(str(getattr(event, "type", "")).endswith("RESPONSE_COMPLETED") for event in response_events)
+    completed_events = [
+        event for event in response_events if str(getattr(event, "type", "")).endswith("RESPONSE_COMPLETED")
+    ]
+    assert completed_events
+    assert all(event.response.model == "fusion/test" for event in completed_events)
 
     anthropic_stream = await router.aanthropic_messages(
         model="fusion/test",

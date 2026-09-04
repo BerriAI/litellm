@@ -14,6 +14,11 @@ from litellm.constants import (
     FUSION_BUDGET_CONTINUATION_STARTED_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
 )
+from litellm.litellm_core_utils.fusion_budget import (
+    complete_fusion_budget_call,
+    register_fusion_budget_call,
+    wait_for_fusion_budget_calls,
+)
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.router_utils.auto_router_model_naming import StrategyRouterDependency
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
@@ -890,17 +895,25 @@ class FusionRouter:
         else:
             try:
                 metadata: Final = _fusion_call_metadata(request_kwargs, FUSION_RESEARCH_CALL_ORIGIN)
-                result = await self._search(  # rebind-ok: orchestration branch state
-                    model=self.config.search_tool_name,
-                    query=query,
-                    # Search routing stores its internal metadata in the newer
-                    # bucket. Passing this as plain `metadata` would let the
-                    # router create a second bucket and hide the Fusion origin
-                    # from spend reconciliation.
-                    litellm_metadata=metadata,
-                    max_tokens_per_page=1024,
-                    _fusion_proxy_auth_required=isinstance(request_kwargs.get("proxy_server_request"), Mapping),
-                )
+                register_fusion_budget_call(metadata)
+                try:
+                    result = await self._search(  # rebind-ok: orchestration branch state
+                        model=self.config.search_tool_name,
+                        query=query,
+                        # Search routing stores its internal metadata in the newer
+                        # bucket. Passing this as plain `metadata` would let the
+                        # router create a second bucket and hide the Fusion origin
+                        # from spend reconciliation.
+                        litellm_metadata=metadata,
+                        max_tokens_per_page=1024,
+                        _fusion_proxy_auth_required=isinstance(request_kwargs.get("proxy_server_request"), Mapping),
+                    )
+                except asyncio.CancelledError:
+                    complete_fusion_budget_call(metadata, cost_known=False)
+                    raise
+                except Exception:
+                    complete_fusion_budget_call(metadata, cost_known=True)
+                    raise
                 if isinstance(result, BaseModel):
                     result = result.model_dump()  # rebind-ok: orchestration branch state
             except Exception as exc:  # noqa: BLE001  # provider search failures become advisory tool results
@@ -930,6 +943,16 @@ class FusionRouter:
         )  # rebind-ok: orchestration branch state
         while True:
             call_kwargs = dict(kwargs)  # mutable-ok: local provider payload
+            metadata = _optional_object_mapping(  # rebind-ok: each loop dispatches a new provider call
+                call_kwargs.get("metadata")
+            )
+            call_metadata = (  # rebind-ok: each loop dispatches a new provider call
+                dict(metadata)  # mutable-ok: each provider call owns its synchronization token
+                if metadata is not None
+                else {}  # mutable-ok: provider metadata requires a native mapping
+            )
+            register_fusion_budget_call(call_metadata)
+            call_kwargs["metadata"] = call_metadata
             if remaining_searches > 0 and self._search is not None:
                 call_kwargs["tools"] = [  # mutable-ok: local provider payload
                     _research_tool()
@@ -941,7 +964,14 @@ class FusionRouter:
                     "model": model,
                     "messages": current_messages,
                 }  # mutable-ok: local provider payload
-            response = await self._completion(model=model, messages=current_messages, stream=False, **call_kwargs)
+            try:
+                response = await self._completion(model=model, messages=current_messages, stream=False, **call_kwargs)
+            except asyncio.CancelledError:
+                complete_fusion_budget_call(call_metadata, cost_known=False)
+                raise
+            except Exception:
+                complete_fusion_budget_call(call_metadata, cost_known=True)
+                raise
             if not isinstance(response, ModelResponse):
                 return response
             search_calls = _research_tool_calls(response)
@@ -981,13 +1011,20 @@ class FusionRouter:
     ) -> tuple[ModelResponse, FusionReplayStream | None]:
         kwargs: Final = _outer_kwargs(request_kwargs)
         kwargs.pop("litellm_metadata", None)
-        kwargs["metadata"] = _fusion_call_metadata(request_kwargs, FUSION_INITIAL_CALL_ORIGIN)
+        metadata: Final = _fusion_call_metadata(request_kwargs, FUSION_INITIAL_CALL_ORIGIN)
+        register_fusion_budget_call(metadata)
+        kwargs["metadata"] = metadata
         client_tools: Final = _client_tools(request_kwargs.get("tools"))
         kwargs["tools"] = [  # mutable-ok: local provider payload
             *client_tools,
             _fusion_tool(),
         ]  # mutable-ok: local provider payload
         if self.config.invocation == "required":
+            # A forced private deliberation still honors the caller's ban on
+            # executable tools. Some providers can emit more than the named
+            # forced tool in one response, so do not expose client schemas here.
+            if kwargs.get("tool_choice") == "none":
+                kwargs["tools"] = [_fusion_tool()]  # mutable-ok: local provider payload
             kwargs["tool_choice"] = {  # mutable-ok: local provider payload
                 "type": "function",
                 "function": {  # mutable-ok: function schema requires a native mapping
@@ -1003,13 +1040,20 @@ class FusionRouter:
             kwargs["tool_choice"] = "auto"
         elif kwargs.get("tool_choice") is None:
             kwargs["tool_choice"] = "auto"
-        response: Final = await self._completion(
-            model=self.config.outer_model,
-            messages=messages,
-            stream=stream,
-            _fusion_depth=1,
-            **kwargs,
-        )
+        try:
+            response: Final = await self._completion(
+                model=self.config.outer_model,
+                messages=messages,
+                stream=stream,
+                _fusion_depth=1,
+                **kwargs,
+            )
+        except asyncio.CancelledError:
+            complete_fusion_budget_call(metadata, cost_known=False)
+            raise
+        except Exception:
+            complete_fusion_budget_call(metadata, cost_known=True)
+            raise
         if isinstance(response, ModelResponse):
             sanitized_response, _ = _without_mixed_fusion_tool_call(response)
             return sanitized_response, None
@@ -1216,6 +1260,10 @@ class FusionRouter:
         final_kwargs["metadata"] = final_metadata
         reservation: Final = final_metadata.get(_BUDGET_RESERVATION_METADATA_KEY)
         if isinstance(reservation, dict):
+            # Do not remove this barrier: success cost callbacks run on the
+            # background logging worker. Finalizing the continuation before all
+            # registered hidden calls report would omit late panel/search spend.
+            await wait_for_fusion_budget_calls(final_metadata)
             # Cancellation accounting can now distinguish an in-flight final
             # outer call from cancellation while the private panel was running.
             reservation[FUSION_BUDGET_CONTINUATION_STARTED_KEY] = True

@@ -18,6 +18,11 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
 )
+from litellm.litellm_core_utils.fusion_budget import (
+    complete_fusion_budget_call,
+    fusion_budget_reconciliation_cost,
+    wait_for_fusion_budget_calls,
+)
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.proxy._types import UserAPIKeyAuth
@@ -337,6 +342,7 @@ class _ProxyDBLogger(CustomLogger):
         )
 
         verbose_proxy_logger.debug("INSIDE _PROXY_track_cost_callback")
+        metadata: dict = {}  # mutable-ok: populated from the callback payload before final token cleanup
         try:
             verbose_proxy_logger.debug(
                 "kwargs stream: %s + complete streaming response: %s",
@@ -346,7 +352,9 @@ class _ProxyDBLogger(CustomLogger):
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs=kwargs)
             litellm_params: Final = kwargs.get("litellm_params", {}) or {}
             end_user_id: Final = get_end_user_id_for_cost_tracking(litellm_params)
-            metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
+            metadata = get_litellm_metadata_from_kwargs(  # rebind-ok: callback payload supplies request metadata
+                kwargs=kwargs
+            )
             # Only fetch key details when user_id wasn't already populated (e.g. direct MCP REST calls).
             # Avoids a cache/DB lookup on every normal LLM request.
             if metadata.get("user_api_key") and not metadata.get("user_api_key_user_id"):
@@ -356,6 +364,14 @@ class _ProxyDBLogger(CustomLogger):
                 )
                 _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
             budget_reservation: Final = _get_budget_reservation_from_metadata(metadata=metadata)
+            if (
+                budget_reservation is not None
+                and budget_reservation.get(FUSION_BUDGET_ACTIVE_KEY) is True
+                and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == "fusion_continuation"
+            ):
+                # Defense in depth for continuations dispatched outside the
+                # FusionRouter helper or while its local wait timed out.
+                await wait_for_fusion_budget_calls(metadata)
             user_id: Final = cast(str | None, metadata.get("user_api_key_user_id", None))
             team_id: Final = cast(str | None, metadata.get("user_api_key_team_id", None))
             org_id: Final = cast(str | None, metadata.get("user_api_key_org_id", None))
@@ -393,8 +409,20 @@ class _ProxyDBLogger(CustomLogger):
                     if defer_fusion_reconciliation and budget_reservation is not None
                     else True
                 )
+                # Completing the token immediately after accumulation is
+                # sufficient for the final-call barrier; persistence and alerts
+                # can continue without delaying the model orchestration.
+                complete_fusion_budget_call(metadata, cost_known=True)
+                known_fusion_cost: Final = float(response_cost) + (
+                    float(budget_reservation.get(FUSION_BUDGET_ACCUMULATED_COST_KEY) or 0.0)
+                    if budget_reservation is not None
+                    else 0.0
+                )
                 budget_counter_response_cost: Final = (
-                    float(response_cost) + float(budget_reservation.get(FUSION_BUDGET_ACCUMULATED_COST_KEY) or 0.0)
+                    fusion_budget_reconciliation_cost(
+                        budget_reservation=budget_reservation,
+                        known_cost=known_fusion_cost,
+                    )
                     if budget_reservation is not None
                     and budget_reservation.get(FUSION_BUDGET_ACTIVE_KEY) is True
                     and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == "fusion_continuation"
@@ -466,6 +494,7 @@ class _ProxyDBLogger(CustomLogger):
                 elif budget_reservation is not None and not defer_fusion_reconciliation:
                     await _release_budget_reservation(budget_reservation=budget_reservation)
             else:
+                complete_fusion_budget_call(metadata, cost_known=False)
                 if _is_unbilled_interaction_response(completion_response):
                     if BACKGROUND_INTERACTION_COST_POLLING_ENABLED and _is_unbilled_in_progress_interaction(
                         completion_response
@@ -526,6 +555,11 @@ class _ProxyDBLogger(CustomLogger):
             )
 
             spend_log_error("Error in tracking cost callback - %s", str(e), exc=e)
+        finally:
+            # If metadata/cost processing itself failed, unblock the final call
+            # but force it to retain the reservation's conservative maximum.
+            # The helper is idempotent when the token already completed above.
+            complete_fusion_budget_call(metadata, cost_known=False)
 
     @staticmethod
     async def _enrich_failure_metadata_with_key_info(metadata: dict, resolve_missing_key_identity: bool = True) -> dict:

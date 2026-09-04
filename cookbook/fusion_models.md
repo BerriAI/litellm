@@ -49,6 +49,7 @@ The outer model must support function calling. Panel and analyst models only nee
 
 - The outer model is the only hard health dependency. Panel failures degrade into tool-result data, and analyst failure degrades to raw responses.
 - Initial outer, panel, analyst, continuation, and search calls are marked separately in spend logs. They inherit the caller identity and remain part of one logical Fusion request.
+- Client-visible `usage` describes the outer response returned to that client. Hidden panel, analyst, and search usage remains in its separately tagged spend-log rows; budget reconciliation includes the cost of every hidden call rather than merging heterogeneous model tokens into one public token count.
 - Admission control reserves the worst-case model-call cost. Hidden calls accumulate against that shared reservation, and the direct initial response or final continuation reconciles it once. This keeps concurrent requests from spending the same remaining budget while Fusion is still running.
 - Chat-completion streaming is buffered until LiteLLM knows whether the private tool was invoked. A direct response is replayed as a normal stream; a Fusion invocation suppresses the private tool-call stream and exposes only the final outer-model stream.
 - A request-level `tool_choice: required` is considered satisfied when Fusion runs. The continuation changes it to `auto` when client tools exist, or removes it when they do not, so the outer model can finish instead of being forced into a second tool call.
