@@ -121,11 +121,11 @@ def _router(
 
 
 def _reasoning_judge_router(reasoning_tokens, verdict='{"preference": "A", "confidence": 0.9}'):
-    """A router whose judge arm reasons before it answers, the way Anthropic's 5 family
-    does whether or not the call asks it to. Reasoning is billed against the caller's own
-    max_tokens and the reply is cut off at that cap, so a cap that does not clear the
-    reasoning budget yields a truncated verdict or no verdict at all. One character stands
-    in for one token, which is what makes the cap the thing under test."""
+    """A router whose judge arm reasons before it answers, the way a deployment carrying an
+    elevated reasoning_effort does. Reasoning is billed against the caller's own max_tokens
+    and the reply is cut off at that cap, so a cap that does not clear the reasoning budget
+    yields a truncated verdict or no verdict at all. One character stands in for one token,
+    which is what makes the cap the thing under test."""
     router = MagicMock()
     router.model_group_alias = {}
     router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
@@ -1156,12 +1156,12 @@ class TestShadowPipeline:
         assert logger._test_counter["spend:shadow_eval:job-1"] == 0.007
 
     async def test_the_judge_output_cap_leaves_room_for_a_reasoning_judge(self):
-        """The output cap covers reasoning tokens as well as the answer, and the models
-        people pick as judges reason before answering whether or not the call asks them to.
-        A cap sized for the verdict JSON alone is spent on reasoning instead and the reply
-        arrives empty, which the attempt records as an unparseable verdict rather than a
-        result. The judge here burns a reasoning budget typical of a thinking model on a
-        comparison task, so the cap has to clear it for the verdict to survive."""
+        """The output cap covers reasoning tokens as well as the answer, and a judge_model
+        deployment carrying an elevated reasoning_effort spends that budget before it writes
+        anything. A cap sized for the verdict JSON alone goes entirely to reasoning and the
+        reply arrives empty, which the attempt records as an unparseable verdict rather than
+        a result. The judge here burns a reasoning budget a live claude-sonnet-5 call was
+        measured at, so the cap has to clear it for the verdict to survive."""
         reasoning_tokens = 2000
         logger = _logger(router=_reasoning_judge_router(reasoning_tokens), prisma=(prisma := _prisma()))
 
