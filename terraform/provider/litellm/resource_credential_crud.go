@@ -89,14 +89,24 @@ func resourceLiteLLMCredentialCreate(d *schema.ResourceData, m interface{}) erro
 	err = handleCredentialAPIResponse(resp, nil, client)
 	if err != nil {
 		// If a credential with this name already exists, adopt it instead of
-		// failing. credential_name is the natural key, so we take ownership
-		// and update the existing credential to match the configured values
+		// failing: take ownership and update the existing credential's
+		// values (merged onto whatever it already had - not a full replace)
 		// rather than erroring on the unique-constraint conflict. See
 		// https://github.com/BerriAI/terraform-provider-litellm/issues/8.
 		if err.Error() == "credential_conflict" {
 			log.Printf("[WARN] Credential %q already exists; adopting it and updating to match configuration.", credentialName)
 			d.SetId(credentialName)
-			return resourceLiteLLMCredentialUpdate(d, m)
+			if updateErr := resourceLiteLLMCredentialUpdate(d, m); updateErr != nil {
+				// Adoption failed before this run took ownership of
+				// anything real. Clear the ID so create is reported as
+				// failed outright (matching pre-adoption behavior) instead
+				// of tainting state for a credential this run doesn't own -
+				// state that would otherwise get destroyed on the next
+				// apply.
+				d.SetId("")
+				return fmt.Errorf("failed to adopt existing credential %q: %w", credentialName, updateErr)
+			}
+			return nil
 		}
 		return fmt.Errorf("failed to create credential: %w", err)
 	}
@@ -152,6 +162,7 @@ func resourceLiteLLMCredentialUpdate(d *schema.ResourceData, m interface{}) erro
 	client := m.(*Client)
 	credentialName := d.Id()
 
+	modelID := d.Get("model_id").(string)
 	credentialInfo := d.Get("credential_info").(map[string]interface{})
 	credentialValues := d.Get("credential_values").(map[string]interface{})
 
@@ -167,8 +178,13 @@ func resourceLiteLLMCredentialUpdate(d *schema.ResourceData, m interface{}) erro
 		credValuesMap[k] = v
 	}
 
+	// model_id must travel with the update the same way it does on create,
+	// so the proxy's model-based credential resolution still applies. Without
+	// it, updating (or adopting) a model_id-scoped credential silently loses
+	// that association.
 	credentialRequest := CredentialRequest{
 		CredentialName:   credentialName,
+		ModelID:          modelID,
 		CredentialInfo:   credInfoMap,
 		CredentialValues: credValuesMap,
 	}
