@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
@@ -398,8 +399,27 @@ def _bridges_to_chat_completions(
     return responses_api_provider_config is None or use_chat_completions_api is True
 
 
+def _deployment_passes_through_responses(model_info: object) -> bool:
+    """Whether ``model_info.supported_endpoints`` opts the deployment into native ``{api_base}/responses``."""
+    if not isinstance(model_info, dict):
+        return False
+    supported_endpoints: Final = model_info.get("supported_endpoints")
+    return isinstance(supported_endpoints, (list, tuple)) and "/v1/responses" in supported_endpoints
+
+
+def _resolve_responses_api_provider_config(
+    model: str, custom_llm_provider: str, model_info: object
+) -> BaseResponsesAPIConfig | None:
+    provider_config: Final = ProviderConfigManager.get_provider_responses_api_config(
+        model=model, provider=custom_llm_provider
+    )
+    if provider_config is not None or not _deployment_passes_through_responses(model_info):
+        return provider_config
+    return OpenAILikeResponsesConfig()
+
+
 def _will_bridge_to_chat_completions(
-    model: str, custom_llm_provider: str | None, use_chat_completions_api: bool
+    model: str, custom_llm_provider: str | None, use_chat_completions_api: bool, model_info: object
 ) -> bool:
     """``_bridges_to_chat_completions`` for callers running before the provider config is resolved.
 
@@ -413,9 +433,7 @@ def _will_bridge_to_chat_completions(
     if custom_llm_provider is None:
         return True
     return _bridges_to_chat_completions(
-        ProviderConfigManager.get_provider_responses_api_config(
-            model=normalized_model[0], provider=custom_llm_provider
-        ),
+        _resolve_responses_api_provider_config(normalized_model[0], custom_llm_provider, model_info),
         use_chat_completions_api or normalized_model[1],
     )
 
@@ -522,7 +540,10 @@ async def aresponses(
             with _prompt_management_sees_a_provisional_message_list(
                 kwargs,
                 bridged=_will_bridge_to_chat_completions(
-                    model, custom_llm_provider, bool(kwargs.get("use_chat_completions_api"))
+                    model,
+                    custom_llm_provider,
+                    bool(kwargs.get("use_chat_completions_api")),
+                    kwargs.get("model_info"),
                 ),
             ):
                 (
@@ -679,7 +700,9 @@ def _apply_prompt_management_to_responses_call(
     ):
         with _prompt_management_sees_a_provisional_message_list(
             kwargs,
-            bridged=_will_bridge_to_chat_completions(model, custom_llm_provider, use_chat_completions_api),
+            bridged=_will_bridge_to_chat_completions(
+                model, custom_llm_provider, use_chat_completions_api, kwargs.get("model_info")
+            ),
         ):
             (
                 model,
@@ -1118,9 +1141,8 @@ def responses(
         if custom_llm_provider is None:
             responses_api_provider_config = None
         else:
-            responses_api_provider_config = ProviderConfigManager.get_provider_responses_api_config(
-                model=model,
-                provider=custom_llm_provider,
+            responses_api_provider_config = _resolve_responses_api_provider_config(
+                model, custom_llm_provider, kwargs.get("model_info")
             )
 
         local_vars.update(kwargs)
