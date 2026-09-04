@@ -407,6 +407,9 @@ def _deployment_passes_through_responses(model_info: object) -> bool:
     return isinstance(supported_endpoints, (list, tuple)) and "/v1/responses" in supported_endpoints
 
 
+_PROMPT_SWAPPED_PROVIDER_KW: Final = "_prompt_swapped_provider"
+
+
 def _resolve_responses_api_provider_config(
     model: str, custom_llm_provider: str, model_info: object
 ) -> BaseResponsesAPIConfig | None:
@@ -569,6 +572,7 @@ async def aresponses(
                 ),
             )
             if model != original_model:
+                requested_provider: Final = custom_llm_provider
                 custom_llm_provider = _resolve_prompt_swapped_provider(
                     original_model=original_model,
                     swapped_model=model,
@@ -576,6 +580,8 @@ async def aresponses(
                     kwargs=kwargs,
                     prompt_id=prompt_id,
                 )
+                if custom_llm_provider != requested_provider:
+                    kwargs[_PROMPT_SWAPPED_PROVIDER_KW] = True
             kwargs.pop("prompt_id", None)
             kwargs["_async_prompt_merged_params"] = merged_optional_params
 
@@ -729,6 +735,7 @@ def _apply_prompt_management_to_responses_call(
         local_vars["input"] = input
         local_vars["model"] = model
         if model != original_model:
+            requested_provider: Final = custom_llm_provider
             custom_llm_provider = _resolve_prompt_swapped_provider(
                 original_model=original_model,
                 swapped_model=model,
@@ -736,6 +743,8 @@ def _apply_prompt_management_to_responses_call(
                 kwargs=kwargs,
                 prompt_id=prompt_id,
             )
+            if custom_llm_provider != requested_provider:
+                kwargs[_PROMPT_SWAPPED_PROVIDER_KW] = True
             local_vars["custom_llm_provider"] = custom_llm_provider
         for key, value in merged_optional_params.items():
             local_vars[key] = value
@@ -1079,6 +1088,9 @@ def responses(
             local_vars=local_vars,
             use_chat_completions_api=use_chat_completions_api,
         )
+        deployment_model_info: Final = (
+            None if kwargs.pop(_PROMPT_SWAPPED_PROVIDER_KW, False) is True else kwargs.get("model_info")
+        )
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -1142,7 +1154,7 @@ def responses(
             responses_api_provider_config = None
         else:
             responses_api_provider_config = _resolve_responses_api_provider_config(
-                model, custom_llm_provider, kwargs.get("model_info")
+                model, custom_llm_provider, deployment_model_info
             )
 
         local_vars.update(kwargs)
