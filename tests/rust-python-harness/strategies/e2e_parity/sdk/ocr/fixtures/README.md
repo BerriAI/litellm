@@ -64,9 +64,8 @@ This covers the defined strategy choices, not every possible value accepted by t
 and remains pending. Its bounding-box annotation, annotation-prompt, and confidence cases record upstream 404/422
 rejections; schema acceptance does not imply support by the hosted model
 
-Reducto fixtures record upload and parse responses. Their parity cases remain non-strict expected failures until the
-Rust OCR bridge supports Reducto. Azure and Vertex generation paths are unit-tested without credentials in CI, so the
-committed corpus does not need live recordings for every target
+Reducto fixtures record upload and parse responses. Azure and Vertex generation paths are unit-tested without
+credentials in CI, so the committed corpus does not need live recordings for every target
 
 Every recording target owns a small fixed provider-rejected corpus, independent of replay implementation support.
 Those inputs are recorded separately from generated valid inputs. Local validation failures use no recorded response;

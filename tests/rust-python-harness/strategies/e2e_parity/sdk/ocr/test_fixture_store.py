@@ -30,7 +30,7 @@ class _MetafuncSpy:
         self.calls.put(args)
 
 
-def test_recorded_fixture_parametrization_applies_case_specific_marks() -> None:
+def test_recorded_fixture_parametrization_needs_no_expected_failure_marks() -> None:
     calls: Final[Queue[tuple[object, ...]]] = Queue()
     metafunc: Final = _MetafuncSpy(fixturenames=("ocr_fixture",), calls=calls)
 
@@ -46,19 +46,8 @@ def test_recorded_fixture_parametrization_applies_case_specific_marks() -> None:
     )
 
     parameters: Final = cast(tuple[_Parameter, ...], calls.get_nowait()[1])
-    reducto_parameters: Final = tuple(
-        parameter
-        for parameter in parameters
-        if parameter.values[0].litellm_input.contract in {"reducto_v3", "reducto_legacy"}
-    )
-    supported_parameters: Final = tuple(parameter for parameter in parameters if parameter not in reducto_parameters)
-
-    assert reducto_parameters
-    assert supported_parameters
-    assert all(len(parameter.marks) == 1 for parameter in reducto_parameters)
-    assert all(parameter.marks[0].name == "xfail" for parameter in reducto_parameters)
-    assert all(parameter.marks[0].kwargs["strict"] is False for parameter in reducto_parameters)
-    assert all(parameter.marks == () for parameter in supported_parameters)
+    assert parameters
+    assert all(parameter.marks == () for parameter in parameters)
 
 
 def test_legacy_fixture_migration_preserves_responses_and_labels_reconstructed_requests(tmp_path: Path) -> None:

@@ -225,6 +225,7 @@ _HOST_ONLY_BRIDGE_EXCLUSIONS: Final = tuple(
     for test, reason in (
         ("test_ocr_routes_to_rust_when_enabled", "Python selects and invokes the native bridge."),
         ("test_ocr_routes_azure_ai_to_rust_when_enabled", "Python resolves provider arguments before the bridge."),
+        ("test_ocr_routes_reducto_to_rust_when_enabled", "Python selects Reducto for the native bridge."),
         ("test_ocr_rust_path_converts_file_document_before_bridge", "Python converts file inputs before the bridge."),
         (
             "test_ocr_exception_type_uses_resolved_provider_context",

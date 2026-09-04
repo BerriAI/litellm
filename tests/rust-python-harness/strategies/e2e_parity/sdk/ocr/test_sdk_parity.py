@@ -15,9 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
-from .....shared.parity.compare import assert_parity
+from .....shared.parity.compare import assert_request_parity, assert_value_parity, validate_harness
 from .....shared.parity.fixtures.store import fixture_id, recorded_fixtures
 from .....shared.parity.models import (
+    Execution,
     SDKCommand,
     SDKError,
     SDKReport,
@@ -42,11 +43,30 @@ API_KEY: Final = "test-key"
 PYTHON_HTTP_SENTINEL: Final = "python-ocr-parity-fallback"
 PYTHON_VARIANT: Final = ExecutionVariant(name="Python", environment=(("LITELLM_RUST", "0"),))
 RUST_VARIANT: Final = ExecutionVariant(name="Rust", environment=(("LITELLM_RUST", "1"),))
+TRUNCATED_ERROR_SUFFIX: Final = "... (truncated)"
 
 
 class SDKRoute(str, Enum):
     OCR = "ocr"
     AOCR = "aocr"
+
+
+def _assert_ocr_parity(python: Execution, rust: Execution) -> None:
+    validate_harness(python, rust, PYTHON_HTTP_SENTINEL)
+    assert_request_parity(python.requests, rust.requests)
+    if (
+        isinstance(python.report, SDKError)
+        and isinstance(rust.report, SDKError)
+        and rust.report.message.endswith(TRUNCATED_ERROR_SUFFIX)
+    ):
+        bounded_prefix: Final = rust.report.message.removesuffix(TRUNCATED_ERROR_SUFFIX)
+        assert python.report.message.startswith(bounded_prefix)
+        assert_value_parity(
+            python.report.model_copy(update={"message": rust.report.message}),
+            rust.report,
+        )
+        return
+    assert_value_parity(python.report, rust.report)
 
 
 class InvalidOcrCase(BaseModel):
@@ -239,7 +259,7 @@ def _check_recorded_ocr_sdk_parity(
     python: Final = python_worker.execute(case_file, route.value, ocr_fixture.provider_responses)
     rust: Final = rust_worker.execute(case_file, route.value, ocr_fixture.provider_responses)
 
-    assert_parity(python, rust, PYTHON_HTTP_SENTINEL)
+    _assert_ocr_parity(python, rust)
     if any(response.status_code >= 400 for response in ocr_fixture.provider_responses):
         assert isinstance(python.report, SDKError)
 
@@ -254,7 +274,7 @@ def _check_invalid_ocr_sdk_parity(
     python: Final = python_worker.execute(case_file, route.value, ())
     rust: Final = rust_worker.execute(case_file, route.value, ())
 
-    assert_parity(python, rust, PYTHON_HTTP_SENTINEL)
+    _assert_ocr_parity(python, rust)
     assert python.requests == ()
     assert rust.requests == ()
     assert isinstance(python.report, SDKError)
@@ -278,11 +298,7 @@ def _write_worker_case(directory: Path, index: int, case: OcrWorkerCase) -> Path
 
 @contextmanager
 def parity_checks() -> Generator[tuple[E2ECheck, ...]]:
-    fixtures: Final = tuple(
-        fixture
-        for fixture in recorded_fixtures(configured_fixture_directory(), OcrParityCase)
-        if fixture.litellm_input.contract not in {"reducto_v3", "reducto_legacy"}
-    )
+    fixtures: Final = recorded_fixtures(configured_fixture_directory(), OcrParityCase)
     runner: Final = SubprocessRunner(
         entrypoint=Path(__file__),
         baseline_user_agent=PYTHON_HTTP_SENTINEL,

@@ -1,5 +1,33 @@
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+
+use super::transformation::OcrProviderConfig;
+
+pub struct OcrRequest<'a> {
+    pub model: &'a str,
+    pub document: Value,
+    pub api_key: Option<&'a str>,
+    pub api_base: Option<&'a str>,
+    pub custom_llm_provider: Option<&'a str>,
+    pub extra_headers: Option<Map<String, Value>>,
+    pub optional_params: Map<String, Value>,
+    pub timeout: Option<Duration>,
+}
+
+pub(super) struct PreparedOcrRequest {
+    pub(super) model: String,
+    pub(super) config: &'static dyn OcrProviderConfig,
+    pub(super) document: Value,
+    pub(super) api_key: Option<String>,
+    pub(super) api_base: Option<String>,
+    pub(super) extra_headers: Option<Map<String, Value>>,
+    pub(super) url_params: Map<String, Value>,
+    pub(super) optional_params: Map<String, Value>,
+    pub(super) requires_reducto_upload: bool,
+    pub(super) timeout: Option<Duration>,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OcrRequestData {

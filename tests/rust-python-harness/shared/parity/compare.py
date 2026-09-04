@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from collections.abc import Mapping, Sequence
 from typing import Final, cast
 
@@ -20,8 +22,51 @@ def validate_harness(baseline: Execution, candidate: Execution, baseline_user_ag
             raise AssertionError("candidate route fell back to the baseline HTTP implementation")
 
 
+def _multipart_boundary(content_type: str) -> str | None:
+    parameters: Final = (parameter.strip() for parameter in content_type.split(";")[1:])
+    boundary: Final = next(
+        (
+            value.strip().strip('"')
+            for parameter in parameters
+            for name, separator, value in (parameter.partition("="),)
+            if separator and name.lower() == "boundary"
+        ),
+        None,
+    )
+    return boundary or None
+
+
 def _request_after_transformation(request: CapturedRequest) -> CapturedRequest:
-    return request.model_copy(update={"user_agent": None})
+    content_type: Final = next(
+        (value for name, value in request.headers if name.lower() == "content-type"),
+        "",
+    )
+    boundary: Final = _multipart_boundary(content_type)
+    if boundary is None or not isinstance(request.body, str):
+        return request.model_copy(update={"user_agent": None})
+    try:
+        raw_body: Final = base64.b64decode(request.body, validate=True)
+    except (binascii.Error, ValueError):
+        return request.model_copy(update={"user_agent": None})
+    canonical_boundary: Final = "litellm-parity-boundary"
+    canonical_headers: Final = tuple(
+        (name, f"multipart/form-data; boundary={canonical_boundary}")
+        if name.lower() == "content-type"
+        else (name, value)
+        for name, value in request.headers
+    )
+    delimiter: Final = f"--{boundary}".encode()
+    canonical_delimiter: Final = f"--{canonical_boundary}".encode()
+    canonical_body: Final = base64.b64encode(
+        raw_body.replace(delimiter, canonical_delimiter)
+    ).decode("ascii")
+    return request.model_copy(
+        update={
+            "headers": canonical_headers,
+            "body": canonical_body,
+            "user_agent": None,
+        }
+    )
 
 
 def assert_request_parity(baseline: tuple[CapturedRequest, ...], candidate: tuple[CapturedRequest, ...]) -> None:

@@ -9,7 +9,7 @@ from typing import Final, Protocol, runtime_checkable
 import httpx
 
 from litellm.rust_bridge import configuration as _configuration
-from litellm.rust_bridge.bindings import NativeBinding
+from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
 from litellm.rust_bridge.runtime import (
     RustAttempt,
     RustDeclined,
@@ -220,6 +220,19 @@ def load_rust_ocr() -> RustOcr | None:
 
 def load_rust_aocr() -> RustAocr | None:
     return _AOCR.load()
+
+
+def upstream_error_details(error: Exception) -> tuple[int, str] | None:
+    exceptions: Final = native_exception_types()
+    if exceptions is None:
+        return None
+    upstream_error: Final = exceptions[1]
+    native_error: Final = error if isinstance(error, upstream_error) else error.__cause__
+    if not isinstance(native_error, upstream_error):
+        return None
+    status: Final = native_error.args[0] if native_error.args else 0
+    message: Final = native_error.args[1] if len(native_error.args) > 1 else ""
+    return int(status) or 500, str(message)
 
 
 def attempt_ocr(

@@ -17,15 +17,8 @@ def ocr_fixture_id(fixture: OcrParityCase) -> str:
     return fixture_id(case_input, prefix)
 
 
-def ocr_fixture_marks(fixture: OcrParityCase) -> tuple[pytest.MarkDecorator, ...]:
-    if fixture.litellm_input.contract not in {"reducto_v3", "reducto_legacy"}:
-        return ()
-    return (
-        pytest.mark.xfail(
-            reason="Reducto does not have a Rust OCR contract",
-            strict=False,
-        ),
-    )
+def ocr_fixture_marks(_fixture: OcrParityCase) -> tuple[pytest.MarkDecorator, ...]:
+    return ()
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:

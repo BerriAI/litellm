@@ -603,6 +603,12 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
         transform_document_intelligence_response(model, response_json, false)
     }
 
+    #[tracing::instrument(
+        name = "transform_ocr_response",
+        target = "litellm::function_trace",
+        level = "trace",
+        skip_all
+    )]
     fn transform_ocr_response_with_params(
         &self,
         model: &str,

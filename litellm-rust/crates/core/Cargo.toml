@@ -13,6 +13,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "time"] }
 tracing.workspace = true
 tokio = { workspace = true, features = ["sync", "rt"] }
 tracing-subscriber = { workspace = true, optional = true }

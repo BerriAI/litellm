@@ -1,9 +1,11 @@
-use litellm_core::Error;
 use std::future::Future;
 
 use litellm_ai_gateway::io::ocr::{
-    OcrRequest, PreparedOcrDispatch, execute_ocr_dispatch, ocr as run_ocr, prepare_ocr_dispatch,
+    OcrRequest as GatewayOcrRequest, PreparedOcrDispatch, execute_ocr_dispatch,
+    prepare_ocr_dispatch,
 };
+use litellm_core::Error;
+use litellm_core::ocr::{OcrRequest, ocr as run_ocr};
 use litellm_core::routing_utils::provider::get_custom_llm_provider;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -103,10 +105,6 @@ fn prepare_ocr(
             extra_headers,
             optional_params,
             timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
-            litellm_call_id: None,
         })
         .await
     })
@@ -135,7 +133,7 @@ fn prepare_dispatch(
         {
             return Err(Error::InvalidRequest(reason));
         }
-        let dispatch = prepare_ocr_dispatch(OcrRequest {
+        let dispatch = prepare_ocr_dispatch(GatewayOcrRequest {
             model: &model,
             document,
             api_key: api_key.as_deref(),

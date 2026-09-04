@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from types import MappingProxyType
 from typing import Final
 
@@ -56,6 +57,46 @@ def _execution(*, body: JsonValue = None, markdown: str = "same", user_agent: st
 def test_parity_rejects_request_difference() -> None:
     python: Final = _execution(user_agent=SENTINEL)
     rust: Final = _execution(body={"model": "different"}, user_agent="litellm-rust")
+
+    with pytest.raises(AssertionError):
+        assert_parity(python, rust, SENTINEL)
+
+
+def _multipart_execution(boundary: str, payload: bytes, user_agent: str | None) -> Execution:
+    body: Final = b"\r\n".join(
+        (
+            f"--{boundary}".encode(),
+            b'Content-Disposition: form-data; name="file"; filename="document"',
+            b"Content-Type: application/pdf",
+            b"",
+            payload,
+            f"--{boundary}--".encode(),
+            b"",
+        )
+    )
+    request: Final = CapturedRequest(
+        method="POST",
+        path="/upload",
+        headers=(("content-type", f"multipart/form-data; boundary={boundary}"),),
+        body=base64.b64encode(body).decode("ascii"),
+        user_agent=user_agent,
+    )
+    return Execution(
+        requests=(request,),
+        report=SDKSuccess(response={"file_id": "reducto://document"}),
+    )
+
+
+def test_parity_ignores_random_multipart_boundaries() -> None:
+    python: Final = _multipart_execution("python-boundary", b"%PDF-1.4", SENTINEL)
+    rust: Final = _multipart_execution("rust-boundary", b"%PDF-1.4", None)
+
+    assert_parity(python, rust, SENTINEL)
+
+
+def test_parity_rejects_multipart_payload_difference() -> None:
+    python: Final = _multipart_execution("python-boundary", b"%PDF-1.4", SENTINEL)
+    rust: Final = _multipart_execution("rust-boundary", b"different", None)
 
     with pytest.raises(AssertionError):
         assert_parity(python, rust, SENTINEL)

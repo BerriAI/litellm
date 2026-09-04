@@ -290,7 +290,7 @@ class BaseOCRConfig:
         self,
         error_message: str,
         status_code: int,
-        headers: dict,
+        headers: dict[str, str] | httpx.Headers,
     ) -> Exception:
         """Get appropriate error class for the provider."""
         return BaseLLMException(

@@ -360,6 +360,24 @@ def test_load_rust_aocr_returns_injected_impl():
     assert rust_bridge.load_rust_aocr() is bridge
 
 
+def test_upstream_error_details_preserves_status_and_message(monkeypatch):
+    class UpstreamError(Exception):
+        pass
+
+    fake_module = types.SimpleNamespace(
+        RustBridgeDeclined=RustBridgeDeclined,
+        RustUpstreamError=UpstreamError,
+    )
+    monkeypatch.setattr(
+        bindings,
+        "get_native_bridge",
+        lambda: fake_module,
+    )
+
+    assert rust_bridge.upstream_error_details(UpstreamError(429, "rate limited")) == (429, "rate limited")
+    assert rust_bridge.upstream_error_details(RuntimeError("local failure")) is None
+
+
 def test_toggle_without_ocr_arg_preserves_injected_impl():
     """The public flag must not clobber an internal test binding."""
     bridge = RecordingBridge()
@@ -774,6 +792,19 @@ def test_ocr_routes_azure_ai_to_rust_when_enabled(fake_bridge):
     assert len(fake_bridge.calls) == 1
     assert fake_bridge.calls[0]["model"] == "pixtral-12b-2409"
     assert fake_bridge.calls[0]["custom_llm_provider"] == "azure_ai"
+
+
+def test_ocr_routes_reducto_to_rust_when_enabled(fake_bridge):
+    response = litellm.ocr(
+        model="reducto/parse-v3",
+        document=DOCUMENT,
+        api_key="sk-test",
+    )
+
+    assert isinstance(response, OCRResponse)
+    assert len(fake_bridge.calls) == 1
+    assert fake_bridge.calls[0]["model"] == "parse-v3"
+    assert fake_bridge.calls[0]["custom_llm_provider"] == "reducto"
 
 
 def test_ocr_rust_path_converts_file_document_before_bridge(fake_bridge):
