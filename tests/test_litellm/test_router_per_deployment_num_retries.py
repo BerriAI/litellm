@@ -490,7 +490,7 @@ class TestRequestNumRetriesBeatsGlobal:
         litellm.callbacks = prev_callbacks
 
     @staticmethod
-    def _router(global_num_retries, retry_policy=None):
+    def _router(global_num_retries):
         return Router(
             model_list=[
                 {
@@ -503,7 +503,6 @@ class TestRequestNumRetriesBeatsGlobal:
                 }
             ],
             num_retries=global_num_retries,
-            retry_policy=retry_policy,
         )
 
     async def _count_attempts(self, *, global_num_retries, request_num_retries):
@@ -534,22 +533,32 @@ class TestRequestNumRetriesBeatsGlobal:
     @pytest.mark.asyncio
     async def test_request_num_retries_zero_disables_retry_policy(self):
         """An explicit zero remains a single attempt when a retry policy matches the error."""
-        counter = _AttemptCounter()
-        litellm.callbacks = [counter]
-        router = self._router(
-            global_num_retries=3,
-            retry_policy=RetryPolicy(InternalServerErrorRetries=2),
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "mock",
+                    "litellm_params": {
+                        "model": "openai/mock-timeout",
+                        "api_key": "sk-fake",
+                        "mock_timeout": True,
+                    },
+                }
+            ],
+            num_retries=3,
+            retry_after=0,
+            retry_policy=RetryPolicy(TimeoutErrorRetries=2),
         )
 
         with patch("asyncio.sleep", return_value=None):
-            with pytest.raises(litellm.InternalServerError):
+            with pytest.raises(litellm.Timeout):
                 await router.acompletion(
                     model="mock",
                     messages=[{"role": "user", "content": "hi"}],
+                    timeout=0.001,
                     num_retries=0,
                 )
 
-        assert counter.attempts == 1
+        assert router.total_calls["openai/mock-timeout"] == 1
 
     @pytest.mark.asyncio
     async def test_global_num_retries_applies_when_request_omits_it(self):
