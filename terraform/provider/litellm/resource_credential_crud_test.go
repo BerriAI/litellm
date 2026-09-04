@@ -226,6 +226,9 @@ func conflictServer(t *testing.T, patchStatus int, patchBody string) (*httptest.
 			w.WriteHeader(patchStatus)
 			w.Write([]byte(patchBody))
 		case r.Method == http.MethodGet:
+			if r.URL.Path != "/credentials/by_name/conflict-test" || r.URL.Query().Get("model_id") != "model-1" {
+				t.Errorf("GET went to %q (query %q), want /credentials/by_name/conflict-test?model_id=model-1", r.URL.Path, r.URL.RawQuery)
+			}
 			resp := CredentialResponse{CredentialName: "conflict-test", CredentialInfo: map[string]interface{}{}}
 			body, _ := json.Marshal(resp)
 			w.Header().Set("Content-Type", "application/json")
