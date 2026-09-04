@@ -817,36 +817,40 @@ async def test_only_connectivity_failures_open_the_breaker(error, opens_breaker)
 
 
 @pytest.mark.asyncio
-async def test_event_loop_stall_timeout_burst_keeps_breaker_closed():
-    """One blocking stall of the worker event loop must not trip the breaker.
+async def test_concurrent_timeout_burst_keeps_breaker_closed():
+    """One concurrent timeout burst must not trip the breaker.
 
-    Every operation already waiting on the loop times out together when the loop resumes,
-    so a purely consecutive threshold is satisfied instantly even though the Redis on the
-    other end (here an in-process fake that answers immediately) is healthy.
+    Operations already waiting on a stalled loop can time out together when it resumes,
+    so a purely consecutive threshold can be satisfied instantly without establishing a
+    persistent Redis outage.
     """
-    import time as time_mod
-
     from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker
 
     breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=5.0)
+    release = asyncio.Event()
 
-    async def healthy_redis_call_with_client_timeout():
-        return await asyncio.wait_for(asyncio.sleep(0.001, result="ok"), timeout=0.05)
+    async def timing_out_call():
+        await release.wait()
+        raise asyncio.TimeoutError
 
-    async def stall_the_loop():
+    async def release_burst():
         await asyncio.sleep(0)
-        time_mod.sleep(0.2)
+        release.set()
 
     results = await asyncio.gather(
-        *(_run_under_circuit_breaker(breaker, "op", healthy_redis_call_with_client_timeout) for _ in range(8)),
-        stall_the_loop(),
+        *(_run_under_circuit_breaker(breaker, "op", timing_out_call) for _ in range(8)),
+        release_burst(),
         return_exceptions=True,
     )
     timeouts = [r for r in results if isinstance(r, asyncio.TimeoutError)]
-    assert len(timeouts) >= breaker.failure_threshold, "the stall must time out a full burst"
+    assert len(timeouts) >= breaker.failure_threshold, "the concurrent calls must time out as one burst"
 
-    assert breaker.is_open() is False, "a healthy Redis behind one loop stall must stay in the pool"
-    assert await _run_under_circuit_breaker(breaker, "op", healthy_redis_call_with_client_timeout) == "ok"
+    assert breaker.is_open() is False, "one timeout burst must not remove Redis from the pool"
+
+    async def healthy_call():
+        return "ok"
+
+    assert await _run_under_circuit_breaker(breaker, "op", healthy_call) == "ok"
 
 
 @pytest.mark.asyncio

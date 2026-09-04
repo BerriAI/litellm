@@ -288,15 +288,14 @@ def _is_redis_health_failure(exc: BaseException) -> bool:
 def _redis_timeout_error_types() -> tuple[type, ...]:
     """Health failures that are timeouts rather than unambiguous connectivity errors.
 
-    ``builtins.TimeoutError`` covers ``asyncio.TimeoutError`` and ``socket.timeout``
-    (aliases since py3.11 / py3.10). ``redis.exceptions.TimeoutError`` does not subclass
-    either, so it is listed explicitly.
+    ``asyncio.TimeoutError`` is separate from ``builtins.TimeoutError`` on Python 3.10.
+    ``redis.exceptions.TimeoutError`` does not subclass either, so all three are listed.
     """
     try:
         from redis.exceptions import TimeoutError as RedisTimeoutError
     except ImportError:
-        return (TimeoutError,)
-    return (RedisTimeoutError, TimeoutError)
+        return (asyncio.TimeoutError, TimeoutError)
+    return (RedisTimeoutError, asyncio.TimeoutError, TimeoutError)
 
 
 def _is_redis_timeout_failure(exc: BaseException) -> bool:
