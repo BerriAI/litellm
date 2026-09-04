@@ -43,7 +43,7 @@ Call `fusion/general` exactly like any other model. `invocation: auto` lets the 
 
 `panel_timeout_seconds` bounds each panel member and the complete analyst phase, including any Search Tool loop. If the analyst times out, the outer model still receives the successful raw panel responses.
 
-The outer model must support function calling. Panel and analyst models only need function calling when a Search Tool is configured. Granting access to the Fusion model lets the request use its administrator-configured model and search dependencies; the panel query and private research are sent to those deployments under their normal provider data policies.
+The outer model must support function calling. Panel and analyst models only need function calling when a Search Tool is configured. Granting access to the Fusion model lets the request use its administrator-configured model and search dependencies; the panel query and private research are sent to those deployments under their normal provider data policies. Only proxy administrators can create or edit DB-backed Fusion models; config-file definitions are controlled by the proxy operator.
 
 ## Operational behavior
 
@@ -51,6 +51,7 @@ The outer model must support function calling. Panel and analyst models only nee
 - Initial outer, panel, analyst, continuation, and search calls are marked separately in spend logs. They inherit the caller identity and remain part of one logical Fusion request.
 - Client-visible `usage` describes the outer response returned to that client. Hidden panel, analyst, and search usage remains in its separately tagged spend-log rows; budget reconciliation includes the cost of every hidden call rather than merging heterogeneous model tokens into one public token count.
 - Admission control reserves the worst-case model-call cost. Hidden calls accumulate against that shared reservation, and the direct initial response or final continuation reconciles it once. This keeps concurrent requests from spending the same remaining budget while Fusion is still running.
+- A deliberately timed-out panel or analyst call does not charge the worst-case cost of the entire Fusion request. Completed calls retain their known spend; the missing-callback fallback remains fail-closed for calls that completed without reporting cost.
 - Chat-completion streaming is buffered until LiteLLM knows whether the private tool was invoked. A direct response is replayed as a normal stream; a Fusion invocation suppresses the private tool-call stream and exposes only the final outer-model stream.
 - A request-level `tool_choice: required` is considered satisfied when Fusion runs. The continuation changes it to `auto` when client tools exist, or removes it when they do not, so the outer model can finish instead of being forced into a second tool call.
 - A client tool named `litellm_fusion` is rejected because that name is reserved for the private server tool.

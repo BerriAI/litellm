@@ -71,6 +71,18 @@ def complete_fusion_budget_call(
         unpriced.append(token)
 
 
+def cancel_fusion_budget_call(metadata: Mapping[str, object]) -> None:
+    """Finish a call deliberately cancelled by Fusion without marking the whole request unpriced.
+
+    Panel and analyst timeouts actively cancel their in-flight child call. They
+    are different from a completed provider call whose cost callback went
+    missing: the latter must retain the conservative full-reservation fallback,
+    while the former must not turn one timed-out advisory member into a charge
+    for every possible Fusion call.
+    """
+    complete_fusion_budget_call(metadata, cost_known=True)
+
+
 async def wait_for_fusion_budget_calls(
     metadata: Mapping[str, object],
     *,

@@ -15,6 +15,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
 )
 from litellm.litellm_core_utils.fusion_budget import (
+    cancel_fusion_budget_call,
     complete_fusion_budget_call,
     register_fusion_budget_call,
     wait_for_fusion_budget_calls,
@@ -909,7 +910,7 @@ class FusionRouter:
                         _fusion_proxy_auth_required=isinstance(request_kwargs.get("proxy_server_request"), Mapping),
                     )
                 except asyncio.CancelledError:
-                    complete_fusion_budget_call(metadata, cost_known=False)
+                    cancel_fusion_budget_call(metadata)
                     raise
                 except Exception:
                     complete_fusion_budget_call(metadata, cost_known=True)
@@ -967,7 +968,7 @@ class FusionRouter:
             try:
                 response = await self._completion(model=model, messages=current_messages, stream=False, **call_kwargs)
             except asyncio.CancelledError:
-                complete_fusion_budget_call(call_metadata, cost_known=False)
+                cancel_fusion_budget_call(call_metadata)
                 raise
             except Exception:
                 complete_fusion_budget_call(call_metadata, cost_known=True)
@@ -1049,7 +1050,7 @@ class FusionRouter:
                 **kwargs,
             )
         except asyncio.CancelledError:
-            complete_fusion_budget_call(metadata, cost_known=False)
+            cancel_fusion_budget_call(metadata)
             raise
         except Exception:
             complete_fusion_budget_call(metadata, cost_known=True)

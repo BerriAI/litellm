@@ -2550,6 +2550,10 @@ class Router:
                         model=model,
                         llm_provider="",
                     )
+                # The public Fusion name is intentionally the runtime ACL. Only
+                # proxy admins may define its hidden dependency graph, so callers
+                # cannot use a team-scoped model write to escalate into models
+                # they could not otherwise reach.
                 self._validate_fusion_proxy_context(request_kwargs=kwargs)
                 response = (  # rebind-ok: one mutually exclusive dispatch branch assigns it
                     await fusion_router.acompletion(
@@ -9544,6 +9548,10 @@ class Router:
                     param=None,
                     code=403,
                 ) from exc
+        # Search is part of the administrator-defined Fusion capability, not a
+        # caller-selected Search API request. Rechecking the caller's direct
+        # Search Tool allowlist here would make an allowed Fusion model fail on
+        # its private dependency and expose its internal configuration.
         return await self.asearch(
             model=model,
             query=query,

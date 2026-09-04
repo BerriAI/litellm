@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import litellm
+from litellm.constants import FUSION_BUDGET_ACTIVE_KEY, FUSION_BUDGET_UNPRICED_CALL_IDS_KEY
 from litellm.fusion_router import (
     FUSION_TOOL_NAME,
     FusionCompletionCaller,
@@ -18,7 +19,10 @@ from litellm.fusion_router import (
     fusion_router_dependencies,
     validate_fusion_router_write,
 )
-from litellm.litellm_core_utils.fusion_budget import complete_fusion_budget_call
+from litellm.litellm_core_utils.fusion_budget import (
+    complete_fusion_budget_call,
+    fusion_budget_reconciliation_cost,
+)
 from litellm.router import Router
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponseStream
@@ -631,11 +635,19 @@ async def test_analyst_timeout_degrades_to_raw_panel_responses() -> None:
             raise AssertionError("unreachable")
 
     completion = HangingAnalystCompletion()
+    reservation: dict[str, object] = {
+        "reserved_cost": 10.0,
+        FUSION_BUDGET_ACTIVE_KEY: True,
+    }
     response = await asyncio.wait_for(
         _router(completion, panel_timeout_seconds=0.2).acompletion(
             messages=[{"role": "user", "content": "Hard question"}],
             stream=False,
-            request_kwargs={},
+            request_kwargs={
+                "litellm_metadata": {
+                    "user_api_key_budget_reservation": reservation,
+                }
+            },
         ),
         timeout=2,
     )
@@ -645,6 +657,8 @@ async def test_analyst_timeout_degrades_to_raw_panel_responses() -> None:
     assert completion.analyst_started.is_set()
     assert completion.analyst_cancelled.is_set()
     assert response._hidden_params["fusion"]["analysis_available"] is False
+    assert reservation.get(FUSION_BUDGET_UNPRICED_CALL_IDS_KEY) in (None, [])
+    assert fusion_budget_reconciliation_cost(reservation, known_cost=0.4) == pytest.approx(0.4)
     payload = json.loads(completion.calls[-1]["messages"][-1]["content"])
     assert [item["content"] for item in payload["responses"]] == ["Panel A", "Panel B"]
 

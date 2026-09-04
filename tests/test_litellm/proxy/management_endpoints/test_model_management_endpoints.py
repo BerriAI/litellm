@@ -4029,6 +4029,44 @@ class TestStrategyRouterWriteValidation:
         assert violation is not None
         assert "panel_models" in violation
 
+    def test_only_proxy_admin_can_define_or_edit_fusion_dependencies(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _raise_if_non_admin_configures_fusion,
+        )
+        from litellm.proxy.proxy_server import ProxyException
+        from litellm.types.router import updateLiteLLMParams
+
+        admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        team_admin = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+        fusion = LiteLLM_Params(
+            model="fusion_router",
+            fusion_router_config={"outer_model": "outer", "panel_models": ["panel-a"]},
+        )
+
+        _raise_if_non_admin_configures_fusion(
+            incoming_params=fusion,
+            existing_params=None,
+            user_api_key_dict=admin,
+        )
+        with pytest.raises(ProxyException, match="Only proxy admins"):
+            _raise_if_non_admin_configures_fusion(
+                incoming_params=fusion,
+                existing_params=None,
+                user_api_key_dict=team_admin,
+            )
+        with pytest.raises(ProxyException, match="Only proxy admins"):
+            _raise_if_non_admin_configures_fusion(
+                incoming_params=updateLiteLLMParams(),
+                existing_params=fusion,
+                user_api_key_dict=team_admin,
+            )
+
+        _raise_if_non_admin_configures_fusion(
+            incoming_params=LiteLLM_Params(model="openai/gpt-4o"),
+            existing_params=None,
+            user_api_key_dict=team_admin,
+        )
+
     def test_fusion_config_only_patch_is_validated_against_stored_marker(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             _strategy_router_write_violation,

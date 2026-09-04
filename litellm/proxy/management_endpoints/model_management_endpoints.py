@@ -296,6 +296,34 @@ def _raise_on_strategy_router_write_violation(
     )
 
 
+def _raise_if_non_admin_configures_fusion(
+    *,
+    incoming_params: GenericLiteLLMParams | None,
+    existing_params: GenericLiteLLMParams | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Keep the virtual model as the runtime ACL without allowing tenant privilege escalation."""
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    incoming_model: Final = getattr(incoming_params, "model", None)
+    existing_model: Final = getattr(existing_params, "model", None)
+    config_supplied: Final = any(
+        params is not None and params.fusion_router_config is not None for params in (incoming_params, existing_params)
+    )
+    if config_supplied or any(
+        isinstance(model, str) and is_fusion_router_model(model) for model in (incoming_model, existing_model)
+    ):
+        raise ProxyException(
+            message=(
+                "Only proxy admins can create or edit Fusion models because their configured "
+                "models and Search Tool execute with the Fusion model's authorization."
+            ),
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param="litellm_params.fusion_router_config",
+        )
+
+
 HEURISTIC_V2_SLOT_LOCK_KEY: Final = 5_872_301
 _HEURISTIC_V2_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock($1)"
 _HEURISTIC_V2_DB_ROWS_SQL: Final = """
@@ -782,6 +810,12 @@ async def patch_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+        )
+
+        _raise_if_non_admin_configures_fusion(
+            incoming_params=patch_data.litellm_params,
+            existing_params=db_model.litellm_params,
+            user_api_key_dict=user_api_key_dict,
         )
 
         # Pause/resume (`blocked`) is a proxy-admin-only privilege. Team admins
@@ -1935,6 +1969,12 @@ async def add_new_model(
             premium_user=premium_user,
         )
 
+        _raise_if_non_admin_configures_fusion(
+            incoming_params=model_params.litellm_params,
+            existing_params=None,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         ModelManagementAuthChecks.can_user_attach_credential(
             litellm_params=model_params.litellm_params,
             user_api_key_dict=user_api_key_dict,
@@ -2113,6 +2153,12 @@ async def update_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+        )
+
+        _raise_if_non_admin_configures_fusion(
+            incoming_params=model_params.litellm_params,
+            existing_params=deployment.litellm_params,
+            user_api_key_dict=user_api_key_dict,
         )
 
         ModelManagementAuthChecks.can_user_attach_credential(
