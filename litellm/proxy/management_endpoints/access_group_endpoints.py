@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -20,7 +21,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.management_helpers.access_group_team_sync import invalidate_access_group_cache
 from litellm.proxy.utils import get_prisma_client_or_throw
-from litellm.repositories.table_repositories import AccessGroupRepository
+from litellm.repositories.table_repositories import AccessGroupRepository, TeamRepository
 from litellm.types.access_group import (
     AccessGroupCreateRequest,
     AccessGroupResponse,
@@ -74,11 +75,11 @@ class _AccessGroupTable(Protocol):
 
 
 class _TeamTable(Protocol):
-    async def find_unique(self, where: Mapping[str, object]) -> _TeamRecord | None: ...
+    async def find_unique(self, *, where: Mapping[str, object]) -> _TeamRecord | None: ...
 
-    async def find_many(self, where: Mapping[str, object]) -> Sequence[_TeamRecord]: ...
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_TeamRecord]: ...
 
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
+    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
 
 
 class _KeyTable(Protocol):
@@ -119,8 +120,56 @@ def _require_admin_view(user_api_key_dict: UserAPIKeyAuth) -> None:
         )
 
 
-def _record_to_response(record: _AccessGroupRecord) -> AccessGroupResponse:
-    return AccessGroupResponse.model_validate(record.dict())
+def _record_to_response(
+    record: _AccessGroupRecord, *, assigned_team_ids: Sequence[str] | None = None
+) -> AccessGroupResponse:
+    stored: Final = record.dict()
+    payload: Final = (
+        stored if assigned_team_ids is None else MappingProxyType({**stored, "assigned_team_ids": assigned_team_ids})
+    )
+    return AccessGroupResponse.model_validate(payload)
+
+
+def _attached_team_ids_by_group(
+    records: Sequence[_AccessGroupRecord], teams: Sequence[_TeamRecord]
+) -> Mapping[str, tuple[str, ...]]:
+    """Teams really attached to each group: the stored column minus ghosts, plus teams the mirror missed."""
+    real_team_ids: Final = frozenset(team.team_id for team in teams)
+
+    def attached(record: _AccessGroupRecord) -> tuple[str, ...]:
+        stored: Final = (team_id for team_id in (record.assigned_team_ids or ()) if team_id in real_team_ids)
+        carrying: Final = (team.team_id for team in teams if record.access_group_id in (team.access_group_ids or ()))
+        return tuple(dict.fromkeys((*stored, *carrying)))
+
+    return MappingProxyType({record.access_group_id: attached(record) for record in records})
+
+
+async def _attached_team_ids_for(
+    team_table: _TeamTable, records: Sequence[_AccessGroupRecord]
+) -> Mapping[str, tuple[str, ...]]:
+    if not records:
+        return MappingProxyType({})
+    group_ids: Final = tuple(record.access_group_id for record in records)
+    stored_team_ids: Final = tuple(
+        dict.fromkeys(team_id for record in records for team_id in (record.assigned_team_ids or ()))
+    )
+    carrying: Final = {"access_group_ids": {"hasSome": group_ids}}  # mutable-ok: prisma where is a dict
+    listed: Final = {"team_id": {"in": stored_team_ids}}  # mutable-ok: prisma where is a dict
+    teams: Final = await team_table.find_many(where={"OR": (carrying, listed)})  # mutable-ok: prisma where is a dict
+    return _attached_team_ids_by_group(records, teams)
+
+
+async def _require_teams_exist(tx: _AccessGroupTx, team_ids: Sequence[str]) -> None:
+    if not team_ids:
+        return
+    where: Final = {"team_id": {"in": team_ids}}  # mutable-ok: prisma where is a dict
+    found: Final = await tx.litellm_teamtable.find_many(where=where)
+    missing: Final = frozenset(team_ids) - frozenset(team.team_id for team in found)
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown team ids: {', '.join(sorted(missing))}",
+        )
 
 
 def _record_to_access_group_table(record: _AccessGroupRecord) -> LiteLLM_AccessGroupTable:
@@ -330,6 +379,7 @@ async def create_access_group(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Access group '{data.access_group_name}' already exists",
                 )
+            await _require_teams_exist(tx, data.assigned_team_ids or ())
 
             record: Final = await tx.litellm_accessgrouptable.create(
                 data={
@@ -390,7 +440,8 @@ async def list_access_groups(
 
     table: Final = AccessGroupRepository(prisma_client).table
     records: Final = await table.find_many(order={"created_at": "desc"})
-    return [_record_to_response(r) for r in records]
+    attached: Final = await _attached_team_ids_for(TeamRepository(prisma_client).table, records)
+    return [_record_to_response(r, assigned_team_ids=attached[r.access_group_id]) for r in records]
 
 
 @router.get(
@@ -411,7 +462,8 @@ async def get_access_group(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Access group '{access_group_id}' not found",
         )
-    return _record_to_response(record)
+    attached: Final = await _attached_team_ids_for(TeamRepository(prisma_client).table, (record,))
+    return _record_to_response(record, assigned_team_ids=attached[record.access_group_id])
 
 
 @router.put(
@@ -461,8 +513,10 @@ async def update_access_group(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Access group '{access_group_id}' not found",
                 )
+            await _require_teams_exist(tx, data.assigned_team_ids or ())
 
-            old_team_ids: Final[set[str]] = set(existing.assigned_team_ids or [])
+            attached: Final = await _attached_team_ids_for(tx.litellm_teamtable, (existing,))
+            old_team_ids: Final[set[str]] = set(attached[access_group_id])
             old_key_ids: Final[set[str]] = set(existing.assigned_key_ids or [])
             new_team_ids: Final[set[str]] = (
                 set(update_fields["assigned_team_ids"] or []) if "assigned_team_ids" in update_fields else old_team_ids

@@ -425,6 +425,22 @@ describe("KeyEditView", () => {
       expect(screen.getByText("Policies")).toBeInTheDocument();
     });
 
+    it("lists a prompt existing in several environments once in the dropdown", async () => {
+      vi.mocked(getPromptsList).mockResolvedValueOnce({
+        prompts: [
+          { prompt_id: "envgreet", litellm_params: {}, prompt_info: { prompt_type: "db" }, environment: "development" },
+          { prompt_id: "envgreet", litellm_params: {}, prompt_info: { prompt_type: "db" }, environment: "production" },
+        ],
+      });
+
+      renderAs("Admin");
+
+      const prompts = await screen.findByLabelText(/Prompts/);
+      await userEvent.type(prompts, "envgreet");
+
+      expect(await screen.findAllByRole("option", { name: "envgreet" })).toHaveLength(1);
+    });
+
     it("should omit both fields and fire neither admin-only request for an internal user", async () => {
       renderAs("Internal User");
 

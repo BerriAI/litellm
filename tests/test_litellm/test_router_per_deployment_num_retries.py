@@ -531,6 +531,36 @@ class TestRequestNumRetriesBeatsGlobal:
         assert attempts == 1
 
     @pytest.mark.asyncio
+    async def test_request_num_retries_zero_disables_retry_policy(self):
+        """An explicit zero remains a single attempt when a retry policy matches the error."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "mock",
+                    "litellm_params": {
+                        "model": "openai/mock-timeout",
+                        "api_key": "sk-fake",
+                        "mock_timeout": True,
+                    },
+                }
+            ],
+            num_retries=3,
+            retry_after=0,
+            retry_policy=RetryPolicy(TimeoutErrorRetries=2),
+        )
+
+        with patch("asyncio.sleep", return_value=None):
+            with pytest.raises(litellm.Timeout):
+                await router.acompletion(
+                    model="mock",
+                    messages=[{"role": "user", "content": "hi"}],
+                    timeout=0.001,
+                    num_retries=0,
+                )
+
+        assert router.total_calls["openai/mock-timeout"] == 1
+
+    @pytest.mark.asyncio
     async def test_global_num_retries_applies_when_request_omits_it(self):
         """No request num_retries -> the global still applies: 1 initial + 3 retries = 4."""
         attempts = await self._count_attempts(global_num_retries=3, request_num_retries=None)

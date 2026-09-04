@@ -139,13 +139,13 @@ class TestGate:
 
     def test_explicit_false_overrides_process_enable(self):
         bridge.set_rust_chat_completions(decline=_RecordingDecline())
-        configuration.use_litellm_rust(True)
+        configuration.rust(True)
 
         assert _accepts(litellm_params={"rust": False}) is False
 
     def test_process_enable_applies_without_request_override(self):
         bridge.set_rust_chat_completions(decline=_RecordingDecline())
-        configuration.use_litellm_rust(True)
+        configuration.rust(True)
 
         assert _accepts(litellm_params={}) is True
 

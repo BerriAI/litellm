@@ -55,13 +55,13 @@ def test_rust_websocket_bridge_is_disabled_without_flag() -> None:
 
 
 def test_explicit_false_overrides_process_enable() -> None:
-    configuration.use_litellm_rust(True)
+    configuration.rust(True)
 
     assert not _rust_responses_websocket_enabled("openai", GenericLiteLLMParams(rust=False))
 
 
 def test_process_enable_applies_without_request_override() -> None:
-    configuration.use_litellm_rust(True)
+    configuration.rust(True)
 
     assert _rust_responses_websocket_enabled("openai", GenericLiteLLMParams())
 

@@ -190,6 +190,9 @@ model_list:
 
         # Let that replacement also override a kept session pin, for image turns only (default: false)
         modality_pin_override: true
+
+        # Refreshes on every pin reuse, so this is idle time rather than total session length (default: 3600)
+        session_affinity_ttl_seconds: 300
 ```
 
 ## Usage
@@ -240,6 +243,10 @@ affinity write happens upstream of the gate and stores the session's own model, 
 turn replays the original pin and the override is never pinned in its place. It does nothing
 unless `modality_routing` is also on.
 
+### Session pin retention
+
+`session_affinity_ttl_seconds` is the idle window for both the model pin selected by session affinity and the deployment pin. Every request that reuses a pin refreshes its TTL, so a session actively sending requests stays pinned. After the window passes with no pin reuse, the next request classifies again and creates a fresh pin. Omit the setting to track the default of 3600 seconds.
+
 ### Heuristic-first chaining
 
 `classifier_type: heuristic_first` runs the local scorer on every request and only calls the LLM
@@ -267,6 +274,15 @@ model_list:
 `classifier_llm_config.reasoning_effort` applies only to the internal classifier call. Omit it to
 keep the classifier deployment or provider default, or set a supported value such as `none` or
 `low` to override that call.
+
+Classifier calls have a one-attempt hard deadline. After a timeout, the router opens a process-local
+circuit for that classifier and sends every session through `classifier_fallback` for
+`classifier_llm_config.circuit_breaker_cooldown_seconds` (30 seconds by default). When the cooldown
+expires, one request probes the classifier while concurrent requests continue through the fallback.
+A successful probe closes the circuit; a failed probe restarts the cooldown. The circuit breaker is
+on by default; set `classifier_llm_config.circuit_breaker_enabled: false` to disable it. The default
+fallback is the local heuristic scorer, so a classifier outage does not repeat its timeout across
+every turn or session handled by the router process.
 
 A request short-circuits, meaning it routes on the scorer's own tier with no classifier call, when
 two things hold: the scorer landed at or below `heuristic_first_max_tier`, and it produced at least

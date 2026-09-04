@@ -56,15 +56,26 @@ import {
 export const normalizeClassifierLlmConfig = ({
   model,
   timeout_ms,
+  circuit_breaker_enabled,
+  circuit_breaker_cooldown_seconds,
   reasoning_effort,
   classification_rubric,
   system_prompt,
 }: ClassifierLLMConfig): ClassifierLLMConfig =>
   system_prompt?.trim()
-    ? { model, timeout_ms, ...(reasoning_effort && { reasoning_effort }), system_prompt }
+    ? {
+        model,
+        timeout_ms,
+        ...(circuit_breaker_enabled !== undefined && { circuit_breaker_enabled }),
+        ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
+        ...(reasoning_effort && { reasoning_effort }),
+        system_prompt,
+      }
     : {
         model,
         timeout_ms,
+        ...(circuit_breaker_enabled !== undefined && { circuit_breaker_enabled }),
+        ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
         ...(reasoning_effort && { reasoning_effort }),
         ...(classification_rubric && { classification_rubric }),
       };
@@ -138,6 +149,7 @@ export interface BuildComplexityRouterConfigParams {
   tierModelParams?: TierModelParamsByTier;
   enableContextWindowEscalation?: boolean;
   contextWindowEscalationBuffer?: number;
+  sessionAffinityTtlSeconds?: number;
 }
 
 /**
@@ -175,6 +187,7 @@ export interface ComplexityRouterConfigPayload {
   hybrid_boundary_margin?: number;
   classification_mode: ClassificationMode;
   session_affinity: boolean;
+  session_affinity_ttl_seconds?: number;
   deployment_affinity: boolean;
   modality_routing: boolean;
   modality_pin_override: boolean;
@@ -323,6 +336,12 @@ export const customTierWireFields = (
       classifier_llm_config: {
         model: classifierLlmConfig.model,
         timeout_ms: classifierLlmConfig.timeout_ms,
+        ...(classifierLlmConfig.circuit_breaker_enabled !== undefined && {
+          circuit_breaker_enabled: classifierLlmConfig.circuit_breaker_enabled,
+        }),
+        ...(classifierLlmConfig.circuit_breaker_cooldown_seconds !== undefined && {
+          circuit_breaker_cooldown_seconds: classifierLlmConfig.circuit_breaker_cooldown_seconds,
+        }),
         ...(classifierLlmConfig.reasoning_effort && { reasoning_effort: classifierLlmConfig.reasoning_effort }),
       },
     }),
@@ -456,6 +475,7 @@ export const buildComplexityRouterConfig = ({
   tierModelParams,
   enableContextWindowEscalation,
   contextWindowEscalationBuffer,
+  sessionAffinityTtlSeconds,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
   const serializedTierModelConfigs = customTierSet
     ? serializeTierModelConfigs(
@@ -521,6 +541,9 @@ export const buildComplexityRouterConfig = ({
     }),
     ...(contextWindowEscalationBuffer !== undefined && {
       context_window_escalation_buffer: contextWindowEscalationBuffer,
+    }),
+    ...(sessionAffinityTtlSeconds !== undefined && {
+      session_affinity_ttl_seconds: sessionAffinityTtlSeconds,
     }),
     ...scorerKnobs,
   };

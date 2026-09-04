@@ -73,6 +73,15 @@ describe("buildComplexityRouterConfig", () => {
     expect(config.context_window_escalation_buffer).toBe(0.9);
   });
 
+  it("omits session_affinity_ttl_seconds when untouched, so the router tracks the backend default", () => {
+    expect(buildComplexityRouterConfig(baseParams)).not.toHaveProperty("session_affinity_ttl_seconds");
+  });
+
+  it("emits an explicit session affinity idle window", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, sessionAffinityTtlSeconds: 300 });
+    expect(config.session_affinity_ttl_seconds).toBe(300);
+  });
+
   it("trims escalation keywords and drops blank entries", () => {
     const config = buildComplexityRouterConfig({
       ...baseParams,
@@ -102,6 +111,21 @@ describe("buildComplexityRouterConfig", () => {
     });
     expect(config.classifier_type).toBe("llm");
     expect(config.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
+  });
+
+  it("preserves explicit classifier circuit-breaker settings, including disabled", () => {
+    const classifierLlmConfig = {
+      model: "gpt-4o-mini",
+      timeout_ms: 3000,
+      circuit_breaker_enabled: false,
+      circuit_breaker_cooldown_seconds: 45,
+    };
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig,
+    });
+    expect(config.classifier_llm_config).toEqual(classifierLlmConfig);
   });
 
   it("omits classifier_llm_config when classifier_type is heuristic even if config lingers in state", () => {
