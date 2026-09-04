@@ -1127,12 +1127,12 @@ class TestValidateKeyDuration:
     """Invalid key-expiry durations must 400, not 500 (#39710)."""
 
     def test_none_and_never_expire_sentinel_pass(self):
-        validate_key_duration(None)
-        validate_key_duration("-1")
+        assert validate_key_duration(None) is None
+        assert validate_key_duration("-1") is None
 
     def test_valid_durations_pass(self):
-        validate_key_duration("7d")
-        validate_key_duration("1h")
+        assert validate_key_duration("7d") is None
+        assert validate_key_duration("1h") is None
 
     def test_garbage_durations_raise_400(self):
         from fastapi import HTTPException
