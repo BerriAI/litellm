@@ -257,6 +257,43 @@ describe("buildUpdatedComplexityRouterConfig session affinity", () => {
   });
 });
 
+describe("buildUpdatedComplexityRouterConfig session affinity ttl", () => {
+  it("writes an edited idle window", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, session_affinity_ttl_seconds: 300 });
+    expect(result.session_affinity_ttl_seconds).toBe(300);
+  });
+
+  it("carries a stored idle window through an untouched open-and-save", () => {
+    const stored = { ...STORED, session_affinity_ttl_seconds: 900 };
+    const result = buildUpdatedComplexityRouterConfig(stored, hydrateComplexityRouterConfig(stored, undefined));
+    expect(result.session_affinity_ttl_seconds).toBe(900);
+  });
+
+  it("drops the key when the field is cleared, so the router goes back to tracking the backend default", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, session_affinity_ttl_seconds: 900 },
+      { ...FORM_VALUE, session_affinity_ttl_seconds: undefined },
+    );
+    expect(result).not.toHaveProperty("session_affinity_ttl_seconds");
+  });
+
+  it("keeps the idle window on a custom tier set, whose deployment pin still uses it", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, {
+      ...FORM_VALUE,
+      session_affinity_ttl_seconds: 300,
+      custom_tier_set: {
+        tiers: [
+          { id: "a", name: "CASUAL", definition: "small talk", models: ["gpt-4o-mini"] },
+          { id: "b", name: "AUDIT", definition: "security review", models: ["o1"] },
+        ],
+        fallback_tier_id: "a",
+      },
+    });
+    expect(result.session_affinity).toBe(false);
+    expect(result.session_affinity_ttl_seconds).toBe(300);
+  });
+});
+
 describe("buildUpdatedComplexityRouterConfig modality pin override", () => {
   it("writes modality_pin_override explicitly both ways", () => {
     expect(
@@ -527,8 +564,11 @@ describe("managed keys survive an untouched open-and-save", () => {
     classifier_context_budget_chars: 4000,
     classifier_context_include_assistant_turns: true,
     classifier_fallback: "default_model",
+    classification_prompt: "Route for a payments team.",
+    classification_examples: "- refund status -> SIMPLE",
     classification_mode: "user_turn",
     session_affinity: true,
+    session_affinity_ttl_seconds: 300,
     modality_routing: true,
     modality_pin_override: true,
     deployment_affinity: false,
@@ -545,15 +585,10 @@ describe("managed keys survive an untouched open-and-save", () => {
     context_window_escalation_buffer: 0.9,
   };
 
-  // tier_definitions, fallback_tier and classification_prompt cannot sit beside heuristic_first, which
-  // this fixture uses, and hybrid_boundary_margin belongs to the sibling hybrid type, so no single
-  // stored config can hold every managed key. Each gets its own round trip below.
-  const KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS = new Set([
-    "tier_definitions",
-    "fallback_tier",
-    "classification_prompt",
-    "hybrid_boundary_margin",
-  ]);
+  // tier_definitions and fallback_tier cannot sit beside heuristic_first, which this fixture uses,
+  // and hybrid_boundary_margin belongs to the sibling hybrid type, so no single stored config can
+  // hold every managed key. Each gets its own round trip below.
+  const KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS = new Set(["tier_definitions", "fallback_tier", "hybrid_boundary_margin"]);
 
   it("carries every managed key a built-in router can hold through hydrate then save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
@@ -602,16 +637,29 @@ describe("managed keys survive an untouched open-and-save", () => {
     expect(buildUpdatedComplexityRouterConfig(storedCustom, reset)).not.toHaveProperty("classification_prompt");
   });
 
-  it("round-trips a stored classification_prompt, which an untouched open-and-save must not clear", () => {
+  it("round-trips stored instructions and examples without merging their separate sections", () => {
     const storedCustom = storedCustomConfig({
-      classification_prompt: "Route for a payments team.\n\nExamples:\n- refund status -> CASUAL",
+      classification_prompt: "Route for a payments team.",
+      classification_examples: "- refund status -> CASUAL",
     });
     const hydrated = hydrateComplexityRouterConfig(storedCustom, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(storedCustom, hydrated);
 
     expect(hydrated.classification_prompt).toBe(storedCustom.classification_prompt);
-    expect(buildUpdatedComplexityRouterConfig(storedCustom, hydrated).classification_prompt).toBe(
-      storedCustom.classification_prompt,
-    );
+    expect(hydrated.classification_examples).toBe(storedCustom.classification_examples);
+    expect(saved.classification_prompt).toBe(storedCustom.classification_prompt);
+    expect(saved.classification_examples).toBe(storedCustom.classification_examples);
+  });
+
+  it("clears a built-in router's stored instructions and examples when the operator resets them", () => {
+    const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
+    expect(hydrated.classification_prompt).toBe("Route for a payments team.");
+    expect(hydrated.classification_examples).toBe("- refund status -> SIMPLE");
+
+    const reset = { ...hydrated, classification_prompt: undefined, classification_examples: undefined };
+    const saved = buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, reset);
+    expect(saved).not.toHaveProperty("classification_prompt");
+    expect(saved).not.toHaveProperty("classification_examples");
   });
 
   it("round-trips a hybrid router's margin, which save requires and the backend rejects without", () => {

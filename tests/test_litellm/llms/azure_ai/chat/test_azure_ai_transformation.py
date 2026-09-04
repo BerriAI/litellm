@@ -31,6 +31,46 @@ async def test_get_openai_compatible_provider_info():
     assert custom_llm_provider == "azure"
 
 
+@pytest.mark.parametrize(
+    "model, api_base, expected_provider",
+    [
+        ("azure_ai/gpt-4o", "https://my-resource.services.ai.azure.com", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://my-resource.services.ai.azure.com/models", "azure_ai"),
+        ("azure_ai/gpt-5.4-nano", "https://my-resource.services.ai.azure.com", "azure_ai"),
+        ("azure_ai/gpt-4o", "https://my-resource.openai.azure.com", "azure"),
+        (
+            "azure_ai/gpt-4o",
+            "https://my-resource.services.ai.azure.com/openai/deployments/gpt-4o/chat/completions"
+            "?api-version=2024-08-01-preview",
+            "azure",
+        ),
+        ("azure_ai/mistral-large-latest", "https://my-resource.services.ai.azure.com", "azure_ai"),
+        ("azure_ai/mistral-large-latest", "https://my-resource.openai.azure.com", "azure_ai"),
+    ],
+)
+def test_foundry_base_keeps_azure_ai_provider(model: str, api_base: str, expected_provider: str):
+    """Regression for #38276: a Foundry .services.ai.azure.com base must not be reclassified as azure."""
+    config = AzureAIStudioConfig()
+    (
+        _,
+        _,
+        custom_llm_provider,
+    ) = config._get_openai_compatible_provider_info(
+        model=model,
+        api_base=api_base,
+        api_key="my-key",
+        custom_llm_provider="azure_ai",
+    )
+    assert custom_llm_provider == expected_provider
+
+
+def test_is_azure_openai_model_without_api_base_keeps_azure_ai():
+    """Metadata lookups (get_model_info, supports_* checks) carry no api_base and must not flip the provider."""
+    config = AzureAIStudioConfig()
+    assert config._is_azure_openai_model(model="azure_ai/gpt-4o", api_base=None) is False
+    assert config._is_azure_openai_model(model="azure_ai/gpt-4o", api_base="https://my-res.openai.azure.com") is True
+
+
 def test_azure_ai_validate_environment():
     config = AzureAIStudioConfig()
     headers = config.validate_environment(

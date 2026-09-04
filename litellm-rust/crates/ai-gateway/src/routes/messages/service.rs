@@ -12,6 +12,12 @@ pub(crate) enum MessagesResponse {
     Stream(reqwest::Response),
 }
 
+#[tracing::instrument(
+    name = "messages_gateway_service",
+    target = "litellm::function_trace",
+    level = "trace",
+    skip_all
+)]
 pub async fn run(
     router: &Arc<Router>,
     body: Value,

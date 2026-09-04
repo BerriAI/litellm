@@ -263,13 +263,20 @@ export const getRequestLogsTableColumns = ({
     meta: { numeric: true },
     cell: ({ row }) => {
       const log = row.original;
+      const showSessionTotal = (log.session_total_count || 1) > 1 && log.session_total_tokens != null;
+      const total = showSessionTotal ? log.session_total_tokens : log.total_tokens;
+      const prompt = showSessionTotal ? log.session_total_prompt_tokens : log.prompt_tokens;
+      const completion = showSessionTotal ? log.session_total_completion_tokens : log.completion_tokens;
       return (
-        <span className="text-sm">
-          {String(log.total_tokens || "0")}
-          <span className="text-muted-foreground text-xs ml-1">
-            ({String(log.prompt_tokens || "0")}+{String(log.completion_tokens || "0")})
+        <div className="flex flex-col items-end">
+          <span className="text-sm">
+            {String(total || "0")}
+            <span className="text-muted-foreground text-xs ml-1">
+              ({String(prompt || "0")}+{String(completion || "0")})
+            </span>
           </span>
-        </span>
+          {showSessionTotal && <span className="text-[10px] text-muted-foreground">session total</span>}
+        </div>
       );
     },
   },
