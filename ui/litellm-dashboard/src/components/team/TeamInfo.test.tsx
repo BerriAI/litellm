@@ -2295,8 +2295,8 @@ describe("TeamInfo MCP permission retention", () => {
     { access_group_id: "ag-2", access_group_name: "Group 2", access_mcp_server_ids: [] },
   ];
 
-  const unifiedTeam = (toolPermissions: Record<string, string[]>, serverIds: string[] = []) =>
-    createMockTeamData({
+  const unifiedTeam = (toolPermissions: Record<string, string[]>, serverIds: string[] = []) => {
+    const teamData = {
       models: ["gpt-4"],
       access_group_ids: ["ag-1", "ag-2"],
       access_group_mcp_server_ids: serverIds,
@@ -2306,7 +2306,9 @@ describe("TeamInfo MCP permission retention", () => {
         mcp_toolsets: [],
         mcp_tool_permissions: toolPermissions,
       },
-    });
+    };
+    return createMockTeamData(teamData);
+  };
 
   const renderMcpEditor = async (
     user: ReturnType<typeof userEvent.setup>,
