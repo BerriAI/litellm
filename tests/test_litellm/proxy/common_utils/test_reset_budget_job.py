@@ -21,6 +21,7 @@ from litellm.constants import (
 )
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
+from litellm.proxy.common_utils.user_api_key_cache import user_budget_window_counter_key
 
 
 # Mock classes for testing
@@ -1118,6 +1119,36 @@ def test_reset_budget_windows_resets_expired_user_window(monkeypatch):
     assert "budget_limits" in call_kwargs["data"]
 
     spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:user:user-expired:window:1d", value=0.0)
+
+
+def test_reset_budget_windows_encodes_user_id_in_counter_key(monkeypatch):
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=1)).isoformat() + "Z"
+    user_id = "user:window:1h"
+    user_rows = [{"user_id": user_id, "budget_limits": [{"budget_duration": "1d", "reset_at": expired}]}]
+    job, _, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=[], team_rows=[], user_rows=user_rows
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key=user_budget_window_counter_key(user_id, "1d"), value=0.0
+    )
+
+
+def test_reset_budget_windows_keeps_counter_when_window_persistence_fails(monkeypatch):
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=1)).isoformat() + "Z"
+    user_rows = [{"user_id": "user-write-fails", "budget_limits": [{"budget_duration": "1d", "reset_at": expired}]}]
+    job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=[], team_rows=[], user_rows=user_rows
+    )
+    prisma_client.db.litellm_usertable.update = AsyncMock(side_effect=Exception("write failed"))
+
+    asyncio.run(job.reset_budget_windows())
+
+    spend_counter_cache.in_memory_cache.set_cache.assert_not_called()
 
 
 def test_reset_budget_windows_handles_string_budget_limits(monkeypatch):

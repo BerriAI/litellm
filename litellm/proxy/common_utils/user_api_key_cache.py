@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
+from urllib.parse import quote
 
 from pydantic import BaseModel
 
@@ -168,6 +169,18 @@ def user_object_permission_id_cache_key(user_id: str) -> str:
     takes effect.
     """
     return f"user_object_permission_id:{user_id}"
+
+
+def user_spend_counter_key(user_id: str) -> str:
+    """Build the primary user spend key without allowing IDs to enter the window namespace."""
+    if ":" not in user_id:
+        return f"spend:user:{user_id}"
+    return f"spend:user:escaped:{quote(user_id, safe='-_.~')}"
+
+
+def user_budget_window_counter_key(user_id: str, budget_duration: str) -> str:
+    """Build a user window key while preserving legacy keys for ordinary IDs."""
+    return f"{user_spend_counter_key(user_id)}:window:{budget_duration}"
 
 
 def object_permission_cache_key(object_permission_id: str) -> str:

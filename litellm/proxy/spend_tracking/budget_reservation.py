@@ -31,6 +31,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     model_access_group_spend_counter_key,
     tag_cache_key,
     team_membership_reservation_cache_key,
+    user_spend_counter_key,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
@@ -445,7 +446,7 @@ async def _get_budget_counters(
     ):
         counters.append(
             _BudgetCounter(
-                counter_key=f"spend:user:{user_object.user_id}",
+                counter_key=user_spend_counter_key(user_object.user_id),
                 source_cache_key=user_object.user_id,
                 max_budget=float(user_object.max_budget),
                 fallback_spend=float(user_object.spend or 0.0),
@@ -457,7 +458,7 @@ async def _get_budget_counters(
     if not (is_team_key and should_skip_user_windows) and user_object is not None:
         counters.extend(
             _get_budget_limit_counters(
-                entity_prefix=f"spend:user:{user_object.user_id}",
+                entity_prefix=user_spend_counter_key(user_object.user_id),
                 entity_type="User",
                 entity_id=user_object.user_id,
                 budget_limits=user_object.budget_limits,

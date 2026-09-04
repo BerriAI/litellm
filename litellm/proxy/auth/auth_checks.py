@@ -94,6 +94,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_registry_cache_key,
     team_membership_auth_cache_key,
     team_membership_reservation_cache_key,
+    user_budget_window_counter_key,
+    user_spend_counter_key,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
@@ -1015,7 +1017,7 @@ async def common_checks(
 
             user_budget: Final = user_object.max_budget
             user_spend: Final = await get_current_spend(
-                counter_key=f"spend:user:{user_object.user_id}",
+                counter_key=user_spend_counter_key(user_object.user_id),
                 fallback_spend=user_object.spend or 0.0,
                 max_budget=user_budget,
             )
@@ -4901,7 +4903,7 @@ async def _user_multi_budget_check(
         w = _coerce_budget_limit_window_for_check(window=window)
         if w is None:
             continue
-        counter_key = f"spend:user:{user_object.user_id}:window:{w.budget_duration}"
+        counter_key = user_budget_window_counter_key(user_object.user_id, w.budget_duration)
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,

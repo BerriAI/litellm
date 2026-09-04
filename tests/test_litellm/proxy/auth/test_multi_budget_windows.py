@@ -17,6 +17,7 @@ from litellm.proxy.auth.auth_checks import (
     _virtual_key_multi_budget_check,
     common_checks,
 )
+from litellm.proxy.common_utils.user_api_key_cache import user_budget_window_counter_key
 
 
 def _make_valid_token(**kwargs) -> UserAPIKeyAuth:
@@ -171,6 +172,32 @@ async def test_user_budget_limits_under_budget_passes():  # test-quality-ok: cou
         window_duration="1d",
         window_start=ANY,
     )
+
+
+@pytest.mark.asyncio
+async def test_user_budget_window_key_encodes_namespace_delimiters():
+    user_id = "user:window:1h"
+    user = LiteLLM_UserTable(
+        user_id=user_id,
+        budget_limits=[{"budget_duration": "1d", "max_budget": 10.0}],
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new_callable=AsyncMock,
+        return_value=1.0,
+    ) as mock_get_spend:
+        await _user_multi_budget_check(user_object=user)
+
+    mock_get_spend.assert_awaited_once()
+    assert mock_get_spend.await_args.kwargs["counter_key"] == user_budget_window_counter_key(user_id, "1d")
+    assert mock_get_spend.await_args.kwargs["counter_key"] == "spend:user:escaped:user%3Awindow%3A1h:window:1d"
+
+
+def test_user_spend_counter_key_preserves_legacy_key_for_percent_id():
+    from litellm.proxy.common_utils.user_api_key_cache import user_spend_counter_key
+
+    assert user_spend_counter_key("user%3Awindow%3A1h") == "spend:user:user%3Awindow%3A1h"
 
 
 @pytest.mark.asyncio

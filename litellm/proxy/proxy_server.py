@@ -395,6 +395,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     model_access_group_cache_key,
     model_access_group_spend_counter_key,
     tag_cache_key,
+    user_budget_window_counter_key,
+    user_spend_counter_key,
 )
 from litellm.proxy.config_resolvers import resolve_fields
 from litellm.proxy.config_resolvers.alerting import (
@@ -2758,7 +2760,7 @@ async def increment_spend_counters(
         )
 
     async def _user_scope(scope_user_id: str) -> None:
-        user_counter_key: Final = f"spend:user:{scope_user_id}"
+        user_counter_key: Final = user_spend_counter_key(scope_user_id)
         if user_counter_key not in reserved_counter_keys:
             await _init_and_increment_spend_counter(
                 counter_key=user_counter_key,
@@ -2770,7 +2772,7 @@ async def increment_spend_counters(
             entity_type="User",
             entity_id=scope_user_id,
             entity_obj=user_obj,
-            counter_key_prefix=f"spend:user:{scope_user_id}",
+            counter_key_prefix=user_spend_counter_key(scope_user_id),
             response_cost=cost,
             reserved_counter_keys=reserved_counter_keys,
             request_started_at=request_started_at,
@@ -2851,7 +2853,11 @@ async def _increment_entity_window_spend_counters(
     for window in budget_limits:
         duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
         reset_at = window.get("reset_at") if isinstance(window, dict) else window.reset_at
-        window_counter = f"{counter_key_prefix}:window:{duration}"
+        window_counter = (
+            user_budget_window_counter_key(entity_id, duration)
+            if entity_type == "User"
+            else f"{counter_key_prefix}:window:{duration}"
+        )
         window_start = get_budget_window_start(window)
         if window_counter not in reserved_counter_keys:
             await _init_and_increment_window_spend_counter(
