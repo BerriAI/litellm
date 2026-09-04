@@ -70,6 +70,12 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
         if let Some(temperature) = optional_params.get("temperature") {
             inference_config.insert("temperature".to_string(), temperature.clone());
         }
+        // Bedrock's Converse API rejects a `system` block on any request that
+        // also carries an audio content block (HTTP 400: "Found system
+        // messages ... and audio chunks ... This is not allowed prior to the
+        // tokenizer version 13."). Voxtral takes the transcription
+        // instruction from the user turn's `text` block above, so no system
+        // prompt is needed here.
         Ok(AudioTranscriptionRequestData {
             body: json!({
                 "messages": [{
@@ -79,7 +85,6 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
                         {"text": instruction}
                     ]
                 }],
-                "system": [{"text": "You are a transcription assistant."}],
                 "inferenceConfig": inference_config,
             }),
         })
@@ -179,9 +184,30 @@ mod tests {
                         {"text": "Transcribe the audio. Respond with only the transcript. The audio language is en. Additional context: Speaker names"}
                     ]
                 }],
-                "system": [{"text": "You are a transcription assistant."}],
                 "inferenceConfig": {"maxTokens": 4096, "temperature": 0}
             })
+        );
+    }
+
+    #[test]
+    fn request_omits_system_message_alongside_audio_content() {
+        // Regression test: Bedrock's Converse API 400s on a `system` block
+        // combined with an audio content block ("Found system messages ...
+        // and audio chunks ... This is not allowed prior to the tokenizer
+        // version 13."). Confirmed against live Bedrock that dropping
+        // `system` while keeping everything else identical makes the
+        // request succeed.
+        let result = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
+            .transform_transcription_request(
+                "mistral.voxtral-mini-3b-2507",
+                json!({"data": "AQI=", "format": "wav", "filename": "sample.wav"}),
+                Map::new(),
+            )
+            .expect("request");
+        assert!(
+            result.body.get("system").is_none(),
+            "request body must not carry a `system` block alongside an audio content block: {}",
+            result.body
         );
     }
 
