@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings, start_in_container_pgbouncer
 from litellm.proxy.db.query_engine_reaper import start_query_engine_reaper
 
 if TYPE_CHECKING:
@@ -1362,6 +1363,19 @@ def run_server(
                 print(
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa: F541
                 )
+        pgbouncer_settings: Final = PgBouncerSettings()
+        upstream_database_url: Final = os.getenv("DATABASE_URL")
+        if pgbouncer_settings.enabled and upstream_database_url is not None:
+            pooled_database_url: Final = start_in_container_pgbouncer(pgbouncer_settings, upstream_database_url)
+            if isinstance(pooled_database_url, PgBouncerError):
+                print(
+                    f"\033[1;31mLiteLLM Proxy: LITELLM_PGBOUNCER_ENABLED is set but the in-container pgbouncer "
+                    f"could not start: {pooled_database_url.reason}\033[0m",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                sys.exit(1)
+            os.environ["DATABASE_URL"] = pooled_database_url
         if port == 4000 and ProxyInitializationHelpers._is_port_in_use(port):
             port = random.randint(1024, 49152)
 

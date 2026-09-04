@@ -110,7 +110,7 @@ USER root
 RUN echo "https://packages.wolfi.dev/os" >> /etc/apk/repositories
 
 # node (without npm) is required by the prisma CLI at runtime
-RUN apk add --no-cache bash openssl tzdata nodejs python-3.13 libsndfile
+RUN apk add --no-cache bash openssl tzdata nodejs python-3.13 libsndfile pgbouncer
 
 WORKDIR /app
 ENV PATH="/app/.venv/bin:${PATH}" \
