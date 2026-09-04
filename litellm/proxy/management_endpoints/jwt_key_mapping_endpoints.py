@@ -170,18 +170,20 @@ async def update_jwt_key_mapping(
         if old_mapping is None:
             raise HTTPException(status_code=404, detail="Mapping not found")
 
-        old_cache_key: Final = jwt_key_mapping_cache_key(old_mapping.jwt_claim_name, old_mapping.jwt_claim_value)
-        await evict_and_broadcast(cache_keys=(old_cache_key,), user_api_key_cache=user_api_key_cache)
-
         updated_mapping: Final = await _mapping_table(prisma_client).update(where={"id": data.id}, data=update_data)
 
         if updated_mapping is None:
             raise HTTPException(status_code=404, detail="Mapping not found")
 
+        # Evict only after the write commits: a concurrent request between an
+        # early eviction and the commit would re-cache the old mapping and keep
+        # it authorized until TTL.
+        old_cache_key: Final = jwt_key_mapping_cache_key(old_mapping.jwt_claim_name, old_mapping.jwt_claim_value)
         new_cache_key: Final = jwt_key_mapping_cache_key(
             updated_mapping.jwt_claim_name, updated_mapping.jwt_claim_value
         )
-        await evict_and_broadcast(cache_keys=(new_cache_key,), user_api_key_cache=user_api_key_cache)
+        cache_keys: Final = (old_cache_key,) if old_cache_key == new_cache_key else (old_cache_key, new_cache_key)
+        await evict_and_broadcast(cache_keys=cache_keys, user_api_key_cache=user_api_key_cache)
 
         return _to_response(updated_mapping)
     except HTTPException:
@@ -221,10 +223,12 @@ async def delete_jwt_key_mapping(
         if old_mapping is None:
             raise HTTPException(status_code=404, detail="Mapping not found")
 
+        await _mapping_table(prisma_client).delete(where={"id": data.id})
+
+        # Evict only after the row is gone, else a concurrent request can
+        # re-cache the deleted mapping and keep it authorized until TTL.
         cache_key: Final = jwt_key_mapping_cache_key(old_mapping.jwt_claim_name, old_mapping.jwt_claim_value)
         await evict_and_broadcast(cache_keys=(cache_key,), user_api_key_cache=user_api_key_cache)
-
-        await _mapping_table(prisma_client).delete(where={"id": data.id})
         return {"status": "success"}
     except HTTPException:
         raise
