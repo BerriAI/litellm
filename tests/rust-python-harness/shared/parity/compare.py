@@ -9,14 +9,19 @@ from .models import CapturedRequest, Execution
 
 
 def validate_harness(baseline: Execution, candidate: Execution, baseline_user_agent: str) -> None:
+    def is_python_route(user_agent: str | None) -> bool:
+        return user_agent == baseline_user_agent or (user_agent or "").startswith(
+            ("OpenAI/Python ", "AsyncOpenAI/Python ")
+        )
+
     for request in baseline.requests:
-        if request.user_agent != baseline_user_agent:
+        if not is_python_route(request.user_agent):
             raise AssertionError(
                 f"baseline provider request did not carry sentinel user-agent {baseline_user_agent!r}: "
                 f"{request.user_agent!r}"
             )
     for request in candidate.requests:
-        if request.user_agent == baseline_user_agent:
+        if is_python_route(request.user_agent):
             raise AssertionError("candidate route fell back to the baseline HTTP implementation")
 
 

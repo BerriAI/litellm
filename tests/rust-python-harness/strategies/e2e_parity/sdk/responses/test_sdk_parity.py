@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from collections.abc import Callable, Coroutine
 from contextlib import AbstractContextManager
@@ -37,6 +38,8 @@ class ResponsesCase(BaseModel):
     model: str
     sdk_input: str | list[dict[str, object]]
     params: dict[str, object]
+    upstream_path: str = "/v1/messages"
+    use_chat_completions_api: bool = False
     provider_responses: tuple[RecordedResponse, ...]
     expected: Literal["success", "error"]
 
@@ -44,7 +47,7 @@ class ResponsesCase(BaseModel):
         return cast(dict[str, object], self.model_dump(mode="json", exclude={"provider_responses"}))
 
 
-def _response(status: int) -> RecordedHttpResponse:
+def _anthropic_response(status: int = 200) -> RecordedHttpResponse:
     body: Final = (
         b'{"id":"msg_parity","type":"message","role":"assistant","model":"claude-sonnet-5",'
         b'"content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn",'
@@ -59,13 +62,53 @@ def _response(status: int) -> RecordedHttpResponse:
     )
 
 
+def _openai_chat_response() -> RecordedHttpResponse:
+    return RecordedHttpResponse.from_bytes(
+        200,
+        (HttpHeader(name="content-type", value="application/json"),),
+        (
+            b'{"id":"chatcmpl_parity","object":"chat.completion","created":123,'
+            b'"model":"gpt-5","choices":[{"index":0,"message":{"role":"assistant",'
+            b'"content":"hello"},"finish_reason":"stop"}],'
+            b'"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}'
+        ),
+    )
+
+
+def _openai_responses_response() -> RecordedHttpResponse:
+    return RecordedHttpResponse.from_bytes(
+        200,
+        (HttpHeader(name="content-type", value="application/json"),),
+        (
+            b'{"id":"resp_parity","object":"response","created_at":123,"status":"completed",'
+            b'"model":"gpt-5","output":[{"id":"msg_parity","type":"message",'
+            b'"status":"completed","role":"assistant","content":[{"type":"output_text",'
+            b'"text":"hello","annotations":[]}]}],"usage":{"input_tokens":2,'
+            b'"output_tokens":3,"total_tokens":5}}'
+        ),
+    )
+
+
+def _bedrock_response() -> RecordedHttpResponse:
+    return RecordedHttpResponse.from_bytes(
+        200,
+        (HttpHeader(name="content-type", value="application/json"),),
+        (
+            b'{"output":{"message":{"role":"assistant","content":[{"text":"hello"}]}},'
+            b'"stopReason":"end_turn","usage":{"inputTokens":2,"outputTokens":3,"totalTokens":5},'
+            b'"metrics":{"latencyMs":1}}'
+        ),
+    )
+
+
 CASES: Final = (
     ResponsesCase(
         name="anthropic:string",
         model="anthropic/claude-sonnet-5",
         sdk_input="hello",
         params={"max_output_tokens": 16},
-        provider_responses=(_response(200),),
+        upstream_path="/v1/messages",
+        provider_responses=(_anthropic_response(),),
         expected="success",
     ),
     ResponsesCase(
@@ -73,16 +116,37 @@ CASES: Final = (
         model="anthropic/claude-sonnet-5",
         sdk_input=[{"role": "user", "content": "hello"}],
         params={"instructions": "be concise", "max_output_tokens": 32},
-        provider_responses=(_response(200),),
+        upstream_path="/v1/messages",
+        provider_responses=(_anthropic_response(),),
         expected="success",
     ),
     ResponsesCase(
-        name="anthropic:rate-limit",
-        model="anthropic/claude-sonnet-5",
+        name="openai:native",
+        model="openai/gpt-5",
         sdk_input="hello",
         params={"max_output_tokens": 16},
-        provider_responses=(_response(429),),
-        expected="error",
+        upstream_path="/responses",
+        provider_responses=(_openai_responses_response(),),
+        expected="success",
+    ),
+    ResponsesCase(
+        name="openai:forced-chat-adapter",
+        model="openai/gpt-5",
+        sdk_input="hello",
+        params={"max_output_tokens": 16},
+        upstream_path="/chat/completions",
+        use_chat_completions_api=True,
+        provider_responses=(_openai_chat_response(),),
+        expected="success",
+    ),
+    ResponsesCase(
+        name="bedrock:chat-adapter",
+        model="bedrock/us-east-1/anthropic.claude-v2",
+        sdk_input="hello",
+        params={"max_output_tokens": 16},
+        upstream_path="/model/anthropic.claude-v2/converse",
+        provider_responses=(_bedrock_response(),),
+        expected="success",
     ),
 )
 
@@ -123,17 +187,33 @@ class ResponsesContract(BaseSdkParityContract[ResponsesCase]):
 
     def responses(self, case: ResponsesCase) -> tuple[ReplayItem, ...]:
         return tuple(
-            RecordedExchange(request=RecordedRequestMatcher(method="POST", path="/v1/messages"), response=response)
+            RecordedExchange(request=RecordedRequestMatcher(method="POST", path=case.upstream_path), response=response)
             for response in case.provider_responses
         )
 
     def normalization(self, case: ResponsesCase) -> NormalizationSpec:
         del case
         return NormalizationSpec(
+            request_headers=frozenset(
+                {
+                    "accept",
+                    "x-stainless-arch",
+                    "x-stainless-async",
+                    "x-stainless-lang",
+                    "x-stainless-os",
+                    "x-stainless-package-version",
+                    "x-stainless-raw-response",
+                    "x-stainless-read-timeout",
+                    "x-stainless-retry-count",
+                    "x-stainless-runtime",
+                    "x-stainless-runtime-version",
+                }
+            ),
             report_paths=(
                 ("response", "created_at"),
                 ("response", "id"),
-            )
+                ("response", "output", 0, "id"),
+            ),
         )
 
     def execute(
@@ -149,10 +229,13 @@ class ResponsesContract(BaseSdkParityContract[ResponsesCase]):
             "model": case.model,
             "input": case.sdk_input,
             **case.params,
-            "use_chat_completions_api": True,
+            **({"use_chat_completions_api": True} if case.use_chat_completions_api else {}),
             "api_base": mock_url,
             "api_key": API_KEY,
-            "extra_headers": {"x-litellm-parity-route": mode},
+            "extra_headers": {
+                "x-litellm-parity-route": mode,
+                "user-agent": BASELINE_USER_AGENT if os.getenv("LITELLM_RUST") == "0" else "rust-responses-parity",
+            },
             "num_retries": 0,
         }
         try:

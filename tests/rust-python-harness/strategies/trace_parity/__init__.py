@@ -32,7 +32,11 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
     ),
     CaseDefinition(
         "responses",
-        NotImplementedCaseSpec(reason="No Responses trace-parity case is registered."),
+        ModuleCaseSpec(
+            coverage=Coverage.PARTIAL,
+            module="tests.rust-python-harness.strategies.trace_parity.sdk.responses.case",
+            note="Non-streaming text inputs across native and adapted provider transports.",
+        ),
         surface="sdk",
     ),
     CaseDefinition(

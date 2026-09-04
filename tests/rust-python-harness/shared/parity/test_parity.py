@@ -108,6 +108,15 @@ def test_parity_rejects_rust_fallback() -> None:
         assert_parity(python, rust, SENTINEL)
 
 
+@pytest.mark.parametrize("prefix", ["OpenAI/Python ", "AsyncOpenAI/Python "])
+def test_parity_recognizes_openai_sdk_fallbacks(prefix: str) -> None:
+    python: Final = _execution(user_agent=f"{prefix}2.33.0")
+    rust: Final = _execution(user_agent="litellm-rust")
+    assert_parity(python, rust, SENTINEL)
+    with pytest.raises(AssertionError, match="fell back"):
+        assert_parity(python, _execution(user_agent=f"{prefix}2.33.0"), SENTINEL)
+
+
 def test_model_parity_compares_public_values_and_ignores_private_attrs() -> None:
     python: Final = _ComparableResponse(value="same")
     rust: Final = _ComparableResponse(value="same")

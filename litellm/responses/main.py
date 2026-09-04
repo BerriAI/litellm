@@ -1173,6 +1173,35 @@ def responses(
         if _file_search_dispatch is not None:
             return _file_search_dispatch
 
+        from litellm.rust_bridge.responses import responses as rust_responses
+        from litellm.rust_bridge.responses import rust_responses_accepts
+
+        rust_override: Final = kwargs.get("rust")
+        if rust_responses_accepts(
+            model=model,
+            input=input,
+            optional_params=response_api_optional_params,
+            custom_llm_provider=custom_llm_provider,
+            use_chat_completions_api=use_chat_completions_api,
+            stream=stream,
+            request_override=rust_override if isinstance(rust_override, bool) else None,
+            extra_body=extra_body,
+            extra_query=extra_query,
+        ):
+            rust_response: Final = rust_responses(
+                model=model,
+                input=input,
+                optional_params=response_api_optional_params,
+                api_key=litellm_params.api_key,
+                api_base=litellm_params.api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                timeout=timeout if timeout is not None else request_timeout,
+                use_chat_completions_api=use_chat_completions_api,
+            )
+            if rust_response is not None:
+                return rust_response
+
         if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,
