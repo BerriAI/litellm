@@ -110,6 +110,15 @@ def _collect_prompt(data: MutableRequest, slots: _SlotSink) -> None:
     if isinstance(prompt, str):
         _collect(data, "prompt", slots)
         return
+    if isinstance(prompt, dict):
+        # A Responses API PromptObject. `variables` are substituted into the stored
+        # prompt on the provider side, so they are caller text. `id` and `version`
+        # identify which prompt to use and must arrive unchanged.
+        variables: Final = prompt.get("variables")
+        if isinstance(variables, dict):
+            for name in tuple(variables):
+                _collect(variables, name, slots)
+        return
     if not isinstance(prompt, list):
         return
     for index in range(len(prompt)):

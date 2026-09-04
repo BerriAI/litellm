@@ -402,6 +402,23 @@ class TestRequestCoverage:
         await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
 
     @pytest.mark.asyncio
+    async def test_responses_prompt_object_variables_are_redacted(self):
+        """A PromptObject's variables are substituted into the prompt provider side.
+
+        The id and version pick which stored prompt to run and have to arrive
+        unchanged; the variables are caller text.
+        """
+        guardrail = _guardrail()
+        _mock_post(guardrail, {"texts": ["[EMAIL_1]"]})
+
+        data = {"prompt": {"id": "pmpt_123", "version": "2", "variables": {"customer": "jane.doe@example.com"}}}
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="aresponses")
+
+        assert data["prompt"]["variables"]["customer"] == "[EMAIL_1]"
+        assert data["prompt"]["id"] == "pmpt_123"
+        assert data["prompt"]["version"] == "2"
+
+    @pytest.mark.asyncio
     async def test_completions_suffix_is_redacted(self):
         """LiteLLM forwards the legacy `suffix` to providers that support it."""
         guardrail = _guardrail()
