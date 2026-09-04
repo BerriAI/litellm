@@ -1,15 +1,5 @@
-"""MongoDB vector store provider, for Atlas and self-managed deployments alike.
-
-MongoDB Vector Search has no HTTP query API (the Data API and HTTPS Endpoints are
-end-of-life), so this config extends BaseDirectVectorStoreConfig and runs the
-``$vectorSearch`` aggregation itself through pymongo instead of shaping an httpx
-request. mongod serves that stage identically whether mongot runs under Atlas or
-beside a self-managed deployment, so one code path covers both.
-
-``vector_store_id`` is the search index name, matching the Valkey provider
-where the id names the index; the database and collection it covers come from
-litellm_params.
-"""
+"""MongoDB Vector Search has no HTTP query API, so this is a direct provider that runs the
+``$vectorSearch`` aggregation through pymongo. ``vector_store_id`` is the search index name."""
 
 from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
@@ -159,9 +149,8 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
 
     @staticmethod
     def _reject_unknown_params(litellm_params: Mapping[str, object]) -> None:
-        """The params model ignores unrelated keys because litellm_params carries plenty of them,
-        which would otherwise turn a mistyped mongodb_collection into 'mongodb_collection is
-        required' pointing at a key the reader can see they have set."""
+        """Without this a mistyped mongodb_collection reads as 'mongodb_collection is required',
+        naming a key the reader can see they have set."""
         unknown: Final = sorted(
             key for key in litellm_params if key.startswith(_MONGODB_PARAM_PREFIX) and key not in _KNOWN_MONGODB_PARAMS
         )
@@ -268,8 +257,7 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
 
     @classmethod
     def _field_value(cls, document: Mapping[str, object], dotted_path: str) -> str | None:
-        """None means the path is absent from the document, which is what separates a
-        mistyped mongodb_text_field from a document whose text is genuinely empty."""
+        """None means absent, which is what separates a mistyped field from genuinely empty text."""
         head, _, rest = dotted_path.partition(".")
         if head not in document:
             return None
@@ -297,9 +285,8 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
     def _raise_for_missing_text_field(
         cls, documents: Sequence[Mapping[str, object]], text_field: str, database: str, collection: str
     ) -> None:
-        """$vectorSearch happily matches documents that carry no text at all, so a mistyped
-        mongodb_text_field returns well-scored results whose content is empty and feeds an empty
-        context to the model. Every matched document lacking the field is the misconfiguration."""
+        """$vectorSearch matches documents carrying no text, so a mistyped mongodb_text_field
+        returns well-scored results with empty content instead of failing."""
         if documents and all(cls._field_value(document, text_field) is None for document in documents):
             raise config_error(
                 f"None of the {len(documents)} matched documents in '{database}.{collection}' has a "
@@ -323,9 +310,8 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
     def _raise_for_unusable_index(
         catalogue: Sequence[Mapping[str, object]], index_name: str, database: str, collection: str
     ) -> None:
-        """An empty result set is ambiguous: mongod returns zero documents both for a query that
-        genuinely matched nothing and for a missing database, collection or index. Only the second
-        is a misconfiguration, so the index catalogue decides which one happened."""
+        """mongod returns zero documents both for a query that matched nothing and for a missing
+        database, collection or index, so the catalogue decides which one happened."""
         if not catalogue:
             raise missing_index_error(index_name, database, collection)
         entry: Final = catalogue[0]

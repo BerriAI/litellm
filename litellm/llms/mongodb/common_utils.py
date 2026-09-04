@@ -1,22 +1,16 @@
-"""Shared helpers for MongoDB integrations.
-
-pymongo ships in the optional ``mongodb`` extra, so every import of it is
-deferred to call time and raises an actionable error when it is absent.
-
-Clients are cached per connection because building one costs an SRV lookup, a
-TLS handshake and topology discovery: measured at ~890ms against a remote deployment versus
-~80ms on a warm client, so a client per search would dominate query latency.
-"""
+"""Shared helpers for the MongoDB integrations. pymongo lives in the optional ``mongodb`` extra,
+so every import of it is deferred to call time."""
 
 import asyncio
 import weakref
 from asyncio import AbstractEventLoop
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeAlias
+from typing import TYPE_CHECKING, Final, TypeAlias, TypeVar
 
-from litellm.exceptions import BadRequestError, Timeout
+from litellm.exceptions import BadRequestError, ServiceUnavailableError, Timeout
 
 if TYPE_CHECKING:
     from pymongo import AsyncMongoClient, MongoClient
@@ -30,13 +24,17 @@ MONGODB_PROVIDER: Final = "mongodb"
 
 
 def config_error(message: str) -> BadRequestError:
-    """Misconfiguration is the caller's to fix, so it maps to 400 rather than the 500
-    a bare ValueError would become once litellm.exception_type wraps it."""
+    """400 rather than the 500 a bare ValueError becomes once litellm.exception_type wraps it."""
     return BadRequestError(message=message, model=None, llm_provider=MONGODB_PROVIDER)
 
 
 def timeout_error(message: str) -> Timeout:
     return Timeout(message=message, model=None, llm_provider=MONGODB_PROVIDER)
+
+
+def unavailable_error(message: str) -> ServiceUnavailableError:
+    """litellm only retries 408, 409, 429 and 5xx, so a 400 here would make a failover permanent."""
+    return ServiceUnavailableError(message=message, model=None, llm_provider=MONGODB_PROVIDER)
 
 
 DEFAULT_CONNECT_TIMEOUT_MS: Final = 10_000
@@ -59,12 +57,26 @@ class MongoClientKey:
 SyncClientFactory: TypeAlias = Callable[..., "MongoClient"]
 AsyncClientFactory: TypeAlias = Callable[..., "AsyncMongoClient"]
 
+_K = TypeVar("_K")
+_V = TypeVar("_V")
+
 _AsyncClientCacheKey: TypeAlias = tuple[MongoClientKey, int]
 # CPython recycles id() aggressively, so the id alone would hand a new loop a closed loop's client
 _AsyncClientEntry: TypeAlias = tuple["weakref.ref[AbstractEventLoop]", "AsyncMongoClient"]
 
-_sync_clients: Final[dict[MongoClientKey, "MongoClient"]] = {}  # mutable-ok: process-level client cache
-_async_clients: Final[dict[_AsyncClientCacheKey, _AsyncClientEntry]] = {}  # mutable-ok: same cache, per loop
+_SyncClientCache: TypeAlias = "OrderedDict[MongoClientKey, MongoClient]"
+_AsyncClientCache: TypeAlias = "OrderedDict[_AsyncClientCacheKey, _AsyncClientEntry]"
+
+_sync_clients: Final[_SyncClientCache] = OrderedDict()  # mutable-ok: process-level client cache
+_async_clients: Final[_AsyncClientCache] = OrderedDict()  # mutable-ok: same cache, per loop
+
+
+def _store_bounded(cache: "OrderedDict[_K, _V]", cache_key: "_K", value: "_V") -> None:
+    """Eviction only drops this cache's reference; an in-flight search keeps its client alive."""
+    cache[cache_key] = value  # mutable-ok: an LRU cache is mutable state by definition
+    cache.move_to_end(cache_key)
+    while len(cache) > _MAX_CACHED_CLIENTS:
+        cache.popitem(last=False)
 
 
 def import_sync_mongo_client() -> "type[MongoClient]":
@@ -95,22 +107,19 @@ def _client_kwargs(key: MongoClientKey) -> Mapping[str, object]:
 
 
 def get_sync_client(key: MongoClientKey, client_class: SyncClientFactory | None = None) -> "MongoClient":
-    """``client_class`` is the injection seam the tests build fake clients through; left unset the
-    real pymongo class is imported at call time, keeping pymongo out of import-time dependencies."""
     cached: Final = _sync_clients.get(key)
     if cached is not None:
+        _sync_clients.move_to_end(key)
         return cached
     build: Final = client_class if client_class is not None else import_sync_mongo_client()
     client: Final = build(key.connection_string, **_client_kwargs(key))
-    if len(_sync_clients) < _MAX_CACHED_CLIENTS:
-        _sync_clients[key] = client
+    _store_bounded(_sync_clients, key, client)
     return client
 
 
 def _purge_dead_loops() -> None:
-    """The cached client holds its loop object alive, so a closed loop's entry would otherwise pin
-    that client and its sockets for the life of the process. Callers that run one loop per search
-    (``asyncio.run`` in a script) reach the cap this way and never release what is behind it."""
+    """A cached client holds its loop alive, so a closed loop's entry would pin that client and its
+    sockets for the life of the process."""
     for stale in tuple(
         cache_key
         for cache_key, (loop_ref, _) in _async_clients.items()
@@ -125,12 +134,12 @@ def get_async_client(key: MongoClientKey, client_class: AsyncClientFactory | Non
     loop_key: Final = (key, id(loop))
     cached: Final = _async_clients.get(loop_key)
     if cached is not None and cached[0]() is loop:
+        _async_clients.move_to_end(loop_key)
         return cached[1]
     _purge_dead_loops()
     build: Final = client_class if client_class is not None else import_async_mongo_client()
     client: Final = build(key.connection_string, **_client_kwargs(key))
-    if len(_async_clients) < _MAX_CACHED_CLIENTS or loop_key in _async_clients:
-        _async_clients[loop_key] = (weakref.ref(loop), client)
+    _store_bounded(_async_clients, loop_key, (weakref.ref(loop), client))
     return client
 
 
@@ -157,9 +166,8 @@ def _index_hint(index_name: str, database: str, collection: str) -> str:
 
 
 def missing_index_error(index_name: str, database: str, collection: str) -> BadRequestError:
-    """$vectorSearch against a missing index, database or collection returns zero documents
-    instead of failing, so an empty result set is checked against the index catalogue and
-    turned into this rather than being reported as 'no matches'."""
+    """$vectorSearch against a missing index, database or collection returns zero documents rather
+    than failing, so an empty result set is checked against the catalogue and reported as this."""
     return config_error(
         f"{_index_hint(index_name, database, collection)} A vector search against a database, "
         "collection or index that does not exist returns no results rather than an error, so this "
@@ -175,10 +183,7 @@ def index_not_ready_error(index_name: str, database: str, collection: str, statu
 
 
 def translate_mongo_error(error: Exception, index_name: str, database: str, collection: str) -> Exception:
-    """Turn a driver failure into a message that names the misconfiguration, never a silent empty result.
-
-    Returns the exception to raise so callers keep the original as ``__cause__``.
-    """
+    """Returns the exception to raise, so callers keep the driver error as ``__cause__``."""
     try:
         from pymongo.errors import (
             ConfigurationError,
@@ -205,14 +210,16 @@ def translate_mongo_error(error: Exception, index_name: str, database: str, coll
             f"The MongoDB vector search against '{database}.{collection}' timed out before returning. "
             f"Driver detail: {error}"
         )
-    # ServerSelectionTimeoutError and NetworkTimeout both sit under ConnectionFailure, so this
-    # only sees what those two branches left: a dropped or refused connection
+    # ServerSelectionTimeoutError and NetworkTimeout also subclass ConnectionFailure, so this only
+    # sees what those branches left
     if isinstance(error, ConnectionFailure):
-        return config_error(
-            f"The connection to '{database}.{collection}' was refused or dropped. On Atlas this is "
-            "usually a connection string with no username and password, or a TLS failure, so confirm "
-            "the URI is the one Atlas shows under Connect, Drivers. On a self-managed deployment, check "
-            f"that mongod is listening on the host and port in the URI. Driver detail: {error}"
+        return unavailable_error(
+            f"The connection to '{database}.{collection}' was dropped or refused. That is usually a "
+            "replica set failover or a restarted node, so the search is worth retrying. If it keeps "
+            "happening: on Atlas the usual cause is a connection string with no username and password, "
+            "or a TLS failure, so confirm the URI is the one Atlas shows under Connect, Drivers; on a "
+            "self-managed deployment, check that mongod is listening on the host and port in the URI. "
+            f"Driver detail: {error}"
         )
     if isinstance(error, OperationFailure):
         code: Final = error.code
@@ -267,16 +274,14 @@ def translate_mongo_error(error: Exception, index_name: str, database: str, coll
         )
     if isinstance(error, InvalidOperation):
         return config_error(f"The MongoDB client was already closed or is unusable. Driver detail: {error}")
-    # A tlsCAFile or tlsCertificateKeyFile the process cannot open raises OSError from the TLS setup
-    # rather than a PyMongoError, and those options are how self-managed deployments present a private CA
+    # An unreadable tlsCAFile or tlsCertificateKeyFile raises OSError, not a PyMongoError
     if isinstance(error, OSError) and error.filename:
         return config_error(
             f"'{error.filename}', named by a TLS option in mongodb_connection_string, could not be read. "
             "Check that tlsCAFile and tlsCertificateKeyFile point at files this process can open; inside "
             f"a container that is the path in the container, not on the host. Driver detail: {error}"
         )
-    # pymongo raises a plain ValueError, not a PyMongoError, for an unusable port, which an unescaped
-    # ':' in a password also produces, and which would otherwise reach the caller as a 500
+    # pymongo raises a plain ValueError, not a PyMongoError, for an unusable port
     if isinstance(error, ValueError):
         return config_error(
             "The host and port in mongodb_connection_string could not be parsed. If the port is a "
