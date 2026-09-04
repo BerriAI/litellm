@@ -4,6 +4,7 @@ import pytest
 
 import litellm
 from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRustDispatch
+from litellm.rust_bridge import bindings
 
 rust_bridge = importlib.import_module("litellm.rust_bridge.transcription")
 
@@ -77,13 +78,13 @@ async def test_enabled_async_bridge() -> None:
 
 def test_loader_returns_none_without_native_extension(monkeypatch: pytest.MonkeyPatch) -> None:
     rust_bridge.configure_rust_transcription(transcription=None, atranscription=None)
-    monkeypatch.setattr("litellm.rust_bridge.get_native_bridge", lambda: None)
-    assert rust_bridge.load_rust_transcription() is None
-    assert rust_bridge.load_rust_atranscription() is None
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
+    assert rust_bridge._TRANSCRIPTION.sync.load() is None
+    assert rust_bridge._TRANSCRIPTION.asynchronous.load() is None
 
 
 def test_dispatch_sync_path_requires_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(rust_bridge, "transcription", lambda **_: None)
+    rust_bridge._TRANSCRIPTION.sync.override(None)
 
     with pytest.raises(RuntimeError, match="bridge is unavailable"):
         BedrockAudioTranscriptionRustDispatch().audio_transcriptions(
@@ -100,10 +101,7 @@ def test_dispatch_sync_path_requires_bridge(monkeypatch: pytest.MonkeyPatch) -> 
 
 @pytest.mark.asyncio
 async def test_dispatch_async_path_requires_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def unavailable(**_: object) -> None:
-        return None
-
-    monkeypatch.setattr(rust_bridge, "atranscription", unavailable)
+    rust_bridge._TRANSCRIPTION.asynchronous.override(None)
 
     with pytest.raises(RuntimeError, match="bridge is unavailable"):
         await BedrockAudioTranscriptionRustDispatch().async_audio_transcriptions(

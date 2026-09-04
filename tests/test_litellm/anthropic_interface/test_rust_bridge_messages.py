@@ -8,7 +8,7 @@ import pytest
 
 import litellm
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.rust_bridge import configuration
+from litellm.rust_bridge import bindings, configuration
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -123,7 +123,7 @@ def test_load_rust_messages_returns_injected_impl():
     bridge = RecordingMessages()
     litellm.rust(True)
     rust_messages.set_rust_messages(messages=bridge)
-    assert rust_messages.load_rust_messages() is bridge
+    assert rust_messages._MESSAGES.sync.load() is bridge
 
 
 def test_bare_rust_still_toggles_ocr():
@@ -140,17 +140,16 @@ def test_load_rust_amessages_returns_injected_impl():
     bridge = RecordingAsyncMessages()
     litellm.rust(True)
     rust_messages.set_rust_messages(amessages=bridge)
-    assert rust_messages.load_rust_amessages() is bridge
+    assert rust_messages._MESSAGES.asynchronous.load() is bridge
 
 
 def test_messages_wrapper_returns_none_when_bridge_absent(monkeypatch):
     monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge"),
+        bindings,
         "get_native_bridge",
         lambda: None,
     )
     litellm.rust(True)
-    assert rust_messages.load_rust_messages() is None
     result = rust_messages.messages(
         model="claude",
         body=REQUEST_BODY,
@@ -248,14 +247,14 @@ async def test_gate_invokes_rust_and_marks_response_header():
 
 
 @pytest.mark.asyncio
-async def test_gate_falls_back_to_python_when_bridge_raises():
+async def test_gate_does_not_handoff_on_unknown_bridge_failure():
     bridge = RaisingAsyncMessages()
     litellm.rust(True)
     rust_messages.set_rust_messages(amessages=bridge)
 
-    response = await _gate()
+    with pytest.raises(RuntimeError, match="upstream request failed"):
+        await _gate()
 
-    assert response is None
     assert bridge.calls == 1
 
 
@@ -405,7 +404,7 @@ async def test_fake_stream_wraps_rust_response_as_anthropic_sse():
 @pytest.mark.asyncio
 async def test_gate_falls_back_when_bridge_unavailable(monkeypatch):
     monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge"),
+        bindings,
         "get_native_bridge",
         lambda: None,
     )

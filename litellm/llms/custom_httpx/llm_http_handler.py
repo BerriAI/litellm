@@ -2401,34 +2401,24 @@ class BaseLLMHTTPHandler:
     ) -> AnthropicMessagesResponse | None:
         if custom_llm_provider not in ("azure_ai", "anthropic"):
             return None
-        from litellm.rust_bridge.configuration import rust_enabled
-
         raw_request_override: Final = litellm_params.get("rust")
         request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
-        if not rust_enabled(request_override=request_override):
-            return None
         if has_agentic_hook:
             return None
 
         from litellm.rust_bridge import messages as rust_messages_bridge
 
         upstream_body: Final = {key: value for key, value in request_body.items() if key != "stream"}
-        try:
-            rust_response: Final = await rust_messages_bridge.amessages(
-                model=model,
-                body=upstream_body,
-                api_key=api_key,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                extra_headers=headers,
-                timeout=timeout,
-            )
-        except Exception as rust_error:  # noqa: BLE001  # rollout-safety fallback: any Rust bridge failure must fall back to the Python path
-            verbose_logger.debug(
-                "Rust Anthropic messages bridge raised %s; falling back to Python path",
-                type(rust_error).__name__,
-            )
-            return None
+        rust_response: Final = await rust_messages_bridge.amessages(
+            model=model,
+            body=upstream_body,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=headers,
+            timeout=timeout,
+            request_override=request_override,
+        )
         if rust_response is None:
             return None
 
@@ -6517,10 +6507,12 @@ class BaseLLMHTTPHandler:
                 if _rust_responses_websocket_enabled(custom_llm_provider, litellm_params):
                     from litellm.rust_bridge import responses_websocket as rust_responses_websocket
 
+                    raw_rust_override: Final = litellm_params.get("rust")
                     rust_backend: Final = await rust_responses_websocket.connect(
                         url=ws_url,
                         headers={str(key): str(value) for key, value in headers.items()},
                         timeout=timeout,
+                        request_override=raw_rust_override if isinstance(raw_rust_override, bool) else None,
                     )
                     if rust_backend is not None:
                         yield rust_backend
