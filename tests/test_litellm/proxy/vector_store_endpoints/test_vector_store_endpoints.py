@@ -877,6 +877,80 @@ async def test_db_fallback_does_not_evict_config_source():
     prisma_client.db.litellm_managedvectorstorestable.find_unique.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_config_vector_store_id_cannot_be_created_in_database():
+    registry = VectorStoreRegistry()
+    registry.config_vector_store_ids = frozenset(("configured",))
+    prisma_client = MagicMock()
+
+    with (
+        patch.object(litellm, "vector_store_registry", registry),
+        pytest.raises(HTTPException, match="defined in proxy configuration") as exc_info,
+    ):
+        await create_vector_store_in_db(
+            vector_store_id="configured",
+            custom_llm_provider="milvus",
+            prisma_client=prisma_client,
+        )
+
+    assert exc_info.value.status_code == 400
+    prisma_client.db.litellm_managedvectorstorestable.find_unique.assert_not_called()
+    prisma_client.db.litellm_managedvectorstorestable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_config_vector_store_id_cannot_be_updated_in_database():
+    from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
+    from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+    registry = VectorStoreRegistry()
+    registry.config_vector_store_ids = frozenset(("configured",))
+    prisma_client = MagicMock()
+
+    with (
+        patch.object(litellm, "vector_store_registry", registry),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+        patch(
+            "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+            new=AsyncMock(),
+        ),
+        pytest.raises(HTTPException, match="defined in proxy configuration") as exc_info,
+    ):
+        await update_vector_store(
+            data=VectorStoreUpdateRequest(
+                vector_store_id="configured",
+                vector_store_description="replacement",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.status_code == 400
+    prisma_client.db.litellm_managedvectorstorestable.find_unique.assert_not_called()
+    prisma_client.db.litellm_managedvectorstorestable.update.assert_not_called()
+
+
+def test_config_vector_store_cannot_be_replaced_or_deleted_from_registry():
+    configured = LiteLLM_ManagedVectorStore(
+        vector_store_id="configured",
+        custom_llm_provider="milvus",
+        litellm_params={"api_base": "https://configured-milvus:19530"},
+    )
+    registry = VectorStoreRegistry(vector_stores=[configured])
+    registry.config_vector_store_ids = frozenset(("configured",))
+
+    registry.update_vector_store_in_registry(
+        "configured",
+        LiteLLM_ManagedVectorStore(
+            vector_store_id="configured",
+            custom_llm_provider="milvus",
+            litellm_params={"api_base": "https://attacker.example"},
+        ),
+    )
+    registry.delete_vector_store_from_registry("configured")
+
+    assert registry.get_litellm_managed_vector_store_from_registry("configured") == configured
+
+
 def test_admin_persistence_strips_forged_marker_and_adds_server_marker():
     params = prepare_milvus_connection_for_persistence(
         custom_llm_provider="milvus/probe",

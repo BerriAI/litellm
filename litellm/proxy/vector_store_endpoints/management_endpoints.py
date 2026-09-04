@@ -137,6 +137,16 @@ def _litellm_params_dict(
     return {}  # mutable-ok: absent persisted parameters normalize to an empty mutable mapping
 
 
+def _reject_config_vector_store_id(vector_store_id: str) -> None:
+    registry: Final = litellm.vector_store_registry
+    if registry is None or vector_store_id not in registry.config_vector_store_ids:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=f"Vector store ID {vector_store_id} is defined in proxy configuration and cannot be managed through the API",
+    )
+
+
 async def _fetch_and_authorize_vector_store(
     vector_store_id: str,
     user_api_key_dict: UserAPIKeyAuth,
@@ -209,6 +219,8 @@ async def create_vector_store_in_db(
     """
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
+
+    _reject_config_vector_store_id(vector_store_id)
 
     # Check if vector store already exists
     existing_vector_store: Final = await _vector_store_table(prisma_client).find_unique(
@@ -629,6 +641,7 @@ async def update_vector_store(
     try:
         update_data: Final = data.model_dump(exclude_unset=True)
         vector_store_id: Final[str] = update_data.pop("vector_store_id")
+        _reject_config_vector_store_id(vector_store_id)
 
         # Per-store access control: anyone authenticated who passes the
         # premium-feature gate could otherwise update *any* vector store —
