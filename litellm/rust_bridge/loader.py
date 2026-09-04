@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import ModuleType
+from collections.abc import Mapping, Set
 from typing import Final
 
 _BRIDGE_SENTINEL: Final = object()
@@ -35,9 +36,12 @@ def native_bridge_available() -> bool:
     return get_native_bridge() is not None
 
 
-def native_route_ready(route: str) -> bool:
+def native_route_ready(route: str, required_capabilities: frozenset[str] = frozenset()) -> bool:
     native: Final = get_native_bridge()
     if native is None:
         return False
     ready_endpoints: Final = getattr(native, "ready_endpoints", None)
-    return isinstance(ready_endpoints, frozenset) and route in ready_endpoints
+    if not isinstance(ready_endpoints, Mapping):
+        return False
+    capabilities: Final = ready_endpoints.get(route)
+    return isinstance(capabilities, Set) and required_capabilities.issubset(capabilities)

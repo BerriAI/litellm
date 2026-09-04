@@ -1,10 +1,38 @@
-from typing import Protocol
+from typing import Literal, Protocol, TypeAlias
+
+from typing_extensions import ReadOnly, TypedDict
+
+
+class CallbackUnchanged(TypedDict):
+    action: ReadOnly[Literal["unchanged"]]
+
+
+class CallbackReplace(TypedDict):
+    action: ReadOnly[Literal["replace"]]
+    payload: ReadOnly[object]
+
+
+class CallbackReject(TypedDict):
+    action: ReadOnly[Literal["reject"]]
+    message: ReadOnly[str]
+    status_code: ReadOnly[int | None]
+
+
+CallbackDecision: TypeAlias = CallbackUnchanged | CallbackReplace | CallbackReject
 
 
 class ProviderAttemptCallbackHandle(Protocol):
-    def pre_call(self, payload: object, /) -> object: ...
+    """Observe one provider attempt.
 
-    def post_call(self, payload: object, /) -> object: ...
+    Retries repeat ``pre_call`` and ``error`` with incremented attempt metadata.
+    Only the successful attempt receives ``post_call``. These callbacks observe
+    the provider operation; outer SDK success and failure callbacks remain owned
+    by Python after endpoint dispatch completes.
+    """
+
+    def pre_call(self, payload: object, /) -> CallbackDecision: ...
+
+    def post_call(self, payload: object, /) -> CallbackDecision: ...
 
     def error(self, payload: object, /) -> None: ...
 
@@ -14,19 +42,19 @@ class OneShotCallbackHandle(ProviderAttemptCallbackHandle, Protocol):
 
 
 class StreamingCallbackHandle(ProviderAttemptCallbackHandle, Protocol):
-    def stream_event(self, payload: object, /) -> object: ...
+    def stream_event(self, payload: object, /) -> CallbackDecision: ...
 
     def stream_close(self, payload: object, /) -> None: ...
 
 
 class SessionCallbackHandle(Protocol):
-    def before_connect(self, payload: object, /) -> object: ...
+    def before_connect(self, payload: object, /) -> CallbackDecision: ...
 
     def connected(self, payload: object, /) -> None: ...
 
-    def before_send(self, payload: object, /) -> object: ...
+    def before_send(self, payload: object, /) -> CallbackDecision: ...
 
-    def after_receive(self, payload: object, /) -> object: ...
+    def after_receive(self, payload: object, /) -> CallbackDecision: ...
 
     def response_complete(self, payload: object, /) -> None: ...
 

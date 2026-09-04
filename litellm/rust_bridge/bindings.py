@@ -46,7 +46,7 @@ class NativeBinding(Generic[BindingT]):
     def load(self) -> BindingT | None:
         if not isinstance(self._override, _Unset):
             return self._override
-        if not native_route_ready(self._route):
+        if not native_route_ready(self._route, frozenset({"callbacks"})):
             return None
         native: Final = get_native_bridge()
         if native is None:

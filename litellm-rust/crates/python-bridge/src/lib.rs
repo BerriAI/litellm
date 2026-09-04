@@ -73,7 +73,7 @@ mod _native {
         super::errors::register(module)?;
         module.add(
             "ready_endpoints",
-            pyo3::types::PyFrozenSet::empty(module.py())?,
+            pyo3::types::PyDict::new(module.py()),
         )?;
         super::routes::register(module)?;
         module.add_class::<super::ResponsesWebSocketConnection>()?;
