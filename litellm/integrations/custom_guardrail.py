@@ -1237,8 +1237,6 @@ class CustomGuardrail(CustomLogger):
         """
         guardrail_response: Final = self._summarize_guardrail_response(
             response=response,
-            request_data=request_data,
-            event_type=event_type,
             original_inputs=original_inputs,
         )
 
@@ -1258,23 +1256,20 @@ class CustomGuardrail(CustomLogger):
     def _summarize_guardrail_response(
         self,
         response: dict | None,  # mutable-ok: matches _process_response signature
-        request_data: dict,  # mutable-ok: matches _process_response signature
-        event_type: GuardrailEventHooks | None,
-        original_inputs: dict | None,  # mutable-ok: matches _process_response signature
+        original_inputs: Mapping[str, object] | None,
     ) -> dict | str:  # mutable-ok: returns the caller's response unchanged
         """Reduce a hook's return value to what is safe to log as ``guardrail_response``.
 
         ``apply_guardrail`` returns the (possibly masked) inputs and ``async_pre_call_hook``
         returns the (possibly modified) request payload. Neither is a provider verdict, and
         logging them verbatim ships the user's prompt to every logging sink (OTEL spans,
-        Datadog, spend logs), so both collapse to ``"allow"`` / ``"mask"``.
+        Datadog, spend logs), so both collapse to ``"allow"`` / ``"mask"`` by comparing
+        against ``original_inputs``, a copy taken before the hook ran.
         """
         if response is None:
             return {}
         if original_inputs is not None:
             return "mask" if self._inputs_were_modified(original_inputs, response) else "allow"
-        if event_type == GuardrailEventHooks.pre_call:
-            return "mask" if self._inputs_were_modified(request_data, response) else "allow"
         return response
 
     @staticmethod
@@ -1316,24 +1311,9 @@ class CustomGuardrail(CustomLogger):
         )
         raise e
 
-    def _inputs_were_modified(self, original_inputs: dict, response: dict) -> bool:
-        """
-        Compare original inputs with response to determine if content was modified.
-
-        Returns True if the inputs were modified (mask scenario), False otherwise (allow scenario).
-        """
-        # Get all keys from both dictionaries
-        all_keys: Final = set(original_inputs.keys()) | set(response.keys())
-
-        # Compare each key's value
-        for key in all_keys:
-            original_value = original_inputs.get(key)
-            response_value = response.get(key)
-            if original_value != response_value:
-                return True
-
-        # No modifications detected
-        return False
+    def _inputs_were_modified(self, original_inputs: Mapping[str, object], response: Mapping[str, object]) -> bool:
+        """True when any baseline key's value differs in ``response`` (mask), False otherwise (allow)."""
+        return any(response.get(key) != value for key, value in original_inputs.items())
 
     def mask_content_in_string(
         self,
@@ -1440,6 +1420,29 @@ def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object)
     _append_slg_to_litellm_params(mcd.get("litellm_params"), entries)
 
 
+_PRE_CALL_CONTENT_KEYS: Final = frozenset({"messages", "input", "prompt", "system", "instructions", "tools"})
+
+
+def _original_inputs_for(
+    func_name: str,
+    kwargs: Mapping[str, object],
+    request_data: Mapping[str, object],
+    event_type: GuardrailEventHooks | None,
+) -> dict | None:  # mutable-ok: matches _process_response(original_inputs=) signature
+    """Baseline the hook's return value is compared against to decide "allow" vs "mask".
+
+    ``apply_guardrail`` masks a fresh ``inputs`` dict, so that dict is the baseline. Pre-call
+    hooks edit the request in place and return it, so the baseline is a deep copy of the
+    prompt-bearing keys taken before the hook runs.
+    """
+    if func_name == "apply_guardrail":
+        inputs: Final = kwargs.get("inputs")
+        return inputs if isinstance(inputs, dict) else None
+    if event_type != GuardrailEventHooks.pre_call:
+        return None
+    return {key: copy.deepcopy(value) for key, value in request_data.items() if key in _PRE_CALL_CONTENT_KEYS}
+
+
 def log_guardrail_information(func):
     """
     Decorator to add standard logging guardrail information to any function
@@ -1498,9 +1501,7 @@ def log_guardrail_information(func):
         event_type: Final = _infer_event_type_from_function_name(func.__name__)
 
         # Store original inputs for comparison (for apply_guardrail functions)
-        original_inputs = None
-        if func.__name__ == "apply_guardrail" and "inputs" in kwargs:
-            original_inputs = kwargs.get("inputs")
+        original_inputs: Final = _original_inputs_for(func.__name__, kwargs, request_data, event_type)
 
         logging_obj: Final = kwargs.get("logging_obj") or request_data.get("litellm_logging_obj")
         self_recorded_token: Final = _guardrail_self_recorded.set(False)
@@ -1540,9 +1541,7 @@ def log_guardrail_information(func):
         event_type: Final = _infer_event_type_from_function_name(func.__name__)
 
         # Store original inputs for comparison (for apply_guardrail functions)
-        original_inputs = None
-        if func.__name__ == "apply_guardrail" and "inputs" in kwargs:
-            original_inputs = kwargs.get("inputs")
+        original_inputs: Final = _original_inputs_for(func.__name__, kwargs, request_data, event_type)
 
         logging_obj: Final = kwargs.get("logging_obj") or request_data.get("litellm_logging_obj")
         self_recorded_token: Final = _guardrail_self_recorded.set(False)

@@ -2513,22 +2513,37 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
     into ``guardrail_response`` and from there onto OTEL guardrail spans."""
 
     @staticmethod
-    def _logged_response(request_data: dict) -> object:
-        entries = request_data["litellm_metadata"]["standard_logging_guardrail_information"]
+    def _logged_response(request_data: dict[str, object]) -> object:
+        metadata = request_data["litellm_metadata"]
+        assert isinstance(metadata, dict)
+        entries = metadata["standard_logging_guardrail_information"]
         assert len(entries) == 1
         return entries[0]["guardrail_response"]
+
+    @staticmethod
+    def _request() -> dict[str, object]:
+        return {
+            "model": "gpt-4.1-mini",
+            "input": "SECRET_PROMPT",
+            "messages": [{"role": "user", "content": "SECRET_PROMPT"}],
+            "litellm_metadata": {},
+        }
 
     @pytest.mark.asyncio
     async def test_pre_call_hook_returning_request_logs_allow(self):
         class PassthroughGuardrail(CustomGuardrail):
             @log_guardrail_information
-            async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> dict[str, object]:
                 return data
 
-        guardrail = PassthroughGuardrail(guardrail_name="g")
-        data = {"model": "gpt-4.1-mini", "input": "SECRET_PROMPT", "litellm_metadata": {}}
-
-        await guardrail.async_pre_call_hook(
+        data = self._request()
+        await PassthroughGuardrail(guardrail_name="g").async_pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="aresponses"
         )
 
@@ -2538,14 +2553,41 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
     async def test_pre_call_hook_returning_modified_copy_logs_mask(self):
         class MaskingGuardrail(CustomGuardrail):
             @log_guardrail_information
-            async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> dict[str, object]:
                 return {**data, "input": "[MASKED]"}
 
-        guardrail = MaskingGuardrail(guardrail_name="g")
-        data = {"model": "gpt-4.1-mini", "input": "SECRET_PROMPT", "litellm_metadata": {}}
-
-        await guardrail.async_pre_call_hook(
+        data = self._request()
+        await MaskingGuardrail(guardrail_name="g").async_pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="aresponses"
+        )
+
+        assert self._logged_response(data) == "mask"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_mutating_request_in_place_logs_mask(self):
+        class InPlaceMaskingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> dict[str, object]:
+                messages = data["messages"]
+                assert isinstance(messages, list)
+                messages[0]["content"] = "[MASKED]"
+                return data
+
+        data = self._request()
+        await InPlaceMaskingGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="acompletion"
         )
 
         assert self._logged_response(data) == "mask"

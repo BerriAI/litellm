@@ -340,8 +340,6 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         (openai/moderations.py)."""
         guardrail_response: Final = self._summarize_guardrail_response(
             response=response,
-            request_data=request_data,
-            event_type=event_type,
             original_inputs=original_inputs,
         )
         self.add_standard_logging_guardrail_information_to_request_data(
