@@ -1,4 +1,3 @@
-import pytest
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 
 
@@ -95,7 +94,9 @@ def test_transform_response_preserves_cache_tokens():
     to the ModelResponse usage object.
     """
     from unittest.mock import MagicMock
+
     import httpx
+
     from litellm.types.utils import ModelResponse
 
     raw_response = {
@@ -131,5 +132,3 @@ def test_transform_response_preserves_cache_tokens():
     assert res.usage.cache_creation_input_tokens == 20
     assert res.usage.prompt_tokens_details.cached_tokens == 80
     assert res.usage.prompt_tokens_details.cache_write_tokens == 20
-
-
