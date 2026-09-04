@@ -115,6 +115,29 @@ _CONFIG_CONNECTION_FIELDS: Final[frozenset[str]] = frozenset(
 )
 
 
+def _request_inherits_config_credentials(
+    config_params: Mapping[str, object],
+    request_params: Mapping[str, object],
+    allow_client_side_credentials: bool,
+) -> bool:
+    """Whether the configuration's credentials are this request's to be probed with.
+
+    The configuration reached here by matching the request's model string, which
+    also matches wildcard routes and unrelated deployments that merely serve the
+    same model, so a request naming a stored credential of its own has already
+    said where its credentials come from and does not borrow that one's. A blank
+    name is no name: ``load_credentials_from_list`` resolves nothing from it, so
+    it must not cost the request the credentials it would otherwise be probed
+    with.
+    """
+    requested_credential: Final = request_params.get("litellm_credential_name")
+    if requested_credential and requested_credential != config_params.get("litellm_credential_name"):
+        return False
+    if allow_client_side_credentials:
+        return True
+    return not any(param in request_params for param in _BANNED_REQUEST_BODY_PARAMS)
+
+
 def _config_base_for_health_check(
     config_params: Mapping[str, object],
     request_params: Mapping[str, object],
@@ -122,25 +145,19 @@ def _config_base_for_health_check(
 ) -> dict[str, object]:
     """Return the configured parameters to merge under a connection-test request.
 
-    A request that sets its own connection fields describes a connection of its
-    own, so the configuration's credentials are not carried into it: they belong
-    to the endpoint the configuration names. Anything the request does not set
-    still comes from the configuration, which is what lets a request name a
-    configured model and test it as configured.
+    A request that sets its own connection fields, or names its own stored
+    credential, describes a connection of its own, so the configuration's
+    credentials are not carried into it: they belong to the endpoint the
+    configuration names. Anything the request does not set still comes from the
+    configuration, which is what lets a request name a configured model and test
+    it as configured.
 
     ``litellm_credential_name`` is dropped alongside the literal credential
     fields: it names a stored credential that ``load_credentials_from_list``
     resolves into the same secrets further down the call, so leaving it in place
     would reintroduce them by reference.
-
-    ``general_settings.allow_client_side_credentials`` is the existing proxy-wide
-    opt-in for callers supplying their own connection parameters. Where an admin
-    has enabled it, a request may pair its own endpoint with the configured
-    credentials, as it could before.
     """
-    if allow_client_side_credentials:
-        return dict(config_params)
-    if not any(param in request_params for param in _BANNED_REQUEST_BODY_PARAMS):
+    if _request_inherits_config_credentials(config_params, request_params, allow_client_side_credentials):
         return dict(config_params)
     return {key: value for key, value in config_params.items() if key not in _CONFIG_CONNECTION_FIELDS}
 
@@ -1959,6 +1976,9 @@ async def test_model_connection(
     Note: 
     - If the model is configured in proxy_config.yaml, credentials (api_key, api_base, etc.) 
       will be automatically loaded from the config (with resolved environment variables).
+    - A request naming a stored credential (`litellm_credential_name`) that the configuration
+      does not name is probed with that credential instead, and inherits no credentials
+      from the configuration its model string happened to match.
     - You can override specific params by including them in the request.
     - You can use `os.environ/VARIABLE_NAME` syntax to reference environment variables,
       which will be resolved automatically (same as in proxy_config.yaml).

@@ -2441,3 +2441,91 @@ class TestAnthropicPassthroughFastMode:
 
         assert served_standard.usage.speed == "standard"
         assert self._cost(served_standard) == pytest.approx(self._cost(standard))
+
+
+class TestRecordPartialUsageForFailure:
+    """A stream that dies mid-way still carries the usage the provider billed in
+    message_start; the failure row must keep it and its cost instead of logging
+    a zero-cost failure (or, worse, a success)."""
+
+    @staticmethod
+    def _sse(event, data):
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+    @staticmethod
+    def _make_logging_obj() -> LiteLLMLoggingObj:
+        return LiteLLMLoggingObj(
+            model="claude-sonnet-5",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=True,
+            call_type="anthropic_messages",
+            start_time=datetime.now(),
+            litellm_call_id="test-partial-usage-failure",
+            function_id="test-partial-usage-failure",
+        )
+
+    def _interrupted_chunks(self):
+        return [
+            self._sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_abc",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-5",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 52, "output_tokens": 1},
+                    },
+                },
+            ),
+            self._sse(
+                "content_block_start",
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            ),
+            self._sse(
+                "content_block_delta",
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}},
+            ),
+        ]
+
+    def test_stashes_partial_usage_and_cost_from_interrupted_stream(self):
+        logging_obj = self._make_logging_obj()
+
+        AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
+            litellm_logging_obj=logging_obj,
+            request_body={"model": "claude-sonnet-5", "stream": True},
+            all_chunks=self._interrupted_chunks(),
+        )
+
+        usage = logging_obj.model_call_details["combined_usage_object"]
+        assert usage.prompt_tokens == 52
+        assert logging_obj.model_call_details["response_cost"] > 0
+
+    def test_stashes_partial_usage_at_zero_cost_when_model_is_unpriced(self):
+        logging_obj = self._make_logging_obj()
+
+        AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
+            litellm_logging_obj=logging_obj,
+            request_body={"model": "claude-unpriced-test-model", "stream": True},
+            all_chunks=self._interrupted_chunks(),
+        )
+
+        usage = logging_obj.model_call_details["combined_usage_object"]
+        assert usage.prompt_tokens == 52
+        assert logging_obj.model_call_details["response_cost"] == 0.0
+
+    def test_leaves_logging_obj_untouched_when_nothing_streamed(self):
+        logging_obj = self._make_logging_obj()
+
+        AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
+            litellm_logging_obj=logging_obj,
+            request_body={"model": "claude-sonnet-5", "stream": True},
+            all_chunks=[],
+        )
+
+        assert "combined_usage_object" not in logging_obj.model_call_details
+        assert "response_cost" not in logging_obj.model_call_details
