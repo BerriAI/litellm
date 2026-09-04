@@ -1,4 +1,7 @@
 import { KeywordTierRule } from "./KeywordTierRules";
+
+type ClassifierLLMConfigWire = ClassifierLLMConfig & { vision?: { enabled?: boolean; max_images?: number } };
+
 import type { ModelGroup } from "../llm_calls/fetch_models";
 import {
   type CustomTierSet,
@@ -61,7 +64,8 @@ export const normalizeClassifierLlmConfig = ({
   reasoning_effort,
   classification_rubric,
   system_prompt,
-}: ClassifierLLMConfig): ClassifierLLMConfig =>
+  vision,
+}: ClassifierLLMConfigWire): ClassifierLLMConfigWire =>
   system_prompt?.trim()
     ? {
         model,
@@ -69,6 +73,7 @@ export const normalizeClassifierLlmConfig = ({
         ...(circuit_breaker_enabled !== undefined && { circuit_breaker_enabled }),
         ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
         ...(reasoning_effort && { reasoning_effort }),
+        ...(vision && { vision }),
         system_prompt,
       }
     : {
@@ -78,6 +83,7 @@ export const normalizeClassifierLlmConfig = ({
         ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
         ...(reasoning_effort && { reasoning_effort }),
         ...(classification_rubric && { classification_rubric }),
+        ...(vision && { vision }),
       };
 
 interface ScorerKnobInputs {
@@ -318,7 +324,7 @@ export const getSemanticConfigError = ({
 };
 
 interface CustomTierWireFieldInputs {
-  classifierLlmConfig: ClassifierLLMConfig | undefined;
+  classifierLlmConfig: ClassifierLLMConfigWire | undefined;
   planModeMinTierId: string | undefined;
   classificationPrompt: string | undefined;
   classificationExamples: string | undefined;
@@ -350,6 +356,7 @@ export const customTierWireFields = (
           circuit_breaker_cooldown_seconds: classifierLlmConfig.circuit_breaker_cooldown_seconds,
         }),
         ...(classifierLlmConfig.reasoning_effort && { reasoning_effort: classifierLlmConfig.reasoning_effort }),
+        ...(classifierLlmConfig.vision && { vision: classifierLlmConfig.vision }),
       },
     }),
     session_affinity: false,

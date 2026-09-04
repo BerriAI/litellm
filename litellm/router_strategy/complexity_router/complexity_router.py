@@ -40,7 +40,10 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
-from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    as_openai_image_part,
+    request_contains_image_content,
+)
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
@@ -48,7 +51,11 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
     TierSuccessPredictor,
     resolve_tier_artifact,
 )
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionImageObject,
+    ChatCompletionTextObject,
+)
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     ModelResponse,
@@ -432,6 +439,23 @@ def _strip_reminder_blocks(text: str, marker_pairs: tuple[tuple[str, str], ...] 
     keep_from: Final = (0, *accumulate((end for _, end in spans), max))
     keep_to: Final = (*(start for start, _ in spans), len(text))
     return " ".join(kept for a, b in zip(keep_from, keep_to) if (kept := text[a:b].strip()))
+
+
+def _inline_image_part(part: Mapping[str, object]) -> ChatCompletionImageObject | None:
+    """One image content part safe to hand the classifier, or None.
+
+    Inline data URIs only. A remote URL is caller-controlled and provider adapters do not uniformly
+    delegate fetching to the provider: gigachat's file handler downloads any non-data URL with
+    `client.get` from the proxy host, so forwarding one would let a key scoped to this router aim a
+    proxy-side request at an internal address, on a call the caller never asked for. The routed
+    model still receives the original URL exactly as before.
+    """
+    converted: Final = as_openai_image_part(part)
+    if converted is None:
+        return None
+    image_url: Final = converted["image_url"]
+    url: Final = image_url if isinstance(image_url, str) else image_url.get("url", "")
+    return converted if url.startswith("data:") else None
 
 
 def _human_text(content: object, marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS) -> str:
@@ -1591,6 +1615,10 @@ class ComplexityRouter(CustomLogger):
         threshold check alone would hand that traffic to the cheapest model without ever consulting
         the classifier. Scores also go negative when simple indicators fire, so a score threshold
         would reject exactly the trivial prompts this path exists to serve.
+
+        A turn carrying images the classifier would see is never decided cheaply: the scorer reads
+        text alone, so its confidence describes a request it has only partly seen, and a trivial
+        caption beside a screenshot is exactly the misrouting vision classification exists to stop.
         """
         tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
         scored: Final = ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
@@ -1598,6 +1626,7 @@ class ComplexityRouter(CustomLogger):
         decided_cheaply: Final = (
             threshold is not None
             and bool(signals)
+            and not self._classifier_image_parts(messages)
             and self._active_tier_severity(tier) <= self._active_tier_severity(threshold)
         )
         if decided_cheaply:
@@ -1622,10 +1651,42 @@ class ComplexityRouter(CustomLogger):
         tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
         scored: Final = ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
         margin: Final = self.config.hybrid_boundary_margin
-        decided: Final = margin is not None and bool(signals) and not self._is_near_tier_boundary(score, margin)
+        decided: Final = (
+            margin is not None
+            and bool(signals)
+            and not self._classifier_image_parts(messages)
+            and not self._is_near_tier_boundary(score, margin)
+        )
         if decided:
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause="hybrid_short_circuit")
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages, scored=scored)
+
+    def _classifier_image_parts(
+        self, messages: Sequence[Mapping[str, object]] | None
+    ) -> tuple[ChatCompletionImageObject, ...]:
+        """Images from the newest user turn to hand the classifier, capped by max_images.
+
+        Empty unless the operator opted in AND the classifier model is declared vision-capable, so
+        every other deployment keeps today's text-only payload byte for byte. Only the newest user
+        turn is read: earlier turns are context the classifier already gets as quoted text, and an
+        image nested in a tool_result is tool output rather than the ask being classified.
+        Remote-URL images are left out entirely; `_inline_image_part` carries why.
+        """
+        llm_config: Final = self.config.classifier_llm_config
+        if llm_config is None or not llm_config.vision.enabled or not self.config.uses_llm_classifier or not messages:
+            return ()
+        if not self._model_declares_vision_support(llm_config.model):
+            return ()
+        newest_user_turn: Final = next((msg for msg in reversed(messages) if msg.get("role") == "user"), None)
+        content: Final = newest_user_turn.get("content") if newest_user_turn is not None else None
+        if not isinstance(content, list):
+            return ()
+        return tuple(
+            islice(
+                (part for raw in content if isinstance(raw, Mapping) and (part := _inline_image_part(raw)) is not None),
+                llm_config.vision.max_images,
+            )
+        )
 
     async def _llm_classifier_outcome(
         self,
@@ -1864,9 +1925,18 @@ class ComplexityRouter(CustomLogger):
         }
         turn_off_message_logging: Final = _effective_turn_off_message_logging(request_kwargs)
 
+        image_parts: Final = self._classifier_image_parts(messages)
+        user_content: Final[str | Sequence[ChatCompletionTextObject | ChatCompletionImageObject]] = (
+            [  # mutable-ok: SDK request payload content list is built once
+                {"type": "text", "text": user_payload},
+                *image_parts,
+            ]
+            if image_parts
+            else user_payload
+        )
         messages_for_call: Final[list[AllMessageValues]] = [  # mutable-ok: SDK request payload list is built once
             {"role": "system", "content": classifier_system_prompt},
-            {"role": "user", "content": user_payload},
+            {"role": "user", "content": user_content},
         ]
         response_format: Final = classifier_response_format
         classifier_call_params: Mapping[str, str] = EMPTY_MAPPING
@@ -2557,31 +2627,53 @@ class ComplexityRouter(CustomLogger):
             return pinned_model
         return self.get_model_for_tier(escalated_tier)
 
-    def _model_accepts_image_input(self, model_name: str) -> bool:
-        """Whether a routed model or pool entry can serve an image request.
+    def _vision_verdicts(self, model_name: str) -> tuple[bool | None, ...]:
+        """Declared vision support per deployment serving the name: True, False, or None when
+        nothing declares either way.
 
         Resolved through the deployments that would actually serve the name; a name with no
         deployment on the router is served by the SDK directly and is checked against the model
-        cost map itself. Only an explicit supports_vision false excludes, a deployment-level
-        model_info override first and the map otherwise, so unmapped custom names stay routable.
+        cost map itself. A deployment-level model_info override wins over the map.
+
+        One verdict set, two readings, because the two callers fail in opposite directions.
+        Routing a user's image asks whether anything RULES IT OUT, so an undeclared model stays
+        eligible and unmapped custom names keep routing. Handing an image to the classifier asks
+        whether something RULES IT IN: an undeclared model that turns out to be text-only rejects
+        every image request, and that rejection is swallowed by the classifier's own fallback, so
+        the router quietly serves all image traffic from the fallback tier and pays for the failed
+        call each time. An undeclared model instead keeps today's text-only payload, which is a
+        visible no-op the operator fixes by declaring supports_vision on the deployment.
+        """
+        from litellm.utils import is_vision_explicitly_disabled, supports_vision
+
+        def model_verdict(model: str) -> bool | None:
+            if supports_vision(model):
+                return True
+            return False if is_vision_explicitly_disabled(model) else None
+
+        def deployment_verdict(deployment: Mapping[str, Any]) -> bool | None:
+            declared: Final = (deployment.get("model_info") or EMPTY_MAPPING).get("supports_vision")
+            if declared is not None:
+                return declared is True
+            return model_verdict((deployment.get("litellm_params") or EMPTY_MAPPING).get("model") or model_name)
+
+        deployments: Final = self.litellm_router_instance.get_model_list(model_name=model_name)
+        if not deployments:
+            return (model_verdict(model_name),)
+        return tuple(deployment_verdict(deployment) for deployment in deployments)
+
+    def _model_accepts_image_input(self, model_name: str) -> bool:
+        """Whether a routed model or pool entry can serve an image request.
 
         A multi-deployment group must accept on EVERY deployment: the router picks a deployment
         inside the group after this gate runs, so a mixed group marked eligible could still hand
         the image to its text-only member and fail with the exact 400 the gate exists to prevent.
         """
-        from litellm.utils import is_vision_explicitly_disabled
+        return all(verdict is not False for verdict in self._vision_verdicts(model_name))
 
-        def deployment_accepts(deployment: Mapping[str, Any]) -> bool:
-            declared: Final = (deployment.get("model_info") or EMPTY_MAPPING).get("supports_vision")
-            if declared is not None:
-                return declared is True
-            litellm_model: Final = (deployment.get("litellm_params") or EMPTY_MAPPING).get("model") or model_name
-            return not is_vision_explicitly_disabled(litellm_model)
-
-        deployments: Final = self.litellm_router_instance.get_model_list(model_name=model_name)
-        if not deployments:
-            return not is_vision_explicitly_disabled(model_name)
-        return all(deployment_accepts(deployment) for deployment in deployments)
+    def _model_declares_vision_support(self, model_name: str) -> bool:
+        """Whether every deployment serving the name is declared vision-capable."""
+        return all(verdict is True for verdict in self._vision_verdicts(model_name))
 
     def _modality_eligible_models(self) -> frozenset[str]:
         """Every configured pool entry, plus default_model, that can serve an image request."""
@@ -3373,8 +3465,9 @@ class ComplexityRouter(CustomLogger):
         has_original_messages: Final = messages is not None and len(messages) > 0
 
         user_message, system_prompt = _extract_current_ask_and_system_prompt(resolved_messages, self._reminder_markers)
+        classifier_images: Final = self._classifier_image_parts(resolved_messages)
 
-        if user_message is None:
+        if user_message is None and not classifier_images:
             verbose_router_logger.debug("ComplexityRouter: No user message found, routing to default model")
             default_model_first: Final = not self.config.plugins and self.config.default_model
             if default_model_first:
@@ -3401,6 +3494,7 @@ class ComplexityRouter(CustomLogger):
                 ),
             )
 
+        ask: Final = user_message or ""
         newest_ask: Final = _newest_turn_ask(resolved_messages, self._reminder_markers)
         escalation_keyword: Final = self._matched_escalation_keyword(newest_ask) if newest_ask is not None else None
 
@@ -3430,7 +3524,7 @@ class ComplexityRouter(CustomLogger):
                 ),
             )
 
-        override: Final = await self._resolve_keyword_tier_override(user_message, request_kwargs)
+        override: Final = await self._resolve_keyword_tier_override(ask, request_kwargs)
         if override is not None:
             escalated_tier: Final = (
                 self._escalate_tier(override.tier) if escalation_keyword is not None else override.tier
@@ -3475,9 +3569,7 @@ class ComplexityRouter(CustomLogger):
         outcome: Final = (
             ClassificationOutcome(tier=housekeeping_tier, score=None, signals=("housekeeping",), cause="housekeeping")
             if housekeeping_tier is not None
-            else await self.aclassify(
-                user_message, system_prompt, request_kwargs, resolved_messages, raw_messages=messages
-            )
+            else await self.aclassify(ask, system_prompt, request_kwargs, resolved_messages, raw_messages=messages)
         )
         tier, score, signals = outcome.tier, outcome.score, outcome.signals
         classified_tier: Final = tier
@@ -3544,7 +3636,7 @@ class ComplexityRouter(CustomLogger):
             # under is not a floor.
             routed_model = self._soft_floor_pick(
                 tier,
-                user_message,
+                ask,
                 request_kwargs,
                 hard_floor=tier if context_original_tier is not None else plan_floor,
                 hard_ceiling=housekeeping_ceiling,
