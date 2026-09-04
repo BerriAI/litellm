@@ -13021,13 +13021,13 @@ class Router:
 
         `model` is whatever the caller asked for, which may be a `model_group_alias` key, while the
         strategy registries and the marker deployment are keyed by the marker's own `model_name`, so
-        every lookup below resolves the team public name or alias first. Only the lookups: the
+        every lookup below resolves the alias, then the team public name, first. Only the lookups: the
         caller-facing name stays the alias, since spend metadata is stamped before routing and the
         response carries the tier group the strategy picked.
         """
         requested_registered_model_name: Final = (
-            self._team_strategy_marker_model_name(model=model, request_kwargs=request_kwargs)
-            or self._get_model_from_alias(model=model)
+            self._get_model_from_alias(model=model)
+            or self._team_strategy_marker_model_name(model=model, request_kwargs=request_kwargs)
             or model
         )
         registered_model_name: Final = await self._resolve_claude_code_session_router(
