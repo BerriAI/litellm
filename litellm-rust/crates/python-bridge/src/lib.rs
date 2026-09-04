@@ -1,3 +1,4 @@
+mod constants;
 mod diagnostics;
 mod errors;
 mod execution;
@@ -96,6 +97,7 @@ mod tests {
             let expected = [
                 "RustBridgeDeclined",
                 "RustUpstreamError",
+                "ocr_decline",
                 "ocr",
                 "aocr",
                 "transcription",

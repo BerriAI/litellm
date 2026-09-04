@@ -6,9 +6,8 @@ from enum import Enum
 from typing import Final, Generic, NoReturn, TypeAlias, TypeVar
 
 from litellm.exceptions import APIError
-from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
+from litellm.rust_bridge.bindings import native_exception_types
 
-BindingT = TypeVar("BindingT")
 NativeT = TypeVar("NativeT")
 ResultT = TypeVar("ResultT")
 
@@ -29,11 +28,18 @@ class RustDeclined:
 
 
 @dataclass(frozen=True, slots=True)
+class RustFailed:
+    status_code: int
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
 class RustUnavailable:
     pass
 
 
-RustAttempt: TypeAlias = RustHandled[ResultT] | RustDeclined | RustUnavailable
+RustOutcome: TypeAlias = RustHandled[ResultT] | RustDeclined | RustFailed
+RustAttempt: TypeAlias = RustOutcome[ResultT] | RustUnavailable
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,9 +57,11 @@ def invoke(
     mode: FallbackMode,
     context: BridgeErrorContext,
 ) -> ResultT:
-    result: Final = attempt(native_call=native_call, adapt=adapt, context=context)
+    result: Final = attempt(native_call=native_call, adapt=adapt)
     if isinstance(result, RustHandled):
         return result.value
+    if isinstance(result, RustFailed):
+        raise_failure(result, context)
     if mode is FallbackMode.PYTHON:
         return fallback()
     _raise_required(result, context)
@@ -67,9 +75,11 @@ async def ainvoke(
     mode: FallbackMode,
     context: BridgeErrorContext,
 ) -> ResultT:
-    result: Final = await aattempt(native_call=native_call, adapt=adapt, context=context)
+    result: Final = await aattempt(native_call=native_call, adapt=adapt)
     if isinstance(result, RustHandled):
         return result.value
+    if isinstance(result, RustFailed):
+        raise_failure(result, context)
     if mode is FallbackMode.PYTHON:
         return await fallback()
     _raise_required(result, context)
@@ -79,7 +89,6 @@ def attempt(
     *,
     native_call: Callable[[], NativeT] | None,
     adapt: Callable[[NativeT], ResultT],
-    context: BridgeErrorContext,
 ) -> RustAttempt[ResultT]:
     if native_call is None:
         return RustUnavailable()
@@ -92,7 +101,7 @@ def attempt(
     except declined as error:
         return RustDeclined(reason=_decline_reason(error))
     except upstream as error:
-        _raise_upstream(error, context)
+        return _failed(error)
     return RustHandled(adapt(value))
 
 
@@ -100,7 +109,6 @@ async def aattempt(
     *,
     native_call: Callable[[], Awaitable[NativeT]] | None,
     adapt: Callable[[NativeT], ResultT],
-    context: BridgeErrorContext,
 ) -> RustAttempt[ResultT]:
     if native_call is None:
         return RustUnavailable()
@@ -113,38 +121,40 @@ async def aattempt(
     except declined as error:
         return RustDeclined(reason=_decline_reason(error))
     except upstream as error:
-        _raise_upstream(error, context)
+        return _failed(error)
     return RustHandled(adapt(value))
 
 
-def attempt_binding(
+def complete(
     *,
-    binding: NativeBinding[BindingT],
-    native_call: Callable[[BindingT], NativeT],
+    native_call: Callable[[], NativeT],
     adapt: Callable[[NativeT], ResultT],
-    context: BridgeErrorContext,
-) -> RustAttempt[ResultT]:
-    loaded: Final = binding.load()
-    return attempt(
-        native_call=None if loaded is None else lambda: native_call(loaded),
-        adapt=adapt,
-        context=context,
-    )
+) -> RustHandled[ResultT] | RustFailed:
+    exceptions: Final = native_exception_types()
+    if exceptions is None:
+        return RustHandled(adapt(native_call()))
+    upstream: Final = exceptions[1]
+    try:
+        value: Final = native_call()
+    except upstream as error:
+        return _failed(error)
+    return RustHandled(adapt(value))
 
 
-async def aattempt_binding(
+async def acomplete(
     *,
-    binding: NativeBinding[BindingT],
-    native_call: Callable[[BindingT], Awaitable[NativeT]],
+    native_call: Callable[[], Awaitable[NativeT]],
     adapt: Callable[[NativeT], ResultT],
-    context: BridgeErrorContext,
-) -> RustAttempt[ResultT]:
-    loaded: Final = binding.load()
-    return await aattempt(
-        native_call=None if loaded is None else lambda: native_call(loaded),
-        adapt=adapt,
-        context=context,
-    )
+) -> RustHandled[ResultT] | RustFailed:
+    exceptions: Final = native_exception_types()
+    if exceptions is None:
+        return RustHandled(adapt(await native_call()))
+    upstream: Final = exceptions[1]
+    try:
+        value: Final = await native_call()
+    except upstream as error:
+        return _failed(error)
+    return RustHandled(adapt(value))
 
 
 def call(operation: Callable[[], ResultT], context: BridgeErrorContext) -> ResultT:
@@ -155,7 +165,7 @@ def call(operation: Callable[[], ResultT], context: BridgeErrorContext) -> Resul
     try:
         return operation()
     except upstream as error:
-        _raise_upstream(error, context)
+        raise_failure(_failed(error), context)
 
 
 async def acall(operation: Callable[[], Awaitable[ResultT]], context: BridgeErrorContext) -> ResultT:
@@ -166,7 +176,7 @@ async def acall(operation: Callable[[], Awaitable[ResultT]], context: BridgeErro
     try:
         return await operation()
     except upstream as error:
-        _raise_upstream(error, context)
+        raise_failure(_failed(error), context)
 
 
 def _decline_reason(error: BaseException) -> str:
@@ -189,18 +199,22 @@ def _required_reason(result: RustDeclined | RustUnavailable) -> str:
             return f"declined the request: {reason}"
 
 
-def _raise_upstream(error: BaseException, context: BridgeErrorContext) -> NoReturn:
+def _failed(error: BaseException) -> RustFailed:
     args: Final[tuple[object, ...]] = error.args
     status_value: Final = args[0] if args else 0
     message_value: Final = args[1] if len(args) > 1 else str(error)
     status: Final = status_value if isinstance(status_value, int) else 0
     message: Final = message_value if isinstance(message_value, str) else str(message_value)
+    return RustFailed(status_code=status, message=message)
+
+
+def raise_failure(failure: RustFailed, context: BridgeErrorContext) -> NoReturn:
     raise APIError(
-        status_code=status or 500,
-        message=f"litellm rust {context.route}: {message}",
+        status_code=failure.status_code or 500,
+        message=f"litellm rust {context.route}: {failure.message}",
         llm_provider=context.provider,
         model=context.model,
-    ) from error
+    )
 
 
 def identity(value: ResultT) -> ResultT:

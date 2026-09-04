@@ -11,10 +11,11 @@ import httpx
 from litellm.rust_bridge import configuration as _configuration
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.runtime import (
-    BridgeErrorContext,
     RustAttempt,
-    aattempt_binding,
-    attempt_binding,
+    RustDeclined,
+    RustUnavailable,
+    acomplete,
+    complete,
     identity,
 )
 from litellm.rust_bridge.timeouts import timeout_to_seconds as _timeout_to_seconds
@@ -55,6 +56,17 @@ class RustAocr(Protocol):
         raise NotImplementedError
 
 
+@runtime_checkable
+class RustOcrDecline(Protocol):
+    def __call__(
+        self,
+        model: str,
+        custom_llm_provider: str | None,
+        optional_params: Mapping[str, object],
+    ) -> str | None:
+        raise NotImplementedError
+
+
 @dataclass(frozen=True, slots=True)
 class RustOCRRequest:
     model: str
@@ -65,6 +77,13 @@ class RustOCRRequest:
     extra_headers: Mapping[str, object] | None
     optional_params: Mapping[str, object]
     timeout: float | httpx.Timeout | None
+
+
+@dataclass(frozen=True, slots=True)
+class RustOCRCandidate:
+    model: str
+    custom_llm_provider: str | None
+    optional_params: Mapping[str, object]
 
 
 class _Unset:
@@ -82,14 +101,28 @@ def _validate_aocr(value: object) -> RustAocr | None:
     return value if isinstance(value, RustAocr) else None
 
 
+def _validate_decline(value: object) -> RustOcrDecline | None:
+    return value if isinstance(value, RustOcrDecline) else None
+
+
 _OCR: Final = NativeBinding[RustOcr]("ocr", validate=_validate_ocr)
 _AOCR: Final = NativeBinding[RustAocr]("aocr", validate=_validate_aocr)
+_OCR_DECLINE: Final = NativeBinding[RustOcrDecline]("ocr_decline", validate=_validate_decline)
+
+
+def _accept_injected_ocr(
+    model: str,
+    custom_llm_provider: str | None,
+    optional_params: Mapping[str, object],
+) -> None:
+    return None
 
 
 def set_rust_ocr(
     *,
     ocr: RustOcr | None | _Unset = _UNSET,
     aocr: RustAocr | None | _Unset = _UNSET,
+    decline: RustOcrDecline | None | _Unset = _UNSET,
 ) -> None:
     if not isinstance(ocr, _Unset):
         if ocr is None:
@@ -101,6 +134,16 @@ def set_rust_ocr(
             _AOCR.reset()
         else:
             _AOCR.override(aocr)
+    if not isinstance(decline, _Unset):
+        if decline is None:
+            _OCR_DECLINE.reset()
+        else:
+            _OCR_DECLINE.override(decline)
+    elif not isinstance(ocr, _Unset) or not isinstance(aocr, _Unset):
+        if ocr is None and aocr is None:
+            _OCR_DECLINE.reset()
+        else:
+            _OCR_DECLINE.override(_accept_injected_ocr)
 
 
 def load_rust_ocr() -> RustOcr | None:
@@ -113,28 +156,42 @@ def load_rust_aocr() -> RustAocr | None:
 
 def attempt_ocr(
     *,
+    candidate: RustOCRCandidate,
     prepare_request: Callable[[], RustOCRRequest],
-    context: BridgeErrorContext,
 ) -> RustAttempt[Mapping[str, object]]:
-    return attempt_binding(
-        binding=_OCR,
-        native_call=lambda rust_ocr: _call_ocr(rust_ocr, prepare_request()),
-        adapt=identity,
-        context=context,
+    rust_ocr: Final = _OCR.load()
+    decline: Final = _OCR_DECLINE.load()
+    if rust_ocr is None or decline is None:
+        return RustUnavailable()
+    reason: Final = decline(
+        model=candidate.model,
+        custom_llm_provider=candidate.custom_llm_provider,
+        optional_params=candidate.optional_params,
     )
+    if reason is not None:
+        return RustDeclined(reason)
+    request: Final = prepare_request()
+    return complete(native_call=lambda: _call_ocr(rust_ocr, request), adapt=identity)
 
 
 async def attempt_aocr(
     *,
+    candidate: RustOCRCandidate,
     prepare_request: Callable[[], RustOCRRequest],
-    context: BridgeErrorContext,
 ) -> RustAttempt[Mapping[str, object]]:
-    return await aattempt_binding(
-        binding=_AOCR,
-        native_call=lambda rust_aocr: _call_aocr(rust_aocr, prepare_request()),
-        adapt=identity,
-        context=context,
+    rust_aocr: Final = _AOCR.load()
+    decline: Final = _OCR_DECLINE.load()
+    if rust_aocr is None or decline is None:
+        return RustUnavailable()
+    reason: Final = decline(
+        model=candidate.model,
+        custom_llm_provider=candidate.custom_llm_provider,
+        optional_params=candidate.optional_params,
     )
+    if reason is not None:
+        return RustDeclined(reason)
+    request: Final = prepare_request()
+    return await acomplete(native_call=lambda: _call_aocr(rust_aocr, request), adapt=identity)
 
 
 def _call_ocr(rust_ocr: RustOcr, request: RustOCRRequest) -> Mapping[str, object]:
