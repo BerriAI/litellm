@@ -1219,10 +1219,12 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         ).rstrip("/")
         url: Final = f"{s3_endpoint_url}/{bucket_name}/{encode_s3_object_key_for_url(object_key)}"
 
-        litellm_params[S3_SIGNED_GET_HEADERS_PARAM] = self._sign_s3_delete_request(  # rebind-ok: router expects litellm_params mutated
-            api_base=url,
-            aws_region_name=aws_region_name,
-            request_params=request_params,
+        litellm_params[S3_SIGNED_GET_HEADERS_PARAM] = (
+            self._sign_s3_delete_request(  # rebind-ok: router expects litellm_params mutated
+                api_base=url,
+                aws_region_name=aws_region_name,
+                request_params=request_params,
+            )
         )
         litellm_params["_deleted_file_id"] = file_id  # rebind-ok: router expects litellm_params mutated
         return url, {}  # mutable-ok: empty headers dict required by BaseFilesConfig contract
