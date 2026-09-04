@@ -1913,6 +1913,27 @@ def ocr_cost(
     except Exception:
         model_info = None
 
+    prompt_tokens: Final = response.usage_info.prompt_tokens
+    completion_tokens: Final = response.usage_info.completion_tokens
+    total_tokens: Final = response.usage_info.total_tokens
+    has_token_usage: Final = prompt_tokens is not None or completion_tokens is not None
+    has_token_pricing: Final = model_info is not None and (
+        model_info.get("input_cost_per_token") is not None or model_info.get("output_cost_per_token") is not None
+    )
+    if has_token_usage and has_token_pricing and model_info is not None:
+        return generic_cost_per_token(
+            model=model,
+            usage=Usage(
+                prompt_tokens=prompt_tokens or 0,
+                completion_tokens=completion_tokens or 0,
+                total_tokens=total_tokens
+                if total_tokens is not None
+                else (prompt_tokens or 0) + (completion_tokens or 0),
+            ),
+            custom_llm_provider=custom_llm_provider or str(model_info.get("litellm_provider") or ""),
+            model_info=model_info,
+        )
+
     credits: Final = getattr(response.usage_info, "credits", None)
     cost_per_credit = None
     if model_info is not None:

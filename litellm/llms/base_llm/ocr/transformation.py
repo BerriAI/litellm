@@ -79,8 +79,37 @@ class OCRUsageInfo(LiteLLMPydanticObjectBase):
     pages_processed_annotation: int | None = None
     credits: float | None = None
     doc_size_bytes: int | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
 
     model_config = {"extra": "allow"}
+
+
+OCR_TOKEN_USAGE_KEYS: Final = frozenset({"prompt_tokens", "completion_tokens", "total_tokens"})
+
+
+def has_ocr_token_usage(usage_info: Mapping[str, builtins.object]) -> bool:
+    return any(usage_info.get(key) is not None for key in OCR_TOKEN_USAGE_KEYS)
+
+
+def normalize_ocr_usage(usage_info: Mapping[str, builtins.object]) -> Mapping[str, builtins.object]:
+    prompt_tokens: Final = usage_info.get("prompt_tokens")
+    completion_tokens: Final = usage_info.get("completion_tokens")
+    reported_total_tokens: Final = usage_info.get("total_tokens")
+    derived_total_tokens: Final = (
+        prompt_tokens + completion_tokens
+        if isinstance(prompt_tokens, int) and isinstance(completion_tokens, int)
+        else 0
+    )
+    total_tokens: Final = reported_total_tokens if reported_total_tokens is not None else derived_total_tokens
+    additional_usage: Final = {key: value for key, value in usage_info.items() if key not in OCR_TOKEN_USAGE_KEYS}
+    return {
+        "prompt_tokens": prompt_tokens if prompt_tokens is not None else 0,
+        "completion_tokens": completion_tokens if completion_tokens is not None else 0,
+        "total_tokens": total_tokens,
+        **additional_usage,
+    }
 
 
 class OCRResponse(LiteLLMPydanticObjectBase):

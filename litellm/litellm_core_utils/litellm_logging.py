@@ -85,7 +85,7 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
     redact_streaming_responses_for_custom_logger,
 )
-from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.llms.base_llm.ocr.transformation import OCRResponse, normalize_ocr_usage
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
@@ -5409,7 +5409,9 @@ class StandardLoggingPayloadSetup:
             return combined_usage_object.model_dump()
         if not response_obj:
             return _empty
-        _raw: Final = response_obj.get("usage", None)
+        usage: Final = response_obj.get("usage")
+        uses_ocr_usage_info: Final = usage is None and response_obj.get("object") == "ocr"
+        _raw: Final = response_obj.get("usage_info") if uses_ocr_usage_info else usage
         if _raw is None:
             return _empty
         if isinstance(_raw, ResponseAPIUsage):
@@ -5419,6 +5421,8 @@ class StandardLoggingPayloadSetup:
                 return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(_raw).model_dump()
             if InteractionsUsageObjectTransformation.is_interactions_usage_object(_raw):
                 return InteractionsUsageObjectTransformation.transform_interactions_usage_object(_raw).model_dump()
+            if uses_ocr_usage_info:
+                return dict(normalize_ocr_usage(_raw))
             return _raw
         if isinstance(_raw, Usage):
             return _raw.model_dump()
