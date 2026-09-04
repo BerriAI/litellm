@@ -1,13 +1,10 @@
 """Compaction block SSE events from AnthropicStreamWrapper (compact_20260112 polyfill)."""
 
-import os
-import sys
 from typing import List
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,

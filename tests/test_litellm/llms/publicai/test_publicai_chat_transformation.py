@@ -5,11 +5,8 @@ These tests validate the PublicAI configuration which is now JSON-based.
 PublicAI is an OpenAI-compatible provider with minor customizations.
 """
 
-import os
-import sys
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import pytest
 

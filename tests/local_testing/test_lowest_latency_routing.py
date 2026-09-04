@@ -2,7 +2,6 @@
 #    This tests the router's ability to pick deployment with lowest latency
 
 import asyncio
-import os
 import random
 import sys
 import time
@@ -13,11 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import copy
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 
 import litellm

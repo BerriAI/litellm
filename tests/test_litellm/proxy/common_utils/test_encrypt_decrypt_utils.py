@@ -18,9 +18,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 
 def _use_aes(monkeypatch):
     """Flip the write-time algorithm to AES-256-GCM for the duration of a test."""
-    monkeypatch.setattr(
-        proxy_server, "general_settings", {"encryption_algorithm": "aes-256-gcm"}
-    )
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "aes-256-gcm"})
 
 
 @pytest.fixture(autouse=True)
@@ -96,12 +94,7 @@ def test_aes_decrypt_failure_returns_original_when_requested(monkeypatch):
     _use_aes(monkeypatch)
 
     garbled = _V2_GCM_PREFIX + "###"
-    assert (
-        decrypt_value_helper(
-            garbled, key="t", exception_type="debug", return_original_value=True
-        )
-        == garbled
-    )
+    assert decrypt_value_helper(garbled, key="t", exception_type="debug", return_original_value=True) == garbled
 
 
 def test_empty_string_round_trips_under_aes(monkeypatch):
@@ -139,10 +132,56 @@ def test_callback_prefix_composes_with_v2(monkeypatch):
 
 def test_unknown_algorithm_falls_back_to_legacy(monkeypatch):
     """An unrecognized encryption_algorithm value does not produce v2 writes."""
-    monkeypatch.setattr(
-        proxy_server, "general_settings", {"encryption_algorithm": "rot13"}
-    )
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "rot13"})
 
     ct = encrypt_value_helper("secret")
     assert not ct.startswith(_V2_GCM_PREFIX)
     assert decrypt_value_helper(ct, key="t") == "secret"
+
+
+def test_decrypt_failure_debug_log_omits_raw_value(monkeypatch):
+    """Regression for LIT-4152: the decrypt-failure debug breadcrumb must not
+    embed the raw value.
+
+    A DB ``environment_variables`` secret (e.g. a ``DATABASE_URL`` connection
+    string) reaches this path when it cannot be decrypted, for example after a
+    salt or master key change, and previously printed in cleartext when the
+    module regex scrubber was bypassed. The failing key still names the pair so
+    the breadcrumb keeps its debugging value. Uses a dedicated handler rather
+    than caplog because caplog is unreliable under pytest-xdist.
+    """
+    import logging
+
+    import litellm._logging as _logging_module
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setattr(_logging_module, "_ENABLE_SECRET_REDACTION", False)
+
+    secret = "postgresql://leak_user:leak_pw_decrypt@leak-host:5432/leak_db"
+
+    class LogRecordHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+
+    handler = LogRecordHandler()
+    handler.setLevel(logging.DEBUG)
+    original_level = verbose_proxy_logger.level
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    verbose_proxy_logger.addHandler(handler)
+    try:
+        result = decrypt_value_helper(secret, key="DATABASE_URL", return_original_value=True)
+        rendered = " ".join(record.getMessage() for record in handler.records)
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+        verbose_proxy_logger.setLevel(original_level)
+
+    assert secret not in rendered, f"raw value leaked in decrypt-failure log: {rendered!r}"
+    assert "leak_pw_decrypt" not in rendered
+    assert any("DATABASE_URL" in record.getMessage() for record in handler.records), (
+        "the failing key should still be named in the breadcrumb"
+    )
+    assert result == secret

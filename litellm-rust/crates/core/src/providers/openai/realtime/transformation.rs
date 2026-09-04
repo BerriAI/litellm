@@ -1,6 +1,6 @@
+use crate::Error;
 use crate::realtime::transformation::RealtimeProviderConfig;
 use crate::realtime::types::{RealtimeEvent, RealtimeTransformResult};
-use crate::CoreResult;
 
 /// Default OpenAI API base, used when the caller does not override `api_base`.
 pub const OPENAI_REALTIME_DEFAULT_API_BASE: &str = "https://api.openai.com";
@@ -72,7 +72,7 @@ impl RealtimeProviderConfig for OpenAiRealtimeConfig {
         &self,
         event: &RealtimeEvent,
         _model: &str,
-    ) -> CoreResult<RealtimeTransformResult> {
+    ) -> Result<RealtimeTransformResult, Error> {
         Ok(RealtimeTransformResult::passthrough(event.clone()))
     }
 
@@ -80,7 +80,7 @@ impl RealtimeProviderConfig for OpenAiRealtimeConfig {
         &self,
         event: &RealtimeEvent,
         _model: &str,
-    ) -> CoreResult<RealtimeTransformResult> {
+    ) -> Result<RealtimeTransformResult, Error> {
         Ok(RealtimeTransformResult::passthrough(event.clone()))
     }
 }
@@ -88,14 +88,14 @@ impl RealtimeProviderConfig for OpenAiRealtimeConfig {
 pub fn transform_realtime_request(
     event: &RealtimeEvent,
     model: &str,
-) -> CoreResult<RealtimeTransformResult> {
+) -> Result<RealtimeTransformResult, Error> {
     OPENAI_REALTIME_CONFIG.transform_realtime_request(event, model)
 }
 
 pub fn transform_realtime_response(
     event: &RealtimeEvent,
     model: &str,
-) -> CoreResult<RealtimeTransformResult> {
+) -> Result<RealtimeTransformResult, Error> {
     OPENAI_REALTIME_CONFIG.transform_realtime_response(event, model)
 }
 

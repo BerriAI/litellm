@@ -19,6 +19,7 @@ from litellm.types.videos.main import (
     VideoCreateOptionalRequestParams,
 )
 from litellm.types.router import GenericLiteLLMParams
+from pydantic import ValidationError
 
 
 class TestAzureVideoConfig:
@@ -299,7 +300,7 @@ class TestAzureVideoConfig:
         logging_obj = MagicMock()
 
         # Test that error responses raise exceptions
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             self.config.transform_video_create_response(
                 model=self.model, raw_response=mock_response, logging_obj=logging_obj
             )
