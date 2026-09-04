@@ -7971,8 +7971,60 @@ async def test_forward_spend_logs_metadata_overrides_caller_supplied_extra_heade
 
     resolved = json.loads(updated["headers"][SPEND_LOGS_METADATA_HEADER_NAME])
     assert resolved["user_id"] == "U0099887"
-    forged = json.loads(updated["extra_headers"][SPEND_LOGS_METADATA_HEADER_NAME])
-    assert forged == resolved, "the proxy's resolved value must win over the request body"
+    assert SPEND_LOGS_METADATA_HEADER_NAME not in updated["extra_headers"], (
+        "the caller's copy must be dropped so the proxy's resolved value is what ships"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_metadata",
+    [
+        {"spend_logs_metadata": {"blob": "x" * (MAX_SPEND_LOGS_METADATA_HEADER_BYTES + 1)}},
+        {},
+    ],
+    ids=["oversized", "no-values"],
+)
+async def test_forward_spend_logs_metadata_drops_caller_header_even_when_nothing_is_emitted(
+    key_metadata: dict[str, object],
+):
+    """
+    The emission is skipped when the resolved dict is oversized or empty. The caller's own
+    copy has to go anyway, otherwise a caller forges upstream attribution by making the
+    resolved value too big to forward.
+    """
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4o",
+            "messages": [],
+            "extra_headers": {SPEND_LOGS_METADATA_HEADER_NAME: json.dumps({"user_id": "forged"})},
+        },
+        request=_spend_logs_metadata_request(),
+        user_api_key_dict=_proxy_chain_auth(metadata=key_metadata, team_metadata={}),
+        proxy_config=MagicMock(),
+        general_settings={"forward_spend_logs_metadata_to_llm_api": True},
+    )
+
+    assert SPEND_LOGS_METADATA_HEADER_NAME not in updated["extra_headers"]
+    assert SPEND_LOGS_METADATA_HEADER_NAME not in (updated.get("headers") or {})
+
+
+@pytest.mark.asyncio
+async def test_forward_spend_logs_metadata_leaves_caller_header_alone_when_flag_is_off():
+    """Without the opt-in the proxy claims no ownership of the header, so nothing is touched."""
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4o",
+            "messages": [],
+            "extra_headers": {SPEND_LOGS_METADATA_HEADER_NAME: json.dumps({"user_id": "caller"})},
+        },
+        request=_spend_logs_metadata_request(),
+        user_api_key_dict=_proxy_chain_auth(),
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+
+    assert json.loads(updated["extra_headers"][SPEND_LOGS_METADATA_HEADER_NAME]) == {"user_id": "caller"}
 
 
 @pytest.mark.asyncio

@@ -1243,6 +1243,18 @@ class LiteLLMProxyRequestSetup:
         if not general_settings or general_settings.get("forward_spend_logs_metadata_to_llm_api") is not True:
             return
 
+        # Past the opt-in gate the proxy owns this header, so drop any copy the caller put
+        # in the request body first. `extra_headers` beats `headers` in every provider
+        # handler, and the emission below can still be skipped (no values, oversized,
+        # unserializable) - leaving the caller's copy on those paths would let a caller
+        # forge the attribution the upstream records by making the resolved value too big.
+        caller_extra_headers: Final = data.get("extra_headers")
+        if isinstance(caller_extra_headers, dict):
+            for key in [
+                k for k in caller_extra_headers if isinstance(k, str) and k.lower() == SPEND_LOGS_METADATA_HEADER_NAME
+            ]:
+                del caller_extra_headers[key]
+
         metadata: Final = data.get(_metadata_variable_name)
         if not isinstance(metadata, dict):
             return
@@ -1276,17 +1288,6 @@ class LiteLLMProxyRequestSetup:
             emitted: Final = dict(litellm.headers or {})
             emitted[SPEND_LOGS_METADATA_HEADER_NAME] = encoded
             data["headers"] = emitted  # rebind-ok: emitting this header is what this helper is for
-
-        # `extra_headers` beats `headers` in every provider handler, so a caller that put
-        # this header in the request body would otherwise overwrite the proxy's resolved
-        # value and forge the attribution the upstream records. The proxy owns this header;
-        # a caller contributes through the `x-litellm-spend-logs-metadata` request header,
-        # which is merged above and loses to nothing.
-        caller_extra_headers: Final = data.get("extra_headers")
-        if isinstance(caller_extra_headers, dict):
-            for key in caller_extra_headers:
-                if isinstance(key, str) and key.lower() == SPEND_LOGS_METADATA_HEADER_NAME:
-                    caller_extra_headers[key] = encoded
 
     @staticmethod
     def add_headers_to_llm_call_by_model_group(data: dict, headers: dict, user_api_key_dict: UserAPIKeyAuth) -> dict:
