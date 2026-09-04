@@ -768,7 +768,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
 
         if response.status_code != 200:
-            raise Exception(f"Failed to get models: {response.text}")
+            raise ValueError(f"Failed to get models: {response.text}")
 
         return response.json()["data"]
 
@@ -838,7 +838,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         try:
             models: Final = self._get_raw_models_data(api_key=api_key, api_base=api_base)
-        except Exception as e:
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as e:
             verbose_logger.debug(
                 "Could not query %s/v1/models for dynamic model info: %s",
                 api_base,

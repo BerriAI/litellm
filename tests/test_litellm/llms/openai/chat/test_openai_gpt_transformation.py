@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
+import httpx
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
@@ -1396,7 +1396,7 @@ class TestOpenAIGPTConfigGetModelInfo:
     def test_returns_none_on_request_failure(self):
         """API failures should fall back gracefully."""
         with patch("litellm.module_level_client.get") as mock_get:
-            mock_get.side_effect = Exception("connection refused")
+            mock_get.side_effect = httpx.ConnectError("connection refused")
 
             info = self.config.get_model_info(
                 model="my-custom-llama-70b",
