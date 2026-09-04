@@ -29,6 +29,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_privileges,
     _user_has_admin_view,
     admin_can_invite_user,
+    validate_key_duration,
 )
 from litellm.proxy.management_endpoints.common_utils import _has_non_empty_value
 
@@ -1120,3 +1121,23 @@ class TestUpdateMetadataFieldsPremiumCheck:
         }
         _update_metadata_fields(updated_kv)
         mock_check.assert_called()
+
+
+class TestValidateKeyDuration:
+    """Invalid key-expiry durations must 400, not 500 (#39710)."""
+
+    def test_none_and_never_expire_sentinel_pass(self):
+        assert validate_key_duration(None) is None
+        assert validate_key_duration("-1") is None
+
+    def test_valid_durations_pass(self):
+        assert validate_key_duration("7d") is None
+        assert validate_key_duration("1h") is None
+
+    def test_garbage_durations_raise_400(self):
+        from fastapi import HTTPException
+
+        for bad in ["banana", "1x", ""]:
+            with pytest.raises(HTTPException) as exc_info:
+                validate_key_duration(bad)
+            assert exc_info.value.status_code == 400

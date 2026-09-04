@@ -22,6 +22,27 @@ def validate_finite_spend(spend: float | None) -> None:
         )
 
 
+def validate_key_duration(duration: str | None) -> None:
+    """Reject key-expiry durations that can't be parsed, so a bad value 400s
+    at the write boundary instead of 500ing inside duration math.
+
+    `None` (never expires) and `'-1'` (the update path's never-expire
+    sentinel) pass through.
+    """
+    if duration is None or duration == "-1":
+        return
+
+    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+
+    try:
+        duration_in_seconds(duration)
+    except (ValueError, OverflowError):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Invalid duration '{duration}'. Use a format like '1h', '24h', '7d', or '30d'."},
+        )
+
+
 def validate_budget_duration(budget_duration: str | None) -> None:
     """Reject budget durations that can't be parsed, are non-positive, or
     overflow date math, so a bad value can't be persisted and later crash the

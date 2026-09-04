@@ -90,6 +90,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_view,
     validate_budget_duration,
     validate_finite_spend,
+    validate_key_duration,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
@@ -968,6 +969,7 @@ async def _common_key_generation_helper(
     )
 
     validate_budget_duration(data.budget_duration)
+    validate_key_duration(data.duration)
     raise_on_invalid_key_logging_config(data.metadata)
 
     if data.throttle_on_budget_exceeded is True and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
@@ -2153,6 +2155,11 @@ async def prepare_key_update_data(
 
     if "duration" in non_default_values:
         duration: Final = non_default_values.pop("duration")
+        if duration is None or isinstance(duration, str):
+            # Reject garbage here so bulk/team-bulk/regenerate callers that
+            # skip _validate_update_key_data still 400 instead of 500ing
+            # inside duration math below.
+            validate_key_duration(duration)
         if duration is None or duration == "-1":
             # Set expires to None to indicate the key never expires
             non_default_values["expires"] = None
@@ -2163,6 +2170,9 @@ async def prepare_key_update_data(
 
     if "budget_duration" in non_default_values:
         budget_duration: Final = non_default_values.pop("budget_duration")
+        if budget_duration is None or isinstance(budget_duration, str):
+            # Same write-boundary guarantee as duration above.
+            validate_budget_duration(budget_duration)
         if budget_duration is None:
             non_default_values["budget_duration"] = None
             non_default_values["budget_reset_at"] = None
@@ -2583,6 +2593,7 @@ async def _validate_update_key_data(
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(data.spend)
     validate_budget_duration(data.budget_duration)
+    validate_key_duration(data.duration)
 
     _is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
