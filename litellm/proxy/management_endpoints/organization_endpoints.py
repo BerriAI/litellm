@@ -41,6 +41,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import get_daily_a
 from litellm.proxy.management_endpoints.common_utils import (
     _set_object_metadata_field,
     _user_has_admin_view,
+    validate_budget_duration,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
@@ -312,7 +313,7 @@ def handle_nested_budget_structure_in_organization_update_request(
             # Extract valid budget fields and merge into top level
             budget_fields: Final = LiteLLM_BudgetTable.model_fields.keys()
             for key, value in budget_data.items():
-                if key in budget_fields and value is not None:
+                if key in budget_fields:
                     transformed_data[key] = value
 
     return transformed_data
@@ -708,9 +709,8 @@ async def update_organization(
             existing_organization_row=existing_organization_row,
         )
 
-    # Handle budget updates if budget fields are provided
     budget_fields: Final = {
-        k: v for k, v in data.model_dump().items() if k in LiteLLM_BudgetTable.model_fields and v is not None
+        k: v for k, v in data.model_dump().items() if k in _BUDGET_SETTABLE_FIELDS and k in data.model_fields_set
     }
 
     if budget_fields and existing_organization_row.budget_id:
@@ -764,7 +764,6 @@ async def handle_update_object_permission(
     tags=["organization management"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=LiteLLM_OrganizationTableWithMembers,
-    include_in_schema=False,
 )
 async def update_organization_v2(
     organization_id: str,
@@ -807,6 +806,17 @@ async def update_organization_v2(
             status_code=422,
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
         )
+    for limit_name, limit_value in (
+        ("tpm_limit", data.tpm_limit),
+        ("rpm_limit", data.rpm_limit),
+        ("max_parallel_requests", data.max_parallel_requests),
+    ):
+        if limit_value is not None and limit_value < 0:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": f"{limit_name} must be non-negative. Received: {limit_value}"},
+            )
+    validate_budget_duration(data.budget_duration, status_code=422)
     if data.model_max_budget:
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             validate_model_max_budget,

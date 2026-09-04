@@ -12,6 +12,7 @@ from typing import Annotated, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation, field_serializer, field_validator, model_validator
 
+from litellm.types.llms.openai import REASONING_EFFORT
 from litellm.types.router import AdaptiveRouterWeights, ClassifierPlugin, RoutingPlugin
 
 from .tier_predictor import TrainedTierArtifact
@@ -432,9 +433,33 @@ class ClassifierLLMConfig(BaseModel):
     model: str = Field(
         description="Model name (from the router's model_list) to call for classification",
     )
+    reasoning_effort: REASONING_EFFORT | None = Field(
+        default=None,
+        description=(
+            "Reasoning effort override for classifier calls. Leave unset to use "
+            "the classifier deployment or provider default."
+        ),
+    )
     timeout_ms: int = Field(
         default=3000,
         description="Timeout budget for the classification call, in milliseconds",
+    )
+    circuit_breaker_enabled: bool = Field(
+        default=True,
+        description=(
+            "Whether one classifier timeout temporarily sends requests through classifier_fallback. "
+            "Enabled by default so an unhealthy classifier cannot repeat its timeout across sessions."
+        ),
+    )
+    circuit_breaker_cooldown_seconds: float = Field(
+        default=30.0,
+        gt=0.0,
+        description=(
+            "How long to skip this router's LLM classifier after a classification call times out. "
+            "Requests use classifier_fallback during the cooldown. When it expires, one request "
+            "probes the classifier while concurrent requests keep using the fallback; a successful "
+            "probe closes the circuit and a failed probe restarts the cooldown."
+        ),
     )
     classification_rubric: ClassificationRubric | None = Field(
         default=None,

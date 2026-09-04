@@ -75,6 +75,103 @@ describe("Cost column", () => {
   });
 });
 
+describe("Tokens column", () => {
+  const sessionRow: Partial<LogEntry> = {
+    request_id: "req-session-tokens",
+    total_tokens: 10,
+    prompt_tokens: 7,
+    completion_tokens: 3,
+    session_id: "sess-1",
+    session_total_count: 3,
+  };
+
+  it("shows the summed session token usage, not the representative call's tokens, for a multi-round session", () => {
+    const aggregatedRow: Partial<LogEntry> = {
+      ...sessionRow,
+      session_total_tokens: 60,
+      session_total_prompt_tokens: 42,
+      session_total_completion_tokens: 18,
+    };
+    renderRows([logEntry(aggregatedRow)]);
+
+    const tokensCell = screen.getByRole("cell", { name: /\(42\+18\)/ });
+    expect(tokensCell).toHaveTextContent("60");
+    expect(tokensCell).toHaveTextContent("session total");
+    expect(screen.queryByText("10")).not.toBeInTheDocument();
+    expect(screen.queryByText("(7+3)")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the call's own tokens with no session label when the backend sent no session token sums", () => {
+    renderRows([logEntry(sessionRow)]);
+
+    const tokensCell = screen.getByRole("cell", { name: /\(7\+3\)/ });
+    expect(tokensCell).toHaveTextContent("10");
+    expect(tokensCell).not.toHaveTextContent("session total");
+  });
+});
+
+describe("Type column", () => {
+  it("shows the conversation badge and composition even when an MCP call represents the conversation", async () => {
+    const user = userEvent.setup();
+    const mcpRepresentative = {
+      request_id: "req-mcp-rep",
+      call_type: "call_mcp_tool",
+      session_id: "sess-edge",
+      session_total_count: 3,
+      session_llm_count: 2,
+      mcp_tool_call_count: 1,
+      session_agent_count: 0,
+    };
+    renderRows([logEntry(mcpRepresentative)]);
+
+    expect(screen.queryByText("MCP")).not.toBeInTheDocument();
+    await user.hover(screen.getByText("3"));
+    expect(await screen.findByText("2 LLM • 1 MCP")).toBeInTheDocument();
+  });
+
+  it("keeps the plain MCP badge for a single MCP call", () => {
+    renderRows([logEntry({ request_id: "req-mcp-solo", call_type: "call_mcp_tool", session_total_count: 1 })]);
+
+    expect(screen.getByText("MCP")).toBeInTheDocument();
+  });
+});
+
+describe("Model column", () => {
+  it("lists every model used across a conversation, not only the representative call's model", () => {
+    const conversationCall: Partial<LogEntry> = {
+      request_id: "req-session",
+      model: "gpt-5.6",
+      session_id: "sess-1",
+      session_total_count: 3,
+      session_models: ["claude-sonnet-5", "gpt-5.6"],
+    };
+    renderRows([logEntry(conversationCall)]);
+
+    expect(screen.getByText("claude-sonnet-5, gpt-5.6")).toBeInTheDocument();
+    expect(screen.queryByText("gpt-5.6")).not.toBeInTheDocument();
+  });
+
+  it("marks a conversation whose model list was capped by the server", () => {
+    const cappedCall = {
+      request_id: "req-capped",
+      model: "gpt-5.6",
+      session_id: "sess-2",
+      session_total_count: 30,
+      session_models: ["claude-sonnet-5", "gpt-5.6"],
+      session_models_truncated: true,
+    };
+    renderRows([logEntry(cappedCall)]);
+
+    expect(screen.getByText("claude-sonnet-5, gpt-5.6, ...")).toBeInTheDocument();
+  });
+
+  it("keeps a single call's own model", () => {
+    renderRows([logEntry({ request_id: "req-single", model: "gpt-5.6" })]);
+
+    expect(screen.getByText("gpt-5.6")).toBeInTheDocument();
+  });
+});
+
 describe("row action cells", () => {
   it("reports the key hash through the injected dependency rather than a row field", async () => {
     const user = userEvent.setup();

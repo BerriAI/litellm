@@ -33,8 +33,9 @@ import time
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import accumulate
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Union, cast
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Union, cast
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from pydantic import BaseModel, TypeAdapter
@@ -42,6 +43,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    LiteLLMResponsesTransformationHandler,
     OpenAiResponsesToChatCompletionStreamIterator,
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
@@ -74,6 +76,7 @@ from litellm.types.llms.openai import (
     OutputTextDoneEvent,
     ResponseAPIUsage,
     ResponseCompletedEvent,
+    ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
     ResponsesAPIStreamingResponse,
@@ -113,6 +116,199 @@ class ResponsesStreamChunk(TypedDict, total=False):
     item_id: ReadOnly[str]
     output_index: ReadOnly[int]
     content_index: ReadOnly[int]
+
+
+_PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"function_call_output": "output", "message": "content"}
+)
+
+_EMPTY_RESPONSES_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {}
+
+
+def _item_rewrite_field(item: Mapping[str, object]) -> str | None:
+    item_type: Final = item.get("type")
+    if item_type is None:
+        return "content" if "content" in item else None
+    if not isinstance(item_type, str):
+        return None
+    return _PATCHABLE_ITEM_FIELDS.get(item_type)
+
+
+def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapping[str, object] | None:
+    field: Final = _item_rewrite_field(item)
+    if field is None or not isinstance(rewritten, Mapping):
+        return None
+    rewritten_content: Final = rewritten.get("content")
+    if isinstance(item.get(field), str) and isinstance(rewritten_content, str):
+        return {**item, field: rewritten_content}  # mutable-ok: request input items must stay JSON-plain dicts
+    rewritten_row: Final = cast("AllMessageValues", rewritten)  # cast-ok: guardrails hand back chat-shaped rows
+    converted_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [rewritten_row]  # mutable-ok: converter signature takes a list
+    )
+    if len(converted_items) != 1 or not isinstance(converted_items[0], Mapping):
+        return None
+    first_converted: Final = cast("Mapping[str, object]", converted_items[0])  # cast-ok: isinstance-checked above
+    converted_value: Final = first_converted.get(field)
+    if converted_value is None:
+        return None
+    return {**item, field: converted_value}  # mutable-ok: request input items must stay JSON-plain dicts
+
+
+def _is_function_call_item(item: object) -> bool:
+    return isinstance(item, Mapping) and item.get("type") in ("function_call", "custom_tool_call")
+
+
+def _last_message_role(messages: Sequence[object]) -> str | None:
+    if not messages:
+        return None
+    last: Final = messages[-1]
+    role: Final = last.get("role") if isinstance(last, Mapping) else getattr(last, "role", None)
+    return role if isinstance(role, str) else None
+
+
+def _provenance_unit_bounds(
+    raw_input: Sequence[object],
+    solo_conversions: Sequence[Sequence[object]],
+) -> tuple[tuple[int, int], ...]:
+    trailing_roles: Final = tuple(
+        accumulate(
+            (_last_message_role(messages) for messages in solo_conversions),
+            lambda previous, current: current if current is not None else previous,
+        )
+    )
+    start_indexes: Final = tuple(
+        index
+        for index in range(len(raw_input))
+        if index == 0 or not (_is_function_call_item(raw_input[index]) and trailing_roles[index - 1] == "assistant")
+    )
+    return tuple(zip(start_indexes, (*start_indexes[1:], len(raw_input))))
+
+
+def _input_item_provenance(
+    raw_input: Sequence[object],
+    expected_messages: Sequence[object],
+) -> tuple[Mapping[int, int], frozenset[int]] | None:
+    if not all(isinstance(item, Mapping) for item in raw_input):
+        return None
+    solo_conversions: Final = tuple(
+        LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=cast("ResponseInputParam", [item]),  # cast-ok: items checked as Mappings above
+            responses_api_request=_EMPTY_RESPONSES_REQUEST,
+        )
+        for item in raw_input
+    )
+    full_conversion: Final = tuple(
+        LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=cast("ResponseInputParam", list(raw_input)),  # cast-ok: items checked as Mappings above
+            responses_api_request=_EMPTY_RESPONSES_REQUEST,
+        )
+    )
+    if full_conversion != tuple(expected_messages):
+        return None
+    units: Final = _provenance_unit_bounds(raw_input, solo_conversions)
+    unit_messages: Final = tuple(
+        tuple(solo_conversions[start])
+        if end - start == 1
+        else tuple(
+            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=cast("ResponseInputParam", list(raw_input[start:end])),  # cast-ok: checked as Mappings above
+                responses_api_request=_EMPTY_RESPONSES_REQUEST,
+            )
+        )
+        for start, end in units
+    )
+    if tuple(message for messages in unit_messages for message in messages) != full_conversion:
+        return None
+    boundaries: Final = tuple(accumulate((len(messages) for messages in unit_messages), initial=0))
+    item_for_message: Final = MappingProxyType(
+        {
+            message_index: start
+            for unit_index, (start, end) in enumerate(units)
+            if end - start == 1
+            for message_index in range(boundaries[unit_index], boundaries[unit_index + 1])
+        }
+    )
+    tainted: Final = frozenset(
+        message_index
+        for unit_index, (start, end) in enumerate(units)
+        if end - start > 1
+        for message_index in range(boundaries[unit_index], boundaries[unit_index + 1])
+    )
+    return item_for_message, tainted
+
+
+class _RequestFields(NamedTuple):
+    input: tuple[object, ...]
+    instructions: str | None
+
+
+class _ExtractedInputs(NamedTuple):
+    inputs: GenericGuardrailAPIInputs
+    task_mappings: tuple[tuple[int, int | None], ...]
+
+
+def _patched_request_fields(
+    raw_input: object,
+    instructions: object,
+    original_messages: Sequence[object],
+    structured_messages: Sequence[object],
+) -> _RequestFields | None:
+    if not isinstance(raw_input, list) or len(original_messages) != len(structured_messages):
+        return None
+    offset: Final = 1 if instructions else 0
+    provenance: Final = _input_item_provenance(raw_input, tuple(original_messages)[offset:])
+    if provenance is None:
+        return None
+    item_for_message, tainted = provenance
+    changed: Final = tuple(
+        (index, rewritten)
+        for index, (original, rewritten) in enumerate(zip(original_messages, structured_messages))
+        if original != rewritten
+    )
+    instruction_rewrites: Final = tuple(rewritten for index, rewritten in changed if index < offset)
+    rewritten_instructions: Final = (
+        instruction_rewrites[0].get("content")
+        if instruction_rewrites and isinstance(instruction_rewrites[0], Mapping)
+        else instructions
+    )
+    instructions_value: Final = rewritten_instructions if isinstance(rewritten_instructions, str) else None
+    if rewritten_instructions is not None and instructions_value is None:
+        return None
+    body_changes: Final = tuple((index - offset, rewritten) for index, rewritten in changed if index >= offset)
+    if any(message_index in tainted or message_index not in item_for_message for message_index, _ in body_changes):
+        return None
+    replacements: Final = MappingProxyType(
+        {
+            item_for_message[message_index]: _rewritten_input_item(
+                cast("Mapping[str, object]", raw_input[item_for_message[message_index]]),  # cast-ok: checked Mappings
+                rewritten,
+            )
+            for message_index, rewritten in body_changes
+        }
+    )
+    if len(replacements) != len(body_changes) or any(item is None for item in replacements.values()):
+        return None
+    return _RequestFields(
+        input=tuple(replacements.get(index, item) for index, item in enumerate(raw_input)),
+        instructions=instructions_value,
+    )
+
+
+def _patch_or_convert_request_fields(
+    raw_input: object,
+    instructions: object,
+    original_messages: Sequence[object],
+    structured_messages: Sequence[AllMessageValues],
+) -> _RequestFields | None:
+    if not isinstance(structured_messages, list):
+        return None
+    patched: Final = _patched_request_fields(raw_input, instructions, original_messages, structured_messages)
+    if patched is not None:
+        return patched
+    input_items, converted_instructions = (
+        LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(structured_messages)
+    )
+    return _RequestFields(input=tuple(input_items), instructions=converted_instructions)
 
 
 def _next_stream_sequence_number(responses_so_far: Sequence[Any] | None) -> int:
@@ -162,9 +358,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         Handles both string input and list of message objects.
         """
         input_data: Final[str | ResponseInputParam | None] = data.get("input")
-        if input_data is None:
+        if not isinstance(input_data, (str, list)):
             return data
-
         structured_messages: Final = self.get_structured_messages(data)
         raw_tools: Final = data.get("tools")
         original_tools: Final[tuple[Mapping[str, object], ...]] = (
@@ -173,94 +368,93 @@ class OpenAIResponsesHandler(BaseTranslation):
         flattened_tool_groups: Final = tuple(
             form.chat_tools for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(original_tools)
         )
-        flattened_tools: Final = tuple(
-            cast(ChatCompletionToolParam, tool)  # cast-ok: mcp tools ride along in the guardrail's tool list
-            for group in flattened_tool_groups
-            for tool in group
-        )
-        tools_to_check: Final[list[ChatCompletionToolParam]] = list(  # mutable-ok: guardrail inputs want a list
-            copy.deepcopy(flattened_tools)
-        )
-
-        # Handle simple string input
-        if isinstance(input_data, str):
-            inputs = GenericGuardrailAPIInputs(texts=[input_data])
-            if tools_to_check:
-                inputs["tools"] = tools_to_check
-            if structured_messages:
-                inputs["structured_messages"] = structured_messages
-            # Include model information if available
-            model = data.get("model")
-            if model:
-                inputs["model"] = model
-
-            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-                inputs=inputs,
-                request_data=data,
-                input_type="request",
-                logging_obj=litellm_logging_obj,
-            )
-            guardrailed_texts = guardrailed_inputs.get("texts", [])
-            data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data
-            self._apply_guardrailed_tools_to_data(
-                data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools")
-            )
-            verbose_proxy_logger.debug("OpenAI Responses API: Processed string input")
+        extracted: Final = self._extract_guardrail_inputs(data, input_data, flattened_tool_groups)
+        if not extracted.inputs.get("texts"):
             return data
+        if structured_messages:
+            extracted.inputs["structured_messages"] = structured_messages
+        guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
+            inputs=extracted.inputs,
+            request_data=data,
+            input_type="request",
+            logging_obj=litellm_logging_obj,
+        )
+        self._apply_guardrailed_tools_to_data(
+            data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools")
+        )
+        written_back: Final = self._written_back_request_fields(data, structured_messages, guardrailed_inputs)
+        if written_back is not None:
+            data["input"] = list(written_back.input)  # mutable-ok: JSON body
+            if written_back.instructions is None:
+                data.pop("instructions", None)
+            else:
+                data["instructions"] = written_back.instructions  # rebind-ok: data is an out-param
+        elif isinstance(input_data, str):
+            guardrailed_texts: Final = guardrailed_inputs.get("texts") or ()
+            data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data  # rebind-ok: data is an out-param
+        else:
+            await self._apply_guardrail_responses_to_input(
+                messages=input_data,
+                responses=guardrailed_inputs.get("texts") or (),
+                task_mappings=extracted.task_mappings,
+            )
+        verbose_proxy_logger.debug("OpenAI Responses API: Processed input messages: %s", data.get("input"))
+        return data
 
-        # Handle list input (ResponseInputParam)
-        if not isinstance(input_data, list):
-            return data
-
+    def _extract_guardrail_inputs(
+        self,
+        data: Mapping[str, object],
+        input_data: "str | ResponseInputParam",
+        flattened_tool_groups: Sequence[Sequence[Mapping[str, object]]],
+    ) -> _ExtractedInputs:
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
         task_mappings: Final[list[tuple[int, int | None]]] = []
-
-        # Step 1: Extract all text content, images, and tools
-        for msg_idx, message in enumerate(input_data):
-            self._extract_input_text_and_images(
-                message=message,
-                msg_idx=msg_idx,
-                texts_to_check=texts_to_check,
-                images_to_check=images_to_check,
-                task_mappings=task_mappings,
+        tools_to_check: Final[list[ChatCompletionToolParam]] = list(  # mutable-ok: guardrail inputs want a list
+            copy.deepcopy(
+                tuple(
+                    cast(ChatCompletionToolParam, tool)  # cast-ok: mcp tools ride along in the guardrail's tool list
+                    for group in flattened_tool_groups
+                    for tool in group
+                )
             )
+        )
+        if isinstance(input_data, str):
+            texts_to_check.append(input_data)
+        else:
+            for msg_idx, message in enumerate(input_data):
+                self._extract_input_text_and_images(
+                    message=message,
+                    msg_idx=msg_idx,
+                    texts_to_check=texts_to_check,
+                    images_to_check=images_to_check,
+                    task_mappings=task_mappings,
+                )
+        inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
+        if images_to_check:
+            inputs["images"] = images_to_check
+        if tools_to_check:
+            inputs["tools"] = tools_to_check
+        model: Final = data.get("model")
+        if isinstance(model, str):
+            inputs["model"] = model
+        return _ExtractedInputs(inputs=inputs, task_mappings=tuple(task_mappings))
 
-        # Step 2: Apply guardrail to all texts in batch
-        if texts_to_check:
-            inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
-            if images_to_check:
-                inputs["images"] = images_to_check
-            if tools_to_check:
-                inputs["tools"] = tools_to_check
-            if structured_messages:
-                inputs["structured_messages"] = structured_messages
-            # Include model information if available
-            model = data.get("model")
-            if model:
-                inputs["model"] = model
-            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-                inputs=inputs,
-                request_data=data,
-                input_type="request",
-                logging_obj=litellm_logging_obj,
-            )
-
-            guardrailed_texts = guardrailed_inputs.get("texts", [])
-            self._apply_guardrailed_tools_to_data(
-                data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools")
-            )
-
-            # Step 3: Map guardrail responses back to original input structure
-            await self._apply_guardrail_responses_to_input(
-                messages=input_data,
-                responses=guardrailed_texts,
-                task_mappings=task_mappings,
-            )
-
-        verbose_proxy_logger.debug("OpenAI Responses API: Processed input messages: %s", input_data)
-
-        return data
+    @staticmethod
+    def _written_back_request_fields(
+        data: Mapping[str, object],
+        structured_messages: Sequence[AllMessageValues] | None,
+        guardrailed_inputs: GenericGuardrailAPIInputs,
+    ) -> _RequestFields | None:
+        guardrailed: Final = guardrailed_inputs.get("structured_messages")
+        if guardrailed is None or guardrailed is structured_messages:
+            return None
+        return _patch_or_convert_request_fields(
+            data.get("input"),
+            data.get("instructions"),
+            structured_messages or (),
+            guardrailed,
+        )
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
         """Extract tool names from Responses API request (tools[].name for function
@@ -331,8 +525,8 @@ class OpenAIResponsesHandler(BaseTranslation):
     async def _apply_guardrail_responses_to_input(
         self,
         messages: Any,  # Can be List[Dict[str, Any]] or ResponseInputParam
-        responses: list[str],
-        task_mappings: list[tuple[int, int | None]],
+        responses: Sequence[str],
+        task_mappings: Sequence[tuple[int, int | None]],
     ) -> None:
         """
         Apply guardrail responses back to input messages.

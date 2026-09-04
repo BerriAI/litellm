@@ -2,7 +2,8 @@
 
 Each test sends a NATIVE provider request through the proxy's passthrough route
 and verifies the proxy still logged a costed SpendLogs row
-(call_type="pass_through_endpoint"), correlated by the x-litellm-call-id header.
+(call_type="pass_through_endpoint"), correlated by the id the caller was served:
+the x-litellm-call-id header on gemini, the `msg_...` message id on anthropic.
 
 Covered: gemini ("gemini-2.5-flash") + anthropic ("claude-haiku-4-5"), streaming +
 non-streaming, plus native tool calls. See LLM_TRANSLATION_COVERAGE_MATRIX.md.
@@ -14,7 +15,7 @@ A passthrough call returning non-2xx fails hard (never a skip); once it returns
 import pytest
 
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
-from e2e_http import StreamingResponse, require_successful_call, unwrap
+from e2e_http import require_successful_call, unwrap
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, SpendLogRow
 from passthrough_client import (
@@ -24,6 +25,7 @@ from passthrough_client import (
     JsonSchema,
     JsonSchemaProperty,
     PassthroughClient,
+    anthropic_message_id,
     completed_responses_object,
 )
 
@@ -33,18 +35,18 @@ REALTIME_MODEL = "gpt-realtime-2"
 pytestmark = pytest.mark.e2e
 
 
-def _fetch_cost_breakdown(client: PassthroughClient, result: StreamingResponse) -> SpendLogRow:
+def _fetch_cost_breakdown(client: PassthroughClient, request_id: str | None) -> SpendLogRow:
     """The passthrough call's logged row, polled until it carries a cost.
 
     Asserts (not skips) that a 2xx passthrough call produced a costed row - the
     whole point of passthrough spend tracking.
     """
-    assert result.call_id, "passthrough response had no x-litellm-call-id header"
+    assert request_id, "passthrough response carried no id to correlate its spend row by"
     rows = client.proxy.poll_logs_for_request_id(
-        result.call_id,
+        request_id,
         predicate=lambda rs: (rs[0].spend or 0) > 0,
     )
-    assert rows, f"no SpendLogs row for passthrough call_id {result.call_id}"
+    assert rows, f"no SpendLogs row for passthrough request_id {request_id}"
     row = rows[0]
     assert row.call_type == "pass_through_endpoint"
     assert (row.spend or 0) > 0, f"passthrough call was not costed: {row}"
@@ -64,7 +66,7 @@ def test_gemini_passthrough_nonstreaming_logs_cost(
     )
     require_successful_call(result)
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, result.call_id)
     assert row.custom_llm_provider == "gemini"
     assert "gemini" in (row.model or "")
     assert tag in (row.request_tags or []), f"tags not logged: {row.request_tags}"
@@ -107,7 +109,7 @@ def test_gemini_passthrough_streaming_logs_cost(
     require_successful_call(result)
     assert result.chunks > 0, "streaming passthrough produced no events"
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, result.call_id)
     assert row.custom_llm_provider == "gemini"
 
 
@@ -137,7 +139,7 @@ def test_gemini_passthrough_tool_call_logs_cost(
     require_successful_call(result)
     assert "functionCall" in result.body, "gemini did not emit a tool call"
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, result.call_id)
     assert row.custom_llm_provider == "gemini"
 
 
@@ -150,7 +152,7 @@ def test_anthropic_passthrough_nonstreaming_logs_cost(
     result = client.anthropic_message(scoped_key, "claude-haiku-4-5", "Say hello")
     require_successful_call(result)
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, anthropic_message_id(result))
     assert row.custom_llm_provider == "anthropic"
     assert "claude" in (row.model or "")
 
@@ -164,7 +166,7 @@ def test_anthropic_passthrough_streaming_logs_cost(
     require_successful_call(result)
     assert result.chunks > 0, "streaming passthrough produced no events"
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, anthropic_message_id(result))
     assert row.custom_llm_provider == "anthropic"
 
 
@@ -190,7 +192,7 @@ def test_anthropic_passthrough_tool_call_logs_cost(
     require_successful_call(result)
     assert "tool_use" in result.body, "anthropic did not emit a tool call"
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, anthropic_message_id(result))
     assert row.custom_llm_provider == "anthropic"
 
 
