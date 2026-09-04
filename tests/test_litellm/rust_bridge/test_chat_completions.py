@@ -163,11 +163,7 @@ def test_gate_forwards_enablement_to_preflight(
     if enablement == "environment":
         monkeypatch.setenv("LITELLM_RUST", "true")
     litellm_params: Final = (
-        {"rust": True}
-        if enablement == "request-true"
-        else {"rust": False}
-        if enablement == "request-false"
-        else {}
+        {"rust": True} if enablement == "request-true" else {"rust": False} if enablement == "request-false" else {}
     )
 
     assert accepts(litellm_params=litellm_params) is expected
@@ -218,11 +214,14 @@ def test_gate_short_circuits_python_only_requests(
     bridge.set_rust_chat_completions(decline=gate)
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", bedrock_metadata_fields)
 
-    assert accepts(
-        custom_llm_provider=provider,
-        litellm_params=litellm_params,
-        stream=stream,
-    ) is False
+    assert (
+        accepts(
+            custom_llm_provider=provider,
+            litellm_params=litellm_params,
+            stream=stream,
+        )
+        is False
+    )
     assert gate.calls == []
 
 

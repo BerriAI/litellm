@@ -176,8 +176,7 @@ class _InvalidWheelCase:
             _InvalidWheelCase(
                 metadata_tags=("cp312-cp312-linux_x86_64",),
                 expected_error=(
-                    "WHEEL tags do not match filename: expected cp310-abi3-linux_x86_64, "
-                    "found cp312-cp312-linux_x86_64"
+                    "WHEEL tags do not match filename: expected cp310-abi3-linux_x86_64, found cp312-cp312-linux_x86_64"
                 ),
             ),
             id="metadata-tag-mismatched",
