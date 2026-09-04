@@ -613,8 +613,11 @@ describe("DataTable layout", () => {
 
   it("makes the header sticky and constrains body height when maxBodyHeight is set", () => {
     render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} maxBodyHeight={240} />);
-    expect(screen.getByTestId("data-table-head")).toHaveClass("sticky");
-    expect(screen.getByTestId("data-table-scroller")).toHaveStyle({ maxHeight: "240px" });
+    const scroller = screen.getByTestId("data-table-scroller");
+    expect(scroller).toHaveStyle({ maxHeight: "240px" });
+    expect(scroller).toHaveClass("overflow-auto");
+    expect(scroller).toHaveClass("[&_[data-slot=table-container]]:overflow-visible");
+    expect(screen.getByTestId("data-table-head")).toHaveClass("sticky", "bg-background");
   });
 
   it("caps fillHeight at the parent's height instead of stretching to it, so a short table stays short", () => {

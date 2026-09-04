@@ -583,6 +583,11 @@ try:
 except ImportError:
     build_billing_metrics_recorder = None
     shutdown_billing_metrics_recorder = None
+from litellm.proxy.middleware.admission_control_middleware import (
+    AdmissionControlMiddleware,
+    admission_control_state,
+    get_admission_control_settings,
+)
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
@@ -16502,6 +16507,9 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
     {
         "max_parallel_requests": "Integer",
         "global_max_parallel_requests": "Integer",
+        "max_in_flight_requests_per_worker": "Integer",
+        "max_queued_requests_per_worker": "Integer",
+        "admission_queue_timeout_seconds": "Float",
         "max_request_size_mb": "Integer",
         "max_batch_file_size_mb": "Integer",
         "max_file_size_mb": "Integer",
@@ -18176,6 +18184,11 @@ app.add_middleware(
     RequestSizeLimitMiddleware,
     get_max_request_size_mb=lambda: general_settings.get("max_request_size_mb"),
     is_request_size_limit_enabled=lambda: premium_user is True,
+)
+app.add_middleware(
+    AdmissionControlMiddleware,
+    get_settings=lambda: get_admission_control_settings(general_settings),
+    state=admission_control_state,
 )
 
 

@@ -947,6 +947,46 @@ describe("ComplexityRouterConfig affinity panel", () => {
 
     expect(screen.getByRole("switch", { name: "Pin a session to one deployment per model group" })).not.toBeChecked();
   });
+
+  it("writes an idle TTL on blur and keeps the partial input as a draft while typing", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Affinity"));
+
+    const ttl = screen.getByLabelText("How long a pin survives idle (seconds)");
+    expect(ttl).toHaveAttribute("placeholder", "3600");
+    fireEvent.change(ttl, { target: { value: "300" } });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.blur(ttl);
+
+    expect(onChange).toHaveBeenCalledWith({ ...defaultValue, session_affinity_ttl_seconds: 300 });
+  });
+
+  it("clearing the idle TTL returns the router to its backend default", () => {
+    const onChange = vi.fn();
+    const value = { ...defaultValue, session_affinity_ttl_seconds: 300 };
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={value} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Affinity"));
+
+    const ttl = screen.getByLabelText("How long a pin survives idle (seconds)");
+    expect(ttl).toHaveValue("300");
+    fireEvent.change(ttl, { target: { value: "" } });
+    fireEvent.blur(ttl);
+
+    expect(onChange).toHaveBeenCalledWith({ ...value, session_affinity_ttl_seconds: undefined });
+  });
+
+  it("clamps a non-positive idle TTL to the backend's minimum", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Affinity"));
+
+    const ttl = screen.getByLabelText("How long a pin survives idle (seconds)");
+    fireEvent.change(ttl, { target: { value: "0" } });
+    fireEvent.blur(ttl);
+
+    expect(onChange).toHaveBeenCalledWith({ ...defaultValue, session_affinity_ttl_seconds: 1 });
+  });
 });
 
 describe("ComplexityRouterConfig default model", () => {
