@@ -3,6 +3,7 @@
 import contextvars
 import time
 from collections.abc import Mapping
+from types import MappingProxyType
 
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
@@ -22,14 +23,16 @@ from litellm.integrations.otel.logger import (
     publish_global_otel_v2_provider,
 )
 from litellm.integrations.otel.plumbing.context import (
-    overridden_backends,
+    destination_backends,
     request_destinations,
     set_request_destinations,
 )
 from litellm.integrations.otel.plumbing.providers import (
     TenantFanOutSpanProcessor,
     _OverriddenBackendFilter,
+    _sink_key,
     build_tracer_provider,
+    operator_sink_keys,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache, get_tracer
 from litellm.integrations.otel.presets.destinations import (
@@ -38,6 +41,7 @@ from litellm.integrations.otel.presets.destinations import (
 )
 from litellm.integrations.otel.presets.langfuse import langfuse_preset
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import StandardCallbackDynamicParams
 from litellm.proxy.litellm_pre_call_utils import resolve_tenant_otel_destinations
 
 LANGFUSE_DEST = OtelDestination(
@@ -115,6 +119,231 @@ class TestOverrideSuppression:
         in_fresh_context(run)
 
         assert [s.name for s in arize_exporter.get_finished_spans()] == ["chat gpt-4"]
+
+
+class TestRoutingMode:
+    """The operator's choice between replacing its own exporter and exporting alongside it.
+
+    One org-wide backend across every team is a real deployment, and losing it the
+    moment a team configures its own is what ``additive`` exists to prevent.
+    """
+
+    OPERATOR_SINK = ("https://cloud.langfuse.com/api/public/otel/v1/traces", (("authorization", "Basic op"),))
+    #: What a tenant destination for that same project looks like before normalizing:
+    #: no signal path yet, and the header name cased the way the backend writes it.
+    SAME_ACCOUNT_ENDPOINT = "https://cloud.langfuse.com/api/public/otel"
+
+    @staticmethod
+    def _additive(monkeypatch):
+        monkeypatch.setattr(litellm, "otel_tenant_destination_mode", "additive", raising=False)
+
+    @staticmethod
+    def _tree(provider):
+        tracer = get_tracer(provider, "litellm")
+        with tracer.start_as_current_span("POST /v1/chat/completions"):
+            with tracer.start_as_current_span("auth /v1/chat/completions"):
+                pass
+            with tracer.start_as_current_span("chat gpt-4"):
+                pass
+
+    def _run(self, provider, destinations=(LANGFUSE_DEST,)):
+        def run():
+            set_request_destinations(destinations)
+            self._tree(provider)
+
+        in_fresh_context(run)
+
+    def test_global_only_keeps_every_span_and_delivers_to_nobody(self):
+        """No team destination resolved, so the operator's backbone is untouched."""
+        global_exporter, dest_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = wired_provider(dest_exporter, global_exporter)
+
+        self._run(provider, destinations=())
+
+        assert len(global_exporter.get_finished_spans()) == 3
+        assert dest_exporter.get_finished_spans() == ()
+
+    def test_team_only_gets_the_whole_tree_with_no_operator_exporter(self):
+        """A deployment with no operator credentials still gives the team its trace."""
+        dest_exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter))
+        )
+
+        self._run(provider)
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == {
+            "POST /v1/chat/completions",
+            "auth /v1/chat/completions",
+            "chat gpt-4",
+        }
+
+    def test_additive_gives_the_operator_and_the_team_the_same_tree(self, monkeypatch):
+        self._additive(monkeypatch)
+        global_exporter, dest_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = wired_provider(dest_exporter, global_exporter)
+
+        self._run(provider)
+
+        names = {"POST /v1/chat/completions", "auth /v1/chat/completions", "chat gpt-4"}
+        assert {s.name for s in global_exporter.get_finished_spans()} == names
+        assert {s.name for s in dest_exporter.get_finished_spans()} == names
+        assert len(global_exporter.get_finished_spans()) == 3, "the operator must not get a span twice"
+
+    def test_override_moves_the_tree_off_the_operator(self):
+        """The default, unchanged: the tenant's traffic reaches the tenant and nowhere else."""
+        global_exporter, dest_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = wired_provider(dest_exporter, global_exporter)
+
+        self._run(provider)
+
+        assert global_exporter.get_finished_spans() == ()
+        assert len(dest_exporter.get_finished_spans()) == 3
+
+    def test_a_team_naming_the_operators_own_project_is_written_once(self, monkeypatch):
+        """Fanning out to two accounts is the point. Writing the same account twice
+        is a duplicate the operator would see in their own project."""
+        self._additive(monkeypatch)
+        shared = InMemorySpanExporter()
+        same = OtelDestination(
+            endpoint=self.SAME_ACCOUNT_ENDPOINT,
+            headers=MappingProxyType({"Authorization": "Basic op"}),
+            callback_name="langfuse_otel",
+        )
+        provider = TracerProvider()
+        provider.add_span_processor(_OverriddenBackendFilter(SimpleSpanProcessor(shared), "langfuse_otel"))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda _d: SimpleSpanProcessor(shared),
+                operator_sinks=frozenset({self.OPERATOR_SINK}),
+            )
+        )
+
+        self._run(provider, destinations=(same,))
+
+        assert len(shared.get_finished_spans()) == 3, "the same account received the trace twice"
+
+    def test_in_override_a_team_naming_the_operators_project_still_gets_the_trace(self):
+        """Override suppresses the operator's own exporter, so the fan-out is the only
+        thing left delivering. Skipping it on a matching account leaves the team with
+        nothing at all."""
+        shared = InMemorySpanExporter()
+        same = OtelDestination(
+            endpoint=self.SAME_ACCOUNT_ENDPOINT,
+            headers=MappingProxyType({"Authorization": "Basic op"}),
+            callback_name="langfuse_otel",
+        )
+        provider = TracerProvider()
+        provider.add_span_processor(_OverriddenBackendFilter(SimpleSpanProcessor(shared), "langfuse_otel"))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda _d: SimpleSpanProcessor(shared),
+                operator_sinks=frozenset({self.OPERATOR_SINK}),
+            )
+        )
+
+        self._run(provider, destinations=(same,))
+
+        assert len(shared.get_finished_spans()) == 3, "the team's own destination received nothing"
+
+    def test_a_team_naming_a_different_project_still_gets_its_copy(self, monkeypatch):
+        """The dedup keys on the account, so a second project is still a second copy."""
+        self._additive(monkeypatch)
+        global_exporter, dest_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(_OverriddenBackendFilter(SimpleSpanProcessor(global_exporter), "langfuse_otel"))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter),
+                operator_sinks=frozenset({self.OPERATOR_SINK}),
+            )
+        )
+
+        self._run(provider)
+
+        assert len(global_exporter.get_finished_spans()) == 3
+        assert len(dest_exporter.get_finished_spans()) == 3
+
+    @pytest.mark.parametrize("additive", [True, False])
+    def test_a_failing_team_destination_leaves_the_operator_alone(self, monkeypatch, additive):
+        """A tenant collector that raises on every span must not cost the operator
+        its own telemetry, nor take the request down with it."""
+        if additive:
+            self._additive(monkeypatch)
+        global_exporter, arize_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+
+        class Exploding(SimpleSpanProcessor):
+            def on_end(self, span):
+                raise RuntimeError("tenant collector is down")
+
+        provider = TracerProvider()
+        provider.add_span_processor(_OverriddenBackendFilter(SimpleSpanProcessor(global_exporter), "langfuse_otel"))
+        provider.add_span_processor(_OverriddenBackendFilter(SimpleSpanProcessor(arize_exporter), "arize"))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(processor_factory=lambda _d: Exploding(InMemorySpanExporter()))
+        )
+
+        self._run(provider)
+
+        assert len(arize_exporter.get_finished_spans()) == 3, "an unrelated backend lost spans"
+        assert len(global_exporter.get_finished_spans()) == (3 if additive else 0)
+
+    def test_the_env_var_turns_additive_on_without_a_config_file(self, monkeypatch):
+        monkeypatch.setattr(litellm, "otel_tenant_destination_mode", None, raising=False)
+        monkeypatch.setenv("LITELLM_OTEL_TENANT_DESTINATION_MODE", "Additive")
+        global_exporter, dest_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = wired_provider(dest_exporter, global_exporter)
+
+        self._run(provider)
+
+        assert len(global_exporter.get_finished_spans()) == 3
+        assert len(dest_exporter.get_finished_spans()) == 3
+
+    def test_an_unrecognized_mode_stays_on_override(self, monkeypatch):
+        monkeypatch.setattr(litellm, "otel_tenant_destination_mode", "both", raising=False)
+        global_exporter, dest_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = wired_provider(dest_exporter, global_exporter)
+
+        self._run(provider)
+
+        assert global_exporter.get_finished_spans() == ()
+
+    def test_operator_sink_keys_skips_an_exporter_with_no_endpoint_of_its_own(self):
+        """Such an exporter resolves its endpoint from the environment at export
+        time, so it has no identity to compare a destination against."""
+        config = OpenTelemetryV2Config(
+            exporters=(
+                ExporterSpec(kind="otlp_http", endpoint=self.OPERATOR_SINK[0], headers="authorization=Basic op"),
+                ExporterSpec(kind="otlp_http", endpoint=None, headers="authorization=Basic other"),
+            )
+        )
+
+        assert operator_sink_keys(config) == frozenset({self.OPERATOR_SINK})
+
+    def test_the_operators_own_langfuse_and_a_team_naming_it_are_one_account(self, monkeypatch):
+        """The two sides are built by different code that writes the endpoint and the
+        header names differently, so comparing them raw silently never matches."""
+        monkeypatch.setenv("LANGFUSE_HOST", "https://lf.internal")
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-op")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-op")
+        monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["lf.internal"], raising=False)
+        operator = operator_sink_keys(langfuse_preset())
+
+        def sink(public_key, secret_key):
+            destination = destination_for(
+                "langfuse_otel",
+                StandardCallbackDynamicParams(
+                    langfuse_public_key=public_key,
+                    langfuse_secret_key=secret_key,
+                    langfuse_host="https://lf.internal",
+                ),
+            )
+            assert destination is not None
+            return _sink_key(destination.endpoint, destination.headers)
+
+        assert sink("pk-op", "sk-op") in operator, "a team naming the operator's own project"
+        assert sink("pk-team", "sk-team") not in operator, "a different project on the same server"
 
 
 class TestFanOut:
@@ -508,7 +737,7 @@ class TestContextIsolation:
     def test_destinations_do_not_leak_between_requests(self):
         def first():
             set_request_destinations((LANGFUSE_DEST,))
-            return overridden_backends()
+            return destination_backends()
 
         assert in_fresh_context(first) == frozenset({"langfuse_otel"})
         assert in_fresh_context(request_destinations) == ()

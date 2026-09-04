@@ -872,7 +872,7 @@ def publish_global_otel_v2_provider(
     through; see :func:`attach_tenant_fan_out`.
     """
     logger: Final = select_global_otel_v2_logger(in_memory_loggers, registered=registered)
-    attach_tenant_fan_out(logger._tracer_provider)
+    attach_tenant_fan_out(logger._tracer_provider, logger.config)
     set_global_provider(logger._tracer_provider)
     return logger
 
