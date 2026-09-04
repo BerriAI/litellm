@@ -102,7 +102,9 @@ def _collect_prompt(data: MutableRequest, slots: _SlotSink) -> None:
     if isinstance(prompt, str):
         _collect(data, "prompt", slots)
         return
-    for index in range(len(prompt)) if isinstance(prompt, list) else ():
+    if not isinstance(prompt, list):
+        return
+    for index in range(len(prompt)):
         _collect_entry(prompt, index, slots)
 
 
@@ -146,7 +148,9 @@ def _collect_responses_fields(data: MutableRequest, slots: _SlotSink) -> None:
     if isinstance(request_input, str):
         _collect(data, "input", slots)
         return
-    for index, item in enumerate(request_input if isinstance(request_input, list) else ()):
+    if not isinstance(request_input, list):
+        return
+    for index, item in enumerate(request_input):
         if isinstance(item, str):
             # The embeddings and moderations shape: `input` as an array of strings.
             _collect_entry(request_input, index, slots)
