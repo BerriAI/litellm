@@ -1362,3 +1362,46 @@ class TestUnescapedCredentialsAreDiagnosed:
 
         assert isinstance(translated, BadRequestError)
         assert "database name in the URI path" in str(translated)
+
+
+class TestUnreadableTlsFilesAreDiagnosed:
+    """A private CA is how self-managed deployments present TLS, so tlsCAFile and
+    tlsCertificateKeyFile are on-prem options in practice. pymongo opens those files itself and
+    lets OSError out, which is not a PyMongoError, so before this they reached the caller as a 500
+    with a traceback. The errors here come from pymongo's real TLS setup."""
+
+    @staticmethod
+    def _real_tls_error(uri):
+        from pymongo import MongoClient
+
+        try:
+            MongoClient(uri, serverSelectionTimeoutMS=1500).admin.command("ping")
+        except Exception as e:
+            return e
+        raise AssertionError(f"expected {uri!r} to fail")
+
+    def _translated(self, uri):
+        return translate_mongo_error(self._real_tls_error(uri), index_name=INDEX, database="db", collection="c")
+
+    @pytest.mark.parametrize(
+        "path",
+        ["/nonexistent-directory-for-tests/ca.pem", "/tmp"],
+    )
+    def test_an_unreadable_ca_file_is_a_400_naming_the_path(self, path):
+        translated = self._translated(f"mongodb://localhost:27717/?tls=true&tlsCAFile={path}")
+
+        assert isinstance(translated, BadRequestError)
+        assert path in str(translated)
+        assert "tlsCAFile" in str(translated)
+
+    def test_an_unreadable_client_certificate_is_a_400_naming_the_path(self):
+        path = "/nonexistent-directory-for-tests/client.pem"
+        translated = self._translated(f"mongodb://localhost:27717/?tls=true&tlsCertificateKeyFile={path}")
+
+        assert isinstance(translated, BadRequestError)
+        assert path in str(translated)
+
+    def test_an_oserror_carrying_no_filename_is_left_for_the_other_branches(self):
+        translated = translate_mongo_error(OSError("socket hung up"), index_name=INDEX, database="db", collection="c")
+
+        assert not isinstance(translated, BadRequestError)
