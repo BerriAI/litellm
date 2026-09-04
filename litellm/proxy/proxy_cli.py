@@ -1366,7 +1366,9 @@ def run_server(
         pgbouncer_settings: Final = PgBouncerSettings()
         upstream_database_url: Final = os.getenv("DATABASE_URL")
         if pgbouncer_settings.enabled and upstream_database_url is not None:
-            pooled_database_url: Final = start_in_container_pgbouncer(pgbouncer_settings, upstream_database_url)
+            pooled_database_url: Final = start_in_container_pgbouncer(
+                pgbouncer_settings, upstream_database_url, token_auth_enabled=wants_rds_iam or wants_azure_entra
+            )
             if isinstance(pooled_database_url, PgBouncerError):
                 print(
                     f"\033[1;31mLiteLLM Proxy: LITELLM_PGBOUNCER_ENABLED is set but the in-container pgbouncer "

@@ -225,6 +225,25 @@ class TestPgBouncerProcess:
         pooler.stop()
         assert _wait_until(lambda: not _listening(port))
 
+    def test_a_failed_restart_is_retried_until_the_pooler_is_back(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ):
+        port: Final = _free_port()
+        script: Final = _fake_pooler(tmp_path, port)
+        pooler: Final = PgBouncerProcess(argv=(str(script),), port=port, restart_delay_seconds=0.1)
+        assert pooler.start() is None
+        first_pid: Final = pooler.pid
+        assert first_pid is not None
+        hidden: Final = script.rename(tmp_path / "hidden")
+        with caplog.at_level(logging.ERROR, logger=verbose_proxy_logger.name):
+            os.kill(first_pid, signal.SIGKILL)
+            assert _wait_until(lambda: any("could not be restarted" in record.message for record in caplog.records))
+            assert not _listening(port)
+            hidden.rename(script)
+            assert _wait_until(lambda: pooler.pid not in (None, first_pid) and _listening(port))
+        pooler.stop()
+        assert _wait_until(lambda: not _listening(port))
+
     def test_a_stopped_pooler_is_not_restarted(self, tmp_path: Path, caplog: pytest.LogCaptureFixture):
         port: Final = _free_port()
         pooler: Final = PgBouncerProcess(
@@ -274,6 +293,17 @@ class TestStartInContainerPgBouncer:
         settings: Final = PgBouncerSettings(enabled=True, port=port, binary=str(_fake_pooler(tmp_path, port)))
         outcome: Final = start_in_container_pgbouncer(settings, "postgresql://app@db/litellm")
         assert isinstance(outcome, PgBouncerError)
+        assert not _listening(port)
+
+    def test_token_auth_is_refused_without_starting_anything(self, tmp_path: Path):
+        port: Final = _free_port()
+        settings: Final = PgBouncerSettings(enabled=True, port=port, binary=str(_fake_pooler(tmp_path, port)))
+        outcome: Final = start_in_container_pgbouncer(
+            settings, "postgresql://app:pw@db/litellm", token_auth_enabled=True
+        )
+        assert isinstance(outcome, PgBouncerError)
+        assert "IAM_TOKEN_DB_AUTH" in outcome.reason
+        assert "AZURE_POSTGRESQL_AUTH" in outcome.reason
         assert not _listening(port)
 
 
