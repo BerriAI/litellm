@@ -16,7 +16,7 @@ import json
 import os
 import re
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from html import escape
 from types import MappingProxyType
@@ -1681,7 +1681,12 @@ async def get_generic_sso_response(
     return result or {}, received_response, access_token_payload, sso_assertion
 
 
-async def warn_if_id_jag_assertion_uncaptured(assertion: SSOIdentityAssertion | None) -> None:
+RetentionCheck = Callable[[], Awaitable[bool]]
+
+
+async def warn_if_id_jag_assertion_uncaptured(
+    assertion: SSOIdentityAssertion | None, *, retention_enabled: RetentionCheck | None = None
+) -> None:
     """Say, at the one moment it is knowable, that this login gave an ``oauth2_id_jag`` server
     nothing to spend. Without it the operator only ever sees the per-request failure, which cannot
     tell a user who has never signed in from a provider that will never capture. Kept strictly
@@ -1689,7 +1694,8 @@ async def warn_if_id_jag_assertion_uncaptured(assertion: SSOIdentityAssertion | 
     if assertion is not None:
         return
     try:
-        if not await ema_assertion_retention_enabled():
+        check: Final = retention_enabled if retention_enabled is not None else ema_assertion_retention_enabled
+        if not await check():
             return
     except Exception as exc:  # noqa: BLE001  # diagnostics must never break the login
         verbose_proxy_logger.debug("Could not check for oauth2_id_jag MCP servers after SSO login: %s", exc)
@@ -1701,17 +1707,18 @@ async def warn_if_id_jag_assertion_uncaptured(assertion: SSOIdentityAssertion | 
     )
 
 
-async def warn_if_id_jag_capture_gap() -> None:
+async def warn_if_id_jag_capture_gap(*, retention_enabled: RetentionCheck | None = None) -> None:
     gap: Final = id_jag_assertion_capture_gap()
     if gap is None:
         return
     try:
-        if not await ema_assertion_retention_enabled():
+        check: Final = retention_enabled if retention_enabled is not None else ema_assertion_retention_enabled
+        if not await check():
             return
     except Exception as exc:  # noqa: BLE001  # diagnostics must never break the page they annotate
         verbose_proxy_logger.debug("Could not check for oauth2_id_jag MCP servers: %s", exc)
         return
-    verbose_proxy_logger.warning("SSO debug callback ran with an ID-JAG capture gap: %s", gap)
+    verbose_proxy_logger.warning("SSO debug callback ran with an oauth2_id_jag capture gap: %s", gap)
 
 
 async def create_team_member_add_task(team_id, user_info):
