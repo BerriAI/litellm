@@ -1,162 +1,86 @@
 from __future__ import annotations
 
 import importlib
-import json
 from pathlib import Path
+from typing import Final
 
 import pytest
 
-catalog = importlib.import_module("tests.rust-python-harness.catalog")
+models = importlib.import_module("tests.rust-python-harness.shared.reporting.models")
+strategy_module = importlib.import_module("tests.rust-python-harness.shared.reporting.strategy")
+ui = importlib.import_module("tests.rust-python-harness.shared.reporting.ui")
+mapping_validator = importlib.import_module("tests.rust-python-harness.strategies.unit_tests_mapping.mapping_validator")
+mappings = importlib.import_module("tests.rust-python-harness.strategies.unit_tests_mapping.mappings")
+ocr_mapping = importlib.import_module("tests.rust-python-harness.strategies.unit_tests_mapping.cases.ocr")
 cli = importlib.import_module("tests.rust-python-harness.cli")
-ledger_module = importlib.import_module("tests.rust-python-harness.shared.parity.ledger")
-mapping_validator = importlib.import_module(
-    "tests.rust-python-harness.strategies.unit_tests.mapping_validator"
-)
-models = importlib.import_module("tests.rust-python-harness.models")
-runner = importlib.import_module("tests.rust-python-harness.runner")
-ui = importlib.import_module("tests.rust-python-harness.ui")
 
-load_catalog = catalog.load_catalog
-load_ledger = ledger_module.load_ledger
-ledger_path_for = mapping_validator.ledger_path_for
-REPO_ROOT = mapping_validator.REPO_ROOT
-audit_ledger = mapping_validator.audit_ledger
-build_function_report = mapping_validator.build_function_report
-_pick_values = cli._pick_values
-_coverage_pytest_args = cli._coverage_pytest_args
-_select = cli._select
-_validate_ledger = cli._validate_ledger
+audit_mapping = mapping_validator.audit_mapping
+UNIT_TEST_CONTRACTS = mappings.UNIT_TEST_CONTRACTS
+OCR_CONTRACT = ocr_mapping.OCR_CONTRACT
+REPO_ROOT = Path(__file__).resolve().parents[1]
 CaseResult = models.CaseResult
 Coverage = models.Coverage
 HarnessCase = models.HarnessCase
 HarnessRun = models.HarnessRun
 RunStatus = models.RunStatus
-SDK_FUNCTIONS = models.SDK_FUNCTIONS
-section_confidence = models.section_confidence
-run_pytest = runner.run_pytest
-runnable_selectors = runner.runnable_selectors
-selector_matches_node = runner.selector_matches_node
+ModuleCaseSpec = strategy_module.ModuleCaseSpec
+NotImplementedCaseSpec = strategy_module.NotImplementedCaseSpec
+SkippedCaseSpec = strategy_module.SkippedCaseSpec
 _format_duration = ui._format_duration
-_rerun_command = ui._rerun_command
 _summary = ui._summary
 
 
-def _case(
-    *, selectors: tuple[str, ...] = (), coverage: Coverage = Coverage.COMPLETE
-) -> HarnessCase:
+def _case(module: str = "tests.example") -> HarnessCase:
     return HarnessCase(
         strategy_id="example",
         strategy_label="Example",
         sdk_function="messages",
-        coverage=coverage,
-        selectors=selectors,
+        spec=ModuleCaseSpec(coverage=Coverage.COMPLETE, module=module),
     )
-
-
-def _manifest() -> dict[str, object]:
-    return {
-        "order": 1,
-        "id": "example",
-        "label": "Example strategy",
-        "description": "Example description",
-        "functions": {
-            function: {"coverage": "planned", "selectors": []}
-            for function in SDK_FUNCTIONS
-        },
-    }
-
-
-def test_should_load_the_four_harness_strategies_in_order() -> None:
-    strategies = load_catalog()
-
-    assert [strategy.id for strategy in strategies] == [
-        "e2e_fuzz_tests",
-        "unit_tests_rust",
-        "validate_sub_methods",
-        "existing_e2e_test_sdk",
-    ]
-    assert all(
-        tuple(case.sdk_function for case in strategy.cases) == SDK_FUNCTIONS
-        for strategy in strategies
-    )
-
-
-def test_should_reject_a_manifest_missing_an_sdk_function(tmp_path: Path) -> None:
-    strategy_directory = tmp_path / "example"
-    strategy_directory.mkdir()
-    manifest = _manifest()
-    del manifest["functions"]["count_tokens"]  # type: ignore[index]
-    (strategy_directory / "strategy.json").write_text(
-        json.dumps(manifest), encoding="utf-8"
-    )
-
-    with pytest.raises(ValueError, match="functions must exactly match"):
-        load_catalog(tmp_path)
 
 
 @pytest.mark.parametrize(
-    ("selector", "nodeid", "matches"),
+    "module",
     [
-        ("tests/test_parity.py", "tests/test_parity.py::test_one", True),
-        ("tests/test_parity.py::test_one", "tests/test_parity.py::test_one", True),
-        (
-            "tests/test_parity.py::test_one",
-            "tests/test_parity.py::test_one[value]",
-            True,
-        ),
-        ("tests/test_parity.py::test_one", "tests/test_parity.py::test_two", False),
-        ("tests/ocr_tests/", "tests/ocr_tests/test_ocr_mistral.py::test_one", True),
-        ("tests/ocr_tests/", "tests/other_tests/test_ocr_mistral.py::test_one", False),
+        "tests.rust-python-harness.strategies.e2e_parity.sdk.ocr.test_sdk_parity",
+        "tests.rust-python-harness.strategies.trace_parity.sdk.ocr.case",
+        "tests.rust-python-harness.strategies.trace_parity.sdk.messages.case",
+        "tests.rust-python-harness.strategies.trace_parity.sdk.chat_completions.case",
+        "tests.rust-python-harness.strategies.trace_parity.sdk.transcription.case",
+        "tests.rust-python-harness.strategies.trace_parity.gateway.messages.case",
     ],
 )
-def test_should_match_pytest_file_and_node_selectors(
-    selector: str, nodeid: str, matches: bool
-) -> None:
-    assert selector_matches_node(selector, nodeid) is matches
+def test_implemented_namespace_case_modules_remain_importable(module: str) -> None:
+    assert importlib.import_module(module)
 
 
-def test_should_only_return_selectors_whose_files_exist(tmp_path: Path) -> None:
-    existing = tmp_path / "tests" / "test_parity.py"
-    existing.parent.mkdir()
-    existing.write_text("", encoding="utf-8")
-    case = _case(
-        selectors=("tests/test_parity.py", "tests/test_missing.py::test_missing")
+def test_should_mark_not_implemented_and_skipped_cases_without_running() -> None:
+    not_implemented: Final = CaseResult(
+        case=HarnessCase(
+            strategy_id="example",
+            strategy_label="Example",
+            sdk_function="messages",
+            spec=NotImplementedCaseSpec(reason="No case is registered."),
+        )
+    )
+    skipped: Final = CaseResult(
+        case=HarnessCase(
+            strategy_id="example",
+            strategy_label="Example",
+            sdk_function="messages",
+            spec=SkippedCaseSpec(reason="The surface does not apply."),
+        )
     )
 
-    assert runnable_selectors((case,), tmp_path) == ("tests/test_parity.py",)
+    not_implemented.set_initial_status()
+    skipped.set_initial_status()
 
-
-def test_should_treat_an_existing_folder_selector_as_runnable(tmp_path: Path) -> None:
-    (tmp_path / "tests" / "ocr_tests").mkdir(parents=True)
-    case = _case(selectors=("tests/ocr_tests/",))
-
-    assert runnable_selectors((case,), tmp_path) == ("tests/ocr_tests/",)
-
-
-def test_should_mark_planned_and_not_applicable_cases_without_running() -> None:
-    planned = CaseResult(case=_case(coverage=Coverage.PLANNED))
-    not_applicable = CaseResult(case=_case(coverage=Coverage.NOT_APPLICABLE))
-
-    planned.set_initial_status()
-    not_applicable.set_initial_status()
-
-    assert planned.status is RunStatus.PLANNED
-    assert not_applicable.status is RunStatus.NOT_APPLICABLE
-
-
-def test_should_treat_an_all_planned_filtered_run_as_success(tmp_path: Path) -> None:
-    exit_code, run = run_pytest(
-        cases=(_case(coverage=Coverage.PLANNED),),
-        repo_root=tmp_path,
-        on_update=lambda _: None,
-    )
-
-    assert exit_code == 0
-    assert next(iter(run.results.values())).status is RunStatus.PLANNED
+    assert not_implemented.status is RunStatus.NOT_IMPLEMENTED
+    assert skipped.status is RunStatus.SKIPPED
 
 
 def test_should_finalize_a_fully_passing_case() -> None:
-    result = CaseResult(case=_case(selectors=("tests/test_parity.py",)))
+    result = CaseResult(case=_case())
     result.set_initial_status()
     result.collected.update({"one", "two"})
     result.completed.update({"one", "two"})
@@ -168,7 +92,7 @@ def test_should_finalize_a_fully_passing_case() -> None:
 
 
 def test_should_replace_a_pass_with_a_teardown_error() -> None:
-    result = CaseResult(case=_case(selectors=("tests/test_parity.py",)))
+    result = CaseResult(case=_case())
     result.set_initial_status()
     result.collected.add("one")
 
@@ -181,121 +105,40 @@ def test_should_replace_a_pass_with_a_teardown_error() -> None:
     assert result.duration == pytest.approx(0.3)
 
 
-def test_should_filter_the_catalog_by_strategy_and_sdk_function() -> None:
-    strategies = load_catalog()
-
-    cases = _select(strategies, {"e2e_fuzz_tests"}, {"messages"})
-
-    assert len(cases) == 1
-    assert cases[0].key == "e2e_fuzz_tests:messages"
-
-
-def test_should_reject_an_unknown_strategy() -> None:
-    with pytest.raises(ValueError, match="Unknown strategy"):
-        _select(load_catalog(), {"not-real"}, set())
-
-
-def test_should_pick_multiple_interactive_filters() -> None:
-    answers = iter(["nope", "1, 3"])
-
-    selected = _pick_values(
-        "Examples",
-        (("one", "One"), ("two", "Two"), ("three", "Three")),
-        input_fn=lambda _: next(answers),
-    )
-
-    assert selected == {"one", "three"}
-
-
 def test_should_format_developer_facing_run_context() -> None:
-    run = HarnessRun.from_cases((_case(selectors=("tests/test_parity.py",)),))
+    run = HarnessRun.from_cases((_case(),))
     result = next(iter(run.results.values()))
     result.collected.add("tests/test_parity.py::test_one")
     result.record("tests/test_parity.py::test_one", RunStatus.PASSED, 1.25)
 
     assert _summary(run) == (1, 0, 0, 0)
     assert _format_duration(1.25) == "1.2s"
-    assert _rerun_command("tests/test_parity.py::test_one") == (
-        "poetry run pytest tests/test_parity.py::test_one -q"
+
+
+def test_should_leave_functions_without_mapping_contracts_unimplemented() -> None:
+    assert "messages" not in UNIT_TEST_CONTRACTS
+
+
+def test_should_derive_ocr_mapping_status_from_live_tests() -> None:
+    report = audit_mapping(OCR_CONTRACT, repo_root=REPO_ROOT)
+
+    assert report.is_valid, (
+        f"Missing Python tests: {list(report.missing_python_tests)}\n"
+        f"Missing Rust tests: {list(report.missing_rust_tests)}\n"
+        f"Duplicate Python mappings: {list(report.duplicate_python_mappings)}\n"
+        f"Invalid mapping exclusions: {list(report.invalid_mapping_exclusions)}\n"
+        f"Invalid parity exclusions: {list(report.invalid_unit_parity_exclusions)}"
     )
-    assert _rerun_command("tests/test_parity.py::test_one[value with spaces]") == (
-        "poetry run pytest 'tests/test_parity.py::test_one[value with spaces]' -q"
+    assert report.mapped_count == len(OCR_CONTRACT.mapping.mappings)
+    assert report.total_count == (
+        report.mapped_count + len(report.excluded_python_tests) + len(report.unmapped_python_tests)
     )
 
 
-def test_should_build_python_coverage_reports_below_the_target_directory(
-    tmp_path: Path,
-) -> None:
-    args = _coverage_pytest_args(tmp_path)
+def test_strategy_subcommand_accepts_function_filter(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code: Final = cli.main(["run", "unit_tests_mapping", "--function", "messages"])
 
-    assert tmp_path.is_dir()
-    assert "--cov=litellm" in args
-    assert "--cov-context=test" in args
-    assert f"--cov-report=json:{tmp_path / 'python.json'}" in args
-    assert f"--cov-report=xml:{tmp_path / 'python.xml'}" in args
-    assert f"--cov-report=html:{tmp_path / 'python-html'}" in args
-
-
-def test_should_report_confidence_for_each_sdk_section() -> None:
-    strategies = load_catalog()
-    cases = tuple(case for strategy in strategies for case in strategy.cases)
-    run = HarnessRun.from_cases(cases)
-    passing = run.results["e2e_fuzz_tests:responses"]
-    passing.collected.add("tests/test_parity.py::test_one")
-    passing.record("tests/test_parity.py::test_one", RunStatus.PASSED)
-
-    scores = {
-        score.sdk_function: score for score in section_confidence(run, strategies)
-    }
-
-    assert scores["responses"].verified_strategies == 1
-    assert scores["responses"].required_strategies == 4
-    assert scores["responses"].percentage == 25
-    assert scores["responses"].level.value == "MEDIUM"
-    assert scores["count_tokens"].percentage == 0
-    assert scores["count_tokens"].level.value == "LOW"
-
-
-
-def test_should_report_no_ledger_for_a_function_without_one() -> None:
-    report = build_function_report("messages", repo_root=REPO_ROOT)
-
-    assert report.has_ledger is False
-    assert report.is_clean is True
-
-
-def test_should_report_ocr_ledger_stats_and_a_clean_audit() -> None:
-    ledger = load_ledger(ledger_path_for("ocr"))
-
-    report = build_function_report("ocr", repo_root=REPO_ROOT)
-
-    assert report.has_ledger is True
-    assert report.ledger.mapped_count == ledger.mapped_count
-    assert report.ledger.total_count == ledger.total_count
-    assert report.is_clean is True
-
-
-def test_should_scope_validate_ledger_to_the_requested_function(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    exit_code = _validate_ledger({"messages"})
-
-    captured = capsys.readouterr()
+    captured: Final = capsys.readouterr()
     assert exit_code == 0
-    assert "messages" in captured.out
-    assert "no ledger yet" in captured.out
-    assert "ocr" not in captured.out
-
-
-def test_should_have_every_python_and_rust_ocr_test_accounted_for_in_the_ledger() -> None:
-    ledger = load_ledger(ledger_path_for("ocr"))
-
-    report = audit_ledger(ledger, repo_root=REPO_ROOT)
-
-    assert report.is_clean, (
-        "\nOCR test-parity ledger is out of sync with the live test files.\n"
-        f"Ledger references a Python test that no longer exists: {list(report.missing_python_tests)}\n"
-        f"Python test exists but is not tracked in the ledger: {list(report.stale_python_tests)}\n"
-        f"Ledger references a Rust test that no longer exists: {list(report.missing_rust_tests)}\n"
-        f"Rust test exists but is not tracked in the ledger: {list(report.stale_rust_tests)}\n"
-    )
+    assert "- messages: not_implemented" in captured.out
+    assert "unit_tests_mapping:messages: not_implemented" not in captured.out
