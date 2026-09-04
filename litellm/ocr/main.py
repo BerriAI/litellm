@@ -23,7 +23,6 @@ from litellm.llms.azure_ai.ocr.common_utils import (
 )
 from litellm.llms.base_llm.ocr.transformation import (
     OCR_REQUEST_FORMAT_PARAM,
-    PROVIDER_NATIVE_RESPONSE_KEY,
     BaseOCRConfig,
     OCRResponse,
     parse_ocr_request_format,
@@ -64,7 +63,6 @@ class _PreparedRustOCRCall:
 _RUST_OCR_PROVIDERS: Final = {
     "mistral",
     "azure_ai",
-    "reducto",
     "vertex_ai",
 }
 
@@ -286,21 +284,6 @@ def _prepare_rust_ocr_call(
     )
 
 
-def _parse_rust_ocr_response(
-    rust_response: Mapping[str, object],
-    custom_llm_provider: str,
-) -> OCRResponse:
-    native_response: Final = rust_response.get(PROVIDER_NATIVE_RESPONSE_KEY)
-    response_data: Final = {key: value for key, value in rust_response.items() if key != PROVIDER_NATIVE_RESPONSE_KEY}
-    response: Final = OCRResponse.model_validate(response_data)
-    if isinstance(native_response, Mapping):
-        if custom_llm_provider == "reducto":
-            response._hidden_params["reducto_raw"] = dict(native_response)
-        else:
-            response.set_provider_native_response(native_response)
-    return response
-
-
 def _run_rust_ocr(
     prepared_request: _PreparedOCRRequest,
     resolve_api_key: Callable[[str], str | None],
@@ -323,7 +306,7 @@ def _run_rust_ocr(
     )
     if rust_response is None:
         return None
-    return _parse_rust_ocr_response(rust_response, prepared_request.custom_llm_provider)
+    return OCRResponse.model_validate(rust_response)
 
 
 async def _run_rust_aocr(
@@ -348,7 +331,7 @@ async def _run_rust_aocr(
     )
     if rust_response is None:
         return None
-    return _parse_rust_ocr_response(rust_response, prepared_request.custom_llm_provider)
+    return OCRResponse.model_validate(rust_response)
 
 
 @client
