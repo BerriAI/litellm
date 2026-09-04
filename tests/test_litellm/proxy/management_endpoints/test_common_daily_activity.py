@@ -459,33 +459,23 @@ async def test_get_api_key_metadata_recovers_double_hashed_key_via_reverse_hash(
     """
     v1.99 spend logging re-hashed already-hashed api_key values when provenance was
     missing. Usage joins DailyUserSpend.api_key to VerificationToken.token, so those
-    rows looked like key-hash-... with a null alias. Reverse-hash recovery must map
-    hash(token) back to the key's alias for historical dirty spend.
+    rows looked like key-hash-... with a null alias. Recovery asks Postgres for the
+    key whose hashed token matches the dirty value and maps it back to its alias.
     """
     from litellm.proxy.utils import hash_token
 
-    token = "a" * 64
-    double_hashed = hash_token(token)
+    double_hashed = hash_token("a" * 64)
     mock_prisma = MagicMock()
-
-    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
-        side_effect=[
-            [],  # exact join miss
-            [
-                SimpleNamespace(
-                    token=token,
-                    key_alias="batch-worker",
-                    team_id="team-1",
-                    user_id="alice",
-                )
-            ],
-        ]
-    )
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_usertable.find_many = AsyncMock(
         return_value=[SimpleNamespace(user_id="alice", user_email="alice@example.com")]
     )
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {"digest": double_hashed, "key_alias": "batch-worker", "team_id": "team-1", "user_id": "alice"}
+        ]
+    )
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -495,37 +485,37 @@ async def test_get_api_key_metadata_recovers_double_hashed_key_via_reverse_hash(
     assert result[double_hashed]["key_alias"] == "batch-worker"
     assert result[double_hashed]["team_id"] == "team-1"
     assert result[double_hashed]["user_email"] == "alice@example.com"
-    mock_prisma.db.query_raw.assert_not_called()
+    ((digest_sql, digests),) = [call.args for call in mock_prisma.db.query_raw.call_args_list]
+    assert '"LiteLLM_VerificationToken"' in digest_sql
+    assert digests == [double_hashed]
 
 
 @pytest.mark.asyncio
-async def test_get_api_key_metadata_recovers_double_hashed_key_via_spend_logs():
-    """When the token tables cannot reverse-hash the dirty key, use SpendLogs metadata."""
+async def test_get_api_key_metadata_permanent_miss_never_pages_tokens_or_reads_spend_logs():
+    """A dirty key no table can explain costs two digest lookups, never a token page walk or a SpendLogs scan."""
     from litellm.proxy.utils import hash_token
 
     double_hashed = hash_token("b" * 64)
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
-    mock_prisma.db.query_raw = AsyncMock(
-        return_value=[
-            {
-                "api_key": double_hashed,
-                "key_alias": "from-spend-log",
-                "team_id": "team-spend",
-            }
-        ]
-    )
     mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
         api_keys={double_hashed},
     )
 
-    assert result[double_hashed]["key_alias"] == "from-spend-log"
-    assert result[double_hashed]["team_id"] == "team-spend"
-    mock_prisma.db.query_raw.assert_called_once()
+    assert double_hashed not in result
+    issued_sql = [call.args[0] for call in mock_prisma.db.query_raw.call_args_list]
+    assert len(issued_sql) == 2
+    assert not any("LiteLLM_SpendLogs" in sql for sql in issued_sql)
+    token_lookups = (
+        mock_prisma.db.litellm_verificationtoken.find_many.call_args_list
+        + mock_prisma.db.litellm_deletedverificationtoken.find_many.call_args_list
+    )
+    assert all("take" not in call.kwargs and "skip" not in call.kwargs for call in token_lookups)
 
 
 def test_key_metadata_includes_recovered_user_email():
