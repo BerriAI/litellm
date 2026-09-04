@@ -894,6 +894,33 @@ class TestEvictionSafety:
 
         assert not closed.is_alive(), "shutdown blocked on an export that never finished"
 
+    def test_shutdown_retires_the_drain_workers(self):
+        """A proxy that rebuilds its telemetry builds another fan-out, so workers that
+        outlive the one that started them are two more threads per reload."""
+        from litellm.integrations.otel.plumbing.providers import _DRAIN_WORKERS
+
+        before = self._drain_workers()
+        fan_out, _ = self._fan_out()
+        assert self._drain_workers() - before == _DRAIN_WORKERS
+
+        fan_out.shutdown()
+        for _ in range(500):
+            if self._drain_workers() == before:
+                break
+            time.sleep(0.02)
+
+        assert self._drain_workers() == before, "the drain workers outlived their fan-out"
+
+    def test_a_processor_shed_after_shutdown_is_still_closed(self):
+        """``close`` retires the workers, so anything handed to the pool afterwards
+        would sit in a queue nobody reads."""
+        fan_out, _ = self._fan_out()
+        stray = self.Recording()
+        fan_out.shutdown()
+        fan_out._drain.submit(stray)
+
+        assert stray.shutdown_calls == 1
+
     def test_a_retired_processor_is_still_closed_on_shutdown(self):
         from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
 

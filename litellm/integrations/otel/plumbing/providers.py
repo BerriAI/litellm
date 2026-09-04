@@ -234,16 +234,38 @@ class _DrainPool:
     """
 
     def __init__(self, workers: int = _DRAIN_WORKERS) -> None:
-        self._pending: Final[queue.Queue[SpanProcessor]] = queue.Queue()
+        self._workers: Final = workers
+        self._closed: Final = threading.Event()
+        self._pending: Final[queue.Queue[SpanProcessor | None]] = queue.Queue()
         for _ in range(workers):
-            threading.Thread(target=self._drain_forever, daemon=True, name="litellm-otel-destination-drain").start()
+            threading.Thread(
+                target=self._drain_until_closed, daemon=True, name="litellm-otel-destination-drain"
+            ).start()
 
     def submit(self, processor: SpanProcessor) -> None:
+        if self._closed.is_set():
+            _shutdown_quietly(processor)
+            return
         self._pending.put(processor)
 
-    def _drain_forever(self) -> None:
+    def close(self) -> None:
+        """Retire the workers once they have closed everything already queued.
+
+        A proxy that rebuilds its telemetry builds another fan-out, so workers that
+        outlive the one that started them are two more threads per reload, forever.
+        """
+        if self._closed.is_set():
+            return
+        self._closed.set()
+        for _ in range(self._workers):
+            self._pending.put(None)
+
+    def _drain_until_closed(self) -> None:
         while True:
-            _shutdown_quietly(self._pending.get())
+            processor: SpanProcessor | None = self._pending.get()  # rebind-ok: loop variable
+            if processor is None:
+                return
+            _shutdown_quietly(processor)
 
 
 class _ResourceWrappedReadableSpan(ReadableSpan):
@@ -345,6 +367,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             self._processors.clear()
             self._retired.clear()
             self._exporting.clear()
+        self._drain.close()
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         results: Final = tuple(self._flush_one(processor, timeout_millis) for processor in self._snapshot())
