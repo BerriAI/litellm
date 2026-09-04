@@ -302,7 +302,8 @@ def _restore_rust_ocr_state() -> Generator[None]:
     try:
         yield
     finally:
-        rust_ocr_bridge.use_litellm_rust(enabled, ocr=ocr_impl, aocr=aocr_impl)
+        rust_ocr_bridge.rust(enabled)
+        rust_ocr_bridge.set_rust_ocr(ocr=ocr_impl, aocr=aocr_impl)
 
 
 def _native_spies() -> tuple[_RustOcrSpy, _RustAocrSpy]:
@@ -343,8 +344,8 @@ def test_recorded_ocr_sdk_parity(
     event_loop: Final = asyncio.new_event_loop()
     try:
         with _restore_rust_ocr_state(), replay_server() as provider:
-            rust_ocr_bridge.use_litellm_rust(False, ocr=sync_spy, aocr=async_spy)
-            rust_ocr_bridge.use_litellm_rust(False)
+            rust_ocr_bridge.rust(False)
+            rust_ocr_bridge.set_rust_ocr(ocr=sync_spy, aocr=async_spy)
             python: Final = run_in_process(
                 provider,
                 ocr_fixture.provider_responses,
@@ -353,7 +354,7 @@ def test_recorded_ocr_sdk_parity(
             assert sync_spy.calls == 0
             assert async_spy.calls == 0
 
-            rust_ocr_bridge.use_litellm_rust(True)
+            rust_ocr_bridge.rust(True)
             rust: Final = run_in_process(
                 provider,
                 ocr_fixture.provider_responses,
@@ -381,8 +382,8 @@ def test_invalid_ocr_sdk_parity(case: InvalidOcrCase, route: SDKRoute) -> None:
     event_loop: Final = asyncio.new_event_loop()
     try:
         with _restore_rust_ocr_state(), replay_server() as provider:
-            rust_ocr_bridge.use_litellm_rust(False, ocr=sync_spy, aocr=async_spy)
-            rust_ocr_bridge.use_litellm_rust(False)
+            rust_ocr_bridge.rust(False)
+            rust_ocr_bridge.set_rust_ocr(ocr=sync_spy, aocr=async_spy)
             python: Final = run_in_process(
                 provider,
                 (),
@@ -391,7 +392,7 @@ def test_invalid_ocr_sdk_parity(case: InvalidOcrCase, route: SDKRoute) -> None:
             assert sync_spy.calls == 0
             assert async_spy.calls == 0
 
-            rust_ocr_bridge.use_litellm_rust(True)
+            rust_ocr_bridge.rust(True)
             rust: Final = run_in_process(
                 provider,
                 (),

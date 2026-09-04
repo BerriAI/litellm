@@ -36,7 +36,7 @@ The native bindings also accept `optional_params` and `timeout_seconds`, while t
 
 ## Runtime results
 
-Built the native extension from the audited source using `cargo build -p litellm-python-bridge --features extension-module --offline`. Supplied that build's functions through `use_litellm_rust` dependency injection. Ran public `litellm.ocr` and `litellm.aocr` with Rust disabled and enabled against identical local HTTP response fixtures, requiring one request per invocation
+Built the native extension from the audited source using `cargo build -p litellm-python-bridge --features extension-module --offline`. Supplied that build's functions through `rust` dependency injection. Ran public `litellm.ocr` and `litellm.aocr` with Rust disabled and enabled against identical local HTTP response fixtures, requiring one request per invocation
 
 Successful `model_dump()` results and failure exception classes were compared. These checks cover Mistral response outcomes only, not request equality, error messages, live providers, or every execution branch
 

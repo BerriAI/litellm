@@ -47,7 +47,7 @@
     {"python_file": "tests/test_litellm/ocr/test_ocr_azure_document_intelligence_api_base.py", "python_test": "TestDocIntelligenceApiBaseResolution::test_explicit_api_base_is_honoured_for_doc_intelligence", "status": "unmapped", "reason": "api_base precedence resolution is Python-only"},
     {"python_file": "tests/test_litellm/ocr/test_ocr_azure_document_intelligence_api_base.py", "python_test": "TestDocIntelligenceApiBaseResolution::test_generic_azure_ai_base_still_applies_to_mistral_ocr", "status": "unmapped", "reason": "api_base precedence resolution is Python-only"},
 
-    {"python_file": "tests/test_litellm/ocr/test_rust_bridge.py", "python_test": "test_use_litellm_rust_toggles_flag", "status": "unmapped", "reason": "bridge-plumbing: Python-side feature-flag toggle, no Rust equivalent"},
+    {"python_file": "tests/test_litellm/ocr/test_rust_bridge.py", "python_test": "test_rust_toggles_flag", "status": "unmapped", "reason": "bridge-plumbing: Python-side feature-flag toggle, no Rust equivalent"},
     {"python_file": "tests/test_litellm/ocr/test_rust_bridge.py", "python_test": "test_env_var_enables_rust_ocr", "status": "unmapped", "reason": "bridge-plumbing: Python-side env-var flag gating"},
     {"python_file": "tests/test_litellm/ocr/test_rust_bridge.py", "python_test": "test_explicit_false_overrides_process_enable", "status": "unmapped", "reason": "Python request-level Rust opt-out overrides the process flag before any Rust implementation runs"},
     {"python_file": "tests/test_litellm/ocr/test_rust_bridge.py", "python_test": "test_load_rust_ocr_returns_injected_impl", "status": "unmapped", "reason": "bridge-plumbing: dependency-injection test hook, not provider behavior"},

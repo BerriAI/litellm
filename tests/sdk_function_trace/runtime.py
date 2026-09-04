@@ -35,11 +35,11 @@ def _python_engine() -> Generator[None]:
 
     previous_ocr: Final = ocr_bridge.rust_ocr_enabled()
     with patch.dict(os.environ, {"LITELLM_RUST": "false"}):
-        ocr_bridge.use_litellm_rust(False)
+        ocr_bridge.rust(False)
         try:
             yield
         finally:
-            ocr_bridge.use_litellm_rust(previous_ocr)
+            ocr_bridge.rust(previous_ocr)
 
 
 def _invoke(case: Invocation, api_base: str, *, asynchronous: bool) -> object:
