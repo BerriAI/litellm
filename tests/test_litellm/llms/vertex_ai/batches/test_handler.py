@@ -35,7 +35,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-
 from litellm.llms.vertex_ai.batches.handler import (  # noqa: E402
     VertexAIBatchPrediction,
 )
@@ -251,6 +250,39 @@ def test_create_batch_sync_resolves_fine_tuned_endpoint_to_tuned_model():
     assert get_kwargs["headers"]["Authorization"] == f"Bearer {TOKEN}"
     sent = json.loads(client.post.call_args.kwargs["data"])
     assert sent["model"] == TUNED_MODEL_RESOURCE
+
+
+@pytest.mark.parametrize(
+    "api_base, expected",
+    [
+        (
+            None,
+            f"https://{LOCATION}-aiplatform.googleapis.com/v1/projects/{PROJECT}"
+            f"/locations/{LOCATION}/endpoints/{ENDPOINT_ID}",
+        ),
+        (
+            "https://proxy.internal",
+            f"https://proxy.internal/v1/projects/{PROJECT}/locations/{LOCATION}/endpoints/{ENDPOINT_ID}",
+        ),
+        (
+            "https://proxy.internal/v1",
+            f"https://proxy.internal/v1/projects/{PROJECT}/locations/{LOCATION}/endpoints/{ENDPOINT_ID}",
+        ),
+        (
+            "https://proxy.internal/vertex",
+            f"https://proxy.internal/vertex/v1/projects/{PROJECT}/locations/{LOCATION}/endpoints/{ENDPOINT_ID}",
+        ),
+    ],
+)
+def test_build_endpoint_resolution_url(api_base, expected):
+    """A custom api_base must replace the Google host for the endpoint-resolution GET without
+    producing a malformed url (no ':' grafting, no doubled /v1)."""
+    url = VertexAIBatchPrediction._build_endpoint_resolution_url(
+        api_base=api_base,
+        model=f"projects/{PROJECT}/locations/{LOCATION}/endpoints/{ENDPOINT_ID}",
+        vertex_location=LOCATION,
+    )
+    assert url == expected
 
 
 def test_create_batch_sync_endpoint_resolution_error_raises():

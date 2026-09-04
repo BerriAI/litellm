@@ -1,6 +1,7 @@
 import json
 from collections.abc import Coroutine, Sequence
 from typing import TYPE_CHECKING, Final, Protocol
+from urllib.parse import urlparse
 
 import httpx
 from typing_extensions import ReadOnly, TypedDict
@@ -18,6 +19,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.vertex_ai.common_utils import VertexAIError, get_vertex_base_url
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.vertex_llm_base import _graft_default_vertex_path
 from litellm.types.llms.openai import CreateBatchRequest
 from litellm.types.llms.vertex_ai import (
     VERTEX_CREDENTIALS_TYPES,
@@ -176,6 +178,24 @@ class VertexAIBatchPrediction(VertexLLM):
         )
         return vertex_batch_response
 
+    @staticmethod
+    def _build_endpoint_resolution_url(api_base: str | None, model: str, vertex_location: str) -> str:
+        """
+        Builds the GET url for resolving an endpoint resource (`projects/../endpoints/<id>`).
+
+        A custom `api_base` replaces the Google host: its `/v1`/`/v1beta1` path swallows the
+        version segment (matching `_check_custom_proxy`'s grafting), any other path is kept as a
+        mount prefix in front of the full default path. The `:operation` suffix convention from
+        `_check_custom_proxy` does not apply to a plain resource GET.
+        """
+        default_endpoint_url: Final = f"{get_vertex_base_url(vertex_location)}/v1/{model}"
+        if not api_base:
+            return default_endpoint_url
+        api_base_path: Final = urlparse(api_base).path.rstrip("/")
+        if api_base_path in ("/v1", "/v1beta1"):
+            return _graft_default_vertex_path(api_base=api_base, default_url=default_endpoint_url)
+        return api_base.rstrip("/") + urlparse(default_endpoint_url).path
+
     def _resolve_fine_tuned_endpoint_model(
         self,
         vertex_batch_request: VertexAIBatchPredictionJob,
@@ -193,18 +213,10 @@ class VertexAIBatchPrediction(VertexLLM):
         if "/endpoints/" not in model:
             return vertex_batch_request
 
-        default_endpoint_url: Final = f"{get_vertex_base_url(vertex_location)}/v1/{model}"
-        _, endpoint_url = self._check_custom_proxy(
+        endpoint_url: Final = self._build_endpoint_resolution_url(
             api_base=api_base,
-            custom_llm_provider="vertex_ai",
-            gemini_api_key=None,
-            endpoint=(default_endpoint_url.split(":")[-1] if len(default_endpoint_url.split(":")) > 1 else ""),
-            stream=None,
-            auth_header=None,
-            url=default_endpoint_url,
-            model=None,
+            model=model,
             vertex_location=vertex_location,
-            vertex_api_version="v1",
         )
         response: Final = sync_handler.get(url=endpoint_url, headers=headers)
         if response.status_code != 200:
