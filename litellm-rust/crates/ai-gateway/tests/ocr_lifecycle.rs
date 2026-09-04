@@ -329,7 +329,10 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
         api_key: Some("sk-test"),
         api_base: Some(&format!("http://{addr}")),
         custom_llm_provider: Some("mistral"),
-        extra_headers: None,
+        extra_headers: Some(Map::from_iter([(
+            "content-type".to_string(),
+            json!("application/json"),
+        )])),
         optional_params: Map::new(),
         timeout: Some(Duration::from_secs(5)),
         callbacks: vec![logger.clone()],
@@ -361,6 +364,13 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
     );
 
     let request = server.await.expect("server task completes");
+    assert_eq!(
+        request
+            .to_ascii_lowercase()
+            .matches("content-type: application/json")
+            .count(),
+        1
+    );
     assert!(request.contains(r#""guarded_pre":true"#), "{request}");
     assert!(request.contains(r#""guarded_during":true"#), "{request}");
 }
