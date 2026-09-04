@@ -392,6 +392,64 @@ with its own provider config (one `examples/default`-style root per project),
 or fork the module to add `configuration_aliases` and pass per-instance
 `providers = { ... }`.
 
+## Dependencies only (run LiteLLM on GKE)
+
+Set `create_runtime = false` to provision Cloud SQL, Memorystore, GCS,
+Secret Manager, and the runtime service account without Cloud Run or the
+load balancer. For a Shared VPC, set the full host-project network ID and
+skip PSA creation after the host project has configured it:
+
+```hcl
+create_runtime        = false
+network_id            = "projects/<host>/global/networks/<vpc>"
+create_psa_connection = false
+```
+
+The host project must already have Private Services Access configured on the
+network, and the Service Networking API must be enabled. GKE nodes must be
+attached to the same Shared VPC so their private IP routes reach Cloud SQL
+and Memorystore. The Terraform provider should target the project where the
+dependencies are deployed. A VPC connector is not created in this mode, so
+the host and deployment project distinction is only relevant when enabling
+`create_runtime`; then the network must be in the deployment project because
+the connector is regional to that project
+
+Map the outputs into the Helm values as follows:
+
+```yaml
+database:
+  writer:
+    host: <cloudsql_writer_ip>
+    dbname: <db_name>
+    passwordSecret:
+      name: <kubernetes-secret-with-db-credentials>
+  reader:
+    host: <cloudsql_reader_ip>
+    dbname: <db_name>
+    passwordSecret:
+      name: <kubernetes-secret-with-db-credentials>
+redis:
+  host: <redis_host>
+  port: <redis_port>
+masterKey:
+  secretName: <kubernetes-secret-with-master-key>
+```
+
+Create the referenced Kubernetes Secret with `db_username` and the password
+from Secret Manager using `db_password_secret_id`, and set its database name
+from `db_name`. Create the master key Secret from `master_key_secret_id`.
+Mount `redis_server_ca_pem` from another
+Kubernetes Secret into the gateway and backend pods, then add
+`REDIS_SSL=true` and `REDIS_SSL_CA_CERTS=<mount path>` to each component's
+`extraEnv`. Set `redis_transit_encryption = false` to avoid the CA mount,
+but plaintext Redis traffic has no in-transit protection
+
+The chart's migration hook replaces the Cloud Run migrations Job. The
+cross-project setup uses one root with its provider pointed at the
+dependencies project and `network_id` referencing the Shared VPC host
+project. The module's provider and `for_each` limitation is described in
+the [`for_each` section above](#using-as-a-module)
+
 ## Storage and database retention
 
 Two opt-in tripwires guard against accidental data loss on
@@ -409,14 +467,15 @@ Flip `cloudsql_deletion_protection` to `false` or `gcs_force_destroy` to
 
 ## Redis encryption
 
-Memorystore runs with `transit_encryption_mode = "SERVER_AUTHENTICATION"`,
-so the proxy connects via `rediss://`. The instance's self-signed CA cert
-(`server_ca_certs[0].cert`) is shipped to gateway + backend as
-`REDIS_CA_PEM_B64`; their entrypoint shell decodes it to `/tmp/redis-ca.pem`
-before uvicorn starts and points `REDIS_SSL_CA_CERTS` at that path. No
-extra config needed — but if you ever swap Memorystore for an external
-Redis, override `REDIS_HOST`/`REDIS_PORT` and either drop these env vars
-or point them at your own CA.
+By default, Memorystore runs with
+`transit_encryption_mode = "SERVER_AUTHENTICATION"`, so Cloud Run connects
+via `rediss://`. The instance's self-signed CA cert
+(`server_ca_certs[0].cert`) is shipped to gateway and backend as
+`REDIS_CA_PEM_B64`; their entrypoint shell decodes it to
+`/tmp/redis-ca.pem` before uvicorn starts and points `REDIS_SSL_CA_CERTS` at
+that path. Set `redis_transit_encryption = false` to use plaintext Redis.
+For GKE, use `redis_server_ca_pem` as described in the dependencies-only
+section, or accept the security tradeoff of disabling transit encryption
 
 ## Files
 
@@ -434,4 +493,5 @@ or point them at your own CA.
 | `iam.tf`          | Runtime SA + Cloud SQL client + Secret Manager accessor              |
 | `cloudrun.tf`     | 3 Cloud Run services + Cloud Run Job for migrations                  |
 | `load_balancer.tf`| External HTTPS LB, serverless NEGs, URL map for path routing         |
-| `outputs.tf`      | LB IP, service URLs, secret IDs, migration `execute` command         |
+| `outputs.tf`      | LB IP, service URLs, dependency endpoints, secret IDs, migration command |
+| `tests/`          | Plan-only mock-provider coverage for deployment modes and Redis encryption |
