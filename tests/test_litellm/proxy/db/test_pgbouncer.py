@@ -158,19 +158,23 @@ def _free_port() -> int:
         return probe.getsockname()[1]
 
 
-def _fake_pooler(tmp_path: Path, port: int, exit_immediately: bool = False) -> Path:
-    """An executable that listens on ``port`` like PgBouncer would (or exits at once), ignoring its ini argument."""
+def _fake_pooler(tmp_path: Path, port: int, exit_immediately: bool = False, port_file: Path | None = None) -> Path:
+    """An executable that listens on ``port`` like PgBouncer would (or exits at once), ignoring its ini argument.
+
+    With ``port_file`` each start reads the port to listen on from that file instead.
+    """
     script: Final = tmp_path / "fake-pgbouncer"
     script.write_text(
         textwrap.dedent(
             f"""\
             #!{sys.executable}
-            import socket, sys, time
+            import pathlib, socket, sys, time
             if {exit_immediately!r}:
                 sys.exit(3)
+            port = {port} if {port_file is None!r} else int(pathlib.Path({str(port_file)!r}).read_text())
             listener = socket.socket()
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            listener.bind(("127.0.0.1", {port}))
+            listener.bind(("127.0.0.1", port))
             listener.listen()
             while True:
                 conn, _ = listener.accept()
@@ -244,6 +248,44 @@ class TestPgBouncerProcess:
         pooler.stop()
         assert _wait_until(lambda: not _listening(port))
 
+    def test_a_replacement_that_never_listens_is_replaced_again(self, tmp_path: Path, caplog: pytest.LogCaptureFixture):
+        port: Final = _free_port()
+        port_file: Final = tmp_path / "port"
+        port_file.write_text(str(port))
+        script: Final = _fake_pooler(tmp_path, port, port_file=port_file)
+        pooler: Final = PgBouncerProcess(
+            argv=(str(script),), port=port, restart_delay_seconds=0.1, ready_timeout_seconds=0.3
+        )
+        assert pooler.start() is None
+        first_pid: Final = pooler.pid
+        assert first_pid is not None
+        wrong_port: Final = _free_port()
+        port_file.write_text(str(wrong_port))
+        with caplog.at_level(logging.ERROR, logger=verbose_proxy_logger.name):
+            os.kill(first_pid, signal.SIGKILL)
+            assert _wait_until(lambda: _listening(wrong_port))
+            assert _wait_until(lambda: any("did not start listening" in record.message for record in caplog.records))
+            port_file.write_text(str(port))
+            assert _wait_until(lambda: _listening(port))
+            assert _wait_until(lambda: not _listening(wrong_port))
+        pooler.stop()
+        assert _wait_until(lambda: not _listening(port))
+
+    def test_stopping_during_the_restart_delay_leaves_no_pooler_behind(self, tmp_path: Path):
+        port: Final = _free_port()
+        pooler: Final = PgBouncerProcess(
+            argv=(str(_fake_pooler(tmp_path, port)),), port=port, restart_delay_seconds=0.3
+        )
+        assert pooler.start() is None
+        first_pid: Final = pooler.pid
+        assert first_pid is not None
+        os.kill(first_pid, signal.SIGKILL)
+        assert _wait_until(lambda: not _listening(port))
+        pooler.stop()
+        time.sleep(1.0)
+        assert not _listening(port)
+        assert pooler.pid == first_pid
+
     def test_a_stopped_pooler_is_not_restarted(self, tmp_path: Path, caplog: pytest.LogCaptureFixture):
         port: Final = _free_port()
         pooler: Final = PgBouncerProcess(
@@ -270,8 +312,10 @@ class TestPgBouncerProcess:
 
     def test_a_pooler_that_never_listens_times_out(self, tmp_path: Path):
         port: Final = _free_port()
-        pooler: Final = PgBouncerProcess(argv=(str(_fake_pooler(tmp_path, _free_port())),), port=port)
-        outcome: Final = pooler.start(ready_timeout_seconds=0.5)
+        pooler: Final = PgBouncerProcess(
+            argv=(str(_fake_pooler(tmp_path, _free_port())),), port=port, ready_timeout_seconds=0.5
+        )
+        outcome: Final = pooler.start()
         assert isinstance(outcome, PgBouncerError)
         assert "did not start listening" in outcome.reason
         pid: Final = pooler.pid

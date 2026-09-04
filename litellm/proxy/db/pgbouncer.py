@@ -258,14 +258,26 @@ def _port_open(port: int) -> bool:
         return False
 
 
+def _end(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=PGBOUNCER_STOP_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
 class PgBouncerProcess:
     """Runs ``argv`` as a foreground child and restarts it whenever it exits on its own.
 
     Prisma reconnects by itself after a failed query, so a PgBouncer crash
     costs the requests in flight plus one failed query per idle pooled
     connection the crash severed, and nothing else once the replacement is
-    listening again. A replacement that cannot be spawned or exits again is
-    retried every ``restart_delay_seconds`` until ``stop`` is called.
+    listening again. A replacement that cannot be spawned, exits again or
+    never starts listening is retried every ``restart_delay_seconds`` until
+    ``stop`` is called.
     """
 
     def __init__(
@@ -273,10 +285,12 @@ class PgBouncerProcess:
         argv: Sequence[str],
         port: int,
         restart_delay_seconds: float = PGBOUNCER_RESTART_DELAY_SECONDS,
+        ready_timeout_seconds: float = PGBOUNCER_READY_TIMEOUT_SECONDS,
     ) -> None:
         self.argv: Final = tuple(argv)
         self.port: Final = port
         self.restart_delay_seconds: Final = restart_delay_seconds
+        self.ready_timeout_seconds: Final = ready_timeout_seconds
         self._stopping: Final = threading.Event()
         self._lock: Final = threading.Lock()
         self._process: subprocess.Popen[bytes] | None = None
@@ -286,14 +300,17 @@ class PgBouncerProcess:
         with self._lock:
             return None if self._process is None else self._process.pid
 
-    def _spawn(self) -> subprocess.Popen[bytes]:
-        process: Final = subprocess.Popen(self.argv)
+    def _spawn(self) -> subprocess.Popen[bytes] | None:
+        """Start a child, or None once ``stop`` ran; both take the lock so no child can slip in after a stop."""
         with self._lock:
+            if self._stopping.is_set():
+                return None
+            process: Final = subprocess.Popen(self.argv)
             self._process = process
-        return process
+            return process
 
-    def _wait_ready(self, process: subprocess.Popen[bytes], timeout_seconds: float) -> PgBouncerError | None:
-        deadline: Final = time.monotonic() + timeout_seconds
+    def _wait_ready(self, process: subprocess.Popen[bytes]) -> PgBouncerError | None:
+        deadline: Final = time.monotonic() + self.ready_timeout_seconds
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 return PgBouncerError(f"pgbouncer exited with status {process.returncode} during startup")
@@ -301,16 +318,19 @@ class PgBouncerProcess:
                 return None
             time.sleep(0.1)
         return PgBouncerError(
-            f"pgbouncer did not start listening on {PGBOUNCER_LISTEN_ADDR}:{self.port} within {timeout_seconds:.0f}s"
+            f"pgbouncer did not start listening on {PGBOUNCER_LISTEN_ADDR}:{self.port} "
+            f"within {self.ready_timeout_seconds:.0f}s"
         )
 
-    def start(self, ready_timeout_seconds: float = PGBOUNCER_READY_TIMEOUT_SECONDS) -> PgBouncerError | None:
+    def start(self) -> PgBouncerError | None:
         """Spawn PgBouncer, wait until it accepts connections, then supervise it from a daemon thread."""
         try:
             process: Final = self._spawn()
         except OSError as spawn_error:
             return PgBouncerError(f"could not start {self.argv[0]!r}: {spawn_error}")
-        not_ready: Final = self._wait_ready(process, ready_timeout_seconds)
+        if process is None:
+            return PgBouncerError("pgbouncer was stopped before it started")
+        not_ready: Final = self._wait_ready(process)
         if not_ready is not None:
             self.stop()
             return not_ready
@@ -336,30 +356,34 @@ class PgBouncerProcess:
 
     def _restart_after_delay(self) -> None:
         time.sleep(self.restart_delay_seconds)
+        try:
+            process: Final = self._spawn()
+        except OSError as spawn_error:
+            self._retry_restart(str(spawn_error))
+            return
+        if process is None:
+            return
+        not_ready: Final = self._wait_ready(process)
+        if not_ready is None:
+            self._watch(process)
+            return
+        _end(process)
+        self._retry_restart(not_ready.reason)
+
+    def _retry_restart(self, reason: str) -> None:
         if self._stopping.is_set():
             return
-        try:
-            self._watch(self._spawn())
-        except OSError as spawn_error:
-            verbose_proxy_logger.error(
-                "In-container pgbouncer could not be restarted (%s); retrying in %.1fs.",
-                spawn_error,
-                self.restart_delay_seconds,
-            )
-            threading.Thread(target=self._restart_after_delay, daemon=True, name="litellm-pgbouncer-supervisor").start()
+        verbose_proxy_logger.error(
+            "In-container pgbouncer could not be restarted (%s); retrying in %.1fs.", reason, self.restart_delay_seconds
+        )
+        threading.Thread(target=self._restart_after_delay, daemon=True, name="litellm-pgbouncer-supervisor").start()
 
     def stop(self) -> None:
-        self._stopping.set()
         with self._lock:
+            self._stopping.set()
             process: Final = self._process
-        if process is None or process.poll() is not None:
-            return
-        process.terminate()
-        try:
-            process.wait(timeout=PGBOUNCER_STOP_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+        if process is not None:
+            _end(process)
 
 
 def start_in_container_pgbouncer(
