@@ -202,6 +202,7 @@ def _handle_ollama_system_message(messages: list, prompt: str, msg_i: int) -> tu
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def _emit_ollama_default_template_warning(model: str, logger: Logger) -> None:
+    display_model: Final = re.sub(r"[\x00-\x1f\x7f]", " ", model)
     logger.warning(
         "ollama/%s: the chat messages were flattened into a single text prompt with "
         "'### System:' / '### User:' / '### Assistant:' markers and sent to /api/generate. This is "
@@ -211,8 +212,8 @@ def _emit_ollama_default_template_warning(model: str, logger: Logger) -> None:
         "the model's template, or register a template for this model with "
         "litellm.register_prompt_template() to keep using 'ollama/'. "
         "Docs: https://docs.litellm.ai/docs/providers/ollama",
-        model,
-        model,
+        display_model,
+        display_model,
     )
 
 

@@ -135,6 +135,20 @@ class TestOllamaDefaultTemplateWarning:
             "each affected model needs its own warning, since one deployment can route several"
         )
 
+    def test_control_characters_in_the_model_name_cannot_forge_log_lines(self, caplog):
+        messages: Final = [
+            {"role": "system", "content": "You are a helpful assistant"},
+            {"role": "user", "content": "Hello"},
+        ]
+
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            ollama_pt(model="llama3.2:1b\nFORGED: standalone log line", messages=messages)
+
+        warnings: Final = self._warnings(caplog)
+        assert len(warnings) == 1
+        assert "\n" not in warnings[0], "a caller-supplied model name must not inject extra log lines"
+        assert "FORGED" in warnings[0]
+
 
 @pytest.mark.asyncio
 async def test_anthropic_bedrock_thinking_blocks_with_none_content():
