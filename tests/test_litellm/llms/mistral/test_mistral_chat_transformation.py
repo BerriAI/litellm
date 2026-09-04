@@ -1,15 +1,11 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    ChatCompletionToolChoiceObjectParam,
-    ChatCompletionToolParam,
-)
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 
 from litellm.llms.mistral.chat.transformation import (
@@ -854,21 +850,17 @@ def test_mistral_transform_request_hoists_tool_message_image():
 class TestMistralToolChoice:
     """Mistral's tool_choice is either an enum or a named function object: https://docs.mistral.ai/api/"""
 
-    NAMED_TOOL_CHOICE: Final[ChatCompletionToolChoiceObjectParam] = {
-        "type": "function",
-        "function": {"name": "get_weather"},
-    }
-    TOOLS: Final[list[ChatCompletionToolParam]] = [
+    TOOLS: Final[Sequence[ChatCompletionToolParam]] = [
         {
             "type": "function",
             "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
         }
     ]
 
-    def _transform(self, tool_choice: str | Mapping[str, object]) -> dict[str, object]:
+    def _transform(self, tool_choice: str | Mapping[str, object]) -> Mapping[str, object]:
         config: Final = MistralConfig()
         optional_params: Final = config.map_openai_params(
-            non_default_params={"tool_choice": tool_choice, "tools": self.TOOLS},
+            non_default_params={"tool_choice": tool_choice, "tools": list(self.TOOLS)},
             optional_params={},
             model="mistral-large-latest",
             drop_params=False,
@@ -882,7 +874,20 @@ class TestMistralToolChoice:
         )
 
     def test_named_function_is_forwarded_to_mistral(self) -> None:
-        assert self._transform(self.NAMED_TOOL_CHOICE)["tool_choice"] == self.NAMED_TOOL_CHOICE
+        request: Final = self._transform({"type": "function", "function": {"name": "get_weather"}})
+
+        assert request["tool_choice"] == {"type": "function", "function": {"name": "get_weather"}}
+
+    def test_keys_mistral_forbids_are_not_replayed(self) -> None:
+        request: Final = self._transform(
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "strict": True},
+                "cache_control": {"type": "ephemeral"},
+            }
+        )
+
+        assert request["tool_choice"] == {"type": "function", "function": {"name": "get_weather"}}
 
     @pytest.mark.parametrize(
         "tool_choice, expected",
@@ -891,5 +896,13 @@ class TestMistralToolChoice:
     def test_enum_tool_choice_is_mapped(self, tool_choice: str, expected: str) -> None:
         assert self._transform(tool_choice)["tool_choice"] == expected
 
-    def test_object_shapes_mistral_does_not_accept_fall_back_to_any(self) -> None:
-        assert self._transform({"type": "allowed_tools", "allowed_tools": {"mode": "auto"}})["tool_choice"] == "any"
+    @pytest.mark.parametrize(
+        "tool_choice",
+        [
+            {"type": "function", "function": {}},
+            {"type": "function", "function": {"name": ""}},
+            {"type": "function", "function": {"name": 123}},
+        ],
+    )
+    def test_function_objects_without_a_usable_name_are_left_out(self, tool_choice: Mapping[str, object]) -> None:
+        assert "tool_choice" not in self._transform(tool_choice)

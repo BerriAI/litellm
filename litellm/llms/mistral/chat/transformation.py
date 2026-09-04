@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, get_type_hints, overload
 
 import httpx
@@ -22,7 +22,11 @@ from litellm.llms.openai.chat.gpt_transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionToolChoiceFunctionParam,
+    ChatCompletionToolChoiceObjectParam,
+)
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object
 
@@ -44,7 +48,7 @@ class MistralConfig(OpenAIGPTConfig):
 
     - `tools` (list or null): A list of available tools for the model. Use this to specify functions for which the model can generate JSON inputs.
 
-    - `tool_choice` (string - 'auto'/'any'/'none' or null): Specifies if/how functions are called. If set to none the model won't call a function and will generate a message instead. If set to auto the model can choose to either generate a message or call a function. If set to any the model is forced to call a function. Default - 'auto'.
+    - `tool_choice` (string - 'auto'/'any'/'none', an object naming one function such as {"type": "function", "function": {"name": "my_function"}}, or null): Specifies if/how functions are called. If set to none the model won't call a function and will generate a message instead. If set to auto the model can choose to either generate a message or call a function. If set to any the model is forced to call a function. Default - 'auto'.
 
     - `stop` (string or array of strings): Stop generation if this token is detected. Or if one of these tokens is detected when providing an array
 
@@ -59,7 +63,7 @@ class MistralConfig(OpenAIGPTConfig):
     top_p: int | None = None
     max_tokens: int | None = None
     tools: list | None = None
-    tool_choice: Literal["auto", "any", "none"] | None = None
+    tool_choice: Literal["auto", "any", "none"] | ChatCompletionToolChoiceObjectParam | None = None
     random_seed: int | None = None
     safe_prompt: bool | None = None
     response_format: dict | None = None
@@ -71,7 +75,7 @@ class MistralConfig(OpenAIGPTConfig):
         top_p: int | None = None,
         max_tokens: int | None = None,
         tools: list | None = None,
-        tool_choice: Literal["auto", "any", "none"] | None = None,
+        tool_choice: Literal["auto", "any", "none"] | ChatCompletionToolChoiceObjectParam | None = None,
         random_seed: int | None = None,
         safe_prompt: bool | None = None,
         response_format: dict | None = None,
@@ -107,14 +111,19 @@ class MistralConfig(OpenAIGPTConfig):
 
         return supported_params
 
-    def _map_tool_choice(self, tool_choice: str | Mapping[str, object]) -> str | Mapping[str, object]:
+    @staticmethod
+    def _map_tool_choice(tool_choice: str | dict[str, object]) -> str | ChatCompletionToolChoiceObjectParam | None:
         match tool_choice:
             case "auto" | "none":
                 return tool_choice
-            case {"type": "function", "function": {"name": str()}}:
-                return tool_choice
-            case _:
+            case {"type": "function", "function": {"name": str(name)}} if name:
+                return ChatCompletionToolChoiceObjectParam(
+                    type="function", function=ChatCompletionToolChoiceFunctionParam(name=name)
+                )
+            case str():
                 return "any"
+            case _:
+                return None
 
     @staticmethod
     def _get_mistral_reasoning_system_prompt() -> str:
@@ -166,8 +175,12 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["top_p"] = value
             if param == "stop":
                 optional_params["stop"] = value
-            if param == "tool_choice" and isinstance(value, (str, Mapping)):
-                optional_params["tool_choice"] = self._map_tool_choice(tool_choice=value)
+            if (
+                param == "tool_choice"
+                and isinstance(value, (str, dict))
+                and (mapped_tool_choice := self._map_tool_choice(tool_choice=value)) is not None
+            ):
+                optional_params["tool_choice"] = mapped_tool_choice
             if param == "seed":
                 optional_params["extra_body"] = {"random_seed": value}
             if param == "response_format":
