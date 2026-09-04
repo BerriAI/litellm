@@ -1761,6 +1761,7 @@ describe("TeamInfoView", () => {
         catalog = [DIRECT_SERVER, GROUP_SERVER],
         accessGroups = UNIFIED_GROUPS,
         team = {},
+        teamAfterLoad,
       }: {
         serversFailed?: boolean;
         toolsetsLoading?: boolean;
@@ -1768,14 +1769,21 @@ describe("TeamInfoView", () => {
         catalog?: readonly MCPServer[];
         accessGroups?: typeof UNIFIED_GROUPS;
         team?: Record<string, unknown>;
+        teamAfterLoad?: Record<string, unknown>;
       } = {},
     ) => {
       mockUseMCPServers.mockReturnValue(mcpQueryResult(serversFailed ? [] : catalog, serversFailed));
       mockUseMCPToolsets.mockReturnValue(mcpQueryResult([], false, toolsetsLoading));
       mockUseAccessGroups.mockReturnValue(mcpQueryResult(accessGroupsFailed ? [] : accessGroups, accessGroupsFailed));
-      vi.mocked(networking.teamInfoCall).mockResolvedValue(
-        createMockTeamData({ models: ["gpt-4"], object_permission: objectPermission, ...team }),
-      );
+      vi.mocked(networking.teamInfoCall)
+        .mockResolvedValueOnce(createMockTeamData({ models: ["gpt-4"], object_permission: objectPermission, ...team }))
+        .mockResolvedValue(
+          createMockTeamData({
+            models: ["gpt-4"],
+            object_permission: objectPermission,
+            ...(teamAfterLoad ?? team),
+          }),
+        );
       renderWithProviders(<TeamInfoView {...defaultProps} />);
       await openSettingsEditor(user);
     };
@@ -1908,6 +1916,49 @@ describe("TeamInfoView", () => {
       expect(savedToolPermissions()).toEqual({ wiki: ["read_page"] });
     });
 
+    it("a team admin without the access group list saves against the current group grants, not the page-load snapshot", async () => {
+      const user = userEvent.setup({ delay: null });
+      await renderTeam(user, {
+        accessGroups: [],
+        catalog: [UNIFIED_SERVER],
+        team: { ...unifiedTeam({ wiki: ["read_page"] }), access_group_mcp_server_ids: ["unified-server"] },
+        teamAfterLoad: { ...unifiedTeam({ wiki: ["read_page"] }), access_group_mcp_server_ids: [] },
+      });
+
+      await renameTeam(user);
+      await save(user);
+
+      expect(savedToolPermissions()).toEqual({});
+    });
+
+    it("a team admin without the access group list keeps a newly granted server from the current group grants", async () => {
+      const user = userEvent.setup({ delay: null });
+      await renderTeam(user, {
+        accessGroups: [],
+        catalog: [UNIFIED_SERVER],
+        team: { ...unifiedTeam({}), access_group_mcp_server_ids: [] },
+        teamAfterLoad: { ...unifiedTeam({ wiki: ["read_page"] }), access_group_mcp_server_ids: ["unified-server"] },
+      });
+
+      await renameTeam(user);
+      await save(user);
+
+      expect(savedToolPermissions()).toEqual({ wiki: ["read_page"] });
+    });
+
+    it("refuses to save when the access group list is unavailable and the team cannot be reloaded", async () => {
+      const user = userEvent.setup({ delay: null });
+      await renderTeam(user, {
+        accessGroups: [],
+        catalog: [UNIFIED_SERVER],
+        team: { ...unifiedTeam({ wiki: ["read_page"] }), access_group_mcp_server_ids: ["unified-server"] },
+      });
+      vi.mocked(networking.teamInfoCall).mockRejectedValueOnce(new Error("boom"));
+
+      await renameTeam(user);
+      await saveIsRefused(user, /access groups could not be reloaded/);
+    });
+
     it("drops a server's allowlist when its unified access group is removed while another group stays", async () => {
       const user = userEvent.setup({ delay: null });
       await renderTeam(user, { catalog: [UNIFIED_SERVER], team: unifiedTeam({ wiki: ["read_page"] }) });
@@ -1996,58 +2047,95 @@ describe("TeamInfoView", () => {
       { access_group_id: "ag-2", access_mcp_server_ids: ["u3"] },
     ];
 
-    it("counts a server granted directly, through a group or through a toolset as granted", () => {
+    it("counts a server granted directly, through a group or through a toolset as granted", async () => {
       expect(
-        grantedMcpServerIds(
+        await grantedMcpServerIds(
           [effective("a", "direct"), effective("b", "accessGroup"), effective("c", "toolset")],
           [],
           [],
-          { ids: [], serverIds: [] },
+          vi.fn(),
         ),
       ).toEqual({ kind: "resolved", serverIds: new Set(["a", "b", "c"]) });
     });
 
-    it("does not let a tool-permission entry justify keeping itself", () => {
-      expect(grantedMcpServerIds([effective("stale", "toolPermission")], [], [], { ids: [], serverIds: [] })).toEqual({
+    it("does not let a tool-permission entry justify keeping itself", async () => {
+      expect(await grantedMcpServerIds([effective("stale", "toolPermission")], [], [], vi.fn())).toEqual({
         kind: "resolved",
         serverIds: new Set(),
       });
     });
 
-    it("adds only the servers of the unified access groups that are still selected", () => {
-      expect(grantedMcpServerIds([effective("a", "direct")], ["ag-2"], GROUPS, { ids: [], serverIds: [] })).toEqual({
+    it("adds only the servers of the unified access groups that are still selected", async () => {
+      expect(await grantedMcpServerIds([effective("a", "direct")], ["ag-2"], GROUPS, vi.fn())).toEqual({
         kind: "resolved",
         serverIds: new Set(["a", "u3"]),
       });
     });
 
-    it("is unresolvable when a selected unified access group is not in the loaded list", () => {
+    it("does not reload the team when the access group list covers the selection", async () => {
+      const loadTeamGroups = vi.fn();
+      await expect(
+        grantedMcpServerIds([effective("a", "direct")], ["ag-1"], GROUPS, loadTeamGroups),
+      ).resolves.toEqual({
+        kind: "resolved",
+        serverIds: new Set(["a", "u1", "u2"]),
+      });
+      expect(loadTeamGroups).not.toHaveBeenCalled();
+    });
+
+    it("is unresolvable when a selected unified access group is not in the loaded list", async () => {
       expect(
-        grantedMcpServerIds([effective("a", "direct")], ["ag-1", "ag-missing"], GROUPS, { ids: [], serverIds: [] }),
+        await grantedMcpServerIds(
+          [effective("a", "direct")],
+          ["ag-1", "ag-missing"],
+          GROUPS,
+          vi.fn().mockResolvedValue({ ids: [], serverIds: [] }),
+        ),
       ).toEqual({
         kind: "unresolvable",
         reason: expect.stringMatching(/access groups could not be loaded/),
       });
     });
 
-    it("falls back to the team's loaded access group servers when the list is unavailable and the selection is unchanged", () => {
+    it("falls back to the team's loaded access group servers when the list is unavailable and the selection is unchanged", async () => {
       expect(
-        grantedMcpServerIds([effective("a", "direct")], ["ag-1"], [], { ids: ["ag-1"], serverIds: ["u1"] }),
+        await grantedMcpServerIds(
+          [effective("a", "direct")],
+          ["ag-1"],
+          [],
+          vi.fn().mockResolvedValue({ ids: ["ag-1"], serverIds: ["u1"] }),
+        ),
       ).toEqual({
         kind: "resolved",
         serverIds: new Set(["a", "u1"]),
       });
     });
 
-    it("is unresolvable when the list is unavailable and the selection changed", () => {
+    it("is unresolvable when the list is unavailable and the selection changed", async () => {
       expect(
-        grantedMcpServerIds([effective("a", "direct")], ["ag-1"], [], {
-          ids: ["ag-1", "ag-2"],
-          serverIds: ["u1"],
-        }),
+        await grantedMcpServerIds(
+          [effective("a", "direct")],
+          ["ag-1"],
+          [],
+          vi.fn().mockResolvedValue({ ids: ["ag-1", "ag-2"], serverIds: ["u1"] }),
+        ),
       ).toEqual({
         kind: "unresolvable",
         reason: expect.stringMatching(/access groups could not be loaded/),
+      });
+    });
+
+    it("is unresolvable when the team reload fails", async () => {
+      expect(
+        await grantedMcpServerIds(
+          [effective("a", "direct")],
+          ["ag-1"],
+          [],
+          vi.fn().mockRejectedValue(new Error("boom")),
+        ),
+      ).toEqual({
+        kind: "unresolvable",
+        reason: expect.stringMatching(/access groups could not be reloaded/),
       });
     });
   });

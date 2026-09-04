@@ -106,18 +106,23 @@ export type McpGrantResolution =
   | { readonly kind: "resolved"; readonly serverIds: ReadonlySet<string> }
   | { readonly kind: "unresolvable"; readonly reason: string };
 
+export type TeamAccessGroupGrants = {
+  readonly ids: readonly string[];
+  readonly serverIds: readonly string[];
+};
+
 const sameIdSelection = (a: readonly string[], b: readonly string[]): boolean => {
   const aSet = new Set(a);
   const bSet = new Set(b);
   return aSet.size === bSet.size && [...aSet].every((id) => bSet.has(id));
 };
 
-export const grantedMcpServerIds = (
+export const grantedMcpServerIds = async (
   effectiveServers: readonly EffectiveMcpServer[],
   selectedAccessGroupIds: readonly string[],
   accessGroups: readonly Pick<AccessGroupResponse, "access_group_id" | "access_mcp_server_ids">[],
-  loadedTeamGroups: { readonly ids: readonly string[]; readonly serverIds: readonly string[] },
-): McpGrantResolution => {
+  loadTeamGroups: () => Promise<TeamAccessGroupGrants>,
+): Promise<McpGrantResolution> => {
   const direct = effectiveServers
     .filter(({ source }) => source.kind !== "toolPermission")
     .map(({ server }) => server.server_id);
@@ -127,6 +132,10 @@ export const grantedMcpServerIds = (
       kind: "resolved",
       serverIds: new Set([...direct, ...selectedGroups.flatMap((group) => group.access_mcp_server_ids)]),
     };
+  }
+  const loadedTeamGroups = await loadTeamGroups().catch(() => null);
+  if (loadedTeamGroups === null) {
+    return { kind: "unresolvable", reason: "the team's access groups could not be reloaded" };
   }
   if (sameIdSelection(selectedAccessGroupIds, loadedTeamGroups.ids)) {
     return { kind: "resolved", serverIds: new Set([...direct, ...loadedTeamGroups.serverIds]) };
@@ -916,11 +925,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const mcpResolution: McpGrantResolution =
         mcpLookupFailure !== null
           ? { kind: "unresolvable", reason: mcpLookupFailure }
-          : grantedMcpServerIds(
+          : await grantedMcpServerIds(
               resolveEffectiveMcpServers(effectiveMcpInput),
               values.access_group_ids || [],
               allAccessGroups,
-              { ids: info.access_group_ids ?? [], serverIds: info.access_group_mcp_server_ids ?? [] },
+              async () => {
+                const teamInfo = await teamInfoCall(accessToken, teamId);
+                return {
+                  ids: teamInfo.team_info.access_group_ids ?? [],
+                  serverIds: teamInfo.team_info.access_group_mcp_server_ids ?? [],
+                };
+              },
             );
       if (mcpResolution.kind === "unresolvable" && Object.keys(submittedToolPermissions).length > 0) {
         toast.error(mcpUnresolvableSaveError(mcpResolution.reason));
