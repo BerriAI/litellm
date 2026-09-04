@@ -490,7 +490,7 @@ class TestRequestNumRetriesBeatsGlobal:
         litellm.callbacks = prev_callbacks
 
     @staticmethod
-    def _router(global_num_retries):
+    def _router(global_num_retries, retry_policy=None):
         return Router(
             model_list=[
                 {
@@ -503,6 +503,7 @@ class TestRequestNumRetriesBeatsGlobal:
                 }
             ],
             num_retries=global_num_retries,
+            retry_policy=retry_policy,
         )
 
     async def _count_attempts(self, *, global_num_retries, request_num_retries):
@@ -529,6 +530,26 @@ class TestRequestNumRetriesBeatsGlobal:
         """global=3 + request=0 -> a single attempt (retries disabled by the request)."""
         attempts = await self._count_attempts(global_num_retries=3, request_num_retries=0)
         assert attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_request_num_retries_zero_disables_retry_policy(self):
+        """An explicit zero remains a single attempt when a retry policy matches the error."""
+        counter = _AttemptCounter()
+        litellm.callbacks = [counter]
+        router = self._router(
+            global_num_retries=3,
+            retry_policy=RetryPolicy(InternalServerErrorRetries=2),
+        )
+
+        with patch("asyncio.sleep", return_value=None):
+            with pytest.raises(litellm.InternalServerError):
+                await router.acompletion(
+                    model="mock",
+                    messages=[{"role": "user", "content": "hi"}],
+                    num_retries=0,
+                )
+
+        assert counter.attempts == 1
 
     @pytest.mark.asyncio
     async def test_global_num_retries_applies_when_request_omits_it(self):
