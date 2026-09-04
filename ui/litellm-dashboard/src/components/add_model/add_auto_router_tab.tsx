@@ -518,87 +518,92 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         <CardContent>
           <form onSubmit={form.handleSubmit(() => handleAutoRouterSubmit())} noValidate>
             <FieldGroup>
-              <FormField
-                control={form.control}
-                name="auto_router_name"
-                label={labelWithHint("Auto Router Name", "Unique name for this auto router configuration")}
-              >
-                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g., smart_router, auto_router_1" />}
-              </FormField>
-
               <div>
-                <label className="block text-sm font-medium text-foreground mb-2">Template</label>
-                <Select
-                  items={templateItems}
-                  value={selectedPreset ?? null}
-                  onValueChange={(presetKey: string | null) => handlePresetChange(presetKey ?? undefined)}
+                <FormField
+                  control={form.control}
+                  name="auto_router_name"
+                  label={labelWithHint("Auto Router Name", "Unique name for this auto router configuration")}
                 >
-                  <SelectTrigger data-testid="template-selector" className="w-full">
-                    <SelectValue placeholder="Choose a template or select Custom to define your own" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {sortedPresetOptions.map(({ preset, availability: presetState }) => {
-                      const disabledHint = presetDisabledHint(presetState);
-                      const hintClass = isPresetHintAlarming(presetState)
-                        ? "text-destructive"
-                        : "text-muted-foreground";
-                      const matchedHint =
-                        presetState.kind === "available" && presetState.viaDeployments
-                          ? "Matches your deployments"
-                          : null;
+                  {({ ref, ...field }) => (
+                    <Input {...field} ref={ref} placeholder="e.g., smart_router, auto_router_1" />
+                  )}
+                </FormField>
 
-                      return (
-                        <SelectItem
-                          key={preset.key}
-                          value={preset.key}
-                          label={preset.label}
-                          disabled={disabledHint !== null}
-                          title={disabledHint ?? preset.description}
-                        >
-                          <div>
-                            <div className="font-medium">{preset.label}</div>
-                            <div className="text-xs text-muted-foreground">{preset.description}</div>
-                            {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
-                            {matchedHint && <div className="text-xs mt-1 text-success">{matchedHint}</div>}
-                          </div>
-                        </SelectItem>
-                      );
-                    })}
-                    <SelectItem value="custom" label="Custom Configuration">
-                      <div>
-                        <div className="font-medium">Custom Configuration</div>
-                        <div className="text-xs text-muted-foreground">Define your auto router from scratch</div>
-                      </div>
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
                 {!automaticSetupLoading && automaticRouterConfig && (
                   <button
                     type="button"
-                    className="mt-2 rounded-sm text-sm font-medium text-blue-600 hover:text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                    className="mt-3 rounded-sm text-sm font-medium text-blue-600 hover:text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
                     data-testid="configure-automatically-button"
                     onClick={handleAutomaticSetup}
                   >
                     Configure automatically
                   </button>
                 )}
-                {modelsUnverifiable && (
-                  <div className="text-xs mt-1 text-destructive">
-                    Could not load available models.{" "}
-                    <button type="button" className="underline" onClick={() => refetchModels()}>
-                      Retry
-                    </button>
-                  </div>
-                )}
-                {presetsPending && <div className="text-xs mt-1 text-muted-foreground">Loading templates...</div>}
-                {presetsUnavailable && (
-                  <div className="text-xs mt-1 text-destructive">
-                    Could not load templates, so only Custom Configuration is shown.{" "}
-                    <button type="button" className="underline" onClick={() => void refetchPresets()}>
-                      Retry
-                    </button>
-                  </div>
-                )}
+
+                <div className="mt-5">
+                  <label className="block text-sm font-medium text-foreground mb-2">Template</label>
+                  <Select
+                    items={templateItems}
+                    value={selectedPreset ?? null}
+                    onValueChange={(presetKey: string | null) => handlePresetChange(presetKey ?? undefined)}
+                  >
+                    <SelectTrigger data-testid="template-selector" className="w-full">
+                      <SelectValue placeholder="Choose a template or select Custom to define your own" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {sortedPresetOptions.map(({ preset, availability: presetState }) => {
+                        const disabledHint = presetDisabledHint(presetState);
+                        const hintClass = isPresetHintAlarming(presetState)
+                          ? "text-destructive"
+                          : "text-muted-foreground";
+                        const matchedHint =
+                          presetState.kind === "available" && presetState.viaDeployments
+                            ? "Matches your deployments"
+                            : null;
+
+                        return (
+                          <SelectItem
+                            key={preset.key}
+                            value={preset.key}
+                            label={preset.label}
+                            disabled={disabledHint !== null}
+                            title={disabledHint ?? preset.description}
+                          >
+                            <div>
+                              <div className="font-medium">{preset.label}</div>
+                              <div className="text-xs text-muted-foreground">{preset.description}</div>
+                              {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
+                              {matchedHint && <div className="text-xs mt-1 text-success">{matchedHint}</div>}
+                            </div>
+                          </SelectItem>
+                        );
+                      })}
+                      <SelectItem value="custom" label="Custom Configuration">
+                        <div>
+                          <div className="font-medium">Custom Configuration</div>
+                          <div className="text-xs text-muted-foreground">Define your auto router from scratch</div>
+                        </div>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {modelsUnverifiable && (
+                    <div className="text-xs mt-1 text-destructive">
+                      Could not load available models.{" "}
+                      <button type="button" className="underline" onClick={() => refetchModels()}>
+                        Retry
+                      </button>
+                    </div>
+                  )}
+                  {presetsPending && <div className="text-xs mt-1 text-muted-foreground">Loading templates...</div>}
+                  {presetsUnavailable && (
+                    <div className="text-xs mt-1 text-destructive">
+                      Could not load templates, so only Custom Configuration is shown.{" "}
+                      <button type="button" className="underline" onClick={() => void refetchPresets()}>
+                        Retry
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {requiresTeamScope && (
