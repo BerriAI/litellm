@@ -963,7 +963,9 @@ async def test_v2_serializes_model_max_budget_on_budget_write(monkeypatch):
     assert json.loads(written) == {"gpt-4o": {"max_budget": 10}}
 
 
-async def _run_legacy_update_organization(monkeypatch, *, body: dict, existing_budget_id: str):
+async def _run_legacy_update_organization(
+    monkeypatch: pytest.MonkeyPatch, *, body: dict[str, object], existing_budget_id: str
+) -> AsyncMock:
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.management_endpoints import organization_endpoints
     from litellm.proxy.management_endpoints.organization_endpoints import update_organization
