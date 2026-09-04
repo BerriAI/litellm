@@ -124,7 +124,7 @@ def test_should_leave_functions_without_mapping_contracts_unimplemented() -> Non
 def test_should_report_a_bridge_that_cannot_be_imported() -> None:
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(native_build, "get_native_bridge", lambda: None)
-        message = native_build.trace_bridge_error()
+        message: Final = native_build.trace_bridge_error()
 
     assert message is not None
     assert "not importable" in message
@@ -133,7 +133,7 @@ def test_should_report_a_bridge_that_cannot_be_imported() -> None:
 def test_should_report_a_bridge_built_without_the_trace_feature() -> None:
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(native_build, "get_native_bridge", lambda: SimpleNamespace(_trace=None))
-        message = native_build.trace_bridge_error()
+        message: Final = native_build.trace_bridge_error()
 
     assert message is not None
     assert native_build.BRIDGE_FEATURE in message
@@ -147,18 +147,14 @@ def test_should_accept_a_bridge_built_with_the_trace_feature() -> None:
 
 
 def test_should_not_rebuild_the_bridge_while_reporting_its_state() -> None:
-    rebuilds: list[object] = []
-
-    def fake_rebuild(repo_root: object) -> tuple[bool, str]:
-        rebuilds.append(repo_root)
-        return True, ""
+    def forbidden_rebuild(repo_root: object) -> tuple[bool, str]:
+        raise AssertionError("trace_bridge_error must not rebuild the native bridge")
 
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(native_build, "_rebuild", fake_rebuild)
+        patch.setattr(native_build, "_rebuild", forbidden_rebuild)
         patch.setattr(native_build, "get_native_bridge", lambda: None)
-        native_build.trace_bridge_error()
 
-    assert rebuilds == []
+        assert native_build.trace_bridge_error() is not None
 
 
 def test_should_derive_ocr_mapping_status_from_live_tests() -> None:

@@ -74,7 +74,6 @@ def _rebuild(repo_root: Path) -> tuple[bool, str]:
 
 
 def trace_bridge_error() -> str | None:
-    """Why the installed bridge cannot serve trace parity, or None when it can. Never rebuilds."""
     bridge: Final = get_native_bridge()
     if bridge is None:
         return "native Rust bridge is not importable"
