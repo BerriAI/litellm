@@ -60,9 +60,13 @@ _MAX_CONCURRENT_SHADOW_TASKS: Final = 16
 _MAX_JUDGE_RESPONSE_CHARS: Final = 8_000
 _MAX_JUDGE_PROMPT_CHARS: Final = 24_000
 
-# The judge answers with a small JSON object; a tighter budget truncates the JSON
-# mid-object and the attempt is lost to an error row.
-JUDGE_MAX_OUTPUT_TOKENS: Final = 1500
+# The judge answers with a small JSON object, but the cap covers reasoning tokens too,
+# and the models people pick as judges reason before answering whether or not the call
+# asks them to (Anthropic's 5 family thinks adaptively and cannot be told not to). A
+# budget sized for the JSON alone is spent on invisible reasoning instead, and the reply
+# arrives empty or truncated mid-object, which the attempt records as an unparseable
+# verdict. Headroom is free: max_tokens is a ceiling, and only generated tokens bill.
+JUDGE_MAX_OUTPUT_TOKENS: Final = 4096
 
 _MAX_ERROR_CHARS: Final = 500
 
