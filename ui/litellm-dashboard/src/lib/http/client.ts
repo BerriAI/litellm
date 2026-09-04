@@ -48,6 +48,7 @@ const deriveDetailMessage = (detail: any): string | undefined => {
   if (Array.isArray(detail)) return detail.map((d: any) => d?.msg || JSON.stringify(d)).join("; ");
   if (typeof detail === "string") return detail;
   if (typeof detail?.error === "string") return detail.error;
+  if (detail && typeof detail === "object") return detail.error?.message || detail.message;
   return undefined;
 };
 

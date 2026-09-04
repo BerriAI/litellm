@@ -1,8 +1,10 @@
 import React, { useState } from "react";
-import { Input, Popover, Tag } from "antd";
-import { EditOutlined } from "@ant-design/icons";
-
-const { TextArea } = Input;
+import { PencilIcon } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Textarea } from "@/components/ui/textarea";
 
 interface VariableTextAreaProps {
   value: string;
@@ -61,65 +63,22 @@ const VariableTextArea: React.FC<VariableTextAreaProps> = ({ value, onChange, pl
 
   return (
     <div className={`variable-textarea-container ${className}`}>
-      <style>
-        {`
-          .variable-highlight-text {
-            color: #f97316;
-            background-color: #fff7ed;
-            border-radius: 4px;
-            padding: 0 2px;
-            border: 1px solid #fed7aa;
-            font-family: monospace;
-          }
-        `}
-      </style>
-
       {/* Using standard TextArea for reliability */}
-      <TextArea
+      <Textarea
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         rows={rows}
-        className="font-sans"
+        className="field-sizing-fixed font-sans"
       />
 
       {/* Variable Management - Clear and Functional */}
       {variables.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2 items-center">
-          <span className="text-xs text-gray-500 mr-1">Detected variables:</span>
+          <span className="text-xs text-muted-foreground mr-1">Detected variables:</span>
           {variables.map((variable, index) => (
             <Popover
               key={`${variable.start}-${index}`}
-              content={
-                <div className="p-2" style={{ minWidth: "200px" }}>
-                  <div className="text-xs text-gray-500 mb-2">Edit variable name</div>
-                  <Input
-                    size="small"
-                    value={newVariableName}
-                    onChange={(e) => setNewVariableName(e.target.value)}
-                    onPressEnter={handleVariableEdit}
-                    placeholder="Variable name"
-                    autoFocus
-                  />
-                  <div className="flex gap-2 mt-2">
-                    <button
-                      onClick={handleVariableEdit}
-                      className="text-xs px-2 py-1 bg-blue-500 text-white rounded-sm hover:bg-blue-600"
-                    >
-                      Save
-                    </button>
-                    <button
-                      onClick={() => {
-                        setEditingVariable(null);
-                        setNewVariableName("");
-                      }}
-                      className="text-xs px-2 py-1 bg-gray-200 text-gray-700 rounded-sm hover:bg-gray-300"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              }
               open={editingVariable?.start === variable.start}
               onOpenChange={(open) => {
                 if (!open) {
@@ -127,23 +86,56 @@ const VariableTextArea: React.FC<VariableTextAreaProps> = ({ value, onChange, pl
                   setNewVariableName("");
                 }
               }}
-              trigger="click"
             >
-              <Tag
-                color="orange"
-                className="cursor-pointer hover:opacity-80 transition-all m-0"
-                icon={<EditOutlined />}
-                onClick={() => {
-                  setEditingVariable({
-                    oldName: variable.name,
-                    start: variable.start,
-                    end: variable.end,
-                  });
-                  setNewVariableName(variable.name);
-                }}
+              <PopoverTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-auto p-0"
+                    onClick={() => {
+                      setEditingVariable({
+                        oldName: variable.name,
+                        start: variable.start,
+                        end: variable.end,
+                      });
+                      setNewVariableName(variable.name);
+                    }}
+                  />
+                }
               >
-                {variable.name}
-              </Tag>
+                <Badge variant="outline" className="cursor-pointer">
+                  <PencilIcon className="size-3" />
+                  {variable.name}
+                </Badge>
+              </PopoverTrigger>
+              <PopoverContent className="w-[216px]">
+                <div className="p-2">
+                  <div className="text-xs text-muted-foreground mb-2">Edit variable name</div>
+                  <Input
+                    value={newVariableName}
+                    onChange={(e) => setNewVariableName(e.target.value)}
+                    onKeyDown={(event) => event.key === "Enter" && handleVariableEdit()}
+                    placeholder="Variable name"
+                    autoFocus
+                  />
+                  <div className="flex gap-2 mt-2">
+                    <Button size="sm" onClick={handleVariableEdit}>
+                      Save
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setEditingVariable(null);
+                        setNewVariableName("");
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              </PopoverContent>
             </Popover>
           ))}
         </div>

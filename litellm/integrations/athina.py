@@ -1,4 +1,5 @@
 import datetime
+from typing import Final
 
 import litellm
 
@@ -34,11 +35,11 @@ class AthinaLogger:
         import traceback
 
         try:
-            is_stream = kwargs.get("stream", False)
+            is_stream: Final = kwargs.get("stream", False)
             if is_stream:
                 if "complete_streaming_response" in kwargs:
                     # Log the completion response in streaming mode
-                    completion_response = kwargs["complete_streaming_response"]
+                    completion_response: Final = kwargs["complete_streaming_response"]
                     response_json = completion_response.model_dump() if completion_response else {}
                 else:
                     # Skip logging if the completion response is not available
@@ -46,7 +47,7 @@ class AthinaLogger:
             else:
                 # Log the completion response in non streaming mode
                 response_json = response_obj.model_dump() if response_obj else {}
-            data = {
+            data: Final = {
                 "language_model_id": kwargs.get("model"),
                 "request": kwargs,
                 "response": response_json,
@@ -62,16 +63,16 @@ class AthinaLogger:
                 data["prompt"] = kwargs.get("messages", None)
 
             # Directly add tools or functions if present
-            optional_params = kwargs.get("optional_params", {})
+            optional_params: Final = kwargs.get("optional_params", {})
             data.update((k, v) for k, v in optional_params.items() if k in ["tools", "functions"])
 
             # Add additional metadata keys
-            metadata = kwargs.get("litellm_params", {}).get("metadata", {})
+            metadata: Final = kwargs.get("litellm_params", {}).get("metadata", {})
             if metadata:
                 for key in self.additional_keys:
                     if key in metadata:
                         data[key] = metadata[key]
-            response = litellm.module_level_client.post(
+            response: Final = litellm.module_level_client.post(
                 self.athina_logging_url,
                 headers=self.headers,
                 data=json.dumps(data, default=str),

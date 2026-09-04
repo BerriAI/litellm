@@ -11,6 +11,8 @@ Endpoint
 Docs - https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api
 """
 
+from typing import Final
+
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -22,7 +24,7 @@ from litellm.types.utils import EmbeddingResponse, Usage
 
 from ..common_utils import DashScopeError
 
-DEFAULT_API_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+DEFAULT_API_BASE: Final = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
 class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
@@ -49,7 +51,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         drop_params: bool = False,
     ) -> dict:
-        supported = self.get_supported_openai_params(model)
+        supported: Final = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
             if v is None:
                 continue
@@ -59,6 +61,17 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
             # the upstream _check_valid_arg already raised UnsupportedParamsError
             # for drop_params=False before this method is called.
         return optional_params
+
+    def _resolve_api_key(self, api_key: str | None) -> str:
+        resolved_api_key: Final = api_key if api_key is not None else get_secret_str("DASHSCOPE_API_KEY")
+        if resolved_api_key is None:
+            raise ValueError(
+                "DashScope API key is required. Set 'DASHSCOPE_API_KEY' env var or pass api_key explicitly."
+            )
+        return resolved_api_key
+
+    def _resolve_embedding_api_base(self, api_base: str | None) -> str:
+        return api_base or get_secret_str("DASHSCOPE_API_BASE") or DEFAULT_API_BASE
 
     def validate_environment(
         self,
@@ -70,17 +83,11 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        if api_key is None:
-            api_key = get_secret_str("DASHSCOPE_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "DashScope API key is required. Set 'DASHSCOPE_API_KEY' env var or pass api_key explicitly."
-            )
-        default_headers = {
+        return {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {self._resolve_api_key(api_key)}",
+            **headers,
         }
-        return {**default_headers, **headers}
 
     def get_complete_url(
         self,
@@ -91,8 +98,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        base = api_base or get_secret_str("DASHSCOPE_API_BASE") or DEFAULT_API_BASE
-        base = base.rstrip("/")
+        base: Final = self._resolve_embedding_api_base(api_base).rstrip("/")
         if base.endswith("/embeddings"):
             return base
         return f"{base}/embeddings"
@@ -104,7 +110,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        data: dict = {
+        data: Final[dict] = {
             "model": model,
             "input": input,
         }
@@ -126,7 +132,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
     ) -> EmbeddingResponse:
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
         except Exception as e:
             raise DashScopeError(
                 status_code=raw_response.status_code,
@@ -141,8 +147,8 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         )
 
         if "error" in response_json:
-            error = response_json["error"]
-            message = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+            error: Final = response_json["error"]
+            message: Final = error.get("message", str(error)) if isinstance(error, dict) else str(error)
             raise DashScopeError(
                 status_code=raw_response.status_code,
                 message=message,
@@ -152,9 +158,9 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         model_response.data = response_json.get("data", [])
         model_response.model = response_json.get("model", model)
 
-        usage = response_json.get("usage") or {}
-        prompt_tokens = usage.get("prompt_tokens", 0)
-        total_tokens = usage.get("total_tokens", prompt_tokens)
+        usage: Final = response_json.get("usage") or {}
+        prompt_tokens: Final = usage.get("prompt_tokens", 0)
+        total_tokens: Final = usage.get("total_tokens", prompt_tokens)
         setattr(
             model_response,
             "usage",

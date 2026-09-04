@@ -125,7 +125,7 @@ describe("Fallbacks", () => {
 
   it("should not render when accessToken is null", () => {
     const { container } = renderWithQueryClient(<Fallbacks {...defaultProps} accessToken={null} />);
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should fetch router settings on mount", async () => {

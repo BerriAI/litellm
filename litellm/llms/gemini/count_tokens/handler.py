@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -34,7 +34,7 @@ class GoogleAIStudioTokenCounter:
         if not contents:
             return contents
 
-        cleaned_contents = copy.deepcopy(contents)
+        cleaned_contents: Final = copy.deepcopy(contents)
 
         for content in cleaned_contents:
             parts = content["parts"]
@@ -51,7 +51,7 @@ class GoogleAIStudioTokenCounter:
         """
         Construct the URL for the Google Gen AI Studio countTokens endpoint.
         """
-        base_url = api_base or "https://generativelanguage.googleapis.com"
+        base_url: Final = api_base or "https://generativelanguage.googleapis.com"
         return f"{base_url}/v1beta/models/{model}:countTokens"
 
     async def validate_environment(
@@ -74,7 +74,7 @@ class GoogleAIStudioTokenCounter:
             litellm_params=litellm_params,
         )
 
-        url = self._construct_url(model=model, api_base=api_base)
+        url: Final = self._construct_url(model=model, api_base=api_base)
         return headers, url
 
     async def acount_tokens(
@@ -129,21 +129,21 @@ class GoogleAIStudioTokenCounter:
         )
 
         # Prepare request body - clean up contents to remove unsupported fields
-        cleaned_contents = self._clean_contents_for_gemini_api(contents)
-        request_body = {"contents": cleaned_contents}
+        cleaned_contents: Final = self._clean_contents_for_gemini_api(contents)
+        request_body: Final = {"contents": cleaned_contents}
 
-        async_httpx_client = get_async_httpx_client(
+        async_httpx_client: Final = get_async_httpx_client(
             llm_provider=LlmProviders.GEMINI,
         )
 
         try:
-            response = await async_httpx_client.post(url=url, headers=headers, json=request_body)
+            response: Final = await async_httpx_client.post(url=url, headers=headers, json=request_body)
 
             # Check for HTTP errors
             response.raise_for_status()
 
             # Parse response
-            result = response.json()
+            result: Final = response.json()
             return result
 
         except httpx.HTTPStatusError as e:

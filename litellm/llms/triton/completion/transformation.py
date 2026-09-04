@@ -4,7 +4,7 @@ Translates from OpenAI's `/v1/chat/completions` endpoint to Triton's `/generate`
 
 import json
 from collections.abc import AsyncIterator, Iterator
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from httpx import Headers, Response
 
@@ -27,6 +27,9 @@ from litellm.types.utils import (
 )
 
 from ..common_utils import TritonError
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class TritonConfig(BaseConfig):
@@ -77,7 +80,7 @@ class TritonConfig(BaseConfig):
     ) -> str:
         if api_base is None:
             raise ValueError("api_base is required")
-        llm_type = self._get_triton_llm_type(api_base)
+        llm_type: Final = self._get_triton_llm_type(api_base)
         if llm_type == "generate" and stream:
             return api_base + "_stream"
         return api_base
@@ -92,12 +95,12 @@ class TritonConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        api_base = litellm_params.get("api_base", "")
-        llm_type = self._get_triton_llm_type(api_base)
+        api_base: Final = litellm_params.get("api_base", "")
+        llm_type: Final = self._get_triton_llm_type(api_base)
         if llm_type == "generate":
             return TritonGenerateConfig().transform_response(
                 model=model,
@@ -136,8 +139,8 @@ class TritonConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        api_base = litellm_params.get("api_base", "")
-        llm_type = self._get_triton_llm_type(api_base)
+        api_base: Final = litellm_params.get("api_base", "")
+        llm_type: Final = self._get_triton_llm_type(api_base)
         if llm_type == "generate":
             return TritonGenerateConfig().transform_request(
                 model=model,
@@ -190,9 +193,9 @@ class TritonGenerateConfig(TritonConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        inference_params = optional_params.copy()
-        stream = inference_params.pop("stream", False)
-        data_for_triton: dict[str, Any] = {
+        inference_params: Final = optional_params.copy()
+        stream: Final = inference_params.pop("stream", False)
+        data_for_triton: Final[dict[str, Any]] = {
             "text_input": prompt_factory(model=model, messages=messages),
             "parameters": {
                 "max_tokens": int(optional_params.get("max_tokens", DEFAULT_MAX_TOKENS_FOR_TRITON)),
@@ -212,12 +215,12 @@ class TritonGenerateConfig(TritonConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise TritonError(message=raw_response.text, status_code=raw_response.status_code)
         model_response.choices = [Choices(index=0, message=Message(content=raw_response_json["text_output"]))]
@@ -238,8 +241,8 @@ class TritonInferConfig(TritonConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        text_input = messages[0].get("content", "")
-        data_for_triton = {
+        text_input: Final = messages[0].get("content", "")
+        data_for_triton: Final = {
             "inputs": [
                 {
                     "name": "text_input",
@@ -277,16 +280,16 @@ class TritonInferConfig(TritonConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise TritonError(message=raw_response.text, status_code=raw_response.status_code)
 
-        _triton_response_data = raw_response_json["outputs"][0]["data"]
+        _triton_response_data: Final = raw_response_json["outputs"][0]["data"]
         triton_response_data: str | None = None
         if isinstance(_triton_response_data, list):
             triton_response_data = "".join(_triton_response_data)
@@ -307,12 +310,12 @@ class TritonResponseIterator(BaseModelResponseIterator):
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
             text = ""
-            tool_use: ChatCompletionToolCallChunk | None = None
+            tool_use: Final[ChatCompletionToolCallChunk | None] = None
             is_finished = False
             finish_reason = ""
-            usage: ChatCompletionUsageBlock | None = None
-            provider_specific_fields = None
-            index = int(chunk.get("index", 0))
+            usage: Final[ChatCompletionUsageBlock | None] = None
+            provider_specific_fields: Final = None
+            index: Final = int(chunk.get("index", 0))
 
             # set values
             text = chunk.get("text_output", "")

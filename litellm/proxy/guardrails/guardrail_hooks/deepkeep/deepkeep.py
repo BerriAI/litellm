@@ -7,9 +7,10 @@
 
 import os
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol
 
 import httpx
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
@@ -27,11 +28,50 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.llms.openai import (
+        AllMessageValues,
+        ChatCompletionToolCallChunk,
+        ChatCompletionToolParam,
+    )
+    from litellm.types.utils import ChatCompletionMessageToolCall
 
-GUARDRAIL_NAME = "deepkeep"
+GUARDRAIL_NAME: Final = "deepkeep"
 
 # Default DeepKeep API endpoint path
-_DEEPKEEP_GUARDRAIL_ENDPOINT = "/v3/openai/beta/litellm_basic_guardrail_api"
+_DEEPKEEP_GUARDRAIL_ENDPOINT: Final = "/v3/openai/beta/litellm_basic_guardrail_api"
+
+
+class DeepKeepFirewallResponse(TypedDict):
+    """Body returned by the DeepKeep firewall endpoint."""
+
+    action: ReadOnly[NotRequired[str]]
+    blocked_reason: ReadOnly[NotRequired[str]]
+    texts: ReadOnly[NotRequired["list[str]"]]
+    images: ReadOnly[NotRequired["list[str]"]]
+    tools: ReadOnly[NotRequired["list[ChatCompletionToolParam]"]]
+    tool_calls: ReadOnly[NotRequired["list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall]"]]
+    structured_messages: ReadOnly[NotRequired["list[AllMessageValues]"]]
+
+
+class _DeepKeepInitKwargsView(TypedDict):
+    """Typed read of the guardrail name carried in the untyped base-guardrail kwargs."""
+
+    guardrail_name: ReadOnly[str]
+
+
+class _DeepKeepMetadataSource(TypedDict, total=False):
+    """Typed read of the two untyped metadata mappings this guardrail merges."""
+
+    litellm_metadata: ReadOnly[Mapping[str, object]]
+    metadata: ReadOnly[Mapping[str, object]]
+
+
+class _FirewallResponseBody(Protocol):
+    def json(self) -> DeepKeepFirewallResponse: ...
+
+
+def _firewall_response_body(response: _FirewallResponseBody) -> DeepKeepFirewallResponse:
+    return response.json()
 
 
 class DeepKeepGuardrailMissingSecrets(Exception):
@@ -75,7 +115,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
         # API key
-        deepkeep_api_key = api_key or os.environ.get("DEEPKEEP_API_KEY")
+        deepkeep_api_key: Final = api_key or os.environ.get("DEEPKEEP_API_KEY")
         if not deepkeep_api_key:
             raise DeepKeepGuardrailMissingSecrets(
                 "DeepKeep API key is required. Set the `DEEPKEEP_API_KEY` environment "
@@ -125,14 +165,16 @@ class DeepKeepGuardrail(CustomGuardrail):
 
         super().__init__(**kwargs)
 
+        init_view: Final[_DeepKeepInitKwargsView] = {"guardrail_name": kwargs.get("guardrail_name", "unknown")}
+
         verbose_proxy_logger.debug(
             "DeepKeep guardrail initialized: guardrail_name=%s, api_base=%s, firewall_id=%s",
-            kwargs.get("guardrail_name", "unknown"),
+            init_view["guardrail_name"],
             self.api_base,
             self.firewall_id,
         )
 
-    def _extract_user_api_key_metadata(self, request_data: dict) -> dict[str, Any]:
+    def _extract_user_api_key_metadata(self, request_data: _DeepKeepMetadataSource) -> dict[str, object]:
         """
         Extract user API key metadata from request_data for the DeepKeep API.
 
@@ -142,17 +184,17 @@ class DeepKeepGuardrail(CustomGuardrail):
         Returns:
             Dictionary with user API key metadata fields.
         """
-        result_metadata: dict[str, Any] = {}
+        result_metadata: Final[dict[str, object]] = {}
 
-        litellm_metadata = request_data.get("litellm_metadata", {})
-        top_level_metadata = request_data.get("metadata", {})
-        metadata_dict = {**top_level_metadata, **litellm_metadata}
+        litellm_metadata: Final = request_data.get("litellm_metadata", {})
+        top_level_metadata: Final = request_data.get("metadata", {})
+        metadata_dict: Final[Mapping[str, object]] = {**top_level_metadata, **litellm_metadata}
 
         if not metadata_dict:
             return result_metadata
 
         # Extract standard user API key fields
-        _METADATA_KEYS = [
+        _METADATA_KEYS: Final = [
             "user_api_key_hash",
             "user_api_key_alias",
             "user_api_key_user_id",
@@ -175,7 +217,7 @@ class DeepKeepGuardrail(CustomGuardrail):
 
     def _build_request_headers(self) -> dict[str, str]:
         """Build HTTP headers for the DeepKeep API request."""
-        headers: dict[str, str] = {
+        headers: Final[dict[str, str]] = {
             "Content-Type": "application/json",
             "X-API-Key": self.deepkeep_api_key,
         }
@@ -193,7 +235,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         http_status_code: int | None = None,
     ) -> GenericGuardrailAPIInputs:
         """Allow the request to proceed when the guardrail is unreachable (fail-open mode)."""
-        status_suffix = f" http_status_code={http_status_code}" if http_status_code else ""
+        status_suffix: Final = f" http_status_code={http_status_code}" if http_status_code else ""
         verbose_proxy_logger.critical(
             "DeepKeep guardrail unreachable (fail-open). Proceeding without guardrail.%s "
             "guardrail_name=%s api_base=%s input_type=%s litellm_call_id=%s litellm_trace_id=%s",
@@ -205,7 +247,7 @@ class DeepKeepGuardrail(CustomGuardrail):
             getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None,
             exc_info=error,
         )
-        return_inputs: GenericGuardrailAPIInputs = {}
+        return_inputs: Final[GenericGuardrailAPIInputs] = {}
         return_inputs.update(inputs)
         return return_inputs
 
@@ -219,7 +261,7 @@ class DeepKeepGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         """Handle errors from the DeepKeep API with fail-open/fail-closed logic."""
         if is_unreachable and self.unreachable_fallback == "fail_open":
-            http_status_code = getattr(getattr(error, "response", None), "status_code", None)
+            http_status_code: Final[int | None] = getattr(getattr(error, "response", None), "status_code", None)
             return self._fail_open_passthrough(
                 inputs=inputs,
                 input_type=input_type,
@@ -233,12 +275,12 @@ class DeepKeepGuardrail(CustomGuardrail):
     @staticmethod
     def _build_return_inputs(
         *,
-        response_json: dict[str, Any],
-        texts: list,
-        images: Any | None,
-        tools: Any | None,
-        tool_calls: Any | None,
-        structured_messages: Any | None,
+        response_json: DeepKeepFirewallResponse,
+        texts: list[str],
+        images: "list[str] | None",
+        tools: "list[ChatCompletionToolParam] | None",
+        tool_calls: "list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall] | None",
+        structured_messages: "list[AllMessageValues] | None",
     ) -> GenericGuardrailAPIInputs:
         """Merge original inputs with any guardrail-modified values from the API response.
 
@@ -247,23 +289,28 @@ class DeepKeepGuardrail(CustomGuardrail):
         ``tool_calls: []`` is honoured and forwarded downstream rather than
         silently discarded in favour of the original content.
         """
-        return_inputs = GenericGuardrailAPIInputs(texts=texts)
-        if response_json.get("texts") is not None:
-            return_inputs["texts"] = response_json["texts"]
-        if response_json.get("images") is not None:
-            return_inputs["images"] = response_json["images"]
+        return_inputs: Final = GenericGuardrailAPIInputs(texts=texts)
+        texts_override: Final = response_json.get("texts")
+        if texts_override is not None:
+            return_inputs["texts"] = texts_override
+        images_override: Final = response_json.get("images")
+        if images_override is not None:
+            return_inputs["images"] = images_override
         elif images is not None:
             return_inputs["images"] = images
-        if response_json.get("tools") is not None:
-            return_inputs["tools"] = response_json["tools"]
+        tools_override: Final = response_json.get("tools")
+        if tools_override is not None:
+            return_inputs["tools"] = tools_override
         elif tools is not None:
             return_inputs["tools"] = tools
-        if response_json.get("tool_calls") is not None:
-            return_inputs["tool_calls"] = response_json["tool_calls"]
+        tool_calls_override: Final = response_json.get("tool_calls")
+        if tool_calls_override is not None:
+            return_inputs["tool_calls"] = tool_calls_override
         elif tool_calls is not None:
             return_inputs["tool_calls"] = tool_calls
-        if response_json.get("structured_messages") is not None:
-            return_inputs["structured_messages"] = response_json["structured_messages"]
+        structured_messages_override: Final = response_json.get("structured_messages")
+        if structured_messages_override is not None:
+            return_inputs["structured_messages"] = structured_messages_override
         elif structured_messages is not None:
             return_inputs["structured_messages"] = structured_messages
         return return_inputs
@@ -296,29 +343,29 @@ class DeepKeepGuardrail(CustomGuardrail):
         """
         verbose_proxy_logger.debug("DeepKeep guardrail: applying guardrail, input_type=%s", input_type)
 
-        texts = inputs.get("texts", [])
-        images = inputs.get("images")
-        tools = inputs.get("tools")
-        structured_messages = inputs.get("structured_messages")
-        tool_calls = inputs.get("tool_calls")
-        model = inputs.get("model")
+        texts: Final = inputs.get("texts", [])
+        images: Final = inputs.get("images")
+        tools: Final = inputs.get("tools")
+        structured_messages: Final = inputs.get("structured_messages")
+        tool_calls: Final = inputs.get("tool_calls")
+        model: Final = inputs.get("model")
 
         if request_data is None:
             request_data = {}
 
-        request_body = request_data.get("body") or {}
+        request_body: Final = request_data.get("body") or {}
 
         # Merge additional provider-specific params from config and dynamic params
-        additional_params: dict[str, Any] = {"firewall_id": self.firewall_id}
-        dynamic_params = self.get_guardrail_dynamic_request_body_params(request_body)
+        additional_params: Final[dict[str, object]] = {"firewall_id": self.firewall_id}
+        dynamic_params: Final = self.get_guardrail_dynamic_request_body_params(request_body)
         if dynamic_params:
             additional_params.update({k: v for k, v in dynamic_params.items() if k != "firewall_id"})
 
         # Extract user API key metadata
-        user_metadata = self._extract_user_api_key_metadata(request_data)
+        user_metadata: Final = self._extract_user_api_key_metadata(request_data)
 
         # Build request payload
-        guardrail_request: dict[str, Any] = {
+        guardrail_request: Final[dict[str, object]] = {
             "litellm_call_id": (logging_obj.litellm_call_id if logging_obj else None),
             "litellm_trace_id": (logging_obj.litellm_trace_id if logging_obj else None),
             "texts": texts,
@@ -333,29 +380,30 @@ class DeepKeepGuardrail(CustomGuardrail):
             "model": model,
         }
 
-        headers = self._build_request_headers()
+        headers: Final = self._build_request_headers()
 
         try:
-            response = await self.async_handler.post(
+            response: Final = await self.async_handler.post(
                 url=self.api_base,
                 json=guardrail_request,
                 headers=headers,
             )
 
             response.raise_for_status()
-            response_json = response.json()
+            response_json: Final = _firewall_response_body(response)
 
             verbose_proxy_logger.debug("DeepKeep guardrail response: %s", response_json)
 
-            action = response_json.get("action", "NONE")
+            action: Final = response_json.get("action", "NONE")
 
             if action == "BLOCKED":
-                error_message = response_json.get("blocked_reason") or "Content violates policy"
+                error_message: Final = response_json.get("blocked_reason") or "Content violates policy"
                 verbose_proxy_logger.warning("DeepKeep guardrail blocked request: %s", error_message)
                 raise GuardrailRaisedException(
                     guardrail_name=GUARDRAIL_NAME,
                     message=error_message,
                     should_wrap_with_default_message=False,
+                    blocked_content=True,
                 )
 
             return self._build_return_inputs(
@@ -372,8 +420,8 @@ class DeepKeepGuardrail(CustomGuardrail):
         except Timeout as e:
             return self._handle_guardrail_request_error(e, inputs, input_type, logging_obj)
         except httpx.HTTPStatusError as e:
-            status_code = getattr(getattr(e, "response", None), "status_code", None)
-            is_unreachable = status_code in (502, 503, 504)
+            status_code: Final = getattr(getattr(e, "response", None), "status_code", None)
+            is_unreachable: Final = status_code in (502, 503, 504)
             return self._handle_guardrail_request_error(
                 e, inputs, input_type, logging_obj, is_unreachable=is_unreachable
             )

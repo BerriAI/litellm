@@ -3,6 +3,7 @@ Transformation logic for Amazon Titan Image Generation.
 """
 
 import types
+from typing import Final
 
 from openai.types.image import Image
 
@@ -34,7 +35,7 @@ class AmazonTitanImageGenerationConfig:
         width: int | None = None,
         height: int | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -81,7 +82,7 @@ class AmazonTitanImageGenerationConfig:
     ):
         from typing import Any
 
-        image_generation_config: dict[str, Any] = {}
+        image_generation_config: Final[dict[str, Any]] = {}
         for k, v in non_default_params.items():
             if k == "size" and v is not None:
                 width, height = v.split("x")
@@ -108,19 +109,19 @@ class AmazonTitanImageGenerationConfig:
         from typing import Any
 
         image_generation_config = optional_params.pop("imageGenerationConfig", {})
-        negative_text = optional_params.pop("negativeText", None)
-        text_to_image_params: dict[str, Any] = {"text": text}
+        negative_text: Final = optional_params.pop("negativeText", None)
+        text_to_image_params: Final[dict[str, Any]] = {"text": text}
         if negative_text:
             text_to_image_params["negativeText"] = negative_text
-        task_type = optional_params.pop("taskType", "TEXT_IMAGE")
-        user_specified_image_generation_config = optional_params.pop("imageGenerationConfig", {})
+        task_type: Final = optional_params.pop("taskType", "TEXT_IMAGE")
+        user_specified_image_generation_config: Final = optional_params.pop("imageGenerationConfig", {})
         image_generation_config = {
             **image_generation_config,
             **user_specified_image_generation_config,
         }
         return AmazonTitanImageGenerationRequestBody(
             taskType=task_type,
-            textToImageParams=AmazonTitanTextToImageParams(**text_to_image_params),  # type: ignore
+            textToImageParams=AmazonTitanTextToImageParams(**text_to_image_params),
             imageGenerationConfig=AmazonNovaCanvasImageGenerationConfig(**image_generation_config),
         )
 
@@ -128,7 +129,7 @@ class AmazonTitanImageGenerationConfig:
     def transform_response_dict_to_openai_response(
         cls, model_response: ImageResponse, response_dict: dict
     ) -> ImageResponse:
-        image_list: list[Image] = []
+        image_list: Final[list[Image]] = []
         for image in response_dict["images"]:
             _image = Image(b64_json=image)
             image_list.append(_image)
@@ -145,9 +146,9 @@ class AmazonTitanImageGenerationConfig:
         size: str | None = None,
         optional_params: dict | None = None,
     ) -> float:
-        model_info = get_model_info(model=model)
-        output_cost_per_image = model_info.get("output_cost_per_image") or 0.0
+        model_info: Final = get_model_info(model=model)
+        output_cost_per_image: Final = model_info.get("output_cost_per_image") or 0.0
         if not image_response.data:
             return 0.0
-        num_images = len(image_response.data)
+        num_images: Final = len(image_response.data)
         return output_cost_per_image * num_images

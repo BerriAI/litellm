@@ -7,13 +7,14 @@ enabled and rejects requests sent to the wrong host, so the api_base hostname
 is the authoritative signal of which region a request was processed in.
 """
 
+from typing import Final
 from urllib.parse import urlparse
 
 # Mapping of OpenAI regional hostnames to the corresponding data-residency
 # value used by the cost calculator. See
 # https://developers.openai.com/api/docs/pricing for the regional-processing
 # uplift these hostnames trigger.
-_OPENAI_REGIONAL_HOSTS: dict[str, str] = {
+_OPENAI_REGIONAL_HOSTS: Final[dict[str, str]] = {
     "eu.api.openai.com": "eu",
     "us.api.openai.com": "us",
 }
@@ -30,7 +31,7 @@ def infer_openai_data_residency(custom_llm_provider: str | None, api_base: str |
     if custom_llm_provider != "openai" or not api_base:
         return None
     try:
-        host = urlparse(api_base).hostname
+        host: Final = urlparse(api_base).hostname
     except (TypeError, ValueError):
         return None
     if not host:

@@ -2,7 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 class LiteLLMProxyChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list:
-        params_list = super().get_supported_openai_params(model)
+        params_list: Final = super().get_supported_openai_params(model)
         params_list.extend(OPENAI_CHAT_COMPLETION_PARAMS)
         return params_list
 
@@ -27,7 +27,7 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_openai_params = self.get_supported_openai_params(model)
+        supported_openai_params: Final = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param == "thinking":
                 optional_params.setdefault("extra_body", {})["thinking"] = value
@@ -38,15 +38,15 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("LITELLM_PROXY_API_BASE")  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("LITELLM_PROXY_API_KEY")
+        api_base = api_base or get_secret_str("LITELLM_PROXY_API_BASE")
+        dynamic_api_key: Final = api_key or get_secret_str("LITELLM_PROXY_API_KEY")
         return api_base, dynamic_api_key
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         api_base, api_key = self._get_openai_compatible_provider_info(api_base, api_key)
         if api_base is None:
             raise ValueError("api_base not set for LiteLLM Proxy route. Set in env via `LITELLM_PROXY_API_BASE`")
-        models = super().get_models(api_key=api_key, api_base=api_base)
+        models: Final = super().get_models(api_key=api_key, api_base=api_base)
         return [f"litellm_proxy/{model}" for model in models]
 
     @staticmethod
@@ -100,7 +100,7 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         """
         import litellm
 
-        custom_llm_provider = "litellm_proxy"
+        custom_llm_provider: Final = "litellm_proxy"
         if model.startswith("litellm_proxy/"):
             model = model.split("/", 1)[1]
 

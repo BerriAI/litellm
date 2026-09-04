@@ -2,6 +2,11 @@
 links win (the ``raise ... from`` cause subtree, then ExceptionGroup members in raise order,
 then the incidental ``__context__`` chain last), and adversarial shapes terminate."""
 
+import sys
+
+if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
+    from exceptiongroup import BaseExceptionGroup
+
 from litellm.proxy._experimental.mcp_server.faults import iter_exception_tree
 
 

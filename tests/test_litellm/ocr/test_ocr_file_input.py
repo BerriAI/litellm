@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import orjson
 import pytest
+from starlette.datastructures import FormData
 
 from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
 
@@ -470,7 +471,7 @@ class TestProxySecurityGuard:
 
         mock_request = MagicMock()
         mock_request.headers = {"content-type": "multipart/form-data; boundary=---"}
-        mock_request.form = AsyncMock(return_value=mock_form)
+        mock_request.form = AsyncMock(return_value=FormData(mock_form))
 
         result = await self._parse_multipart(mock_request)
 

@@ -5,7 +5,8 @@ Docs - https://cloud.ibm.com/apidocs/watsonx-ai#text-rerank
 """
 
 import uuid
-from typing import Any, cast
+from collections.abc import Mapping
+from typing import Any, Final, cast
 
 import httpx
 
@@ -35,14 +36,14 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         model: str,
         optional_params: dict | None = None,
     ) -> str:
-        base_url = self._get_base_url(api_base=api_base)
-        endpoint = WatsonXAIEndpoint.RERANK.value
+        base_url: Final = self._get_base_url(api_base=api_base)
+        endpoint: Final = WatsonXAIEndpoint.RERANK.value
 
-        url = base_url.rstrip("/") + endpoint
+        url: Final = base_url.rstrip("/") + endpoint
 
-        params = optional_params or {}
+        params: Final = optional_params or {}
 
-        complete_url = self._add_api_version_to_url(url=url, api_version=(params.get("api_version", None)))
+        complete_url: Final = self._add_api_version_to_url(url=url, api_version=(params.get("api_version", None)))
         return complete_url
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
@@ -54,16 +55,17 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
             "max_tokens_per_doc",
         ]
 
-    def validate_environment(  # type: ignore[override]
+    def validate_environment(
         self,
         headers: dict,
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         optional_params = optional_params or {}
 
-        default_headers = {
+        default_headers: Final = {
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
@@ -74,7 +76,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
             str | None,
             optional_params.pop("token", None) or get_secret_str("WATSONX_TOKEN"),
         )
-        zen_api_key = cast(
+        zen_api_key: Final = cast(
             str | None,
             optional_params.pop("zen_api_key", None) or get_secret_str("WATSONX_ZENAPIKEY"),
         )
@@ -106,7 +108,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         """
         Map Cohere rerank params to IBM watsonx.ai rerank params
         """
-        optional_rerank_params = {}
+        optional_rerank_params: Final = {}
         if non_default_params is not None:
             for k, v in non_default_params.items():
                 if k == "query" and v is not None:
@@ -138,8 +140,8 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         """
         Transform request to IBM watsonx.ai rerank format
         """
-        watsonx_api_params = _get_api_params(params=optional_rerank_params, model=model)
-        watsonx_auth_payload = self._prepare_payload(
+        watsonx_api_params: Final = _get_api_params(params=optional_rerank_params, model=model)
+        watsonx_auth_payload: Final = self._prepare_payload(
             model=model,
             api_params=watsonx_api_params,
         )
@@ -161,7 +163,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         Transform IBM watsonx.ai rerank response to LiteLLM RerankResponse format
         """
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Failed to parse response: {e}",
@@ -169,11 +171,11 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
                 headers=raw_response.headers,
             )
 
-        _results: list[dict] | None = raw_response_json.get("results")
+        _results: Final[list[dict] | None] = raw_response_json.get("results")
         if _results is None:
             raise ValueError(f"No results found in the response={raw_response_json}")
 
-        transformed_results = []
+        transformed_results: Final = []
 
         for result in _results:
             transformed_result: dict[str, Any] = {
@@ -189,16 +191,16 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
 
             transformed_results.append(transformed_result)
 
-        response_id = raw_response_json.get("id") or raw_response_json.get("model_id") or str(uuid.uuid4())
+        response_id: Final = raw_response_json.get("id") or raw_response_json.get("model_id") or str(uuid.uuid4())
 
         # Extract usage information
-        _tokens = RerankTokens(
+        _tokens: Final = RerankTokens(
             input_tokens=raw_response_json.get("input_token_count", 0),
         )
-        rerank_meta = RerankResponseMeta(tokens=_tokens)
+        rerank_meta: Final = RerankResponseMeta(tokens=_tokens)
 
         return RerankResponse(
             id=response_id,
-            results=transformed_results,  # type: ignore
+            results=transformed_results,
             meta=rerank_meta,
         )

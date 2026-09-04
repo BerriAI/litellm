@@ -15,7 +15,7 @@ Follows the same pattern as max_iterations_limiter.py.
 """
 
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
@@ -36,7 +36,7 @@ else:
 # Redis Lua script for atomic float increment with TTL.
 # INCRBYFLOAT returns the new value as a string.
 # Only sets EXPIRE on first call (when prior value was nil).
-MAX_BUDGET_SESSION_INCREMENT_SCRIPT = """
+MAX_BUDGET_SESSION_INCREMENT_SCRIPT: Final = """
 local key = KEYS[1]
 local amount = ARGV[1]
 local ttl = tonumber(ARGV[2])
@@ -51,7 +51,7 @@ return new_val
 """
 
 # Default TTL for session budget counters (1 hour)
-DEFAULT_MAX_BUDGET_PER_SESSION_TTL = 3600
+DEFAULT_MAX_BUDGET_PER_SESSION_TTL: Final = 3600
 
 
 class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
@@ -94,14 +94,14 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         """
         max_budget = self._get_max_budget_per_session(user_api_key_dict)
 
-        session_id = self._get_session_id(data)
+        session_id: Final = self._get_session_id(data)
 
         if max_budget is None or session_id is None:
             return None
 
         max_budget = float(max_budget)
-        cache_key = self._make_cache_key(session_id)
-        current_spend = await self._get_current_spend(cache_key)
+        cache_key: Final = self._make_cache_key(session_id)
+        current_spend: Final = await self._get_current_spend(cache_key)
 
         verbose_proxy_logger.debug(
             "MaxBudgetPerSessionHandler: session_id=%s, spend=%.4f, max=%.2f",
@@ -130,13 +130,13 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         After a successful LLM call, increment the session spend by the response cost.
         """
         try:
-            litellm_params = kwargs.get("litellm_params") or {}
-            metadata = litellm_params.get("metadata") or {}
-            session_id = metadata.get("session_id")
+            litellm_params: Final = kwargs.get("litellm_params") or {}
+            metadata: Final = litellm_params.get("metadata") or {}
+            session_id: Final = metadata.get("session_id")
             if session_id is None:
                 return
 
-            agent_id = metadata.get("agent_id")
+            agent_id: Final = metadata.get("agent_id")
             if agent_id is None:
                 return
 
@@ -144,20 +144,20 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 global_agent_registry,
             )
 
-            agent = global_agent_registry.get_agent_by_id(agent_id=str(agent_id))
+            agent: Final = global_agent_registry.get_agent_by_id(agent_id=str(agent_id))
             if agent is None:
                 return
 
-            agent_litellm_params = agent.litellm_params or {}
-            max_budget = agent_litellm_params.get("max_budget_per_session")
+            agent_litellm_params: Final = agent.litellm_params or {}
+            max_budget: Final = agent_litellm_params.get("max_budget_per_session")
             if max_budget is None:
                 return
 
-            response_cost = kwargs.get("response_cost") or 0.0
+            response_cost: Final = kwargs.get("response_cost") or 0.0
             if response_cost <= 0:
                 return
 
-            cache_key = self._make_cache_key(str(session_id))
+            cache_key: Final = self._make_cache_key(str(session_id))
             await self._increment_spend(cache_key, float(response_cost))
 
             verbose_proxy_logger.debug(
@@ -173,12 +173,12 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
 
     def _get_session_id(self, data: dict) -> str | None:
         """Extract session_id from request metadata."""
-        metadata = data.get("metadata") or {}
+        metadata: Final = data.get("metadata") or {}
         session_id = metadata.get("session_id")
         if session_id is not None:
             return str(session_id)
 
-        litellm_metadata = data.get("litellm_metadata") or {}
+        litellm_metadata: Final = data.get("litellm_metadata") or {}
         session_id = litellm_metadata.get("session_id")
         if session_id is not None:
             return str(session_id)
@@ -187,18 +187,18 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
 
     def _get_max_budget_per_session(self, user_api_key_dict: UserAPIKeyAuth) -> float | None:
         """Extract max_budget_per_session from agent litellm_params."""
-        agent_id = user_api_key_dict.agent_id
+        agent_id: Final = user_api_key_dict.agent_id
         if agent_id is None:
             return None
 
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
-        agent = global_agent_registry.get_agent_by_id(agent_id=agent_id)
+        agent: Final = global_agent_registry.get_agent_by_id(agent_id=agent_id)
         if agent is None:
             return None
 
-        litellm_params = agent.litellm_params or {}
-        max_budget = litellm_params.get("max_budget_per_session")
+        litellm_params: Final = agent.litellm_params or {}
+        max_budget: Final = litellm_params.get("max_budget_per_session")
         if max_budget is not None:
             return float(max_budget)
         return None
@@ -233,7 +233,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         """Atomically increment the session spend and return the new value."""
         if self.increment_script is not None:
             try:
-                result = await self.increment_script(
+                result: Final = await self.increment_script(
                     keys=[cache_key],
                     args=[str(amount), self.ttl],
                 )
@@ -247,12 +247,12 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         return await self._in_memory_increment_spend(cache_key, amount)
 
     async def _in_memory_increment_spend(self, cache_key: str, amount: float) -> float:
-        current = await self.internal_usage_cache.async_get_cache(
+        current: Final = await self.internal_usage_cache.async_get_cache(
             key=cache_key,
             litellm_parent_otel_span=None,
             local_only=True,
         )
-        new_value = (float(current) if current is not None else 0.0) + amount
+        new_value: Final = (float(current) if current is not None else 0.0) + amount
         await self.internal_usage_cache.async_set_cache(
             key=cache_key,
             value=new_value,

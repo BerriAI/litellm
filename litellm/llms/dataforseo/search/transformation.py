@@ -4,7 +4,7 @@ Calls DataForSEO SERP API to search the web.
 DataForSEO API Reference: https://docs.dataforseo.com/v3/serp/google/organic/live/advanced/?bash
 """
 
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import httpx
 
@@ -59,7 +59,7 @@ class DataForSEOSearchConfig(BaseSearchConfig):
         password = get_secret_str("DATAFORSEO_PASSWORD")
 
         # If api_key is provided in "login:password" format, use it
-        caller_supplied_credentials = bool(api_key and ":" in api_key)
+        caller_supplied_credentials: Final = bool(api_key and ":" in api_key)
         if api_key and ":" in api_key:
             login, password = api_key.split(":", 1)
 
@@ -82,8 +82,8 @@ class DataForSEOSearchConfig(BaseSearchConfig):
             )
 
         # Create Basic Auth header
-        credentials = f"{login}:{password}"
-        encoded_credentials = base64.b64encode(credentials.encode()).decode()
+        credentials: Final = f"{login}:{password}"
+        encoded_credentials: Final = base64.b64encode(credentials.encode()).decode()
         headers["Authorization"] = f"Basic {encoded_credentials}"
         headers["Content-Type"] = "application/json"
 
@@ -126,7 +126,7 @@ class DataForSEOSearchConfig(BaseSearchConfig):
             List[Dict]: Request body for DataForSEO API (array of task objects as required by API)
         """
         # DataForSEO expects an array of task objects
-        task: dict[str, Any] = {}
+        task: Final[dict[str, Any]] = {}
 
         # Convert query to string if it's a list
         if isinstance(query, list):
@@ -138,7 +138,7 @@ class DataForSEOSearchConfig(BaseSearchConfig):
         # Map unified parameters to DataForSEO parameters
         if "max_results" in optional_params and optional_params["max_results"]:
             # DataForSEO uses 'depth' for number of results (max 700)
-            depth = min(int(optional_params["max_results"]), 700)
+            depth: Final = min(int(optional_params["max_results"]), 700)
             task["depth"] = depth
 
         if "country" in optional_params and optional_params["country"]:
@@ -188,20 +188,20 @@ class DataForSEOSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         # Transform results to SearchResult objects
-        results = []
+        results: Final = []
 
         # DataForSEO wraps results in tasks array
         if "tasks" in response_json and len(response_json["tasks"]) > 0:
-            task = response_json["tasks"][0]
+            task: Final = response_json["tasks"][0]
 
             # Check if task was successful
             if task.get("status_code") == 20000 and "result" in task:
                 # Result is an array, take first element
                 if len(task["result"]) > 0:
-                    result = task["result"][0]
+                    result: Final = task["result"][0]
 
                     # Items contain the actual search results
                     for item in result.get("items", []):

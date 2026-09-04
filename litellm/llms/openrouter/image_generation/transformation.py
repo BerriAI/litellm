@@ -27,7 +27,7 @@ Response format:
 }
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -50,6 +50,8 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
@@ -91,7 +93,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         - size -> image_config.aspect_ratio
         - quality -> image_config.image_size
         """
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
 
         for key, value in non_default_params.items():
             if key in supported_params:
@@ -142,7 +144,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         - 16:9 → 1344×768
         - 21:9 → 1536×672
         """
-        size_to_aspect_ratio = {
+        size_to_aspect_ratio: Final = {
             # Square formats
             "256x256": "1:1",
             "512x512": "1:1",
@@ -172,7 +174,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         - 2K → Higher resolution
         - 4K → Highest resolution
         """
-        quality_to_image_size = {
+        quality_to_image_size: Final = {
             # OpenAI quality mappings
             "low": "1K",
             "standard": "1K",
@@ -198,13 +200,13 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
             response_json: Parsed JSON response from OpenRouter
             model: The model name
         """
-        usage_data = response_json.get("usage", {})
+        usage_data: Final = response_json.get("usage", {})
         if usage_data:
-            prompt_tokens = usage_data.get("prompt_tokens", 0)
-            total_tokens = usage_data.get("total_tokens", 0)
+            prompt_tokens: Final = usage_data.get("prompt_tokens", 0)
+            total_tokens: Final = usage_data.get("total_tokens", 0)
 
-            completion_tokens_details = usage_data.get("completion_tokens_details", {})
-            image_tokens = completion_tokens_details.get("image_tokens", 0)
+            completion_tokens_details: Final = usage_data.get("completion_tokens_details", {})
+            image_tokens: Final = completion_tokens_details.get("image_tokens", 0)
 
             model_response.usage = ImageUsage(
                 input_tokens=prompt_tokens,
@@ -216,7 +218,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
                 total_tokens=total_tokens,
             )
 
-            cost = usage_data.get("cost")
+            cost: Final = usage_data.get("cost")
             if cost is not None:
                 if not hasattr(model_response, "_hidden_params"):
                     model_response._hidden_params = {}
@@ -226,7 +228,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
                     cost
                 )
 
-            cost_details = usage_data.get("cost_details", {})
+            cost_details: Final = usage_data.get("cost_details", {})
             if cost_details:
                 if "response_cost_details" not in model_response._hidden_params:
                     model_response._hidden_params["response_cost_details"] = {}
@@ -296,7 +298,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         Returns:
             dict: Request body in chat completion format with image_config
         """
-        request_body = {
+        request_body: Final = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
         }
@@ -317,7 +319,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -342,7 +344,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
             ImageResponse: Populated image response
         """
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
         except Exception as e:
             raise OpenRouterException(
                 message=f"Error parsing OpenRouter response: {e}",
@@ -354,7 +356,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
             model_response.data = []
 
         try:
-            choices = response_json.get("choices", [])
+            choices: Final = response_json.get("choices", [])
 
             for choice in choices:
                 message = choice.get("message", {})

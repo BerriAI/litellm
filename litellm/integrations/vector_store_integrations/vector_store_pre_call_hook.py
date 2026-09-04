@@ -5,7 +5,9 @@ This hook is called before making an LLM request when a vector store is configur
 It searches the vector store for relevant context and appends it to the messages.
 """
 
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import litellm
 import litellm.vector_stores
@@ -13,7 +15,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import CallTypes, StandardCallbackDynamicParams
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
     VectorStoreResultContent,
@@ -23,8 +25,33 @@ from litellm.types.vector_stores import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy.utils import PrismaClient
+    from litellm.router import Router
 else:
     LiteLLMLoggingObj = Any
+
+
+class ProxyRuntime(Protocol):
+    def llm_router(self) -> "Router | None": ...
+
+    def prisma_client(self) -> "PrismaClient | None": ...
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyServerRuntime:
+    def llm_router(self) -> "Router | None":
+        try:
+            from litellm.proxy.proxy_server import llm_router
+        except ImportError:
+            return None
+        return llm_router
+
+    def prisma_client(self) -> "PrismaClient | None":
+        try:
+            from litellm.proxy.proxy_server import prisma_client
+        except ImportError:
+            return None
+        return prisma_client
 
 
 class VectorStorePreCallHook(CustomLogger):
@@ -38,8 +65,9 @@ class VectorStorePreCallHook(CustomLogger):
     3. Appends the search results as context to the messages
     """
 
-    def __init__(self):
+    def __init__(self, proxy_runtime: ProxyRuntime | None = None):
         super().__init__()
+        self.proxy_runtime: Final[ProxyRuntime] = proxy_runtime or ProxyServerRuntime()
 
     async def async_get_chat_completion_prompt(
         self,
@@ -78,14 +106,8 @@ class VectorStorePreCallHook(CustomLogger):
             if litellm.vector_store_registry is None:
                 return model, messages, non_default_params
 
-            # Get prisma_client for database fallback
-            prisma_client = None
-            try:
-                from litellm.proxy.proxy_server import prisma_client as _prisma_client
-
-                prisma_client = _prisma_client
-            except ImportError:
-                pass
+            prisma_client: Final = self.proxy_runtime.prisma_client()
+            llm_router: Final = self.proxy_runtime.llm_router()
 
             # Use database fallback to ensure synchronization across instances
             vector_stores_to_run: list[
@@ -100,44 +122,66 @@ class VectorStorePreCallHook(CustomLogger):
                 return model, messages, non_default_params
 
             # Extract the query from the last user message
-            query = self._extract_query_from_messages(messages)
+            query: Final = self._extract_query_from_messages(messages)
 
             if not query:
                 verbose_logger.debug("No query found in messages for vector store search")
                 return model, messages, non_default_params
 
             modified_messages: list[AllMessageValues] = messages.copy()
-            all_search_results: list[VectorStoreSearchResponse] = []
+            all_search_results: Final[list[VectorStoreSearchResponse]] = []
 
             for vector_store_to_run in vector_stores_to_run:
                 # Get vector store id from the vector store config
                 vector_store_id = vector_store_to_run.get("vector_store_id", "")
                 custom_llm_provider = vector_store_to_run.get("custom_llm_provider")
                 litellm_params_for_vector_store = vector_store_to_run.get("litellm_params", {}) or {}
-                # Call litellm.vector_stores.search() with the required parameters
-                search_response = await litellm.vector_stores.asearch(
-                    **{
-                        "vector_store_id": vector_store_id,
-                        "query": query,
-                        "custom_llm_provider": custom_llm_provider,
-                        **litellm_params_for_vector_store,
-                    },
+                request_litellm_params = litellm_logging_obj.model_call_details.get("litellm_params", {})
+                request_metadata = (
+                    request_litellm_params.get("metadata", {}) if isinstance(request_litellm_params, dict) else {}
                 )
+                if llm_router is not None:
+                    search_function = cast(  # cast-ok: normalize router search callable
+                        Callable[..., Awaitable[VectorStoreSearchResponse]],
+                        llm_router.avector_store_search,
+                    )
+                else:
+                    search_function = cast(  # cast-ok: normalize SDK search callable
+                        Callable[..., Awaitable[VectorStoreSearchResponse]],
+                        litellm.vector_stores.asearch,
+                    )
+                try:
+                    search_response = await search_function(
+                        **{
+                            "vector_store_id": vector_store_id,
+                            "query": query,
+                            "custom_llm_provider": custom_llm_provider,
+                            "metadata": request_metadata,
+                            **litellm_params_for_vector_store,
+                        },
+                    )
+                except Exception as search_error:
+                    verbose_logger.warning(
+                        "Vector store search failed for vector_store_id=%s, continuing without its context: %s",
+                        vector_store_id,
+                        search_error,
+                    )
+                    continue
 
-                verbose_logger.debug(f"search_response: {search_response}")
+                verbose_logger.debug("search_response: %s", search_response)
 
                 # Store search results for later use in citations
                 all_search_results.append(search_response)
 
                 # Process search results and append as context
                 modified_messages = self._append_search_results_to_messages(
-                    messages=messages, search_response=search_response
+                    messages=modified_messages, search_response=search_response
                 )
 
                 # Get the number of results for logging
                 num_results = 0
                 num_results = len(search_response.get("data", []) or [])
-                verbose_logger.debug(f"Vector store search completed. Added context from {num_results} results")
+                verbose_logger.debug("Vector store search completed. Added context from %s results", num_results)
 
             # Store search results as-is (already in OpenAI-compatible format)
             if litellm_logging_obj and all_search_results:
@@ -146,7 +190,7 @@ class VectorStorePreCallHook(CustomLogger):
             return model, modified_messages, non_default_params
 
         except Exception as e:
-            verbose_logger.exception(f"Error in VectorStorePreCallHook: {e}")
+            verbose_logger.exception("Error in VectorStorePreCallHook: %s", e)
             # Return original parameters on error
             return model, messages, non_default_params
 
@@ -163,11 +207,11 @@ class VectorStorePreCallHook(CustomLogger):
         if not messages or len(messages) == 0:
             return None
 
-        last_message = messages[-1]
+        last_message: Final = messages[-1]
         if not isinstance(last_message, dict) or "content" not in last_message:
             return None
 
-        content = last_message["content"]
+        content: Final = last_message["content"]
 
         if isinstance(content, str):
             return content
@@ -194,7 +238,7 @@ class VectorStorePreCallHook(CustomLogger):
         Returns:
             Modified list of messages with context appended
         """
-        search_response_data: list[VectorStoreSearchResult] | None = search_response.get("data")
+        search_response_data: Final[list[VectorStoreSearchResult] | None] = search_response.get("data")
         if not search_response_data:
             return messages
 
@@ -211,9 +255,9 @@ class VectorStorePreCallHook(CustomLogger):
         # Only add context if we found any content
         if context_content != "Context:\n\n":
             # Create a copy of messages to avoid modifying the original
-            modified_messages = messages.copy()
+            modified_messages: Final = messages.copy()
             # Add context as a new message before the last user message
-            context_message: ChatCompletionUserMessage = {
+            context_message: Final[ChatCompletionUserMessage] = {
                 "role": "user",
                 "content": context_content,
             }
@@ -226,7 +270,7 @@ class VectorStorePreCallHook(CustomLogger):
         self,
         request_data: dict,
         response: Any,
-        call_type: Any | None,
+        call_type: CallTypes | None,
     ) -> Any | None:
         """
         Add search results to the response after successful LLM call.
@@ -238,19 +282,19 @@ class VectorStorePreCallHook(CustomLogger):
             verbose_logger.debug("VectorStorePreCallHook.async_post_call_success_deployment_hook called")
 
             # Get logging object from request_data
-            litellm_logging_obj = request_data.get("litellm_logging_obj")
+            litellm_logging_obj: Final = request_data.get("litellm_logging_obj")
             if not litellm_logging_obj:
                 verbose_logger.debug("No litellm_logging_obj in request_data")
                 return None
 
-            verbose_logger.debug(f"model_call_details keys: {list(litellm_logging_obj.model_call_details.keys())}")
+            verbose_logger.debug("model_call_details keys: %s", list(litellm_logging_obj.model_call_details.keys()))
 
             # Get search results from model_call_details (already in OpenAI format)
-            search_results: list[VectorStoreSearchResponse] | None = litellm_logging_obj.model_call_details.get(
+            search_results: Final[list[VectorStoreSearchResponse] | None] = litellm_logging_obj.model_call_details.get(
                 "search_results"
             )
 
-            verbose_logger.debug(f"Search results found: {search_results is not None}")
+            verbose_logger.debug("Search results found: %s", search_results is not None)
 
             if not search_results:
                 verbose_logger.debug("No search results found")
@@ -269,13 +313,13 @@ class VectorStorePreCallHook(CustomLogger):
                         # Set the provider_specific_fields
                         setattr(choice.message, "provider_specific_fields", provider_fields)
 
-            verbose_logger.debug(f"Added {len(search_results)} search results to response")
+            verbose_logger.debug("Added %s search results to response", len(search_results))
 
             # Return modified response
             return response
 
         except Exception as e:
-            verbose_logger.exception(f"Error adding search results to response: {e}")
+            verbose_logger.exception("Error adding search results to response: %s", e)
             # Don't fail the request if search results fail to be added
             return None
 
@@ -283,7 +327,7 @@ class VectorStorePreCallHook(CustomLogger):
         self,
         request_data: dict,
         response_chunk: Any,
-        call_type: Any | None,
+        call_type: CallTypes | None,
     ) -> Any | None:
         """
         Add search results to the final streaming chunk.
@@ -295,9 +339,9 @@ class VectorStorePreCallHook(CustomLogger):
             verbose_logger.debug("VectorStorePreCallHook.async_post_call_streaming_deployment_hook called")
 
             # Get search results from model_call_details (already in OpenAI format)
-            search_results: list[VectorStoreSearchResponse] | None = request_data.get("search_results")
+            search_results: Final[list[VectorStoreSearchResponse] | None] = request_data.get("search_results")
 
-            verbose_logger.debug(f"Search results found for streaming chunk: {search_results is not None}")
+            verbose_logger.debug("Search results found for streaming chunk: %s", search_results is not None)
 
             if not search_results:
                 verbose_logger.debug("No search results found for streaming chunk")
@@ -316,12 +360,12 @@ class VectorStorePreCallHook(CustomLogger):
                         # Set the provider_specific_fields
                         choice.delta.provider_specific_fields = provider_fields
 
-            verbose_logger.debug(f"Added {len(search_results)} search results to streaming chunk")
+            verbose_logger.debug("Added %s search results to streaming chunk", len(search_results))
 
             # Return modified chunk
             return response_chunk
 
         except Exception as e:
-            verbose_logger.exception(f"Error adding search results to streaming chunk: {e}")
+            verbose_logger.exception("Error adding search results to streaming chunk: %s", e)
             # Don't fail the request if search results fail to be added
             return response_chunk

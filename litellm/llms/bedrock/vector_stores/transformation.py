@@ -1,5 +1,5 @@
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -57,7 +57,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         OpenAI uses: eq, ne, gt, gte, lt, lte, in, nin
         AWS uses: equals, notEquals, greaterThan, greaterThanOrEquals, lessThan, lessThanOrEquals, in, notIn, startsWith, listContains, stringContains
         """
-        operator_mapping = {
+        operator_mapping: Final = {
             "eq": "equals",
             "ne": "notEquals",
             "gt": "greaterThan",
@@ -87,7 +87,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         OpenAI format: {"key": <key>, "value": <value>, "operator": <operator>}
         AWS KB format: {"operator": {"key": <key>, "value": <value>}}
         """
-        aws_operator = self._map_operator_to_aws(filter_dict["operator"])
+        aws_operator: Final = self._map_operator_to_aws(filter_dict["operator"])
         return {
             aws_operator: {
                 "key": filter_dict["key"],
@@ -105,10 +105,10 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         Note: AWS requires andAll/orAll to have at least 2 elements.
         For single filters, unwrap and return just the operator.
         """
-        aws_filters = {}
+        aws_filters: Final = {}
 
         if "and" in value:
-            and_filters = value["and"]
+            and_filters: Final = value["and"]
             # If only 1 filter, return just the operator (AWS requires andAll to have >=2 elements)
             if len(and_filters) == 1:
                 return self._map_operator_filter(and_filters[0])
@@ -124,7 +124,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             ]
 
         if "or" in value:
-            or_filters = value["or"]
+            or_filters: Final = value["or"]
             # If only 1 filter, return just the operator (AWS requires orAll to have >=2 elements)
             if len(or_filters) == 1:
                 return self._map_operator_filter(or_filters[0])
@@ -160,10 +160,10 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                 aws_filters: dict | None = None
 
                 if isinstance(value, dict):
-                    if "operator" in value.keys():
+                    if "operator" in value:
                         # Single operator - map directly (no wrapping needed)
                         aws_filters = self._map_operator_filter(value)
-                    elif "and" in value.keys() or "or" in value.keys():
+                    elif "and" in value or "or" in value:
                         aws_filters = self._map_and_or_filters(value)
                     else:
                         # Assume it's already in AWS KB format
@@ -178,7 +178,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         return headers
 
     def get_complete_url(self, api_base: str | None, litellm_params: dict) -> str:
-        aws_region_name = litellm_params.get("aws_region_name")
+        aws_region_name: Final = litellm_params.get("aws_region_name")
         endpoint_url, _ = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=litellm_params.get("aws_bedrock_runtime_endpoint"),
@@ -200,10 +200,10 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         if isinstance(query, list):
             query = " ".join(query)
 
-        encoded_vector_store_id = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url = f"{api_base}/{encoded_vector_store_id}/retrieve"
+        encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
+        url: Final = f"{api_base}/{encoded_vector_store_id}/retrieve"
 
-        request_body: dict[str, Any] = {
+        request_body: Final[dict[str, Any]] = {
             "retrievalQuery": BedrockKBRetrievalQuery(text=query),
         }
 
@@ -213,7 +213,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             retrieval_config = deepcopy(
                 extra_body.get("retrievalConfiguration") or extra_body.get("retrieval_configuration") or {}
             )
-        max_results = vector_store_search_optional_params.get("max_num_results")
+        max_results: Final = vector_store_search_optional_params.get("max_num_results")
         if max_results is not None:
             existing_number_of_results = retrieval_config.get("vectorSearchConfiguration", {}).get("numberOfResults")
             if existing_number_of_results is not None and existing_number_of_results != max_results:
@@ -223,9 +223,9 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                     max_results,
                 )
             retrieval_config.setdefault("vectorSearchConfiguration", {})["numberOfResults"] = max_results
-        filters = vector_store_search_optional_params.get("filters")
+        filters: Final = vector_store_search_optional_params.get("filters")
         if filters is not None:
-            existing_filter = retrieval_config.get("vectorSearchConfiguration", {}).get("filter")
+            existing_filter: Final = retrieval_config.get("vectorSearchConfiguration", {}).get("filter")
             if existing_filter is not None and existing_filter != filters:
                 verbose_logger.debug(
                     "Overriding extra_body retrievalConfiguration.vectorSearchConfiguration.filter with filters from vector_store_search_optional_params"
@@ -259,11 +259,11 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         Extract file_id from Bedrock KB metadata.
         Uses source URI if available, otherwise generates a fallback ID.
         """
-        source_uri = metadata.get("x-amz-bedrock-kb-source-uri", "") if metadata else ""
+        source_uri: Final = metadata.get("x-amz-bedrock-kb-source-uri", "") if metadata else ""
         if source_uri:
             return source_uri
 
-        chunk_id = metadata.get("x-amz-bedrock-kb-chunk-id", "unknown") if metadata else "unknown"
+        chunk_id: Final = metadata.get("x-amz-bedrock-kb-chunk-id", "unknown") if metadata else "unknown"
         return f"bedrock-kb-{chunk_id}"
 
     def _get_filename_from_metadata(self, metadata: dict[str, Any]) -> str:
@@ -271,11 +271,11 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         Extract filename from Bedrock KB metadata.
         Tries to extract filename from source URI, falls back to domain name or data source ID.
         """
-        source_uri = metadata.get("x-amz-bedrock-kb-source-uri", "") if metadata else ""
+        source_uri: Final = metadata.get("x-amz-bedrock-kb-source-uri", "") if metadata else ""
 
         if source_uri:
             try:
-                parsed_uri = urlparse(source_uri)
+                parsed_uri: Final = urlparse(source_uri)
                 filename = (
                     parsed_uri.path.split("/")[-1] if parsed_uri.path and parsed_uri.path != "/" else parsed_uri.netloc
                 )
@@ -285,7 +285,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             except Exception:
                 return source_uri
 
-        data_source_id = metadata.get("x-amz-bedrock-kb-data-source-id", "unknown") if metadata else "unknown"
+        data_source_id: Final = metadata.get("x-amz-bedrock-kb-data-source-id", "unknown") if metadata else "unknown"
         return f"bedrock-kb-document-{data_source_id}"
 
     def _get_attributes_from_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
@@ -301,8 +301,8 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
     ) -> VectorStoreSearchResponse:
         try:
-            response_data = BedrockKBResponse(**response.json())
-            results: list[VectorStoreSearchResult] = []
+            response_data: Final = BedrockKBResponse(**response.json())
+            results: Final[list[VectorStoreSearchResult]] = []
             for item in response_data.get("retrievalResults", []) or []:
                 content: BedrockKBContent | None = item.get("content")
                 text = content.get("text") if content else None

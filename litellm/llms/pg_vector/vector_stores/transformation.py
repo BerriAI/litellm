@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
@@ -34,7 +34,7 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
         litellm_params = litellm_params or GenericLiteLLMParams()
 
         # Get API key from various sources
-        api_key = litellm_params.api_key or get_secret_str("PG_VECTOR_API_KEY")
+        api_key: Final = litellm_params.api_key or get_secret_str("PG_VECTOR_API_KEY")
 
         if not api_key:
             raise ValueError(
@@ -81,8 +81,8 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
         litellm_params: dict,
         extra_body: dict[str, Any] | None = None,
     ) -> tuple[str, dict]:
-        encoded_vector_store_id = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url = f"{api_base}/{encoded_vector_store_id}/search"
+        encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
+        url: Final = f"{api_base}/{encoded_vector_store_id}/search"
         _, request_body = super().transform_search_vector_store_request(
             vector_store_id=vector_store_id,
             query=query,

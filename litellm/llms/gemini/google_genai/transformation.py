@@ -3,7 +3,7 @@ Transformation for Calling Google models in their native format.
 """
 
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 
@@ -117,10 +117,10 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             _snake_to_camel,
         )
 
-        _generate_content_config_dict: dict[str, Any] = {}
-        supported_google_genai_params = self.get_supported_generate_content_optional_params(model)
+        _generate_content_config_dict: Final[dict[str, Any]] = {}
+        supported_google_genai_params: Final = self.get_supported_generate_content_optional_params(model)
         # Create a set with both camelCase and snake_case versions for faster lookup
-        supported_params_set = set(supported_google_genai_params)
+        supported_params_set: Final = set(supported_google_genai_params)
         supported_params_set.update(_snake_to_camel(p) for p in supported_google_genai_params)
         supported_params_set.update(_camel_to_snake(p) for p in supported_google_genai_params if "_" not in p)
 
@@ -150,11 +150,11 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         model: str,
         litellm_params: GenericLiteLLMParams | dict | None,
     ) -> dict:
-        default_headers = {
+        default_headers: Final = {
             "Content-Type": "application/json",
         }
         # Use the passed api_key first, then fall back to litellm_params and environment
-        gemini_api_key = api_key or self._get_google_ai_studio_api_key(dict(litellm_params or {}))
+        gemini_api_key: Final = api_key or self._get_google_ai_studio_api_key(dict(litellm_params or {}))
         if isinstance(gemini_api_key, dict):
             default_headers.update(gemini_api_key)
         elif gemini_api_key is not None:
@@ -182,9 +182,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         Returns:
             Tuple of (vertex_credentials, vertex_project, vertex_location)
         """
-        vertex_credentials = self.get_vertex_ai_credentials(litellm_params)
-        vertex_project = self.get_vertex_ai_project(litellm_params)
-        vertex_location = self.get_vertex_ai_location(litellm_params)
+        vertex_credentials: Final = self.get_vertex_ai_credentials(litellm_params)
+        vertex_project: Final = self.get_vertex_ai_project(litellm_params)
+        vertex_location: Final = self.get_vertex_ai_location(litellm_params)
         return vertex_credentials, vertex_project, vertex_location
 
     def _build_final_headers_and_url(
@@ -201,7 +201,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         """
         Build final headers and API URL from auth components.
         """
-        gemini_api_key = self._get_google_ai_studio_api_key(litellm_params)
+        gemini_api_key: Final = self._get_google_ai_studio_api_key(litellm_params)
 
         auth_header, api_base = self._get_token_and_url(
             model=model,
@@ -216,7 +216,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             should_use_v1beta1_features=True,
         )
 
-        headers = self.validate_environment(
+        headers: Final = self.validate_environment(
             api_key=auth_header,
             headers=None,
             model=model,
@@ -301,11 +301,11 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
 
     @staticmethod
     def _normalize_response_schema(generate_content_config_dict: dict, model: str) -> None:
-        schema_key = next(
+        schema_key: Final = next(
             (k for k in ("responseSchema", "response_schema") if k in generate_content_config_dict),
             None,
         )
-        json_schema_key = next(
+        json_schema_key: Final = next(
             (k for k in ("responseJsonSchema", "response_json_schema") if k in generate_content_config_dict),
             None,
         )
@@ -313,7 +313,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         if schema_key is None:
             return
 
-        value = generate_content_config_dict[schema_key]
+        value: Final = generate_content_config_dict[schema_key]
         if not isinstance(value, dict):
             return
 
@@ -346,14 +346,14 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
 
         self._normalize_response_schema(generate_content_config_dict, model)
 
-        typed_generate_content_request = GenerateContentRequestDict(
+        typed_generate_content_request: Final = GenerateContentRequestDict(
             model=model,
             contents=contents,
             tools=tools,
             generationConfig=GenerateContentConfigDict(**generate_content_config_dict),
         )
 
-        request_dict = cast(dict, typed_generate_content_request)
+        request_dict: Final = cast(dict, typed_generate_content_request)
 
         if system_instruction is not None:
             request_dict["systemInstruction"] = system_instruction

@@ -4,6 +4,8 @@ This module is responsible for handling Getting/Setting the proxy server request
 It allows fetching a dict of the proxy server request from s3 or GCS bucket.
 """
 
+from typing import Final
+
 import litellm
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.integrations.custom_logger import CustomLogger
@@ -35,7 +37,7 @@ class ColdStorageHandler:
         Returns:
             Optional[dict]: The proxy server request dict or None if not found
         """
-        custom_logger = self._injected_cold_storage_logger or self._resolve_cold_storage_logger()
+        custom_logger: Final = self._injected_cold_storage_logger or self._resolve_cold_storage_logger()
         if custom_logger is None:
             return None
 
@@ -44,7 +46,7 @@ class ColdStorageHandler:
         )
 
     def _resolve_cold_storage_logger(self) -> CustomLogger | None:
-        custom_logger_name = self._select_custom_logger_for_cold_storage()
+        custom_logger_name: Final = self._select_custom_logger_for_cold_storage()
         if custom_logger_name is None:
             return None
         return litellm.logging_callback_manager.get_active_custom_logger_for_callback_name(custom_logger_name)
@@ -52,7 +54,7 @@ class ColdStorageHandler:
     def _select_custom_logger_for_cold_storage(
         self,
     ) -> _custom_logger_compatible_callbacks_literal | None:
-        cold_storage_custom_logger: _custom_logger_compatible_callbacks_literal | None = (
+        cold_storage_custom_logger: Final[_custom_logger_compatible_callbacks_literal | None] = (
             litellm.cold_storage_custom_logger
         )
 

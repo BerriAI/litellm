@@ -6,7 +6,7 @@ attach ``iterations`` to ``usage``.
 """
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 
 from litellm.types.llms.anthropic import (
     AppliedEdit,
@@ -39,7 +39,7 @@ class PolyfillResult:
         (no block, no error, no warnings) are omitted. Other edit types are
         included when the editor returned an ``AppliedEdit``.
         """
-        visible: list[AppliedEdit] = []
+        visible: Final[list[AppliedEdit]] = []
         for edit in self.applied_edits:
             if edit.get("type") == COMPACT_EDIT_TYPE:
                 if self.compaction_block is not None or edit.get("error") or edit.get("warnings"):

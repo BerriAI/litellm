@@ -2,17 +2,21 @@
 ObjectPermission repository for database operations on LiteLLM_ObjectPermissionTable.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.prisma_protocols import TableActions
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 
 class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
     """Repository for object permission database operations."""
 
     @property
-    def table(self) -> Any:
+    def table(self) -> TableActions["prisma_models.LiteLLM_ObjectPermissionTable"]:
         return self.prisma_client.db.litellm_objectpermissiontable
 
     @property
@@ -38,7 +42,7 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
         search_tools: list[str] | None = None,
     ) -> LiteLLM_ObjectPermissionTable:
         """Create a new object permission record."""
-        data: dict[str, Any] = {}
+        data: Final[dict[str, Any]] = {}
         if mcp_servers is not None:
             data["mcp_servers"] = mcp_servers
         if mcp_access_groups is not None:
@@ -77,7 +81,7 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
         search_tools: list[str] | None = None,
     ) -> LiteLLM_ObjectPermissionTable | None:
         """Update an object permission record."""
-        data: dict[str, Any] = {}
+        data: Final[dict[str, Any]] = {}
         if mcp_servers is not None:
             data["mcp_servers"] = mcp_servers
         if mcp_access_groups is not None:

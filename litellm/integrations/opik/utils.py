@@ -17,11 +17,11 @@ def create_uuid7() -> str:
     extra dependency is added to litellm. See ``opik.id_helpers`` for the
     reference implementation.
     """
-    unix_ts_ms = int(time.time() * 1000)
+    unix_ts_ms: Final = int(time.time() * 1000)
 
     # Fill the 16-byte buffer with random data, then overwrite the structured
     # parts (timestamp, version, variant) defined by the UUIDv7 layout.
-    uuid_bytes = bytearray(os.urandom(16))
+    uuid_bytes: Final = bytearray(os.urandom(16))
 
     # First 48 bits (6 bytes): Unix timestamp in milliseconds.
     uuid_bytes[0:6] = unix_ts_ms.to_bytes(6, byteorder="big")
@@ -36,12 +36,12 @@ def create_uuid7() -> str:
 
 
 def _read_opik_config_file() -> dict[str, str]:
-    config_path = os.path.expanduser(CONFIG_FILE_PATH_DEFAULT)
+    config_path: Final = os.path.expanduser(CONFIG_FILE_PATH_DEFAULT)
 
-    config = configparser.ConfigParser()
+    config: Final = configparser.ConfigParser()
     config.read(config_path)
 
-    config_values = {section: dict(config.items(section)) for section in config.sections()}
+    config_values: Final = {section: dict(config.items(section)) for section in config.sections()}
 
     if "opik" in config_values:
         return config_values["opik"]
@@ -50,7 +50,7 @@ def _read_opik_config_file() -> dict[str, str]:
 
 
 def _get_env_variable(key: str) -> str | None:
-    env_prefix = "opik_"
+    env_prefix: Final = "opik_"
     return os.getenv((env_prefix + key).upper(), None)
 
 
@@ -67,12 +67,12 @@ def get_opik_config_variable(key: str, user_value: str | None = None, default_va
         return user_value
 
     # Return environment variable if it is not None
-    env_value = _get_env_variable(key)
+    env_value: Final = _get_env_variable(key)
     if env_value is not None:
         return env_value
 
     # Return value from Opik configuration file if it is not None
-    config_values = _read_opik_config_file()
+    config_values: Final = _read_opik_config_file()
 
     if key in config_values:
         return config_values[key]
@@ -82,7 +82,7 @@ def get_opik_config_variable(key: str, user_value: str | None = None, default_va
 
 
 def create_usage_object(usage):
-    usage_dict = {}
+    usage_dict: Final = {}
 
     if usage.completion_tokens is not None:
         usage_dict["completion_tokens"] = usage.completion_tokens
@@ -113,6 +113,6 @@ def get_traces_and_spans_from_payload(
     Returns:
         Tuple of (traces, spans) where both are lists of dicts with null values removed
     """
-    traces = [_remove_nulls(x) for x in payload if "type" not in x]
-    spans = [_remove_nulls(x) for x in payload if "type" in x]
+    traces: Final = [_remove_nulls(x) for x in payload if "type" not in x]
+    spans: Final = [_remove_nulls(x) for x in payload if "type" in x]
     return traces, spans

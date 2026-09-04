@@ -52,7 +52,7 @@ class _RustTranscriptionState:
     atranscription: RustAtranscription | None = None
 
 
-_STATE = _RustTranscriptionState()
+_STATE: Final = _RustTranscriptionState()
 
 
 def configure_rust_transcription(
@@ -72,7 +72,7 @@ def load_rust_transcription() -> RustTranscription | None:
         return _STATE.transcription
     from litellm.rust_bridge import get_native_bridge
 
-    native_bridge = get_native_bridge()
+    native_bridge: Final = get_native_bridge()
     return (
         None
         if native_bridge is None
@@ -87,7 +87,7 @@ def load_rust_atranscription() -> RustAtranscription | None:
         return _STATE.atranscription
     from litellm.rust_bridge import get_native_bridge
 
-    native_bridge = get_native_bridge()
+    native_bridge: Final = get_native_bridge()
     return (
         None
         if native_bridge is None
@@ -108,7 +108,7 @@ def transcription(
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
-    rust_transcription = load_rust_transcription()
+    rust_transcription: Final = load_rust_transcription()
     if rust_transcription is None:
         return None
     return rust_transcription(
@@ -134,7 +134,7 @@ async def atranscription(
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
-    rust_atranscription = load_rust_atranscription()
+    rust_atranscription: Final = load_rust_atranscription()
     if rust_atranscription is None:
         return None
     return await rust_atranscription(

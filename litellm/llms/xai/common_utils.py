@@ -1,3 +1,5 @@
+from typing import Final
+
 import httpx
 
 import litellm
@@ -5,6 +7,17 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ProviderSpecificModelInfo
+
+USD_TICKS_PER_DOLLAR: Final = 10_000_000_000
+
+
+def xai_reported_cost_in_usd(cost_in_usd_ticks: object) -> float | None:
+    """xAI bills in ticks of a dollar: https://docs.x.ai/developers/cost-tracking"""
+    if not isinstance(cost_in_usd_ticks, int) or isinstance(cost_in_usd_ticks, bool):
+        return None
+    if cost_in_usd_ticks < 0:
+        return None
+    return cost_in_usd_ticks / USD_TICKS_PER_DOLLAR
 
 
 class XAIModelInfo(BaseLLMModelInfo):
@@ -72,7 +85,7 @@ class XAIModelInfo(BaseLLMModelInfo):
             raise ValueError(
                 "XAI API base or key is not set. Set XAI_API_BASE and provide an xAI API key via api_key, litellm.xai_key, or XAI_API_KEY."
             )
-        response = litellm.module_level_client.get(
+        response: Final = litellm.module_level_client.get(
             url=f"{api_base}/v1/models",
             headers={"Authorization": f"Bearer {api_key}"},
         )
@@ -84,9 +97,9 @@ class XAIModelInfo(BaseLLMModelInfo):
                 f"Failed to fetch models from XAI. Status code: {response.status_code}, Response: {response.text}"
             )
 
-        models = response.json()["data"]
+        models: Final = response.json()["data"]
 
-        litellm_model_names = []
+        litellm_model_names: Final = []
         for model in models:
             stripped_model_name = model["id"]
             litellm_model_name = "xai/" + stripped_model_name

@@ -4,6 +4,8 @@ Support for Scaleway's OpenAI-compatible `/v1/audio/transcriptions` endpoint.
 API reference: https://www.scaleway.com/en/developers/api/generative-apis/#path-audio-create-an-audio-transcription
 """
 
+from typing import Final
+
 import httpx
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
@@ -41,7 +43,7 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
             if k in supported_params:
                 optional_params[k] = v
@@ -88,7 +90,7 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 headers={},
             )
 
-        default_headers = {
+        default_headers: Final = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
         }
@@ -102,15 +104,15 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> AudioTranscriptionRequestData:
-        processed_audio = process_audio_file(audio_file)
+        processed_audio: Final = process_audio_file(audio_file)
 
-        form_fields: dict = {"model": model}
+        form_fields: Final[dict] = {"model": model}
         for key in self.get_supported_openai_params(model):
             value = optional_params.get(key)
             if value is not None:
                 form_fields[key] = value
 
-        files = {
+        files: Final = {
             "file": (
                 processed_audio.filename,
                 processed_audio.file_content,
@@ -124,12 +126,12 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         raw_response: httpx.Response,
     ) -> TranscriptionResponse:
-        content_type = (raw_response.headers.get("content-type") or "").lower()
+        content_type: Final = (raw_response.headers.get("content-type") or "").lower()
         if "application/json" not in content_type:
             return TranscriptionResponse(text=raw_response.text)
 
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
         except Exception:
             raise ScalewayAudioTranscriptionException(
                 message=raw_response.text,
@@ -137,8 +139,8 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 headers=raw_response.headers,
             )
 
-        text = response_json.get("text") or ""
-        response = TranscriptionResponse(text=text)
+        text: Final = response_json.get("text") or ""
+        response: Final = TranscriptionResponse(text=text)
 
         if "segments" in response_json:
             response["segments"] = response_json["segments"]

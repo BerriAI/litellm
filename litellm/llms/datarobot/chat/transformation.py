@@ -4,13 +4,14 @@ Support for OpenAI's `/v1/chat/completions` endpoint.
 Calls done in OpenAI/openai.py as DataRobot is openai-compatible.
 """
 
+from typing import Final
 from urllib.parse import urlparse, urlunparse
 
 from litellm.secret_managers.main import get_secret_str
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
-LLMGW_PATH = "/genai/llmgw/chat/completions"
+LLMGW_PATH: Final = "/genai/llmgw/chat/completions"
 
 
 class DataRobotConfig(OpenAILikeChatConfig):
@@ -36,7 +37,7 @@ class DataRobotConfig(OpenAILikeChatConfig):
         if api_base is None:
             api_base = "https://app.datarobot.com"
 
-        parsed = urlparse(api_base)
+        parsed: Final = urlparse(api_base)
         path = parsed.path
 
         if not path or path == "/":  # Add full path to LLMGW
@@ -50,7 +51,7 @@ class DataRobotConfig(OpenAILikeChatConfig):
         if not path.endswith("/"):
             path += "/"
         path = path.replace("//", "/")
-        updated_parsed = parsed._replace(path=path)
+        updated_parsed: Final = parsed._replace(path=path)
 
         return urlunparse(updated_parsed)
 
@@ -64,7 +65,7 @@ class DataRobotConfig(OpenAILikeChatConfig):
         If an API key cannot be resolved via either method, a fake key is returned.
         """
         api_base = DataRobotConfig._resolve_api_base(api_base)
-        dynamic_api_key = DataRobotConfig._resolve_api_key(api_key)
+        dynamic_api_key: Final = DataRobotConfig._resolve_api_key(api_key)
 
         return api_base, dynamic_api_key
 
@@ -85,4 +86,4 @@ class DataRobotConfig(OpenAILikeChatConfig):
         Returns:
             str: The complete URL for the API call.
         """
-        return str(api_base)  # type: ignore
+        return str(api_base)

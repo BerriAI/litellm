@@ -1,15 +1,17 @@
 from collections.abc import Mapping
+from typing import Final
 from urllib.parse import parse_qs
 
 import httpx
 
 from litellm._logging import verbose_logger
 from litellm.constants import PASS_THROUGH_HEADER_PREFIX
+from litellm.litellm_core_utils.aws_partition import contains_aws_arn
 
 # Headers that must not be overwritten via the x-pass- forwarding mechanism.
 # Includes standard credential/auth headers and protocol-level headers that
 # affect routing or message framing.
-_PASS_THROUGH_PROTECTED_HEADERS: frozenset = frozenset(
+_PASS_THROUGH_PROTECTED_HEADERS: Final[frozenset] = frozenset(
     {
         "authorization",
         "api-key",
@@ -17,11 +19,12 @@ _PASS_THROUGH_PROTECTED_HEADERS: frozenset = frozenset(
         "x-goog-api-key",
         "host",
         "content-length",
+        "accept-encoding",
     }
 )
 
 # Header name prefix used to block AWS SigV4 signing headers from being overridden.
-_PASS_THROUGH_PROTECTED_HEADER_PREFIXES: tuple = ("x-amz-",)
+_PASS_THROUGH_PROTECTED_HEADER_PREFIXES: Final[tuple] = ("x-amz-",)
 
 
 class BasePassthroughUtils:
@@ -32,14 +35,14 @@ class BasePassthroughUtils:
         default_query_params: dict[str, str | list] | None = None,
     ) -> dict[str, str | list[str]]:
         # Get the existing query params from the target URL
-        existing_query_string = existing_url.query.decode("utf-8")
-        existing_query_params = parse_qs(existing_query_string)
+        existing_query_string: Final = existing_url.query.decode("utf-8")
+        existing_query_params: Final = parse_qs(existing_query_string)
 
         # parse_qs returns a dict where each value is a list, so let's flatten it
-        updated_existing_query_params = {k: v[0] if len(v) == 1 else v for k, v in existing_query_params.items()}
+        updated_existing_query_params: Final = {k: v[0] if len(v) == 1 else v for k, v in existing_query_params.items()}
 
         # Start with default query params (lowest priority)
-        merged_params = {}
+        merged_params: Final = {}
         if default_query_params:
             merged_params.update(default_query_params)
 
@@ -68,8 +71,11 @@ class BasePassthroughUtils:
             # Header We Should NOT forward
             request_headers.pop("content-length", None)
             request_headers.pop("host", None)
+            # accept-encoding must stay client-negotiated: forwarding e.g. "br" when
+            # the brotli package is absent relays undecodable bytes to the caller
+            request_headers.pop("accept-encoding", None)
 
-            custom_header_names = {header_name.lower() for header_name in headers}
+            custom_header_names: Final = {header_name.lower() for header_name in headers}
             for header_name in list(request_headers.keys()):
                 if header_name.lower() in custom_header_names:
                     request_headers.pop(header_name, None)
@@ -121,11 +127,11 @@ class CommonUtils:
         import re
 
         # Early exit: if no ARN detected, return unchanged
-        if "arn:aws:" not in endpoint:
+        if not contains_aws_arn(endpoint):
             return endpoint
 
         # Handle all patterns in one go - more efficient and cleaner
-        patterns = [
+        patterns: Final = [
             # Custom model with 2 slashes (order matters - do this first)
             (r"(custom-model)/([a-z0-9.-]+)/([a-z0-9]+)", r"\1%2F\2%2F\3"),
             # All other resource types with 1 slash

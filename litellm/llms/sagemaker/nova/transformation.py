@@ -7,6 +7,8 @@ additional Nova-specific parameters (top_k, reasoning_effort, etc.).
 Docs: https://docs.aws.amazon.com/nova/latest/nova2-userguide/nova-sagemaker-inference-api-reference.html
 """
 
+from typing import Final
+
 from litellm.types.llms.openai import AllMessageValues
 
 from ..chat.transformation import SagemakerChatConfig
@@ -31,8 +33,8 @@ class SagemakerNovaConfig(SagemakerChatConfig):
 
     def get_supported_openai_params(self, model: str) -> list:
         """Extend parent params with Nova-specific parameters."""
-        params = super().get_supported_openai_params(model)
-        nova_params = [
+        params: Final = super().get_supported_openai_params(model)
+        nova_params: Final = [
             "top_k",
             "reasoning_effort",
             "allowed_token_ids",
@@ -57,7 +59,7 @@ class SagemakerNovaConfig(SagemakerChatConfig):
         temperature, top_p, top_k, stream, stream_options, logprobs,
         top_logprobs, reasoning_effort, allowed_token_ids, truncate_prompt_tokens.
         """
-        request_body = super().transform_request(
+        request_body: Final = super().transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,

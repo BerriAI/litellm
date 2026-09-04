@@ -6,7 +6,7 @@ this file has Arize ai specific helper functions
 
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.integrations.arize import _utils
 from litellm.integrations.arize._utils import ArizeOTELAttributes
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from litellm.types.integrations.arize import Protocol as _Protocol
 
     Protocol = _Protocol
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Protocol = Any
     Span = Any
@@ -50,7 +50,7 @@ class ArizeLogger(OpenTelemetry):
             self.span_kind = SpanKind
             return
 
-        provider = TracerProvider(resource=self._get_litellm_resource(self.config))
+        provider: Final = TracerProvider(resource=self._get_litellm_resource(self.config))
         provider.add_span_processor(self._get_span_processor())
         self.tracer = provider.get_tracer("litellm")
         self.span_kind = SpanKind
@@ -80,13 +80,13 @@ class ArizeLogger(OpenTelemetry):
         Raises:
             ValueError: If required environment variables are not set.
         """
-        space_id = os.environ.get("ARIZE_SPACE_ID")
-        space_key = os.environ.get("ARIZE_SPACE_KEY")
-        api_key = os.environ.get("ARIZE_API_KEY")
-        project_name = os.environ.get("ARIZE_PROJECT_NAME")
+        space_id: Final = os.environ.get("ARIZE_SPACE_ID")
+        space_key: Final = os.environ.get("ARIZE_SPACE_KEY")
+        api_key: Final = os.environ.get("ARIZE_API_KEY")
+        project_name: Final = os.environ.get("ARIZE_PROJECT_NAME")
 
-        grpc_endpoint = os.environ.get("ARIZE_ENDPOINT")
-        http_endpoint = os.environ.get("ARIZE_HTTP_ENDPOINT")
+        grpc_endpoint: Final = os.environ.get("ARIZE_ENDPOINT")
+        http_endpoint: Final = os.environ.get("ARIZE_HTTP_ENDPOINT")
 
         endpoint = None
         protocol: Protocol = "otlp_grpc"
@@ -147,7 +147,7 @@ class ArizeLogger(OpenTelemetry):
             dict: Health check result with status and message
         """
         try:
-            config = self.get_arize_config()
+            config: Final = self.get_arize_config()
 
             if not config.space_id and not config.space_key:
                 return {
@@ -183,7 +183,7 @@ class ArizeLogger(OpenTelemetry):
         Returns:
             dict: A dictionary of dynamic Arize headers
         """
-        dynamic_headers = {}
+        dynamic_headers: Final = {}
 
         #########################################################
         # `arize-space-id` handling

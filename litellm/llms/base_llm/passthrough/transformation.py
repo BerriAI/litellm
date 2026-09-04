@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Final, Optional, Union
 
 from ..base_utils import BaseLLMModelInfo
 
@@ -38,9 +38,9 @@ class BasePassthroughConfig(BaseLLMModelInfo):
 
         import httpx
 
-        base = base_target_url.rstrip("/")
+        base: Final = base_target_url.rstrip("/")
         endpoint = endpoint.lstrip("/")
-        full_url = f"{base}/{endpoint}"
+        full_url: Final = f"{base}/{endpoint}"
 
         url = httpx.URL(full_url)
 
@@ -127,9 +127,9 @@ class BasePassthroughConfig(BaseLLMModelInfo):
             List of string lines, with each line being a complete data: {} chunk
         """
         # Combine all bytes and decode to string
-        combined_str = b"".join(raw_bytes).decode("utf-8")
+        combined_str: Final = b"".join(raw_bytes).decode("utf-8")
 
         # Split by newlines and filter out empty lines
-        lines = [line.strip() for line in combined_str.split("\n") if line.strip()]
+        lines: Final = [line.strip() for line in combined_str.split("\n") if line.strip()]
 
         return lines

@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from functools import lru_cache
-from typing import TypeVar
+from typing import Final, TypeVar
 
 T = TypeVar("T")
 
@@ -21,7 +21,7 @@ def lru_cache_wrapper(
                 return ("error", e)
 
         def wrapped(*args, **kwargs):
-            result = wrapper(*args, **kwargs)
+            result: Final = wrapper(*args, **kwargs)
             if result[0] == "error":
                 raise result[1]
             return result[1]

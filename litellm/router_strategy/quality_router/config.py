@@ -2,11 +2,13 @@
 Configuration models for the QualityRouter.
 """
 
+from typing import Final
+
 from pydantic import BaseModel, ConfigDict, Field
 
 # Default mapping from ComplexityTier name (string) to quality tier (int).
 # Higher tier = higher capability requirement.
-DEFAULT_COMPLEXITY_TO_QUALITY: dict[str, int] = {
+DEFAULT_COMPLEXITY_TO_QUALITY: Final[dict[str, int]] = {
     "SIMPLE": 1,
     "MEDIUM": 2,
     "COMPLEX": 3,

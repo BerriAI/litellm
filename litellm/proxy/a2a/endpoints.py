@@ -9,7 +9,7 @@ admin pick which ones to expose through the proxy. The actual merge into a
 LiteLLM-fronted card happens when the agent is saved via ``POST /v1/agents``.
 """
 
-from typing import Any
+from typing import Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
@@ -25,7 +25,7 @@ from litellm.proxy.a2a.discovery import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 class DiscoverAgentRequest(BaseModel):
@@ -95,7 +95,7 @@ async def discover_agent_card(
         )
 
     try:
-        card = await fetch_well_known_card(
+        card: Final = await fetch_well_known_card(
             request.url,
             discovery_mode=request.discovery_mode,
             params=request.params,

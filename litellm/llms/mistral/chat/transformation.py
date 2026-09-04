@@ -7,13 +7,7 @@ Docs - https://docs.mistral.ai/api/
 """
 
 from collections.abc import AsyncIterator, Coroutine, Iterator
-from typing import (
-    Any,
-    Literal,
-    cast,
-    get_type_hints,
-    overload,
-)
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, get_type_hints, overload
 
 import httpx
 
@@ -31,6 +25,9 @@ from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMess
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class MistralConfig(OpenAIGPTConfig):
@@ -80,7 +77,7 @@ class MistralConfig(OpenAIGPTConfig):
         response_format: dict | None = None,
         stop: str | list | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -90,7 +87,7 @@ class MistralConfig(OpenAIGPTConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        supported_params = [
+        supported_params: Final = [
             "stream",
             "temperature",
             "top_p",
@@ -190,12 +187,12 @@ class MistralConfig(OpenAIGPTConfig):
             api_base
             or get_secret_str("MISTRAL_AZURE_API_BASE")  # for Azure AI Mistral
             or "https://api.mistral.ai/v1"
-        )  # type: ignore
+        )
 
         # if api_base does not end with /v1 we add it
         if api_base is not None and not api_base.endswith("/v1"):  # Mistral always needs a /v1 at the end
             api_base = api_base + "/v1"
-        dynamic_api_key = (
+        dynamic_api_key: Final = (
             api_key
             or get_secret_str("MISTRAL_AZURE_API_KEY")  # for Azure AI Mistral
             or get_secret_str("MISTRAL_API_KEY")
@@ -250,7 +247,7 @@ class MistralConfig(OpenAIGPTConfig):
         messages = handle_messages_with_content_list_to_str_conversion(messages)
 
         ## 3. Handle name in message
-        new_messages: list[AllMessageValues] = []
+        new_messages: Final[list[AllMessageValues]] = []
         for m in messages:
             m = MistralConfig._handle_name_in_message(m)
             m = MistralConfig._handle_tool_call_message(m)
@@ -298,7 +295,7 @@ class MistralConfig(OpenAIGPTConfig):
                         file_id = file_content.get("file", {}).get("file_id")
                         if file_id:
                             # Replace 'file' with 'file_id'
-                            file_content["file_id"] = file_id  # type: ignore
+                            file_content["file_id"] = file_id  # pyright: ignore[reportGeneralTypeIssues]  # legacy in-place rewrite of the block shape
                             file_content.pop("file", None)
         return messages
 
@@ -312,7 +309,7 @@ class MistralConfig(OpenAIGPTConfig):
             return messages
 
         # Check if there's already a system message
-        has_system_message = any(msg.get("role") == "system" for msg in messages)
+        has_system_message: Final = any(msg.get("role") == "system" for msg in messages)
 
         if has_system_message:
             # Prepend reasoning instructions to existing system message
@@ -336,7 +333,7 @@ class MistralConfig(OpenAIGPTConfig):
                     break
         else:
             # Add new system message with reasoning instructions
-            reasoning_message: AllMessageValues = cast(
+            reasoning_message: Final[AllMessageValues] = cast(
                 AllMessageValues,
                 {
                     "role": "system",
@@ -404,12 +401,12 @@ class MistralConfig(OpenAIGPTConfig):
         If role == tool, then we keep `name` if it's not an empty string
         Otherwise, we drop `name`
         """
-        _name = message.get("name")  # type: ignore
+        _name: Final = message.get("name")
 
         if _name is not None:
             # Remove name if not a tool message
             if message["role"] != "tool" or isinstance(_name, str) and len(_name.strip()) == 0:
-                message.pop("name", None)  # type: ignore
+                message.pop("name", None)
 
         return message
 
@@ -418,17 +415,17 @@ class MistralConfig(OpenAIGPTConfig):
         """
         Mistral API only supports tool_calls in Messages in `MistralToolCallMessage` spec
         """
-        _tool_calls = message.get("tool_calls")
-        mistral_tool_calls: list[MistralToolCallMessage] = []
+        _tool_calls: Final = message.get("tool_calls")
+        mistral_tool_calls: Final[list[MistralToolCallMessage]] = []
         if _tool_calls is not None and isinstance(_tool_calls, list):
             for _tool in _tool_calls:
                 _tool_call_message = MistralToolCallMessage(
                     id=_tool.get("id"),
                     type="function",
-                    function=_tool.get("function"),  # type: ignore
+                    function=_tool.get("function"),
                 )
                 mistral_tool_calls.append(_tool_call_message)
-            message["tool_calls"] = mistral_tool_calls  # type: ignore
+            message["tool_calls"] = mistral_tool_calls
         return message
 
     @classmethod
@@ -438,7 +435,7 @@ class MistralConfig(OpenAIGPTConfig):
         """
         from litellm.types.llms.openai import ChatCompletionAssistantMessage
 
-        set_keys = get_type_hints(ChatCompletionAssistantMessage).keys()
+        set_keys: Final = get_type_hints(ChatCompletionAssistantMessage).keys()
 
         all_expected_values_are_empty = True
         for key in set_keys:
@@ -556,7 +553,7 @@ class MistralConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -573,7 +570,7 @@ class MistralConfig(OpenAIGPTConfig):
         response_data = self._handle_empty_content_response(response_data)
         response_data = self._handle_content_list_to_str_conversion(response_data)
 
-        final_response_obj = cast(
+        final_response_obj: Final = cast(
             ModelResponse,
             convert_to_model_response_object(
                 response_object=response_data,
@@ -630,9 +627,9 @@ class MistralChatResponseIterator(OpenAIChatCompletionStreamingHandler):
         """
         Convert Mistral magistral content blocks into OpenAI-compatible content + thinking_blocks.
         """
-        text_segments: list[str] = []
-        thinking_blocks: list[dict] = []
-        reasoning_segments: list[str] = []
+        text_segments: Final[list[str]] = []
+        thinking_blocks: Final[list[dict]] = []
+        reasoning_segments: Final[list[str]] = []
 
         for block in content_blocks:
             block_type = block.get("type")
@@ -655,6 +652,6 @@ class MistralChatResponseIterator(OpenAIChatCompletionStreamingHandler):
             elif block_type == "text":
                 text_segments.append(block.get("text", ""))
 
-        normalized_text = "".join(text_segments) if text_segments else None
-        reasoning_content = "\n".join(reasoning_segments) if reasoning_segments else None
+        normalized_text: Final = "".join(text_segments) if text_segments else None
+        reasoning_content: Final = "\n".join(reasoning_segments) if reasoning_segments else None
         return normalized_text, thinking_blocks, reasoning_content

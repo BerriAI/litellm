@@ -2,7 +2,7 @@
 Bedrock Token Counter implementation using the CountTokens API.
 """
 
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
@@ -53,10 +53,10 @@ class BedrockTokenCounter(BaseTokenCounter):
             return None
 
         deployment = deployment or {}
-        litellm_params = deployment.get("litellm_params", {})
+        litellm_params: Final = deployment.get("litellm_params", {})
 
         # Build request data in the format expected by BedrockCountTokensHandler
-        request_data: dict[str, Any] = {
+        request_data: Final[dict[str, Any]] = {
             "model": model_to_use,
             "messages": messages,
         }
@@ -68,11 +68,11 @@ class BedrockTokenCounter(BaseTokenCounter):
             request_data["system"] = system
 
         # Get the resolved model (strip prefixes like bedrock/, converse/, etc.)
-        resolved_model = get_bedrock_base_model(model_to_use)
+        resolved_model: Final = get_bedrock_base_model(model_to_use)
 
         try:
-            handler = BedrockCountTokensHandler()
-            result = await handler.handle_count_tokens_request(
+            handler: Final = BedrockCountTokensHandler()
+            result: Final = await handler.handle_count_tokens_request(
                 request_data=request_data,
                 litellm_params=litellm_params,
                 resolved_model=resolved_model,
@@ -88,7 +88,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         except BedrockError as e:
-            verbose_logger.warning(f"Bedrock CountTokens API error: status={e.status_code}, message={e.message}")
+            verbose_logger.warning("Bedrock CountTokens API error: status=%s, message=%s", e.status_code, e.message)
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,
@@ -99,7 +99,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                 status_code=e.status_code,
             )
         except Exception as e:
-            verbose_logger.warning(f"Error calling Bedrock CountTokens API: {e}")
+            verbose_logger.warning("Error calling Bedrock CountTokens API: %s", e)
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,

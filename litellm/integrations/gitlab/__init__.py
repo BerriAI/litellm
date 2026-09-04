@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_prompt_management import CustomPromptManagement
@@ -12,7 +12,7 @@ from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec, 
 from .gitlab_prompt_manager import GitLabPromptCache, GitLabPromptManager
 
 # Global instances
-global_gitlab_config: dict | None = None
+global_gitlab_config: Final[dict | None] = None
 
 
 def set_global_gitlab_config(config: dict) -> None:
@@ -28,21 +28,21 @@ def set_global_gitlab_config(config: dict) -> None:
     """
     import litellm
 
-    litellm.global_gitlab_config = config  # type: ignore
+    litellm.global_gitlab_config = config
 
 
 def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec") -> "CustomPromptManagement":
     """
     Initialize a prompt from a Gitlab repository.
     """
-    gitlab_config = getattr(litellm_params, "gitlab_config", None)
-    prompt_id = getattr(litellm_params, "prompt_id", None)
+    gitlab_config: Final = getattr(litellm_params, "gitlab_config", None)
+    prompt_id: Final = getattr(litellm_params, "prompt_id", None)
 
     if not gitlab_config:
         raise ValueError("gitlab_config is required for gitlab prompt integration")
 
     try:
-        gitlab_prompt_manager = GitLabPromptManager(
+        gitlab_prompt_manager: Final = GitLabPromptManager(
             gitlab_config=gitlab_config,
             prompt_id=prompt_id,
         )
@@ -66,8 +66,8 @@ def _gitlab_prompt_initializer(
     # You can store arbitrary integration-specific config on PromptLiteLLMParams.
     # If your dataclass doesn't have these attributes, add them or put inside
     # `litellm_params.extra` and pull them from there.
-    gitlab_config: dict[str, Any] = getattr(litellm_params, "gitlab_config", None) or {}
-    git_ref: str | None = getattr(litellm_params, "git_ref", None)
+    gitlab_config: Final[dict[str, Any]] = getattr(litellm_params, "gitlab_config", None) or {}
+    git_ref: Final[str | None] = getattr(litellm_params, "git_ref", None)
 
     if not gitlab_config:
         raise ValueError("gitlab_config is required for gitlab prompt integration")
@@ -80,7 +80,7 @@ def _gitlab_prompt_initializer(
     )
 
 
-prompt_initializer_registry = {
+prompt_initializer_registry: Final = {
     SupportedPromptIntegrations.GITLAB.value: _gitlab_prompt_initializer,
 }
 

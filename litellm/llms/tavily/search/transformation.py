@@ -4,7 +4,7 @@ Calls Tavily's /search endpoint to search the web.
 Tavily API Reference: https://docs.tavily.com/documentation/api-reference/endpoint/search
 """
 
-from typing import TypedDict
+from typing import Final, TypedDict
 
 import httpx
 
@@ -127,7 +127,7 @@ class TavilySearchConfig(BaseSearchConfig):
             # Tavily only supports single string queries
             query = " ".join(query)
 
-        request_data: TavilySearchRequest = {
+        request_data: Final[TavilySearchRequest] = {
             "query": query,
         }
 
@@ -143,7 +143,7 @@ class TavilySearchConfig(BaseSearchConfig):
             request_data["country"] = optional_params["country"].lower()
 
         # Convert to dict before dynamic key assignments
-        result_data = dict(request_data)
+        result_data: Final = dict(request_data)
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
@@ -174,10 +174,10 @@ class TavilySearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         # Transform results to SearchResult objects
-        results = []
+        results: Final = []
         for result in response_json.get("results", []):
             search_result = SearchResult(
                 title=result.get("title", ""),

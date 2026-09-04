@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -13,6 +13,8 @@ from litellm.types.utils import ModelResponse
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -68,7 +70,7 @@ class ClarifaiConfig(OpenAIGPTConfig):
         Get API base and key for Clarifai provider.
         """
         api_base = api_base or "https://api.clarifai.com/v2/ext/openai/v1"
-        dynamic_api_key = api_key or get_secret_str("CLARIFAI_API_KEY") or ""
+        dynamic_api_key: Final = api_key or get_secret_str("CLARIFAI_API_KEY") or ""
         return api_base, dynamic_api_key
 
     def transform_request(self, model, messages, optional_params, litellm_params, headers):
@@ -85,7 +87,7 @@ class ClarifaiConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -102,7 +104,7 @@ class ClarifaiConfig(OpenAIGPTConfig):
         )
         ## Reponse
         try:
-            completion_response = raw_response.json()
+            completion_response: Final = raw_response.json()
         except Exception as e:
             raise OpenAIError(
                 status_code=raw_response.status_code,
@@ -110,7 +112,7 @@ class ClarifaiConfig(OpenAIGPTConfig):
                 headers=raw_response.headers,
             ) from e
 
-        response = ModelResponse(**completion_response)
+        response: Final = ModelResponse(**completion_response)
 
         if response.model is not None:
             response.model = "clarifai/" + model

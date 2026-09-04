@@ -1,6 +1,6 @@
 import json
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, Final
 
 import requests
 
@@ -8,16 +8,19 @@ from .exceptions import UnauthorizedError
 
 
 class ChatClient:
-    def __init__(self, base_url: str, api_key: str | None = None):
+    def __init__(self, base_url: str, api_key: str | None = None, timeout: int = 600):
         """
         Initialize the ChatClient.
 
         Args:
             base_url (str): The base URL of the LiteLLM proxy server (e.g., "http://localhost:8000")
             api_key (Optional[str]): API key for authentication. If provided, it will be sent as a Bearer token.
+            timeout (int): Request timeout in seconds (default: 600, the OpenAI SDK default, since a completion
+                can legitimately take minutes)
         """
         self._base_url = base_url.rstrip("/")  # Remove trailing slash if present
         self._api_key = api_key
+        self._timeout = timeout
 
     def _get_headers(self) -> dict[str, str]:
         """
@@ -26,7 +29,7 @@ class ChatClient:
         Returns:
             Dict[str, str]: Headers to use for API requests
         """
-        headers = {"Content-Type": "application/json"}
+        headers: Final = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
@@ -67,10 +70,10 @@ class ChatClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/chat/completions"
+        url: Final = f"{self._base_url}/chat/completions"
 
         # Build request data with required fields
-        data: dict[str, Any] = {"model": model, "messages": messages}
+        data: Final[dict[str, Any]] = {"model": model, "messages": messages}
 
         # Add optional parameters if provided
         if temperature is not None:
@@ -88,15 +91,15 @@ class ChatClient:
         if user is not None:
             data["user"] = user
 
-        request = requests.Request("POST", url, headers=self._get_headers(), json=data)
+        request: Final = requests.Request("POST", url, headers=self._get_headers(), json=data)
 
         if return_request:
             return request
 
         # Prepare and send the request
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.send(request.prepare())
+            response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.HTTPError as e:
@@ -137,10 +140,10 @@ class ChatClient:
             UnauthorizedError: If the request fails with a 401 status code
             requests.exceptions.RequestException: If the request fails with any other error
         """
-        url = f"{self._base_url}/chat/completions"
+        url: Final = f"{self._base_url}/chat/completions"
 
         # Build request data with required fields
-        data: dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+        data: Final[dict[str, Any]] = {"model": model, "messages": messages, "stream": True}
 
         # Add optional parameters if provided
         if temperature is not None:
@@ -159,9 +162,11 @@ class ChatClient:
             data["user"] = user
 
         # Make streaming request
-        session = requests.Session()
+        session: Final = requests.Session()
         try:
-            response = session.post(url, headers=self._get_headers(), json=data, stream=True)
+            response: Final = session.post(
+                url, headers=self._get_headers(), json=data, stream=True, timeout=self._timeout
+            )
             response.raise_for_status()
 
             # Parse SSE stream

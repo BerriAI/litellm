@@ -59,9 +59,9 @@ test.describe("Internal Viewer", () => {
     await expect(page.getByRole("button", { name: /Create New Key/i })).toHaveCount(0);
 
     // Open the viewer's own key info page
-    const keyRow = page.locator("tr", { hasText: E2E_VIEWER_KEY_ALIAS });
+    const keyRow = page.getByRole("row").filter({ hasText: E2E_VIEWER_KEY_ALIAS });
     await expect(keyRow).toBeVisible({ timeout: 10_000 });
-    await keyRow.locator("button").first().click();
+    await keyRow.getByRole("button", { name: E2E_VIEWER_KEY_ALIAS }).click();
     await expect(page.getByText("Back to Keys")).toBeVisible({ timeout: 10_000 });
 
     // None of the destructive / mutating actions should render

@@ -1,14 +1,35 @@
 import builtins
 import json
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import click
 import requests
 import rich
 from rich.table import Table
+from typing_extensions import ReadOnly, TypedDict
 
 from ...keys import KeysManagementClient
+
+
+class _CliContext(TypedDict):
+    """Values the top-level CLI group stores on the click context."""
+
+    base_url: ReadOnly[str]
+    api_key: ReadOnly[str | None]
+
+
+class _CliContextView(TypedDict):
+    obj: ReadOnly[_CliContext]
+
+
+class _KeyRowsView(TypedDict):
+    rows: ReadOnly[Sequence[Mapping[str, object]]]
+
+
+class _JsonBodyView(TypedDict):
+    body: ReadOnly[object]
 
 
 @click.group()
@@ -53,8 +74,9 @@ def list(
     return_full_object: bool,
 ):
     """List all API keys"""
-    client = KeysManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
-    response = client.list(
+    context: Final[_CliContextView] = {"obj": ctx.obj}
+    client: Final = KeysManagementClient(context["obj"]["base_url"], context["obj"]["api_key"])
+    response: Final = client.list(
         page=page,
         size=size,
         user_id=user_id,
@@ -70,14 +92,16 @@ def list(
     if output_format == "json":
         rich.print_json(data=response)
     else:
-        rich.print(f"Showing {len(response.get('keys', []))} keys out of {response.get('total_count', 0)}")
-        table = Table(title="API Keys")
+        listed: Final[_KeyRowsView] = {"rows": response.get("keys", [])}
+        rich.print(f"Showing {len(listed['rows'])} keys out of {response.get('total_count', 0)}")
+        table: Final = Table(title="API Keys")
         table.add_column("Key Hash", style="cyan")
         table.add_column("Alias", style="green")
         table.add_column("User ID", style="magenta")
         table.add_column("Team ID", style="yellow")
         table.add_column("Spend", style="red")
-        for key in response.get("keys", []):
+        key_rows: Final[_KeyRowsView] = {"rows": response.get("keys", [])}
+        for key in key_rows["rows"]:
             table.add_row(
                 str(key.get("token", "")),
                 str(key.get("key_alias", "")),
@@ -116,15 +140,16 @@ def generate(
     config: str | None,
 ):
     """Generate a new API key"""
-    client = KeysManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
+    context: Final[_CliContextView] = {"obj": ctx.obj}
+    client: Final = KeysManagementClient(context["obj"]["base_url"], context["obj"]["api_key"])
     try:
-        models_list = [m.strip() for m in models.split(",")] if models else None
-        aliases_dict = json.loads(aliases) if aliases else None
-        config_dict = json.loads(config) if config else None
+        models_list: Final = [m.strip() for m in models.split(",")] if models else None
+        aliases_dict: Final = json.loads(aliases) if aliases else None
+        config_dict: Final = json.loads(config) if config else None
     except json.JSONDecodeError as e:
         raise click.BadParameter(f"Invalid JSON: {e}")
     try:
-        response = client.generate(
+        response: Final = client.generate(
             models=models_list,
             aliases=aliases_dict,
             spend=spend,
@@ -139,8 +164,8 @@ def generate(
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         try:
-            error_body = e.response.json()
-            rich.print_json(data=error_body)
+            error_body: Final[_JsonBodyView] = {"body": e.response.json()}
+            rich.print_json(data=error_body["body"])
         except json.JSONDecodeError:
             click.echo(e.response.text, err=True)
         raise click.Abort()
@@ -152,17 +177,18 @@ def generate(
 @click.pass_context
 def delete(ctx: click.Context, keys: str | None, key_aliases: str | None):
     """Delete API keys by key or alias"""
-    client = KeysManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
-    keys_list = [k.strip() for k in keys.split(",")] if keys else None
-    aliases_list = [a.strip() for a in key_aliases.split(",")] if key_aliases else None
+    context: Final[_CliContextView] = {"obj": ctx.obj}
+    client: Final = KeysManagementClient(context["obj"]["base_url"], context["obj"]["api_key"])
+    keys_list: Final = [k.strip() for k in keys.split(",")] if keys else None
+    aliases_list: Final = [a.strip() for a in key_aliases.split(",")] if key_aliases else None
     try:
-        response = client.delete(keys=keys_list, key_aliases=aliases_list)
+        response: Final = client.delete(keys=keys_list, key_aliases=aliases_list)
         rich.print_json(data=response)
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         try:
-            error_body = e.response.json()
-            rich.print_json(data=error_body)
+            error_body: Final[_JsonBodyView] = {"body": e.response.json()}
+            rich.print_json(data=error_body["body"])
         except json.JSONDecodeError:
             click.echo(e.response.text, err=True)
         raise click.Abort()
@@ -189,18 +215,18 @@ def _parse_created_since_filter(created_since: str | None) -> datetime | None:
 
 def _fetch_all_keys_with_pagination(
     source_client: KeysManagementClient, source_base_url: str
-) -> builtins.list[dict[str, Any]]:
+) -> Sequence[Mapping[str, object]]:
     """Fetch all keys from source instance using pagination."""
     click.echo(f"Fetching keys from source server: {source_base_url}")
-    source_keys = []
+    source_keys: Final[builtins.list[Mapping[str, object]]] = []
     page = 1
-    page_size = 100  # Use a larger page size to minimize API calls
+    page_size: Final = 100  # Use a larger page size to minimize API calls
 
     while True:
         source_response = source_client.list(return_full_object=True, page=page, size=page_size)
         # source_client.list() returns Dict[str, Any] when return_request is False (default)
         assert isinstance(source_response, dict), "Expected dict response from list API"
-        page_keys = source_response.get("keys", [])
+        page_keys: Sequence[Mapping[str, object]] = source_response.get("keys", [])
 
         if not page_keys:
             break
@@ -218,15 +244,15 @@ def _fetch_all_keys_with_pagination(
 
 
 def _filter_keys_by_created_since(
-    source_keys: builtins.list[dict[str, Any]],
+    source_keys: Sequence[Mapping[str, object]],
     created_since_dt: datetime | None,
     created_since: str,
-) -> builtins.list[dict[str, Any]]:
+) -> Sequence[Mapping[str, object]]:
     """Filter keys by created_since date if specified."""
     if not created_since_dt:
         return source_keys
 
-    filtered_keys = []
+    filtered_keys: Final[builtins.list[Mapping[str, object]]] = []
     for key in source_keys:
         key_created_at = key.get("created_at")
         if key_created_at:
@@ -248,10 +274,10 @@ def _filter_keys_by_created_since(
     return filtered_keys
 
 
-def _display_dry_run_table(source_keys: builtins.list[dict[str, Any]]) -> None:
+def _display_dry_run_table(source_keys: Sequence[Mapping[str, object]]) -> None:
     """Display a table of keys that would be imported in dry-run mode."""
     click.echo("\n--- DRY RUN MODE ---")
-    table = Table(title="Keys that would be imported")
+    table: Final = Table(title="Keys that would be imported")
     table.add_column("Key Alias", style="green")
     table.add_column("User ID", style="magenta")
     table.add_column("Created", style="cyan")
@@ -271,9 +297,9 @@ def _display_dry_run_table(source_keys: builtins.list[dict[str, Any]]) -> None:
     rich.print(table)
 
 
-def _prepare_key_import_data(key: dict[str, Any]) -> dict[str, Any]:
+def _prepare_key_import_data(key: Mapping[str, object]) -> dict[str, Any]:
     """Prepare key data for import by extracting relevant fields."""
-    import_data = {}
+    import_data: Final = {}
 
     # Copy relevant fields if they exist
     for field in [
@@ -293,7 +319,7 @@ def _prepare_key_import_data(key: dict[str, Any]) -> dict[str, Any]:
 
 
 def _import_keys_to_destination(
-    source_keys: builtins.list[dict[str, Any]], dest_client: KeysManagementClient
+    source_keys: Sequence[Mapping[str, object]], dest_client: KeysManagementClient
 ) -> tuple[int, int]:
     """Import each key to the destination instance and return counts."""
     imported_count = 0
@@ -347,11 +373,12 @@ def import_keys(
 ):
     """Import API keys from another LiteLLM instance"""
     # Parse created_since filter if provided
-    created_since_dt = _parse_created_since_filter(created_since)
+    created_since_dt: Final = _parse_created_since_filter(created_since)
 
     # Create clients for both source and destination
-    source_client = KeysManagementClient(source_base_url, source_api_key)
-    dest_client = KeysManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
+    source_client: Final = KeysManagementClient(source_base_url, source_api_key)
+    context: Final[_CliContextView] = {"obj": ctx.obj}
+    dest_client: Final = KeysManagementClient(context["obj"]["base_url"], context["obj"]["api_key"])
 
     try:
         # Get all keys from source instance with pagination
@@ -383,8 +410,8 @@ def import_keys(
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
         try:
-            error_body = e.response.json()
-            rich.print_json(data=error_body)
+            error_body: Final[_JsonBodyView] = {"body": e.response.json()}
+            rich.print_json(data=error_body["body"])
         except json.JSONDecodeError:
             click.echo(e.response.text, err=True)
         raise click.Abort()

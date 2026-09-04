@@ -5,7 +5,7 @@ Docker Model Runner API Reference: https://docs.docker.com/ai/model-runner/api-r
 """
 
 from collections.abc import Coroutine
-from typing import Any, Literal, overload
+from typing import Any, Final, Literal, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -60,9 +60,9 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
         """
         api_base = (
             api_base or get_secret_str("DOCKER_MODEL_RUNNER_API_BASE") or "http://localhost:22088/engines/llama.cpp"
-        )  # type: ignore
+        )
         # Docker Model Runner may not require authentication for local instances
-        dynamic_api_key = api_key or get_secret_str("DOCKER_MODEL_RUNNER_API_KEY") or "dummy-key"
+        dynamic_api_key: Final = api_key or get_secret_str("DOCKER_MODEL_RUNNER_API_KEY") or "dummy-key"
         return api_base, dynamic_api_key
 
     def get_complete_url(
@@ -102,7 +102,7 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
 
         # Build the URL: {api_base}/v1/chat/completions
         # api_base is expected to already contain the engine path
-        complete_url = f"{api_base}/v1/chat/completions"
+        complete_url: Final = f"{api_base}/v1/chat/completions"
 
         return complete_url
 
@@ -126,7 +126,7 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
 
         Docker Model Runner is OpenAI-compatible, so most parameters map directly.
         """
-        supported_openai_params = self.get_supported_openai_params(model)
+        supported_openai_params: Final = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value

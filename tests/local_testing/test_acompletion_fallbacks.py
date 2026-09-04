@@ -1,18 +1,13 @@
 import asyncio
 import os
-import sys
 import time
 import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import concurrent
 
 from dotenv import load_dotenv
-import asyncio
 import litellm
 
 
@@ -69,14 +64,14 @@ async def test_acompletion_fallbacks_empty_list():
     """
     Test behavior when fallbacks list is empty
     """
-    try:
+    with pytest.raises(litellm.NotFoundError) as exc_info:
         response = await litellm.acompletion(
             model="openai/unknown-model",
             messages=[{"role": "user", "content": "Hello, world!"}],
             fallbacks=[],
         )
-    except Exception as e:
-        assert isinstance(e, litellm.NotFoundError)
+    e = exc_info.value
+    assert isinstance(e, litellm.NotFoundError)
 
 
 @pytest.mark.asyncio

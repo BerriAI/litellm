@@ -48,7 +48,9 @@ class ConditionEvaluator:
                 condition=condition.model,
                 model=context.model,
             ):
-                verbose_proxy_logger.debug(f"Condition failed: model={context.model} did not match {condition.model}")
+                verbose_proxy_logger.debug(
+                    "Condition failed: model=%s did not match %s", context.model, condition.model
+                )
                 return False
 
         return True

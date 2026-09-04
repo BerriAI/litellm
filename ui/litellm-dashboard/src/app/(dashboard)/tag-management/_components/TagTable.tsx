@@ -41,6 +41,7 @@ const TagTable: React.FC<TagTableProps> = ({ data, onEdit, onDelete, onSelectTag
       data={data}
       columns={columns}
       getRowId={(tag, index) => tag.name || String(index)}
+      fillHeight
       sortingMode="client"
       sorting={sorting}
       onSortingChange={setSorting}

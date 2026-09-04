@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Final, Literal
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -46,7 +46,7 @@ class myCustomGuardrail(CustomGuardrail):
         """
 
         # In this guardrail, if a user inputs `litellm` we will mask it and then send it to the LLM
-        _messages = data.get("messages")
+        _messages: Final = data.get("messages")
         if _messages:
             for message in _messages:
                 _content = message.get("content")
@@ -84,7 +84,7 @@ class myCustomGuardrail(CustomGuardrail):
 
         # this works the same as async_pre_call_hook, but just runs in parallel as the LLM API Call
         # In this guardrail, if a user inputs `litellm` we will mask it.
-        _messages = data.get("messages")
+        _messages: Final = data.get("messages")
         if _messages:
             for message in _messages:
                 _content = message.get("content")

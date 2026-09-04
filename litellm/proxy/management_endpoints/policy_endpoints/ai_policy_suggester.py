@@ -4,12 +4,14 @@ based on user-provided attack examples and descriptions.
 """
 
 import json
+from typing import Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
+from litellm.proxy._types import ProxyErrorTypes, ProxyException
 
-SUGGEST_TOOL = {
+SUGGEST_TOOL: Final = {
     "type": "function",
     "function": {
         "name": "select_policy_templates",
@@ -56,12 +58,24 @@ class AiPolicySuggester:
         description: str,
         model: str | None = None,
     ) -> dict:
-        system_prompt = self._build_system_prompt(templates)
-        user_prompt = self._build_user_prompt(attack_examples, description)
+        system_prompt: Final = self._build_system_prompt(templates)
+        user_prompt: Final = self._build_user_prompt(attack_examples, description)
         model = model or DEFAULT_COMPETITOR_DISCOVERY_MODEL
+        custom_llm_provider: Final = model.split("/", 1)[0] if "/" in model else None
+        supported_params: Final = litellm.get_supported_openai_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+        if supported_params is not None and "tools" not in supported_params:
+            raise ProxyException(
+                message=(f"AI policy suggestion requires tool calling; model '{model}' does not support it"),
+                type=ProxyErrorTypes.validation_error.value,
+                param="model",
+                code=400,
+            )
 
         try:
-            response = await litellm.acompletion(
+            response: Final = await litellm.acompletion(
                 model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -73,18 +87,19 @@ class AiPolicySuggester:
                     "function": {"name": "select_policy_templates"},
                 },
                 temperature=0.2,
+                drop_params=True,
             )
 
-            tool_calls = response.choices[0].message.tool_calls  # type: ignore
+            tool_calls: Final = response.choices[0].message.tool_calls
             if not tool_calls:
                 return {
                     "selected_templates": [],
                     "explanation": "No templates could be matched to your requirements.",
                 }
 
-            result = json.loads(tool_calls[0].function.arguments)
+            result: Final = json.loads(tool_calls[0].function.arguments)
 
-            valid_ids = {t["id"] for t in templates}
+            valid_ids: Final = {t["id"] for t in templates}
             result["selected_templates"] = [
                 s for s in result.get("selected_templates", []) if s.get("template_id") in valid_ids
             ]
@@ -95,7 +110,7 @@ class AiPolicySuggester:
             raise
 
     def _build_system_prompt(self, templates: list) -> str:
-        template_descriptions = []
+        template_descriptions: Final = []
         for t in templates:
             examples = t.get("example_sentences", [])
             examples_str = ", ".join(f'"{e}"' for e in examples) if examples else "none"
@@ -117,8 +132,8 @@ class AiPolicySuggester:
         )
 
     def _build_user_prompt(self, attack_examples: list[str], description: str) -> str:
-        parts = []
-        filtered_examples = [e for e in attack_examples if e.strip()]
+        parts: Final = []
+        filtered_examples: Final = [e for e in attack_examples if e.strip()]
         if filtered_examples:
             parts.append("Example attack prompts I want to block:")
             for i, ex in enumerate(filtered_examples, 1):
