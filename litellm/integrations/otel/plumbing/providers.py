@@ -218,8 +218,8 @@ _DRAIN_WORKERS: Final = 2
 #: proxy open.
 _SHUTDOWN_DRAIN_SECONDS: Final = 5.0
 
-#: An exporter's account: its normalized endpoint and its credentials.
-_SinkKey = tuple[str, tuple[tuple[str, str], ...]]
+#: An exporter's account: its normalized endpoint and the credentials it presents.
+_SinkKey = tuple[str, tuple[str, ...]]
 
 
 class _DrainPool:
@@ -851,14 +851,16 @@ def operator_sink_keys(config: OpenTelemetryV2Config | None) -> frozenset[_SinkK
 def _sink_key(endpoint: str | None, headers: Mapping[str, str]) -> "_SinkKey | None":
     """The account an exporter writes to, or ``None`` when it has no fixed one.
 
-    Normalized on both counts that make the same account look like two: the operator's
-    spec carries the signal path a tenant destination leaves for the exporter to
-    append, and header names survive one round trip lowercased and the other not.
+    The credentials are the identity; the header names are only how each backend
+    spells them, and one account answers to more than one spelling (Arize takes the
+    operator's ``space_id`` and a tenant's ``arize-space-id``). The endpoint needs
+    normalizing too: the operator's spec carries the signal path that a tenant
+    destination leaves for the exporter to append.
     """
     normalized: Final = _otlp_traces_endpoint(endpoint)
     if normalized is None:
         return None
-    return (normalized, tuple(sorted((name.lower(), value) for name, value in headers.items())))
+    return (normalized, tuple(sorted(headers.values())))
 
 
 def _attached_processors(provider: TracerProvider) -> "tuple[SpanProcessor, ...]":
