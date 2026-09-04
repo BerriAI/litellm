@@ -88,3 +88,48 @@ def test_openai_like_reasoning_effort_supported():
     supported_standard = config.get_supported_openai_params("custom-standard")
     assert "reasoning_effort" not in supported_standard
 
+
+def test_transform_response_preserves_cache_tokens():
+    """
+    Tests that _transform_response maps cache_read_input_tokens and cache_creation_input_tokens
+    to the ModelResponse usage object.
+    """
+    from unittest.mock import MagicMock
+    import httpx
+    from litellm.types.utils import ModelResponse
+
+    raw_response = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "deepseek-chat",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello"}}],
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+            "cache_read_input_tokens": 80,
+            "cache_creation_input_tokens": 20,
+        },
+    }
+    http_resp = httpx.Response(200, json=raw_response, request=httpx.Request("POST", "https://api.example.com"))
+    config = OpenAILikeChatConfig()
+    logging_obj = MagicMock()
+
+    res = config.transform_response(
+        model="deepseek-chat",
+        raw_response=http_resp,
+        model_response=ModelResponse(),
+        logging_obj=logging_obj,
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+    assert res.usage.cache_read_input_tokens == 80
+    assert res.usage.cache_creation_input_tokens == 20
+    assert res.usage.prompt_tokens_details.cached_tokens == 80
+    assert res.usage.prompt_tokens_details.cache_write_tokens == 20
+
+
