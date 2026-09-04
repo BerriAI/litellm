@@ -58,6 +58,28 @@ impl fmt::Debug for SecretString {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthHeaderKind {
+    Bearer,
+    Header(&'static str),
+}
+
+impl AuthHeaderKind {
+    pub fn header_name(self) -> &'static str {
+        match self {
+            Self::Bearer => "authorization",
+            Self::Header(name) => name,
+        }
+    }
+
+    pub fn header_value(self, credential: &SecretString) -> SecretString {
+        match self {
+            Self::Bearer => SecretString::new(format!("Bearer {}", credential.expose())),
+            Self::Header(_) => credential.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuthErrorKind {
     MissingCredential,
     InvalidConfiguration,
@@ -377,6 +399,50 @@ impl RequestAuthorizer for StaticHeaderAuthorizer {
         value.set_sensitive(true);
         headers.insert(self.name.clone(), value);
         Ok(headers)
+    }
+}
+
+pub struct BearerTokenAuthorizer {
+    provider: Arc<dyn TokenProvider>,
+    clock: Arc<dyn Clock>,
+    conflicts: Vec<HeaderName>,
+}
+
+impl BearerTokenAuthorizer {
+    pub fn new(
+        provider: Arc<dyn TokenProvider>,
+        clock: Arc<dyn Clock>,
+        conflicts: Vec<HeaderName>,
+    ) -> Self {
+        Self {
+            provider,
+            clock,
+            conflicts,
+        }
+    }
+}
+
+#[async_trait]
+impl RequestAuthorizer for BearerTokenAuthorizer {
+    async fn authorize(&self, request: AuthorizeRequest<'_>) -> Result<HeaderMap, AuthError> {
+        let token = match self.provider.token().await? {
+            TokenCredential::Cached(lease) if lease.expires_at > self.clock.now() => lease.token,
+            TokenCredential::Cached(_) => {
+                return Err(AuthError::new(
+                    AuthErrorKind::CredentialUnavailable,
+                    "expired_token",
+                    "credential provider returned an expired token",
+                ));
+            }
+            TokenCredential::NoStore(token) => token,
+        };
+        StaticHeaderAuthorizer::new(
+            reqwest::header::AUTHORIZATION,
+            AuthHeaderKind::Bearer.header_value(&token),
+            self.conflicts.clone(),
+        )
+        .authorize(request)
+        .await
     }
 }
 
