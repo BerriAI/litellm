@@ -179,6 +179,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             model_specific_params.append(
                 "user"
             )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
+
+        if litellm.utils.supports_reasoning(model=model, custom_llm_provider="openai") and not model.startswith("gpt-5-chat"):
+            model_specific_params.append("reasoning_effort")
         return base_params + model_specific_params
 
     @staticmethod
