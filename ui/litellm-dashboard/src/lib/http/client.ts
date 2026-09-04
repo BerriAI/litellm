@@ -102,7 +102,10 @@ export const extractProxyErrorMessage = (error: unknown): string => {
  * the dashboard keeps working against proxies that predate that.
  */
 export const isUnknownApiKeyError = (error: unknown): boolean => {
-  const body = error instanceof ApiError ? (error.body as any) : undefined;
+  const body =
+    error instanceof ApiError && typeof error.body === "object" && error.body !== null
+      ? (error.body as { error?: { type?: unknown } })
+      : undefined;
   return (
     body?.error?.type === "token_not_found_in_db" ||
     extractProxyErrorMessage(error).includes("Invalid proxy server token passed")
