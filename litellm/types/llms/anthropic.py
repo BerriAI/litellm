@@ -528,7 +528,7 @@ class AnthropicStopDetails(TypedDict, total=False):
 
 class MessageDelta(TypedDict, total=False):
     stop_reason: str | None
-    stop_details: AnthropicStopDetails
+    stop_details: ReadOnly[AnthropicStopDetails]
 
 
 class ServerToolUsage(TypedDict, total=False):

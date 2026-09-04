@@ -81,20 +81,20 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 )
             if not isinstance(item, Mapping):
                 return None
-            item_mapping: Final = cast(Mapping[str, object], item)
+            item_mapping: Final = cast(Mapping[str, object], item)  # cast-ok: keys re-checked before use
             raw_parts: Final = item_mapping.get("content")
             if item_mapping.get("type") != "message" or not isinstance(raw_parts, Sequence):
                 return None
-            return next(
-                (
-                    refusal
-                    for part in cast(Sequence[object], raw_parts)
-                    if isinstance(part, Mapping)
-                    and cast(Mapping[str, object], part).get("type") == "refusal"
-                    and isinstance((refusal := cast(Mapping[str, object], part).get("refusal")), str)
-                ),
-                None,
-            )
+            for part in cast(Sequence[object], raw_parts):  # cast-ok: members re-validated below
+                if not isinstance(part, Mapping):
+                    continue
+                part_mapping = cast(Mapping[str, object], part)  # cast-ok: keys re-checked before use
+                if part_mapping.get("type") != "refusal":
+                    continue
+                refusal = part_mapping.get("refusal")
+                if isinstance(refusal, str):
+                    return refusal
+            return None
 
         return next(
             (text for item in output if (text := refusal_text_from_item(item)) is not None),
@@ -656,7 +656,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         content: Final[list[dict[str, object]]] = []
         stop_reason: AnthropicFinishReason = "end_turn"
-        refusal_text: Final = self._refusal_text_from_output(cast(Iterable[object], response.output))
+        refusal_text: Final = self._refusal_text_from_output(
+            cast(Iterable[object], response.output)  # cast-ok: output items re-validated per item
+        )
 
         for item in response.output:
             if isinstance(item, ResponseReasoningItem):
@@ -746,7 +748,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             content=content,
             stop_reason=stop_reason,
             stop_details=(
-                {
+                {  # mutable-ok: fresh refusal stop_details payload built per response
                     "type": "refusal",
                     "category": None,
                     "explanation": refusal_text,

@@ -1534,7 +1534,7 @@ class LiteLLMAnthropicMessagesAdapter:
             content=anthropic_content,
             stop_reason=anthropic_finish_reason,
             stop_details=(
-                {
+                {  # mutable-ok: fresh refusal stop_details payload built per response
                     "type": "refusal",
                     "category": None,
                     "explanation": refusal_text,
