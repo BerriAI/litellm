@@ -1344,3 +1344,180 @@ async def test_acompletion_with_mcp_streaming_drains_inner_stream_after_exhausti
 
     assert len(all_chunks) == 3
     assert initial_stream.drained_after_exhaustion is True
+
+
+# ---------------------------------------------------------------------------
+# mcp_tool_search virtual tools on the /chat/completions MCP bridge
+# ---------------------------------------------------------------------------
+
+VIRTUAL_TOOL_MCP_CONFIG = {
+    "type": "mcp",
+    "server_label": "x",
+    "server_url": "litellm_proxy/mcp/deepwiki",
+    "require_approval": "never",
+}
+
+
+def _tool_search_auth():
+    from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    return UserAPIKeyAuth(
+        api_key="k",
+        user_id="u",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="test", mcp_tool_search_enabled=True
+        ),
+    )
+
+
+def _chat_tool_call_response(call_id: str, name: str, arguments: str) -> ModelResponse:
+    return ModelResponse(
+        id=call_id,
+        model="gpt-5.5",
+        created=0,
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": name, "arguments": arguments},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    )
+
+
+def _chat_text_response(text: str) -> ModelResponse:
+    return ModelResponse(
+        id="final",
+        model="gpt-5.5",
+        created=0,
+        object="chat.completion",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+    )
+
+
+def _patch_chat_mcp_globals(monkeypatch):
+    import sys
+    import types as _types
+    from unittest.mock import MagicMock
+
+    from mcp.types import Tool
+
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        _types.SimpleNamespace(proxy_logging_obj=MagicMock()),
+    )
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+
+    mock_get_tools = AsyncMock(
+        return_value=AggregateToolListing(
+            tools=[Tool(name="deepwiki-read_wiki_contents", description="d", inputSchema={"type": "object"})],
+            outcomes={},
+        )
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
+        mock_get_tools,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        _types.SimpleNamespace(
+            get_registry=MagicMock(return_value={}),
+            call_tool=AsyncMock(),
+            _get_mcp_server_from_tool_name=MagicMock(return_value=None),
+            get_mcp_server_by_name=MagicMock(return_value=None),
+            get_allowed_mcp_servers=AsyncMock(return_value=[]),
+            get_mcp_servers_from_ids=MagicMock(return_value=[]),
+        ),
+    )
+    return mock_get_tools
+
+
+@pytest.mark.asyncio
+async def test_acompletion_with_mcp_virtual_tools_search_then_call(monkeypatch):
+    """Non-streaming /chat/completions must complete the two-hop virtual tool
+    flow in a single request and never list the catalog."""
+    import litellm
+    from mcp.types import CallToolResult, TextContent
+
+    mock_get_tools = _patch_chat_mcp_globals(monkeypatch)
+
+    search_mock = AsyncMock(
+        return_value=CallToolResult(
+            content=[TextContent(type="text", text='[{"name": "deepwiki-read_wiki_contents"}]')], isError=False
+        )
+    )
+    call_mock = AsyncMock(
+        return_value=CallToolResult(content=[TextContent(type="text", text="wiki body")], isError=False)
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_search", search_mock
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_call", call_mock
+    )
+
+    mock_acompletion = AsyncMock(
+        side_effect=[
+            _chat_tool_call_response("call-1", "mcp_tool_search", '{"query": "wiki"}'),
+            _chat_tool_call_response(
+                "call-2",
+                "mcp_tool_call",
+                '{"tool_name": "deepwiki-read_wiki_contents", "arguments": {"repo": "x"}}',
+            ),
+            _chat_text_response("The wiki says hello."),
+        ]
+    )
+    monkeypatch.setattr(litellm, "acompletion", mock_acompletion)
+
+    response = await acompletion_with_mcp(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "describe the wiki"}],
+        tools=[VIRTUAL_TOOL_MCP_CONFIG],
+        user_api_key_auth=_tool_search_auth(),
+    )
+
+    assert mock_get_tools.await_count == 0
+    assert mock_acompletion.await_count == 3
+    assert search_mock.await_count == 1
+    assert call_mock.await_count == 1
+    assert call_mock.await_args.kwargs["tool_name"] == "deepwiki-read_wiki_contents"
+
+    injected_tools = mock_acompletion.await_args_list[0].kwargs["tools"]
+    assert [tool["function"]["name"] for tool in injected_tools] == ["mcp_tool_search", "mcp_tool_call"]
+    assert response.choices[0].message.content == "The wiki says hello."
+
+
+@pytest.mark.asyncio
+async def test_acompletion_with_mcp_streaming_keeps_catalog_when_tool_search_enabled(monkeypatch):
+    """The streaming chat bridge only does one tool-call round, so the virtual
+    tools stay off there and the full catalog is injected as before."""
+    import litellm
+
+    mock_get_tools = _patch_chat_mcp_globals(monkeypatch)
+    mock_acompletion = AsyncMock(return_value=_chat_text_response("hi"))
+    monkeypatch.setattr(litellm, "acompletion", mock_acompletion)
+
+    await acompletion_with_mcp(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[VIRTUAL_TOOL_MCP_CONFIG],
+        user_api_key_auth=_tool_search_auth(),
+        stream=True,
+    )
+
+    assert mock_get_tools.await_count == 1
+    injected_tools = mock_acompletion.await_args_list[0].kwargs["tools"]
+    assert [tool["function"]["name"] for tool in injected_tools] == ["deepwiki-read_wiki_contents"]

@@ -166,6 +166,11 @@ MCP_PER_USER_TOKEN_DEFAULT_TTL: Final = int(
 )
 MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS: Final = int(os.getenv("MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS", "60"))
 
+# Sentinel server name for the mcp_tool_search / mcp_tool_call virtual tools,
+# stored in the Responses API tool_server_map to tell them apart from a real
+# upstream tool of the same name.
+MCP_VIRTUAL_TOOL_SEARCH_SERVER_NAME = "litellm_virtual_mcp_tool_search"
+
 # MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
 MCP_CLIENT_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"))
 MCP_TOOL_LISTING_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))

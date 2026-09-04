@@ -258,3 +258,102 @@ async def test_initial_call_failure_is_stashed_for_eager_reraise(monkeypatch):
 
     assert iterator._initial_creation_error is not None
     assert "initial boom" in str(iterator._initial_creation_error)
+
+
+def _virtual_tool_iterator(initial_chunks) -> MCPEnhancedStreamingIterator:
+    from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.responses.mcp.tool_search_bridge import virtual_tool_server_map
+
+    return MCPEnhancedStreamingIterator(
+        base_iterator=_FakeAsyncStream(initial_chunks),
+        mcp_events=[],
+        tool_server_map=virtual_tool_server_map(),
+        mcp_tools_with_litellm_proxy=[
+            {
+                "type": "mcp",
+                "server_url": "litellm_proxy/mcp/deepwiki",
+                "require_approval": "never",
+            }
+        ],
+        user_api_key_auth=UserAPIKeyAuth(
+            api_key="k",
+            user_id="u",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="test", mcp_tool_search_enabled=True
+            ),
+        ),
+        original_request_params={
+            "model": "gpt-5.5",
+            "input": "what is berriai/litellm?",
+            "tools": [{"type": "mcp"}],
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_virtual_tool_search_then_call_shows_inner_tool_name(monkeypatch):
+    """With mcp_tool_search_enabled the stream must run search -> call -> text,
+    dispatch through the virtual tool handlers (never the manager directly) and
+    label the mcp_call item with the real tool the model reached."""
+    call_tool = _mock_mcp_environment(monkeypatch)
+    proxy_logging_obj = sys.modules["litellm.proxy.proxy_server"].proxy_logging_obj
+    proxy_logging_obj.post_mcp_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["response"])
+
+    search_mock = AsyncMock(
+        return_value=CallToolResult(
+            content=[TextContent(type="text", text='[{"name": "deepwiki-read_wiki_contents"}]')], isError=False
+        )
+    )
+    call_mock = AsyncMock(
+        return_value=CallToolResult(content=[TextContent(type="text", text="wiki body")], isError=False)
+    )
+    monkeypatch.setattr("litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_search", search_mock)
+    monkeypatch.setattr("litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_call", call_mock)
+
+    aresponses_mock = AsyncMock(
+        side_effect=[
+            _FakeAsyncStream(
+                [
+                    _completed_chunk(
+                        [
+                            _function_call(
+                                "call_2",
+                                "mcp_tool_call",
+                                '{"tool_name": "deepwiki-read_wiki_contents", "arguments": {"repo": "x"}}',
+                            )
+                        ]
+                    )
+                ]
+            ),
+            _text_only_stream("The wiki says hello."),
+        ]
+    )
+    monkeypatch.setattr(responses_main_module, "aresponses", aresponses_mock)
+
+    iterator = _virtual_tool_iterator(
+        [
+            _output_item_added_chunk(),
+            _completed_chunk([_function_call("call_1", "mcp_tool_search", '{"query": "wiki"}')]),
+        ]
+    )
+
+    chunks = [chunk async for chunk in iterator]
+
+    assert iterator.max_tool_call_rounds == MAX_MCP_TOOL_CALL_ROUNDS * 2
+    assert search_mock.await_count == 1
+    assert search_mock.await_args.kwargs["mcp_servers"] == ["deepwiki"]
+    assert call_mock.await_count == 1
+    assert call_mock.await_args.kwargs["tool_name"] == "deepwiki-read_wiki_contents"
+    assert call_tool.call_count == 0
+
+    mcp_call_names = [
+        chunk.item.name
+        for chunk in chunks
+        if getattr(chunk, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        and getattr(getattr(chunk, "item", None), "type", None) == "mcp_call"
+    ]
+    assert mcp_call_names == ["mcp_tool_search", "deepwiki-read_wiki_contents"]
+
+    completed_chunks = [c for c in chunks if getattr(c, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
+    assert completed_chunks[-1].response.output[0]["content"][0]["text"] == "The wiki says hello."
