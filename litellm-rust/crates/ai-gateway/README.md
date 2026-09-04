@@ -43,9 +43,10 @@ model_list:
 LITELLM_CONFIG_PATH=./config.yaml ./litellm-ai-gateway
 ```
 
-At boot the gateway calls into `litellm.proxy.read_model_list`, which reuses the
-**real proxy config reader** (`ProxyConfig.get_config`). That means everything
-the proxy supports in config.yaml works here too:
+At boot `litellm-config` calls into `litellm.proxy.read_model_list` and returns
+resolved deployments to the gateway, which constructs the router. The Python
+backend still reuses the **real proxy config reader** (`ProxyConfig.get_config`),
+so everything the proxy supports in config.yaml works here too:
 
 - `include:` to merge in other config files,
 - `os.environ/VAR` secret references (resolved via the secret manager, never
@@ -82,8 +83,8 @@ stand-in built from the environment:
 |---|---|---|
 | `OPENAI_REALTIME_MODEL` | `gpt-realtime` | The single deployment's model name (also the `?model=` clients pass). |
 
-This mode links no libpython and needs no config file, but it only supports one
-hard-coded OpenAI deployment. **config.yaml is the recommended path** — use the
+The default workspace build links no libpython and needs no config file. This
+fallback mode only supports one hard-coded OpenAI deployment. **config.yaml is the recommended path** — use the
 stand-in only for the leanest possible build.
 
 ## Request logging

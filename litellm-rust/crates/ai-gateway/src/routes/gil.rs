@@ -5,7 +5,6 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde::Serialize;
 
-use crate::gil;
 use crate::state::AppState;
 
 /// This route's contribution to the app router.
@@ -21,7 +20,7 @@ struct GilStatusResponse {
 }
 
 async fn status() -> Json<GilStatusResponse> {
-    let snapshot = gil::snapshot();
+    let snapshot = litellm_config::gil::snapshot();
     Json(GilStatusResponse {
         gil_acquired_last_30s: snapshot.acquired_last_30s,
         total_acquisitions: snapshot.total_acquisitions,
