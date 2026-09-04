@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -56,6 +57,8 @@ PGBOUNCER_RESTART_DELAY_SECONDS: Final = 1.0
 PGBOUNCER_READY_TIMEOUT_SECONDS: Final = 15.0
 PGBOUNCER_STOP_GRACE_SECONDS: Final = 10.0
 PGBOUNCER_UNPRIVILEGED_USER: Final = "nobody"
+PGBOUNCER_MIN_VERSION: Final = (1, 19)
+PGBOUNCER_VERSION_PATTERN: Final = re.compile(r"PgBouncer (\d+)\.(\d+)")
 PGBOUNCER_TOKEN_AUTH_CONFLICT: Final = (
     f"the in-container pgbouncer cannot be combined with {IAM_TOKEN_DB_AUTH_ENV_VAR} or "
     f"{AZURE_POSTGRESQL_AUTH_ENV_VAR}: each worker rotates the database password on its own schedule and the pooler "
@@ -272,6 +275,25 @@ def unix_socket_path(runtime_dir: Path, port: int) -> Path:
     return runtime_dir / f".s.PGSQL.{port}"
 
 
+def pgbouncer_version(binary: str) -> tuple[int, int] | PgBouncerError:
+    """``(major, minor)`` from ``<binary> --version``.
+
+    Readiness relies on PgBouncer exiting when it cannot bind its TCP port,
+    which it does from 1.19 on. Older releases log a warning and serve the unix
+    socket alone, so their socket would vouch for a port held by someone else.
+    """
+    try:
+        output: Final = subprocess.run(
+            (binary, "--version"), capture_output=True, text=True, check=False, timeout=10
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired) as run_error:
+        return PgBouncerError(f"could not run {binary!r} --version: {run_error}")
+    found: Final = PGBOUNCER_VERSION_PATTERN.search(output)
+    if found is None:
+        return PgBouncerError(f"{binary!r} --version did not report a PgBouncer version: {output.strip()!r}")
+    return int(found[1]), int(found[2])
+
+
 def _end(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
@@ -296,7 +318,8 @@ class PgBouncerProcess:
     A connect probe of ``port`` cannot tell the child from another process
     that grabbed the port after the availability check, so readiness also
     needs ``socket_path``: the unix socket PgBouncer creates in the private
-    runtime directory, which it only does once every TCP listener is bound.
+    runtime directory, which it only does once every TCP listener is bound
+    (PgBouncer 1.19 or newer, see ``pgbouncer_version``).
     """
 
     def __init__(
@@ -429,6 +452,15 @@ def start_in_container_pgbouncer(
     """
     if token_auth_enabled:
         return PgBouncerError(PGBOUNCER_TOKEN_AUTH_CONFLICT)
+    version: Final = pgbouncer_version(settings.binary)
+    if isinstance(version, PgBouncerError):
+        return version
+    if version < PGBOUNCER_MIN_VERSION:
+        return PgBouncerError(
+            f"PgBouncer {version[0]}.{version[1]} keeps running after failing to bind its TCP port, so the proxy "
+            f"cannot tell it apart from another listener; {PGBOUNCER_MIN_VERSION[0]}.{PGBOUNCER_MIN_VERSION[1]} "
+            "or newer is required"
+        )
     runtime_dir: Final = Path(tempfile.mkdtemp(prefix="litellm-pgbouncer-"))
     atexit.register(shutil.rmtree, runtime_dir, ignore_errors=True)
     run_as_user: Final = PGBOUNCER_UNPRIVILEGED_USER if os.geteuid() == 0 else None

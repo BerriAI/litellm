@@ -21,6 +21,7 @@ from litellm.proxy.db.pgbouncer import (
     PgBouncerPlan,
     PgBouncerProcess,
     PgBouncerSettings,
+    pgbouncer_version,
     plan_pgbouncer,
     start_in_container_pgbouncer,
     unix_socket_path,
@@ -170,12 +171,14 @@ def _fake_pooler(
     exit_immediately: bool = False,
     port_file: Path | None = None,
     bind_delay_seconds: float = 0.0,
+    version_banner: str = "PgBouncer 1.25.2\nlibevent 2.1.13-stable",
 ) -> Path:
     """An executable that listens like PgBouncer: on the TCP port first, then on ``.s.PGSQL.<port>`` in the socket dir.
 
     Port and socket dir come from the ini it is given, else from ``port`` and
     ``tmp_path``. With ``port_file`` each start reads the port from that file
     instead. ``bind_delay_seconds`` holds the bind back, like a slow start.
+    ``--version`` prints ``version_banner``.
     """
     script: Final = tmp_path / "fake-pgbouncer"
     script.write_text(
@@ -183,6 +186,9 @@ def _fake_pooler(
             f"""\
             #!{sys.executable}
             import configparser, os, pathlib, select, socket, sys, time
+            if sys.argv[1:] == ["--version"]:
+                print({version_banner!r})
+                sys.exit(0)
             if {exit_immediately!r}:
                 sys.exit(3)
             ini = configparser.ConfigParser()
@@ -480,6 +486,40 @@ class TestStartInContainerPgBouncer:
         assert "IAM_TOKEN_DB_AUTH" in outcome.reason
         assert "AZURE_POSTGRESQL_AUTH" in outcome.reason
         assert not _listening(port)
+
+    def test_a_pgbouncer_that_survives_a_failed_tcp_bind_is_refused_without_starting(self, tmp_path: Path):
+        port: Final = _free_port()
+        binary: Final = _fake_pooler(tmp_path, port, version_banner="PgBouncer 1.18.1\nlibevent 2.1.12-stable")
+        settings: Final = PgBouncerSettings(enabled=True, port=port, binary=str(binary))
+        outcome: Final = start_in_container_pgbouncer(settings, "postgresql://app:pw@db/litellm")
+        assert isinstance(outcome, PgBouncerError)
+        assert "PgBouncer 1.18" in outcome.reason
+        assert "1.19" in outcome.reason
+        assert not _listening(port)
+
+    def test_the_first_version_that_dies_on_a_failed_tcp_bind_is_accepted(self, tmp_path: Path):
+        port: Final = _free_port()
+        binary: Final = _fake_pooler(tmp_path, port, version_banner="PgBouncer 1.19.0")
+        settings: Final = PgBouncerSettings(enabled=True, port=port, binary=str(binary))
+        assert start_in_container_pgbouncer(settings, "postgresql://app:pw@db/litellm") == (
+            f"postgresql://app:pw@127.0.0.1:{port}/litellm?pgbouncer=true"
+        )
+        assert _listening(port)
+
+
+class TestPgBouncerVersion:
+    def test_reads_major_and_minor_from_the_banner(self, tmp_path: Path):
+        assert pgbouncer_version(str(_fake_pooler(tmp_path, _free_port()))) == (1, 25)
+
+    def test_a_binary_that_cannot_run_is_reported(self, tmp_path: Path):
+        outcome: Final = pgbouncer_version(str(tmp_path / "missing-pgbouncer"))
+        assert isinstance(outcome, PgBouncerError)
+        assert "missing-pgbouncer" in outcome.reason
+
+    def test_a_banner_without_a_version_is_reported(self, tmp_path: Path):
+        outcome: Final = pgbouncer_version(str(_fake_pooler(tmp_path, _free_port(), version_banner="something else")))
+        assert isinstance(outcome, PgBouncerError)
+        assert "something else" in outcome.reason
 
 
 class TestPgBouncerSettings:
