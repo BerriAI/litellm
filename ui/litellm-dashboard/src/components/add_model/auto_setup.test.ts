@@ -16,13 +16,14 @@ describe("buildPreferredTierModels", () => {
     const available = ["gpt-4o-mini", "claude-sonnet-4-5", "grok-4", "deepseek-reasoner"];
     const availability = buildModelAvailability(available, []);
     const preferred = buildPreferredTierModels([], availability);
-
-    expect(preferred).toEqual({
+    const expected: PreferredTierModels = {
       SIMPLE: ["gpt-4o-mini"],
       MEDIUM: ["claude-sonnet-4-5"],
       COMPLEX: ["grok-4"],
       REASONING: ["deepseek-reasoner"],
-    });
+    };
+
+    expect(preferred).toEqual(expected);
   });
 });
 
