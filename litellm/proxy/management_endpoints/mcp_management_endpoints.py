@@ -609,7 +609,7 @@ if MCP_AVAILABLE:
 
     def _preserved_admin_config_credentials(
         credentials: "MCPCredentials | str | None",
-    ) -> "dict[str, str | list[str]] | None":
+    ) -> "dict[str, str | list[str]] | None":  # mutable-ok: API response payload
         """Keep non-secret admin-config keys and scopes, which are stored unencrypted so they lift out
         as plaintext; every secret and minted-token key is dropped.
 
@@ -620,20 +620,24 @@ if MCP_AVAILABLE:
         parsed: object = credentials
         if isinstance(credentials, str):
             try:
-                parsed = cast(object, json.loads(credentials))
+                parsed = cast(object, json.loads(credentials))  # cast-ok: JSON parse result is validated below
             except (ValueError, TypeError):
                 return None
         if not isinstance(parsed, dict):
             return None
-        parsed_credentials: Final = cast(Mapping[str, object], parsed)
+        parsed_credentials: Final = cast(Mapping[str, object], parsed)  # cast-ok: dict shape validated above
         scopes: Final[object] = parsed_credentials.get("scopes")
-        scopes_as_objects: Final[list[object]] = cast(list[object], scopes) if isinstance(scopes, list) else []
-        preserved_scopes: Final[dict[str, list[str]]] = (
-            {"scopes": cast(list[str], scopes_as_objects)}
+        scopes_as_objects: Final = (
+            cast(Sequence[object], scopes)  # cast-ok: list shape validated above
+            if isinstance(scopes, list)
+            else ()
+        )
+        preserved_scopes: Final = (
+            {"scopes": cast(list[str], scopes_as_objects)}  # cast-ok: every scope is validated below
             if scopes_as_objects and all(isinstance(scope, str) and scope for scope in scopes_as_objects)
             else {}
         )
-        preserved: Final[dict[str, str | list[str]]] = {
+        preserved: Final = {  # mutable-ok: API response payload
             **{
                 key: value
                 for key in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS
