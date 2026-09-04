@@ -28,6 +28,8 @@ OPENCODE_PROVIDER_ID: Final = "litellm"
 OPENCODE_PROVIDER_NAME: Final = "LiteLLM"
 OPENCODE_PROVIDER_NPM: Final = "@ai-sdk/openai-compatible"
 
+_SKIP_VERIFY_FLAG: Final = "--skip-verify"
+
 PROFILE_ANTHROPIC: Final = "anthropic"
 PROFILE_OPENAI: Final = "openai"
 
@@ -253,6 +255,7 @@ def agent_model_sync_env(
     base_env: Mapping[str, str],
     base_url: str,
     api_key: str,
+    skip_verify: bool,
     *,
     get: Callable[..., requests.Response] = requests.get,
 ) -> Mapping[str, str] | ModelSyncSkipped:
@@ -260,9 +263,13 @@ def agent_model_sync_env(
 
     Only OpenCode needs one: Claude Code discovers models through
     CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY and Codex takes the model by name.
+    skip_verify means the caller wants no pre-launch proxy call at all, so the
+    listing is skipped too rather than hanging on an offline proxy.
     """
     if os.path.basename(command) != "opencode":
         return _NO_EXTRA_ENV
+    if skip_verify:
+        return ModelSyncSkipped(f"{_SKIP_VERIFY_FLAG} was passed")
     return opencode_model_sync_env(base_env, base_url, api_key, get=get)
 
 
@@ -381,6 +388,10 @@ def _restore_controlling_terminal() -> None:
         os.close(fd)
 
 
+def _warn(message: str) -> None:
+    click.echo(message, err=True)
+
+
 def run_agent(
     base_url: str,
     api_key: str,
@@ -388,9 +399,12 @@ def run_agent(
     *,
     skip_verify: bool = False,
     base_env: Mapping[str, str] | None = None,
-    extra_env: Mapping[str, str] = _NO_EXTRA_ENV,
     which: Callable[[str], str | None] = shutil.which,
     verify: Callable[[str, str], None] = verify_proxy_key,
+    sync_models: Callable[[str, Mapping[str, str], str, str, bool], Mapping[str, str] | ModelSyncSkipped] = (
+        agent_model_sync_env
+    ),
+    warn: Callable[[str], None] = _warn,
     launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _hand_off,
     reattach_terminal: Callable[[], None] | None = None,
 ) -> None:
@@ -398,14 +412,15 @@ def run_agent(
 
     On success this never returns: POSIX replaces the current process, Windows
     waits on the agent and exits with its status. Raises AgentRunError for
-    missing binaries, an unreachable proxy, or a rejected key. extra_env is
-    layered over the profile env (see agent_model_sync_env).
+    missing binaries, an unreachable proxy, or a rejected key. The model list is
+    synced only once the key check passed, so an unreachable proxy costs one
+    timeout rather than two, and --skip-verify keeps the launch fully offline.
     reattach_terminal, when given, runs just before handoff to restore stdin.
     """
     if not command:
         raise AgentRunError("Nothing to run.")
 
-    _, profiles = agent_profile(command[0])
+    display_name, profiles = agent_profile(command[0])
     binary: Final = which(command[0])
     if binary is None:
         docs: Final = _INSTALL_DOCS.get(os.path.basename(command[0]))
@@ -415,15 +430,15 @@ def run_agent(
     if not skip_verify:
         verify(base_url, api_key)
 
+    env_before_sync: Final = base_env if base_env is not None else os.environ
+    synced: Final = sync_models(command[0], env_before_sync, base_url, api_key, skip_verify)
+    if isinstance(synced, ModelSyncSkipped):
+        warn(f"litellm: not syncing {display_name} models from the proxy: {synced.reason}")
+
     env: Final = MappingProxyType(
         {
-            **build_agent_env(
-                base_env if base_env is not None else os.environ,
-                base_url,
-                api_key,
-                profiles,
-            ),
-            **extra_env,
+            **build_agent_env(env_before_sync, base_url, api_key, profiles),
+            **(_NO_EXTRA_ENV if isinstance(synced, ModelSyncSkipped) else synced),
         }
     )
     extra_args: Final = agent_launch_args(command[0], base_url)
@@ -467,17 +482,12 @@ def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify
     display_name, _ = agent_profile(binary)
     click.echo(f"litellm: routing {display_name} through proxy at {base_url.rstrip('/')}")
 
-    synced: Final = agent_model_sync_env(binary, os.environ, base_url, api_key)
-    if isinstance(synced, ModelSyncSkipped):
-        click.echo(f"litellm: not syncing {display_name} models from the proxy: {synced.reason}", err=True)
-
     try:
         run_agent(
             base_url,
             api_key,
             [binary, *args],
             skip_verify=skip_verify,
-            extra_env=_NO_EXTRA_ENV if isinstance(synced, ModelSyncSkipped) else synced,
             reattach_terminal=(_restore_controlling_terminal if started_interactive else None),
         )
     except AgentRunError as e:

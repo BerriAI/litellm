@@ -313,7 +313,15 @@ class TestOpencodeModelSync:
         def boom(*a, **k):
             raise AssertionError("no agent other than opencode should call the proxy")
 
-        assert agent_model_sync_env(command, {}, "http://localhost:4000", "sk-key", get=boom) == {}
+        assert agent_model_sync_env(command, {}, "http://localhost:4000", "sk-key", False, get=boom) == {}
+
+    def test_skip_verify_keeps_the_launch_offline(self):
+        def boom(*a, **k):
+            raise AssertionError("--skip-verify must not touch the proxy")
+
+        result = agent_model_sync_env("opencode", {}, "http://localhost:4000", "sk-key", True, get=boom)
+        assert isinstance(result, ModelSyncSkipped)
+        assert "--skip-verify" in result.reason
 
     def test_full_path_opencode_syncs(self):
         listing = self._listing({"id": "m", "object": "model", "created": 1, "owned_by": "x"})
@@ -322,6 +330,7 @@ class TestOpencodeModelSync:
             {},
             "http://localhost:4000",
             "sk-key",
+            False,
             get=lambda *a, **k: _FakeResponse(200, listing),
         )
         assert "m" in json.loads(env["OPENCODE_CONFIG_CONTENT"])["provider"]["litellm"]["models"]
@@ -332,14 +341,14 @@ class TestOpencodeModelSync:
 
 
 class TestRunAgent:
-    def test_extra_env_reaches_the_agent_alongside_profile_env(self):
+    def test_synced_model_config_reaches_the_agent_alongside_profile_env(self):
         calls = {}
         run_agent(
             "http://localhost:4000",
             "sk-key",
             ["opencode"],
             base_env={"HOME": "/home/me"},
-            extra_env={"OPENCODE_CONFIG_CONTENT": '{"provider":{}}'},
+            sync_models=lambda *a: {"OPENCODE_CONFIG_CONTENT": '{"provider":{}}'},
             which=lambda name: "/usr/local/bin/opencode",
             verify=lambda *a: None,
             launcher=lambda p, a, e: calls.update(env=dict(e)),
@@ -348,6 +357,106 @@ class TestRunAgent:
         assert calls["env"]["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
         assert calls["env"]["OPENAI_API_KEY"] == "sk-key"
         assert calls["env"]["HOME"] == "/home/me"
+
+    def test_sync_gets_the_launch_inputs_and_runs_after_verify(self):
+        order = []
+        calls = {}
+
+        def fake_sync(command, base_env, base_url, api_key, skip_verify):
+            order.append("sync")
+            calls["args"] = (command, dict(base_env), base_url, api_key, skip_verify)
+            return {"OPENCODE_CONFIG_CONTENT": '{"provider":{"litellm":{}}}'}
+
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["opencode"],
+            base_env={"HOME": "/home/me"},
+            sync_models=fake_sync,
+            which=lambda name: "/usr/local/bin/opencode",
+            verify=lambda *a: order.append("verify"),
+            launcher=lambda p, a, e: order.append("launch"),
+        )
+        assert order == ["verify", "sync", "launch"]
+        assert calls["args"] == ("opencode", {"HOME": "/home/me"}, "http://localhost:4000", "sk-key", False)
+
+    def test_unreachable_proxy_is_not_asked_for_models(self):
+        def failing_verify(*a):
+            raise AgentRunError("Could not reach the LiteLLM proxy")
+
+        def boom(*a):
+            raise AssertionError("a failed key check must not be followed by a model fetch")
+
+        with pytest.raises(AgentRunError):
+            run_agent(
+                "http://localhost:4000",
+                "sk-key",
+                ["opencode"],
+                base_env={},
+                sync_models=boom,
+                which=lambda name: "/usr/local/bin/opencode",
+                verify=failing_verify,
+                launcher=lambda *a: None,
+            )
+
+    def test_skip_verify_reaches_the_sync_which_reports_the_skip(self):
+        warnings = []
+        calls = {}
+
+        def fake_sync(command, base_env, base_url, api_key, skip_verify):
+            calls["skip_verify"] = skip_verify
+            return ModelSyncSkipped("offline")
+
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["opencode"],
+            skip_verify=True,
+            base_env={},
+            sync_models=fake_sync,
+            warn=warnings.append,
+            which=lambda name: "/usr/local/bin/opencode",
+            verify=lambda *a: pytest.fail("--skip-verify must not verify"),
+            launcher=lambda p, a, e: calls.update(env=dict(e)),
+        )
+        assert calls["skip_verify"] is True
+        assert "OPENCODE_CONFIG_CONTENT" not in calls["env"]
+        assert warnings == ["litellm: not syncing OpenCode models from the proxy: offline"]
+
+    def test_skipped_sync_still_launches_with_plain_openai_env(self):
+        calls = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["opencode"],
+            base_env={},
+            sync_models=lambda *a: ModelSyncSkipped("proxy said no"),
+            warn=lambda message: calls.setdefault("warned", message),
+            which=lambda name: "/usr/local/bin/opencode",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: calls.update(env=dict(e)),
+        )
+        assert calls["env"]["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
+        assert "OPENCODE_CONFIG_CONTENT" not in calls["env"]
+        assert "proxy said no" in calls["warned"]
+
+    def test_non_opencode_agent_is_not_warned_about_model_sync(self):
+        warnings = []
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude"],
+            base_env={},
+            warn=warnings.append,
+            which=lambda name: "/usr/local/bin/claude",
+            verify=lambda *a: None,
+            launcher=lambda *a: None,
+            sync_models=agent_model_sync_env,
+        )
+        assert warnings == []
+
+    def test_default_sync_is_the_agent_model_sync(self):
+        assert _default_of(run_agent, "sync_models") is agent_model_sync_env
 
     def test_wires_env_and_launches_resolved_binary(self):
         calls = {}
@@ -810,17 +919,9 @@ class TestAgentCommands:
         assert captured["command"] == ["codex", "exec", "do a thing"]
         assert "routing Codex through proxy" in result.output
 
-    def test_opencode_hands_off_synced_model_config(self):
+    def test_opencode_launches_through_the_proxy(self):
         captured = {}
-
-        def fake_sync(command, base_env, base_url, api_key):
-            captured["sync"] = (command, dict(base_env) == dict(os.environ), base_url, api_key)
-            return {"OPENCODE_CONFIG_CONTENT": '{"provider":{"litellm":{}}}'}
-
-        with (
-            patch(f"{AGENTS_MODULE}.agent_model_sync_env", fake_sync),
-            patch(f"{AGENTS_MODULE}.run_agent", side_effect=lambda b, k, c, **kw: captured.update(kw)),
-        ):
+        with patch(f"{AGENTS_MODULE}.run_agent", side_effect=lambda b, k, c, **kw: captured.update(command=list(c))):
             result = self.runner.invoke(
                 _agent_command("opencode"),
                 [],
@@ -828,25 +929,8 @@ class TestAgentCommands:
             )
 
         assert result.exit_code == 0, result.output
-        assert captured["sync"] == ("opencode", True, "http://localhost:4000", "sk-key")
-        assert captured["extra_env"] == {"OPENCODE_CONFIG_CONTENT": '{"provider":{"litellm":{}}}'}
-        assert "not syncing" not in result.output
-
-    def test_opencode_reports_skipped_sync_and_still_launches(self):
-        captured = {}
-        with (
-            patch(f"{AGENTS_MODULE}.agent_model_sync_env", return_value=ModelSyncSkipped("proxy said no")),
-            patch(f"{AGENTS_MODULE}.run_agent", side_effect=lambda b, k, c, **kw: captured.update(kw)),
-        ):
-            result = self.runner.invoke(
-                _agent_command("opencode"),
-                [],
-                obj={"base_url": "http://localhost:4000", "api_key": "sk-key"},
-            )
-
-        assert result.exit_code == 0, result.output
-        assert dict(captured["extra_env"]) == {}
-        assert "not syncing OpenCode models from the proxy: proxy said no" in result.output
+        assert captured["command"] == ["opencode"]
+        assert "routing OpenCode through proxy at http://localhost:4000" in result.output
 
     def test_skip_verify_is_consumed_not_forwarded(self):
         captured = {}
