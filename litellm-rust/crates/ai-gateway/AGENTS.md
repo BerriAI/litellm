@@ -15,7 +15,6 @@ src/
     AGENTS.md        #   ← the route template (read this before adding a route)
     mod.rs           #   app(): merges every module's router()
     health.rs        #   simple route (one file): router() + liveness/readiness
-    gil.rs           #   simple route (one file): router() + GET /health/gil
     realtime/        #   route with logic → axum surface + a no-axum service:
       mod.rs         #     router() + handler + WS<->events adapter (the axum surface)
       service.rs     #     business logic (select deployment, call provider) — no axum, testable

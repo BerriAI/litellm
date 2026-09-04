@@ -19,7 +19,7 @@ Dependency direction is acyclic: `litellm-python-bridge` depends on the domain l
 
 - **Client endpoint:** `wss://<host>/v1/realtime?model=<model>` (WebSocket)
 - **Auth:** `Authorization: Bearer $LITELLM_MASTER_KEY` (fails closed if unset)
-- **Health:** `GET /health/readiness`, `GET /health/liveness`, `GET /health/gil`
+- **Health:** `GET /health/readiness`, `GET /health/liveness`
 - **Request logs:** POSTed to a LiteLLM proxy at `/v1/rust_control_plane/logs` (see [Request logging](#request-logging))
 
 > **Realtime serving is pure Rust.** Python is used at **load time only** — to

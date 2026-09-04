@@ -1,5 +1,4 @@
 mod error;
-pub mod gil;
 #[cfg(feature = "python")]
 mod python;
 

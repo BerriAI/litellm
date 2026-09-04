@@ -39,7 +39,7 @@ crates/
   core/           The SDK: route modules + provider transforms.
     src/messages/   mod.rs (entrypoint), types, transformation, prepare, handler, client
     src/providers/anthropic/messages/transformation.rs
-  config/         Config loading, resolved deployments, and GIL tracking.
+  config/         Config loading and resolved deployments.
   ai-gateway/     Axum server + WebSocket hosts; calls core entrypoints.
   python-interop/ Domain-neutral PyO3 conversion and GIL primitives.
   python-bridge/  PyO3 API adapter for Python LiteLLM.

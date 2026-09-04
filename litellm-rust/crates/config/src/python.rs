@@ -4,10 +4,8 @@ use litellm_core::router::Deployment;
 use pyo3::prelude::*;
 
 use crate::Error;
-use crate::gil;
 
 pub fn load_model_list(config_path: &Path) -> Result<Vec<Deployment>, Error> {
-    gil::record_acquisition();
     Python::attach(|python| {
         let model_list = python
             .import("litellm.proxy.read_model_list")
