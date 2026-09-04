@@ -5,15 +5,21 @@ from typing import TYPE_CHECKING, Final, cast
 
 from typing_extensions import TypedDict, Unpack
 
+from litellm._logging import verbose_logger
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
+from litellm.responses.mcp.tool_search_bridge import (
+    is_mcp_tool_search_enabled,
+    max_tool_call_rounds,
+)
 from litellm.types.utils import Message, ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import MCPToolResult
 
 
 class _MCPCompletionKwargs(TypedDict, total=False, extra_items=object):
@@ -125,6 +131,14 @@ async def acompletion_with_mcp(
     oauth2_headers: Final = context.oauth2_headers
     raw_headers: Final = context.raw_headers
 
+    stream: Final[object] = kwargs.get("stream", False)
+
+    if stream and is_mcp_tool_search_enabled(user_api_key_auth):
+        verbose_logger.debug(
+            "mcp_tool_search_enabled is set but streaming /chat/completions only supports a single "
+            "tool-call round; falling back to the full catalog."
+        )
+
     # Process MCP tools (pass auth headers for dynamic auth)
     (
         deduplicated_mcp_tools,
@@ -136,6 +150,13 @@ async def acompletion_with_mcp(
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
         request_tags=request_tags,
+        allow_virtual_tools=not stream,
+    )
+
+    virtual_tool_scope = (
+        LiteLLM_Proxy_MCP_Handler._build_virtual_tool_scope(mcp_tools_with_litellm_proxy)
+        if not stream and is_mcp_tool_search_enabled(user_api_key_auth)
+        else None
     )
 
     openai_tools: Final = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
@@ -174,7 +195,6 @@ async def acompletion_with_mcp(
         return response
 
     # For auto-execute: handle streaming vs non-streaming differently
-    stream: Final[object] = kwargs.get("stream", False)
     mock_tool_calls: Final = base_call_args.pop("mock_tool_calls", None)
 
     if stream:
@@ -591,56 +611,73 @@ async def acompletion_with_mcp(
     if not isinstance(initial_response, ModelResponse):
         return initial_response
 
-    # Extract tool calls from response
-    tool_calls: Final = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_chat_response(response=initial_response)
+    max_rounds: Final = max_tool_call_rounds(virtual_tool_scope)
+    current_response: ModelResponse = initial_response
+    current_messages: list[object] = messages  # mutable-ok: chat follow-up takes list
+    all_tool_calls: Final[list[object]] = []  # mutable-ok: round accumulator
+    all_tool_results: Final[list[MCPToolResult]] = []  # mutable-ok: round accumulator
+    completed_rounds = 0
 
-    if not tool_calls:
-        _add_mcp_metadata_to_response(
-            response=initial_response,
-            openai_tools=openai_tools,
-        )
-        return initial_response
+    while completed_rounds < max_rounds:
+        tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_chat_response(response=current_response)
+        if not tool_calls:
+            break
+        all_tool_calls.extend(tool_calls)
 
-    # Execute tool calls
-    tool_results: Final = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
-        tool_server_map=tool_server_map,
-        tool_calls=tool_calls,
-        user_api_key_auth=user_api_key_auth,
-        mcp_auth_header=mcp_auth_header,
-        mcp_server_auth_headers=mcp_server_auth_headers,
-        oauth2_headers=oauth2_headers,
-        raw_headers=raw_headers,
-        litellm_call_id=context.litellm_call_id,
-        litellm_trace_id=context.litellm_trace_id,
-        request_tags=request_tags,
-    )
-
-    if not tool_results:
-        _add_mcp_metadata_to_response(
-            response=initial_response,
-            openai_tools=openai_tools,
+        tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+            tool_server_map=tool_server_map,
             tool_calls=tool_calls,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            litellm_call_id=context.litellm_call_id,
+            litellm_trace_id=context.litellm_trace_id,
+            request_tags=request_tags,
+            virtual_tool_scope=virtual_tool_scope,
         )
-        return initial_response
+        if not tool_results:
+            break
 
-    # Create follow-up messages with tool results
-    follow_up_messages: Final = LiteLLM_Proxy_MCP_Handler._create_follow_up_messages_for_chat(
-        original_messages=messages,
-        response=initial_response,
-        tool_results=tool_results,
-    )
+        completed_rounds += 1
+        all_tool_results.extend(tool_results)
 
-    # Make follow-up call with original stream setting
-    follow_up_call_args: Final = dict(base_call_args)
-    follow_up_call_args["messages"] = follow_up_messages
-    follow_up_call_args["stream"] = stream
-
-    response = await litellm_acompletion(**follow_up_call_args)
-    if isinstance(response, (ModelResponse, CustomStreamWrapper)):
-        _add_mcp_metadata_to_response(
-            response=response,
-            openai_tools=openai_tools,
-            tool_calls=tool_calls,
+        follow_up_messages = LiteLLM_Proxy_MCP_Handler._create_follow_up_messages_for_chat(
+            original_messages=current_messages,
+            response=current_response,
             tool_results=tool_results,
         )
-    return response
+
+        follow_up_call_args = dict(base_call_args)
+        follow_up_call_args["messages"] = follow_up_messages
+        follow_up_call_args["stream"] = stream
+        if completed_rounds >= max_rounds:
+            follow_up_call_args["tools"] = None
+            verbose_logger.warning(
+                "MCP auto-execute hit its %s-round cap; forcing a text-only follow-up.",
+                max_rounds,
+            )
+
+        follow_up_response = await litellm_acompletion(**follow_up_call_args)
+        current_messages = follow_up_messages
+
+        if not isinstance(follow_up_response, ModelResponse):
+            if isinstance(follow_up_response, CustomStreamWrapper):
+                _add_mcp_metadata_to_response(
+                    response=follow_up_response,
+                    openai_tools=openai_tools,
+                    tool_calls=all_tool_calls,
+                    tool_results=all_tool_results,
+                )
+            return follow_up_response
+
+        current_response = follow_up_response
+
+    _add_mcp_metadata_to_response(
+        response=current_response,
+        openai_tools=openai_tools,
+        tool_calls=all_tool_calls or None,
+        tool_results=all_tool_results or None,
+    )
+    return current_response

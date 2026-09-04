@@ -56,6 +56,8 @@ from litellm.utils import (
 if TYPE_CHECKING:
     from fastapi import WebSocket
     from mcp.types import Tool as MCPTool
+
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import MCPToolResult
 else:
     MCPTool = Any
 
@@ -170,6 +172,7 @@ async def aresponses_api_with_mcp(
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
     )
+    from litellm.responses.mcp.tool_search_bridge import is_mcp_tool_search_enabled
 
     # Parse MCP tools and separate from other tools
     (
@@ -206,6 +209,12 @@ async def aresponses_api_with_mcp(
         request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
     )
     openai_tools: Final = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(original_mcp_tools)
+
+    virtual_tool_scope = (
+        LiteLLM_Proxy_MCP_Handler._build_virtual_tool_scope(mcp_tools_with_litellm_proxy)
+        if is_mcp_tool_search_enabled(user_api_key_auth)
+        else None
+    )
 
     # Combine with other tools
     all_tools: Final = openai_tools + other_tools if (openai_tools or other_tools) else None
@@ -295,100 +304,102 @@ async def aresponses_api_with_mcp(
     # Auto-Execute Tools Handling
     # If auto-execute tools is True, then we need to execute the tool calls
     #########################################################
-    if should_auto_execute and isinstance(response, ResponsesAPIResponse):
-        tool_calls: Final = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(response=response)
+    if not (should_auto_execute and isinstance(response, ResponsesAPIResponse)):
+        return response
 
-        if tool_calls:
-            user_api_key_auth = kwargs.get("litellm_metadata", {}).get("user_api_key_auth")
+    from litellm.responses.mcp.tool_search_bridge import max_tool_call_rounds
 
-            # Extract MCP auth headers from the request to pass to MCP server
-            secret_fields = kwargs.get("secret_fields")
-            (
-                mcp_auth_header,
-                mcp_server_auth_headers,
-                oauth2_headers,
-                raw_headers_from_request,
-            ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
-                secret_fields=secret_fields,
-                tools=tools,
+    max_rounds = max_tool_call_rounds(virtual_tool_scope)
+
+    # Extract MCP auth headers from the request to pass to MCP server
+    (
+        mcp_auth_header,
+        mcp_server_auth_headers,
+        oauth2_headers,
+        raw_headers_from_request,
+    ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
+        secret_fields=kwargs.get("secret_fields"),
+        tools=tools,
+    )
+
+    current_response: ResponsesAPIResponse = response
+    conversation_input: Any = input
+    all_tool_results: Final[list[MCPToolResult]] = []  # mutable-ok: round accumulator
+    completed_rounds = 0
+
+    while completed_rounds < max_rounds:
+        tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(response=current_response)
+        if not tool_calls:
+            break
+
+        tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+            tool_server_map=tool_server_map,
+            tool_calls=tool_calls,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers_from_request,
+            litellm_call_id=kwargs.get("litellm_call_id"),
+            litellm_trace_id=kwargs.get("litellm_trace_id"),
+            request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
+            virtual_tool_scope=virtual_tool_scope,
+        )
+        if not tool_results:
+            break
+
+        completed_rounds += 1
+        all_tool_results.extend(tool_results)
+
+        follow_up_input = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+            response=current_response,
+            tool_results=tool_results,
+            original_input=conversation_input,
+        )
+
+        follow_up_call_params = LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(
+            call_params=call_params, original_stream_setting=stream or False
+        )
+
+        follow_up_tools = all_tools if completed_rounds < max_rounds else None
+        if follow_up_tools is None:
+            verbose_logger.warning(
+                "MCP auto-execute hit its %s-round cap; forcing a text-only follow-up.",
+                max_rounds,
             )
 
-            tool_results: Final = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
-                tool_server_map=tool_server_map,
-                tool_calls=tool_calls,
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=mcp_auth_header,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers_from_request,
-                litellm_call_id=kwargs.get("litellm_call_id"),
-                litellm_trace_id=kwargs.get("litellm_trace_id"),
-                request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
-            )
+        follow_up_response = await LiteLLM_Proxy_MCP_Handler._make_follow_up_call(
+            follow_up_input=follow_up_input,
+            model=model,
+            all_tools=follow_up_tools,
+            response_id=current_response.id,
+            **follow_up_call_params,
+        )
+        if not isinstance(follow_up_response, ResponsesAPIResponse):
+            return follow_up_response
 
-            if tool_results:
-                follow_up_input: Final = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
-                    response=response, tool_results=tool_results, original_input=input
-                )
+        conversation_input = follow_up_input
+        current_response = follow_up_response
 
-                # Prepare parameters for follow-up call (restores original stream setting)
-                follow_up_call_params: Final = LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(
-                    call_params=call_params, original_stream_setting=stream or False
-                )
+    if not all_tool_results:
+        return response
 
-                # Create tool execution events for streaming if needed
-                tool_execution_events = []
-                if stream:
-                    tool_execution_events = LiteLLM_Proxy_MCP_Handler._create_tool_execution_events(
-                        tool_calls=tool_calls, tool_results=tool_results
-                    )
-
-                final_response = await LiteLLM_Proxy_MCP_Handler._make_follow_up_call(
-                    follow_up_input=follow_up_input,
-                    model=model,
-                    all_tools=all_tools,
-                    response_id=response.id,
-                    **follow_up_call_params,
-                )
-
-                # If streaming and we have tool execution events, wrap the response
-                if (
-                    stream
-                    and tool_execution_events
-                    and (hasattr(final_response, "__aiter__") or hasattr(final_response, "__iter__"))
-                ):
-                    from litellm.responses.mcp.mcp_streaming_iterator import (
-                        MCPEnhancedStreamingIterator,
-                    )
-
-                    final_response = MCPEnhancedStreamingIterator(
-                        tool_server_map=tool_server_map,
-                        base_iterator=final_response,
-                        mcp_events=tool_execution_events,
-                        user_api_key_auth=user_api_key_auth,
-                    )
-
-                # Add custom output elements to the final response (for non-streaming)
-                elif isinstance(final_response, ResponsesAPIResponse):
-                    # Fetch MCP tools again for output elements (without OpenAI transformation)
-                    (
-                        mcp_tools_for_output,
-                        _,
-                    ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
-                        user_api_key_auth=user_api_key_auth,
-                        mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
-                        mcp_auth_header=mcp_auth_header,
-                        mcp_server_auth_headers=mcp_server_auth_headers,
-                        request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
-                    )
-                    final_response = LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(
-                        response=final_response,
-                        mcp_tools_fetched=mcp_tools_for_output,
-                        tool_results=tool_results,
-                    )
-                return final_response
-
-    return response
+    # Fetch MCP tools again for output elements (without OpenAI transformation)
+    (
+        mcp_tools_for_output,
+        _,
+    ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+        user_api_key_auth=user_api_key_auth,
+        mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+        mcp_auth_header=mcp_auth_header,
+        mcp_server_auth_headers=mcp_server_auth_headers,
+        request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
+    )
+    return LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(
+        response=current_response,
+        mcp_tools_fetched=mcp_tools_for_output,
+        tool_results=all_tool_results,
+    )
 
 
 def _bridges_to_chat_completions(

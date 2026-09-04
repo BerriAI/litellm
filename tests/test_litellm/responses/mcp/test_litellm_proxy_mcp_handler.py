@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 import textwrap
@@ -12,6 +13,8 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import Aggregat
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
+from litellm.constants import MCP_VIRTUAL_TOOL_SEARCH_SERVER_NAME
+from litellm.responses.mcp.tool_search_bridge import virtual_tool_server_map
 from typing import Any, cast
 from litellm.types.utils import ModelResponse
 from litellm.types.responses.main import OutputFunctionToolCall
@@ -719,3 +722,292 @@ def test_extract_tool_call_details_still_prefers_openai_arguments():
     assert name == "get_weather"
     assert call_id == "call_123"
     assert arguments == '{"city": "Paris"}'
+# mcp_tool_search virtual tools on the Responses API type: "mcp" path
+
+
+def _mcp_tool_config(server: str = "deepwiki", allowed_tools=None):
+    config = {
+        "type": "mcp",
+        "server_label": "x",
+        "server_url": f"litellm_proxy/mcp/{server}",
+        "require_approval": "never",
+    }
+    if allowed_tools is not None:
+        config["allowed_tools"] = allowed_tools
+    return config
+
+
+def _auth(tool_search_enabled=None):
+    """Real UserAPIKeyAuth; tool_search_enabled=None means no object_permission at all."""
+    from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    if tool_search_enabled is None:
+        return UserAPIKeyAuth(api_key="k", user_id="u")
+    return UserAPIKeyAuth(
+        api_key="k",
+        user_id="u",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="test",
+            mcp_tool_search_enabled=tool_search_enabled,
+        ),
+    )
+
+
+def _setup_async_proxy_logging(monkeypatch: pytest.MonkeyPatch) -> None:
+    """proxy_logging_obj with awaitable hooks, needed once a tool actually dispatches."""
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    proxy_logging_obj.post_mcp_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["response"])
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        types.SimpleNamespace(proxy_logging_obj=proxy_logging_obj),
+    )
+
+
+def _text_result(text: str, is_error: bool = False):
+    from mcp.types import CallToolResult, TextContent
+
+    return CallToolResult(content=[TextContent(type="text", text=text)], isError=is_error)
+
+
+def _patch_catalog_listing(monkeypatch):
+    """Patch the manager listing seam and return the mock, so a test can assert it was never used."""
+    from mcp.types import Tool
+
+    mock_get_tools = AsyncMock(
+        return_value=AggregateToolListing(
+            tools=[
+                Tool(
+                    name="deepwiki-read_wiki_structure",
+                    description="read the wiki structure",
+                    inputSchema={"type": "object", "properties": {}},
+                )
+            ],
+            outcomes={},
+        )
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
+        mock_get_tools,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        types.SimpleNamespace(
+            get_registry=MagicMock(return_value={}),
+            get_allowed_mcp_servers=AsyncMock(return_value=[]),
+            get_mcp_servers_from_ids=MagicMock(return_value=[]),
+            get_mcp_server_by_name=MagicMock(return_value=None),
+        ),
+    )
+    return mock_get_tools
+
+
+@pytest.mark.asyncio
+async def test_process_mcp_tools_returns_only_virtual_tools_when_flag_enabled(monkeypatch):
+    """With mcp_tool_search_enabled the catalog must never be listed; the model
+    sees only mcp_tool_search + mcp_tool_call."""
+    mock_get_tools = _patch_catalog_listing(monkeypatch)
+
+    openai_tools, tool_server_map = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_to_openai_format(
+        user_api_key_auth=_auth(True),
+        mcp_tools_with_litellm_proxy=[_mcp_tool_config()],
+    )
+
+    assert [tool["name"] for tool in openai_tools] == ["mcp_tool_search", "mcp_tool_call"]
+    assert all(tool["type"] == "function" for tool in openai_tools)
+    assert tool_server_map == {
+        "mcp_tool_search": MCP_VIRTUAL_TOOL_SEARCH_SERVER_NAME,
+        "mcp_tool_call": MCP_VIRTUAL_TOOL_SEARCH_SERVER_NAME,
+    }
+    assert mock_get_tools.await_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_search_enabled,require_approval",
+    [
+        (False, "never"),
+        (None, "never"),
+        (True, None),
+    ],
+    ids=["flag_false", "no_object_permission", "flag_on_but_approval_required"],
+)
+async def test_process_mcp_tools_injects_catalog_unchanged(monkeypatch, tool_search_enabled, require_approval):
+    """Regression: the catalog path is untouched for keys without the flag, and
+    the virtual tools are skipped when they could not be auto-executed."""
+    mock_get_tools = _patch_catalog_listing(monkeypatch)
+    tool_config = _mcp_tool_config()
+    if require_approval is None:
+        tool_config.pop("require_approval")
+
+    openai_tools, tool_server_map = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_to_openai_format(
+        user_api_key_auth=_auth(tool_search_enabled),
+        mcp_tools_with_litellm_proxy=[tool_config],
+    )
+
+    assert [tool["name"] for tool in openai_tools] == ["deepwiki-read_wiki_structure"]
+    assert tool_server_map == {"deepwiki-read_wiki_structure": "deepwiki"}
+    assert mock_get_tools.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "allowed_tools,expected_names",
+    [
+        (["read_wiki_structure"], ["deepwiki-read_wiki_structure"]),
+        (["something_else"], []),
+    ],
+    ids=["keeps_allowed", "filters_everything_out"],
+)
+async def test_execute_tool_calls_scopes_mcp_tool_search(monkeypatch, allowed_tools, expected_names):
+    """mcp_tool_search is scoped to the request's server aliases, and its results
+    are filtered to allowed_tools; filtering everything out is an empty list, not an error."""
+    _setup_proxy_logging(monkeypatch)
+    _setup_mcp_call_environment(monkeypatch)
+
+    search_mock = AsyncMock(
+        return_value=_text_result(
+            json.dumps(
+                [
+                    {"name": "deepwiki-read_wiki_structure", "description": "d", "inputSchema": {}},
+                    {"name": "deepwiki-ask_question", "description": "d", "inputSchema": {}},
+                ]
+            )
+        )
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_search",
+        search_mock,
+    )
+
+    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map=virtual_tool_server_map(),
+        tool_calls=[
+            {
+                "id": "call-search",
+                "function": {"name": "mcp_tool_search", "arguments": json.dumps({"query": "wiki", "top_k": 3})},
+            }
+        ],
+        user_api_key_auth=_auth(True),
+        virtual_tool_scope=LiteLLM_Proxy_MCP_Handler._build_virtual_tool_scope(
+            [_mcp_tool_config(allowed_tools=allowed_tools)]
+        ),
+    )
+
+    assert search_mock.await_args.kwargs["mcp_servers"] == ["deepwiki"]
+    assert search_mock.await_args.kwargs["query"] == "wiki"
+    assert search_mock.await_args.kwargs["top_k"] == 3
+    assert [entry["name"] for entry in json.loads(results[0]["result"])] == expected_names
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_mcp_tool_call_dispatches_inner_tool_with_auth_headers(monkeypatch):
+    """mcp_tool_call unwraps to the real tool, forwards the per-request auth
+    headers and spend-logs the inner tool name rather than mcp_tool_call."""
+    _setup_mcp_call_environment(monkeypatch)
+    _setup_async_proxy_logging(monkeypatch)
+
+    call_mock = AsyncMock(return_value=_text_result("wiki structure"))
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_call",
+        call_mock,
+    )
+
+    captured = {}
+
+    def fake_function_setup(*_args, **kwargs):
+        captured.update(kwargs)
+        return None, None
+
+    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
+
+    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map=virtual_tool_server_map(),
+        tool_calls=[
+            {
+                "id": "call-inner",
+                "function": {
+                    "name": "mcp_tool_call",
+                    "arguments": json.dumps(
+                        {"tool_name": "deepwiki-read_wiki_structure", "arguments": {"repo": "litellm"}}
+                    ),
+                },
+            }
+        ],
+        user_api_key_auth=_auth(True),
+        mcp_auth_header="legacy-token",
+        mcp_server_auth_headers={"deepwiki": {"authorization": "Bearer per-server"}},
+        oauth2_headers={"x-oauth": "1"},
+        raw_headers={"x-raw": "1"},
+        virtual_tool_scope=LiteLLM_Proxy_MCP_Handler._build_virtual_tool_scope([_mcp_tool_config()]),
+    )
+
+    call_kwargs = call_mock.await_args.kwargs
+    assert call_kwargs["tool_name"] == "deepwiki-read_wiki_structure"
+    assert call_kwargs["arguments"] == {"repo": "litellm"}
+    assert call_kwargs["mcp_servers"] == ["deepwiki"]
+    assert call_kwargs["mcp_auth_header"] == "legacy-token"
+    assert call_kwargs["mcp_server_auth_headers"] == {"deepwiki": {"authorization": "Bearer per-server"}}
+    assert call_kwargs["oauth2_headers"] == {"x-oauth": "1"}
+    assert call_kwargs["raw_headers"] == {"x-raw": "1"}
+
+    assert captured["model"] == "MCP: deepwiki-read_wiki_structure"
+    assert captured["metadata"]["tool_name"] == "read_wiki_structure"
+    assert captured["input"][0]["content"]["arguments"] == {"repo": "litellm"}
+    assert results[0]["result"] == "wiki structure"
+    assert results[0]["display_name"] == "deepwiki-read_wiki_structure"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_mcp_tool_call_rejects_tool_outside_allowed_tools(monkeypatch):
+    _setup_proxy_logging(monkeypatch)
+    _setup_mcp_call_environment(monkeypatch)
+    call_mock = AsyncMock(return_value=_text_result("should not run"))
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_call",
+        call_mock,
+    )
+
+    results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map=virtual_tool_server_map(),
+        tool_calls=[
+            {
+                "id": "call-inner",
+                "function": {
+                    "name": "mcp_tool_call",
+                    "arguments": json.dumps({"tool_name": "deepwiki-delete_everything", "arguments": {}}),
+                },
+            }
+        ],
+        user_api_key_auth=_auth(True),
+        virtual_tool_scope=LiteLLM_Proxy_MCP_Handler._build_virtual_tool_scope(
+            [_mcp_tool_config(allowed_tools=["read_wiki_structure"])]
+        ),
+    )
+
+    assert call_mock.await_count == 0
+    assert "not in allowed_tools" in results[0]["result"]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_ignores_virtual_names_without_scope(monkeypatch):
+    """A real upstream tool literally named mcp_tool_search must still dispatch
+    normally when the virtual tools are not in play."""
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    search_mock = AsyncMock(return_value=_text_result("[]"))
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_search",
+        search_mock,
+    )
+
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map={"mcp_tool_search": "deepwiki"},
+        tool_calls=[{"id": "c", "function": {"name": "mcp_tool_search", "arguments": "{}"}}],
+        user_api_key_auth=None,
+    )
+
+    assert search_mock.await_count == 0
+    assert call_tool_mock.await_count == 1

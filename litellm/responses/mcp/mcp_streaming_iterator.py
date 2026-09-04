@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.responses.mcp.litellm_proxy_mcp_handler import MCPToolResult
+    from litellm.responses.mcp.tool_search_bridge import VirtualToolScope
 else:
     MCPTool = Any
 
@@ -272,6 +273,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.user_api_key_auth = user_api_key_auth
         self.original_request_params = original_request_params or {}
         self.should_auto_execute = self._should_auto_execute_tools()
+        self.virtual_tool_scope = self._build_virtual_tool_scope()
+        self.max_tool_call_rounds = self._max_tool_call_rounds()
 
         # Streaming state management
         self.phase = "initial_response"  # initial_response -> mcp_discovery -> (continue_initial_response <-> tool_execution) -> finished
@@ -394,6 +397,22 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         )
 
         return LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(self.mcp_tools_with_litellm_proxy)
+
+    def _build_virtual_tool_scope(self) -> "VirtualToolScope | None":
+        """Scope for the mcp_tool_search / mcp_tool_call virtual tools, or None when they are not in play."""
+        from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+            LiteLLM_Proxy_MCP_Handler,
+        )
+        from litellm.responses.mcp.tool_search_bridge import is_mcp_tool_search_enabled
+
+        if not self.should_auto_execute or not is_mcp_tool_search_enabled(self.user_api_key_auth):
+            return None
+        return LiteLLM_Proxy_MCP_Handler._build_virtual_tool_scope(self.mcp_tools_with_litellm_proxy)
+
+    def _max_tool_call_rounds(self) -> int:
+        from litellm.responses.mcp.tool_search_bridge import max_tool_call_rounds
+
+        return max_tool_call_rounds(self.virtual_tool_scope)
 
     def _make_stream_error_event(self) -> ResponsesAPIStreamingResponse:
         err: Final = self._stream_error
@@ -698,6 +717,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 litellm_call_id=self.litellm_call_id,
                 litellm_trace_id=self.litellm_trace_id,
                 request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(self.original_request_params),
+                virtual_tool_scope=self.virtual_tool_scope,
             )
 
             # Create completion events and output_item.done events for tool execution
@@ -706,7 +726,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 result_text = tool_result.get("result", "")
 
                 # Find matching tool name and arguments
-                tool_name = "unknown"
+                tool_name = tool_result.get("display_name") or "unknown"
                 tool_arguments = "{}"
                 for tool_call in tool_calls:
                     (
@@ -715,7 +735,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                         call_id,
                     ) = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
                     if call_id == tool_call_id:
-                        tool_name = name or "unknown"
+                        tool_name = tool_result.get("display_name") or name or "unknown"
                         tool_arguments = args or "{}"
                         break
 
@@ -800,14 +820,14 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             # Remove tool_choice to avoid forcing more tool calls
             follow_up_params.pop("tool_choice", None)
 
-            if self.tool_call_round >= MAX_MCP_TOOL_CALL_ROUNDS:
+            if self.tool_call_round >= self.max_tool_call_rounds:
                 # Hit the round cap: drop tools entirely so the model must
                 # answer in text instead of emitting another (unexecuted)
                 # tool call that would otherwise end the stream in silence.
                 follow_up_params.pop("tools", None)
                 verbose_logger.warning(
-                    "MCP auto-execute hit MAX_MCP_TOOL_CALL_ROUNDS=%s; forcing a text-only follow-up.",
-                    MAX_MCP_TOOL_CALL_ROUNDS,
+                    "MCP auto-execute hit its %s-round cap; forcing a text-only follow-up.",
+                    self.max_tool_call_rounds,
                 )
 
             follow_up_response: Final = await aresponses(**follow_up_params)
