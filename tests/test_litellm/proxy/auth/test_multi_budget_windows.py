@@ -2,13 +2,22 @@
 Unit tests for multi-budget-window enforcement on API keys.
 """
 
-from unittest.mock import AsyncMock, patch
+from datetime import datetime, timezone
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import Request
 
 import litellm
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import _virtual_key_multi_budget_check
+from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import (
+    _coerce_budget_limit_window_for_check,
+    _team_multi_budget_check,
+    _user_multi_budget_check,
+    _virtual_key_multi_budget_check,
+    common_checks,
+)
+from litellm.proxy.common_utils.user_api_key_cache import user_budget_window_counter_key
 
 
 def _make_valid_token(**kwargs) -> UserAPIKeyAuth:
@@ -68,7 +77,7 @@ async def test_over_first_window_raises():
         call_count += 1
         return val
 
-    with patch(
+    with patch(  # test-quality-ok: no injected spend reader exists for this window-order regression
         "litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend
     ):
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
@@ -100,7 +109,7 @@ async def test_over_second_window_raises():
         call_count += 1
         return val
 
-    with patch(
+    with patch(  # test-quality-ok: no injected spend reader exists for this window-order regression
         "litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend
     ):
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
@@ -135,3 +144,254 @@ async def test_budget_limit_entry_objects_coerced():
     ):
         # Should not raise TypeError / KeyError — model_dump() coerces the object
         await _virtual_key_multi_budget_check(valid_token=token)
+
+
+@pytest.mark.asyncio
+async def test_user_budget_limits_under_budget_passes():  # test-quality-ok: counter-call contract is the observable boundary
+    """User budget_limits should use spend:user:{user_id}:window:{duration} counters."""
+    user = LiteLLM_UserTable(
+        user_id="user-budget-window",
+        budget_limits=[
+            {"budget_duration": "1d", "max_budget": 10.0, "reset_at": None},
+        ],
+    )
+
+    with patch(  # test-quality-ok: no injected Redis spend reader exists for this unit test
+        "litellm.proxy.proxy_server.get_current_spend",
+        new_callable=AsyncMock,
+        return_value=1.0,
+    ) as mock_get_spend:
+        await _user_multi_budget_check(user_object=user)
+
+    mock_get_spend.assert_awaited_once_with(
+        counter_key="spend:user:user-budget-window:window:1d",
+        fallback_spend=0.0,
+        max_budget=10.0,
+        window_entity_type="User",
+        window_entity_id="user-budget-window",
+        window_duration="1d",
+        window_start=ANY,
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_budget_window_key_encodes_namespace_delimiters():  # test-quality-ok: key namespace is the observable boundary
+    user_id = "user:window:1h"
+    user = LiteLLM_UserTable(
+        user_id=user_id,
+        budget_limits=[{"budget_duration": "1d", "max_budget": 10.0}],
+    )
+
+    with patch(  # test-quality-ok: no injected spend reader exists at this auth boundary
+        "litellm.proxy.proxy_server.get_current_spend",
+        new_callable=AsyncMock,
+        return_value=1.0,
+    ) as mock_get_spend:
+        await _user_multi_budget_check(user_object=user)
+
+    mock_get_spend.assert_awaited_once()
+    assert mock_get_spend.await_args.kwargs["counter_key"] == user_budget_window_counter_key(user_id, "1d")
+    assert mock_get_spend.await_args.kwargs["counter_key"] == "spend:user:escaped:user%3Awindow%3A1h:window:1d"
+
+
+def test_user_spend_counter_key_preserves_legacy_key_for_percent_id():
+    from litellm.proxy.common_utils.user_api_key_cache import user_spend_counter_key
+
+    assert user_spend_counter_key("user%3Awindow%3A1h") == "spend:user:user%3Awindow%3A1h"
+
+
+@pytest.mark.asyncio
+async def test_user_budget_limits_over_window_raises():  # test-quality-ok: spend reader must be controlled at this boundary
+    """A user exceeding any configured budget window should be blocked."""
+    user = LiteLLM_UserTable(
+        user_id="user-budget-window",
+        budget_limits=[
+            {"budget_duration": "1d", "max_budget": 5.0, "reset_at": None},
+        ],
+    )
+
+    with patch(  # test-quality-ok: no injected Redis spend reader exists for this unit test
+        "litellm.proxy.proxy_server.get_current_spend",
+        new_callable=AsyncMock,
+        return_value=6.0,
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _user_multi_budget_check(user_object=user)
+
+    err = exc_info.value
+    assert err.status_code == 429
+    assert "User=user-budget-window" in str(err)
+    assert "1d" in str(err)
+
+
+@pytest.mark.asyncio
+async def test_team_budget_limits_use_typed_window():  # test-quality-ok: counter-call contract is the observable boundary
+    team = LiteLLM_TeamTable(
+        team_id="team-budget-window",
+        budget_limits=[
+            {"budget_duration": "1d", "max_budget": 10.0, "reset_at": None},
+        ],
+    )
+
+    with patch(  # test-quality-ok: no injected Redis spend reader exists for this unit test
+        "litellm.proxy.proxy_server.get_current_spend",
+        new_callable=AsyncMock,
+        return_value=1.0,
+    ) as mock_get_spend:
+        await _team_multi_budget_check(team_object=team)
+
+    mock_get_spend.assert_awaited_once_with(
+        counter_key="spend:team:team-budget-window:window:1d",
+        fallback_spend=0.0,
+        max_budget=10.0,
+        window_entity_type="Team",
+        window_entity_id="team-budget-window",
+        window_duration="1d",
+        window_start=ANY,
+    )
+
+
+@pytest.mark.parametrize("empty_duration", ["", None])
+def test_coerce_skips_window_with_empty_budget_duration(empty_duration):
+    """
+    Regression: the auth check and the budget-reservation path must agree on
+    what counts as a missing budget_duration. The reservation path rejects with
+    `if not budget_duration`, so an empty-string duration must be rejected here
+    too; otherwise the auth check builds a counter key ending in `:window:` that
+    never accumulates spend, silently disabling the window instead of enforcing it.
+    """
+    assert _coerce_budget_limit_window_for_check(window={"budget_duration": empty_duration, "max_budget": 10.0}) is None
+
+
+def test_coerce_preserves_reset_at():
+    reset_at = datetime(2026, 7, 30, tzinfo=timezone.utc)
+
+    window = _coerce_budget_limit_window_for_check(
+        window={"budget_duration": "1d", "max_budget": 10.0, "reset_at": reset_at}
+    )
+
+    assert window is not None
+    assert window.reset_at == reset_at
+
+
+def test_coerce_invalid_reset_at_does_not_disable_window():
+    window = _coerce_budget_limit_window_for_check(
+        window={"budget_duration": "1d", "max_budget": 10.0, "reset_at": "invalid"}
+    )
+
+    assert window is not None
+    assert window.reset_at == "invalid"
+
+
+@pytest.mark.asyncio
+async def test_empty_budget_duration_window_is_skipped_not_queried():  # test-quality-ok: call absence is the observable boundary
+    """A window with an empty-string duration must be skipped entirely, never
+    turned into a malformed `spend:key:...:window:` counter lookup."""
+    token = _make_valid_token(budget_limits=[{"budget_duration": "", "max_budget": 1.0, "reset_at": None}])
+
+    with patch(  # test-quality-ok: no injected Redis spend reader exists for this unit test
+        "litellm.proxy.proxy_server.get_current_spend",
+        new_callable=AsyncMock,
+    ) as mock_get_spend:
+        await _virtual_key_multi_budget_check(valid_token=token)
+
+    mock_get_spend.assert_not_awaited()
+
+
+def _make_team(team_id: str = "team-xyz") -> LiteLLM_TeamTable:
+    return LiteLLM_TeamTable(
+        team_id=team_id,
+        models=["example-model"],
+        blocked=False,
+        spend=0.0,
+        max_budget=None,
+    )
+
+
+async def _invoke_common_checks(*, team_object, user_object, skip_user_budget_on_team_key=False):
+    """Minimal common_checks call exercising just the user-budget block."""
+    request_body = {
+        "model": "example-model",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+    valid_token = UserAPIKeyAuth(
+        token="sk-test-token",
+        models=["example-model"],
+        spend=0.0,
+        max_budget=None,
+        budget_limits=[],
+    )
+    return await common_checks(
+        request_body=request_body,
+        team_object=team_object,
+        user_object=user_object,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={"skip_user_budget_on_team_key": skip_user_budget_on_team_key},
+        route="/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=valid_token,
+        request=MagicMock(spec=Request),
+    )
+
+
+@pytest.mark.asyncio
+async def test_common_checks_runs_user_multi_budget_for_team_keys_by_default():  # test-quality-ok: invocation is the intentional gate boundary
+    user = LiteLLM_UserTable(
+        user_id="user-with-windows",
+        budget_limits=[
+            {"budget_duration": "1d", "max_budget": 1.0, "reset_at": None},
+        ],
+    )
+    team = _make_team()
+
+    with patch(  # test-quality-ok: common_checks has no injected budget-check collaborator
+        "litellm.proxy.auth.auth_checks._user_multi_budget_check",
+        new_callable=AsyncMock,
+    ) as user_check:
+        await _invoke_common_checks(team_object=team, user_object=user)
+
+    user_check.assert_awaited_once_with(user_object=user)
+
+
+@pytest.mark.asyncio
+async def test_common_checks_skips_user_multi_budget_for_team_keys_when_configured():  # test-quality-ok: skip invocation is the intentional gate boundary
+    user = LiteLLM_UserTable(
+        user_id="user-with-windows",
+        budget_limits=[
+            {"budget_duration": "1d", "max_budget": 1.0, "reset_at": None},
+        ],
+    )
+    team = _make_team()
+
+    with patch(  # test-quality-ok: common_checks has no injected budget-check collaborator
+        "litellm.proxy.auth.auth_checks._user_multi_budget_check",
+        new_callable=AsyncMock,
+    ) as user_check:
+        await _invoke_common_checks(
+            team_object=team,
+            user_object=user,
+            skip_user_budget_on_team_key=True,
+        )
+
+    user_check.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_common_checks_runs_user_multi_budget_for_personal_keys():  # test-quality-ok: invocation is the intentional gate boundary
+    """Companion to the team-key skip test: personal keys must still run it."""
+    user = LiteLLM_UserTable(
+        user_id="user-with-windows",
+        budget_limits=[
+            {"budget_duration": "1d", "max_budget": 1.0, "reset_at": None},
+        ],
+    )
+
+    with patch(  # test-quality-ok: common_checks has no injected budget-check collaborator
+        "litellm.proxy.auth.auth_checks._user_multi_budget_check",
+        new_callable=AsyncMock,
+    ) as user_check:
+        await _invoke_common_checks(team_object=None, user_object=user)
+
+    user_check.assert_awaited_once_with(user_object=user)

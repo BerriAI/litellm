@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, Optional
+from urllib.parse import unquote
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
@@ -44,6 +45,7 @@ _WINDOW_SPEND_ENTITY_TYPES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "Key": Litellm_EntityType.KEY.value,
         "Team": Litellm_EntityType.TEAM.value,
+        "User": Litellm_EntityType.USER.value,
     }
 )
 
@@ -51,6 +53,7 @@ _WINDOW_SPEND_LOG_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "Key": "api_key",
         "Team": "team_id",
+        "User": "user",
     }
 )
 
@@ -127,7 +130,12 @@ class SpendCounterReseed:
                 team_id = counter_key[len("spend:team:") :]
                 row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
             elif counter_key.startswith("spend:user:"):
-                user_id = counter_key[len("spend:user:") :]
+                user_id_suffix: Final = counter_key[len("spend:user:") :]
+                user_id = (
+                    unquote(user_id_suffix[len("escaped:") :])
+                    if user_id_suffix.startswith("escaped:")
+                    else user_id_suffix
+                )
                 row = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
             elif counter_key.startswith("spend:end_user:") or counter_key.startswith("spend:tag:"):
                 return None
@@ -145,7 +153,7 @@ class SpendCounterReseed:
 
     @staticmethod
     def _is_key_or_team_window_counter(counter_key: str) -> bool:
-        for prefix in ("spend:key:", "spend:team:"):
+        for prefix in ("spend:key:", "spend:team:", "spend:user:"):
             if not counter_key.startswith(prefix):
                 continue
             _, separator, duration = counter_key.rpartition(":window:")

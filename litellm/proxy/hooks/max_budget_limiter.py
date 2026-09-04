@@ -9,6 +9,7 @@ from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.common_utils.user_api_key_cache import user_spend_counter_key
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 
 
@@ -49,7 +50,7 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
                 get_reserved_counter_keys,
             )
 
-            user_counter_key: Final = f"spend:user:{user_id}"
+            user_counter_key: Final = user_spend_counter_key(user_id)
             if user_counter_key in get_reserved_counter_keys(user_api_key_dict.budget_reservation):
                 return
 

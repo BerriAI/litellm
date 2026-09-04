@@ -4,7 +4,7 @@ import sys
 import types
 from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -21,6 +21,7 @@ from litellm.constants import (
 )
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
+from litellm.proxy.common_utils.user_api_key_cache import user_budget_window_counter_key
 
 
 # Mock classes for testing
@@ -816,6 +817,7 @@ def _make_reset_budget_windows_job(
     monkeypatch,
     key_rows: List[Dict[str, Any]],
     team_rows: List[Dict[str, Any]],
+    user_rows: Optional[List[Dict[str, Any]]] = None,
 ):
     """Build a ResetBudgetJob with a fully-mocked prisma client and a fake
     `litellm.proxy.proxy_server` module exposing a stub `spend_counter_cache`.
@@ -823,25 +825,32 @@ def _make_reset_budget_windows_job(
     Returns (job, prisma_client_mock, spend_counter_cache_mock).
     """
     prisma_client = MagicMock()
+    if user_rows is None:
+        user_rows = []
 
     async def fake_query_raw(query: str, *args, **kwargs):
-        # Dispatch by table name in the SQL so a single stub covers both calls.
+        # Dispatch by table name in the SQL so a single stub covers all calls.
         if '"LiteLLM_VerificationToken"' in query:
             return key_rows
         if '"LiteLLM_TeamTable"' in query:
             return team_rows
+        if '"LiteLLM_UserTable"' in query:
+            return user_rows
         raise AssertionError(f"Unexpected query_raw call: {query}")
 
     prisma_client.db.query_raw = AsyncMock(side_effect=fake_query_raw)
     prisma_client.db.execute_raw = AsyncMock(return_value=1)
     prisma_client.db.litellm_verificationtoken.update = AsyncMock(return_value=None)
     prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=None)
+    prisma_client.db.litellm_usertable.update = AsyncMock(return_value=None)
 
     # Stub out litellm.proxy.proxy_server so the in-function
     # `from litellm.proxy.proxy_server import spend_counter_cache` resolves
     # without importing the real (heavy) module.
     spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.get_cache = MagicMock(return_value=0.0)
     spend_counter_cache.in_memory_cache.set_cache = MagicMock()
+    spend_counter_cache.async_increment_cache = AsyncMock(return_value=0.0)
     spend_counter_cache.redis_cache = None  # skip the async redis branch
 
     fake_module = types.ModuleType("litellm.proxy.proxy_server")
@@ -863,13 +872,15 @@ def test_reset_budget_windows_uses_is_not_null_filter(monkeypatch):
     asyncio.run(job.reset_budget_windows())
 
     queries = [call.args[0] for call in prisma_client.db.query_raw.await_args_list]
-    assert len(queries) == 2, queries
-    key_query, team_query = queries
+    assert len(queries) == 3, queries
+    key_query, team_query, user_query = queries
 
     assert '"LiteLLM_VerificationToken"' in key_query
     assert "budget_limits IS NOT NULL" in key_query
     assert '"LiteLLM_TeamTable"' in team_query
     assert "budget_limits IS NOT NULL" in team_query
+    assert '"LiteLLM_UserTable"' in user_query
+    assert "budget_limits IS NOT NULL" in user_query
 
 
 def test_reset_budget_windows_resets_expired_key_window(monkeypatch):
@@ -901,8 +912,10 @@ def test_reset_budget_windows_resets_expired_key_window(monkeypatch):
     new_reset_at = datetime.fromisoformat(written_windows[0]["reset_at"].replace("Z", "+00:00")).replace(tzinfo=None)
     assert new_reset_at > now
 
-    # The spend counter for this key+window was cleared.
-    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:sk-expired:window:1d", value=0.0)
+    spend_counter_cache.async_increment_cache.assert_awaited_once_with(
+        key="spend:key:sk-expired:window:1d",
+        value=0.0,
+    )
 
 
 def _window_spend_rolls(prisma_client):
@@ -1041,7 +1054,10 @@ def test_reset_budget_windows_survives_a_failed_window_spend_roll(monkeypatch):
     asyncio.run(job.reset_budget_windows())
 
     prisma_client.db.litellm_verificationtoken.update.assert_awaited_once()
-    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:sk-expired:window:1d", value=0.0)
+    spend_counter_cache.async_increment_cache.assert_awaited_once_with(
+        key="spend:key:sk-expired:window:1d",
+        value=0.0,
+    )
 
 
 def test_reset_budget_windows_skips_unexpired_key_window(monkeypatch):
@@ -1084,7 +1100,108 @@ def test_reset_budget_windows_resets_expired_team_window(monkeypatch):
     assert call_kwargs["where"] == {"team_id": "team-expired"}
     assert "budget_limits" in call_kwargs["data"]
 
-    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:team:team-expired:window:30d", value=0.0)
+    spend_counter_cache.async_increment_cache.assert_awaited_once_with(
+        key="spend:team:team-expired:window:30d",
+        value=0.0,
+    )
+
+
+def test_reset_budget_windows_resets_expired_user_window(monkeypatch):
+    """Same as the key and team tests, but for users."""
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=1)).isoformat() + "Z"
+
+    user_rows = [
+        {
+            "user_id": "user-expired",
+            "budget_limits": [{"budget_duration": "1d", "reset_at": expired}],
+        }
+    ]
+    job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=[], team_rows=[], user_rows=user_rows
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_usertable.update.assert_awaited_once()
+    call_kwargs = prisma_client.db.litellm_usertable.update.await_args.kwargs
+    assert call_kwargs["where"] == {"user_id": "user-expired"}
+    assert "budget_limits" in call_kwargs["data"]
+
+    spend_counter_cache.async_increment_cache.assert_awaited_once_with(
+        key="spend:user:user-expired:window:1d",
+        value=0.0,
+    )
+
+
+def test_reset_budget_windows_encodes_user_id_in_counter_key(monkeypatch):
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=1)).isoformat() + "Z"
+    user_id = "user:window:1h"
+    user_rows = [{"user_id": user_id, "budget_limits": [{"budget_duration": "1d", "reset_at": expired}]}]
+    job, _, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=[], team_rows=[], user_rows=user_rows
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    spend_counter_cache.async_increment_cache.assert_awaited_once_with(
+        key=user_budget_window_counter_key(user_id, "1d"),
+        value=0.0,
+    )
+
+
+def test_reset_budget_windows_keeps_counter_when_window_persistence_fails(monkeypatch):
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=1)).isoformat() + "Z"
+    user_rows = [{"user_id": "user-write-fails", "budget_limits": [{"budget_duration": "1d", "reset_at": expired}]}]
+    job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=[], team_rows=[], user_rows=user_rows
+    )
+    prisma_client.db.litellm_usertable.update = AsyncMock(side_effect=Exception("write failed"))
+
+    asyncio.run(job.reset_budget_windows())
+
+    spend_counter_cache.async_increment_cache.assert_not_awaited()
+
+
+def test_reset_budget_windows_preserves_spend_added_during_persistence(monkeypatch):
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=1)).isoformat() + "Z"
+    user_rows = [
+        {
+            "user_id": "user-concurrent",
+            "budget_limits": [{"budget_duration": "1d", "reset_at": expired}],
+        }
+    ]
+    job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch,
+        key_rows=[],
+        team_rows=[],
+        user_rows=user_rows,
+    )
+    redis_cache = MagicMock()
+    redis_cache.async_get_cache = AsyncMock(return_value=100.0)
+    redis_cache.async_increment = AsyncMock(return_value=0.0)
+    spend_counter_cache.redis_cache = redis_cache
+
+    async def persist_with_concurrent_spend(**_kwargs: object) -> None:
+        redis_cache.async_increment.assert_not_awaited()
+        redis_cache.async_increment.return_value = 7.0
+
+    prisma_client.db.litellm_usertable.update = AsyncMock(side_effect=persist_with_concurrent_spend)
+
+    asyncio.run(job.reset_budget_windows())
+
+    redis_cache.async_increment.assert_awaited_once_with(
+        key=user_budget_window_counter_key("user-concurrent", "1d"),
+        value=-100.0,
+        refresh_ttl=True,
+    )
+    spend_counter_cache.in_memory_cache.set_cache.assert_called_once_with(
+        key=user_budget_window_counter_key("user-concurrent", "1d"),
+        value=7.0,
+    )
 
 
 def test_reset_budget_windows_handles_string_budget_limits(monkeypatch):
@@ -1140,6 +1257,8 @@ def test_reset_budget_windows_query_error_does_not_break_team_path(monkeypatch):
                     "budget_limits": [{"budget_duration": "1d", "reset_at": expired}],
                 }
             ]
+        if '"LiteLLM_UserTable"' in query:
+            return []
         raise AssertionError(query)
 
     prisma_client.db.query_raw = AsyncMock(side_effect=fake_query_raw)
@@ -2343,9 +2462,15 @@ def _paginating_window_job(monkeypatch, pages_by_table: Dict[str, List[List[Dict
     calls: List[Dict[str, Any]] = []
 
     async def fake_query_raw(query: str, *args, **kwargs):
-        table = "key" if '"LiteLLM_VerificationToken"' in query else "team"
+        table = (
+            "key"
+            if '"LiteLLM_VerificationToken"' in query
+            else "user"
+            if '"LiteLLM_UserTable"' in query
+            else "team"
+        )
         calls.append({"table": table, "sql": query, "cursor": args[0], "limit": args[1]})
-        pages = remaining[table]
+        pages = remaining.get(table, [])
         return pages.pop(0) if pages else []
 
     prisma_client.db.query_raw = AsyncMock(side_effect=fake_query_raw)
@@ -2353,6 +2478,8 @@ def _paginating_window_job(monkeypatch, pages_by_table: Dict[str, List[List[Dict
     prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=None)
 
     spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.get_cache = MagicMock(return_value=0.0)
+    spend_counter_cache.async_increment_cache = AsyncMock(return_value=0.0)
     spend_counter_cache.redis_cache = None
     fake_module = types.ModuleType("litellm.proxy.proxy_server")
     fake_module.spend_counter_cache = spend_counter_cache
@@ -2484,6 +2611,8 @@ def _cursor_paginating_window_job(monkeypatch, key_rows: List[Dict[str, Any]]):
     async def fake_query_raw(query: str, *args, **kwargs):
         if '"LiteLLM_TeamTable"' in query:
             return []
+        if '"LiteLLM_UserTable"' in query:
+            return []
         cursor, limit = args[0], args[1]
         page = [row for row in ordered if row["token"] > cursor][:limit]
         visited.extend(row["token"] for row in page)
@@ -2494,6 +2623,8 @@ def _cursor_paginating_window_job(monkeypatch, key_rows: List[Dict[str, Any]]):
     prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=None)
 
     spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.get_cache = MagicMock(return_value=0.0)
+    spend_counter_cache.async_increment_cache = AsyncMock(return_value=0.0)
     spend_counter_cache.redis_cache = None
     fake_module = types.ModuleType("litellm.proxy.proxy_server")
     fake_module.spend_counter_cache = spend_counter_cache
@@ -3108,12 +3239,15 @@ def test_window_reset_carries_counter_overage_when_rollover_enabled(rollover_ena
     job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
         monkeypatch, key_rows=key_rows, team_rows=[]
     )
-    spend_counter_cache.async_get_cache = AsyncMock(return_value=130.0)
+    spend_counter_cache.in_memory_cache.get_cache.return_value = 130.0
 
     asyncio.run(job.reset_budget_windows())
 
     prisma_client.db.litellm_verificationtoken.update.assert_awaited_once()
-    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:sk-roll:window:1d", value=30.0)
+    spend_counter_cache.async_increment_cache.assert_awaited_once_with(
+        key="spend:key:sk-roll:window:1d",
+        value=-100.0,
+    )
 
 
 def test_window_reset_zeroes_counter_when_rollover_disabled(monkeypatch):
@@ -3128,9 +3262,11 @@ def test_window_reset_zeroes_counter_when_rollover_disabled(monkeypatch):
     job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
         monkeypatch, key_rows=key_rows, team_rows=[]
     )
-    spend_counter_cache.async_get_cache = AsyncMock(return_value=130.0)
+    spend_counter_cache.in_memory_cache.get_cache.return_value = 130.0
 
     asyncio.run(job.reset_budget_windows())
 
-    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:key:sk-off:window:1d", value=0.0)
-    spend_counter_cache.async_get_cache.assert_not_awaited()
+    spend_counter_cache.async_increment_cache.assert_awaited_once_with(
+        key="spend:key:sk-off:window:1d",
+        value=-130.0,
+    )

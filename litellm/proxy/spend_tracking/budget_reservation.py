@@ -31,6 +31,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     model_access_group_spend_counter_key,
     tag_cache_key,
     team_membership_reservation_cache_key,
+    user_spend_counter_key,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
@@ -186,6 +187,7 @@ async def reserve_budget_for_request(
     end_user_id: str | None = None,
     end_user_object: object = None,
     apply_user_budget_to_team_keys: bool = False,
+    skip_user_budget_on_team_key: bool | None = None,
     fail_closed_budget_enforcement: bool = False,
 ) -> dict | None:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
@@ -213,6 +215,7 @@ async def reserve_budget_for_request(
         end_user_id=end_user_id,
         end_user_object=end_user_object,
         apply_user_budget_to_team_keys=apply_user_budget_to_team_keys,
+        skip_user_budget_on_team_key=skip_user_budget_on_team_key,
     )
     if not counters:
         return None
@@ -384,6 +387,7 @@ async def _get_budget_counters(
     end_user_id: str | None = None,
     end_user_object: object = None,
     apply_user_budget_to_team_keys: bool = False,
+    skip_user_budget_on_team_key: bool | None = None,
 ) -> list[_BudgetCounter]:
     counters: Final[list[_BudgetCounter]] = []
 
@@ -442,12 +446,23 @@ async def _get_budget_counters(
     ):
         counters.append(
             _BudgetCounter(
-                counter_key=f"spend:user:{user_object.user_id}",
+                counter_key=user_spend_counter_key(user_object.user_id),
                 source_cache_key=user_object.user_id,
                 max_budget=float(user_object.max_budget),
                 fallback_spend=float(user_object.spend or 0.0),
                 entity_type="User",
                 entity_id=user_object.user_id,
+            )
+        )
+    should_skip_user_windows = skip_user_budget_on_team_key is True
+    if not (is_team_key and should_skip_user_windows) and user_object is not None:
+        counters.extend(
+            _get_budget_limit_counters(
+                entity_prefix=user_spend_counter_key(user_object.user_id),
+                entity_type="User",
+                entity_id=user_object.user_id,
+                budget_limits=user_object.budget_limits,
+                fallback_spend=float(user_object.spend or 0.0),
             )
         )
 
