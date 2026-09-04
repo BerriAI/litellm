@@ -19298,6 +19298,7 @@
         "supports_tool_choice": true
     },
     "deepseek/deepseek-coder": {
+        "cache_read_input_token_cost": 1.4e-08,
         "input_cost_per_token": 1.4e-07,
         "input_cost_per_token_cache_hit": 1.4e-08,
         "litellm_provider": "deepseek",
@@ -19312,6 +19313,7 @@
         "supports_tool_choice": true
     },
     "deepseek/deepseek-r1": {
+        "cache_read_input_token_cost": 1.4e-07,
         "input_cost_per_token": 5.5e-07,
         "input_cost_per_token_cache_hit": 1.4e-07,
         "litellm_provider": "deepseek",
@@ -19367,6 +19369,7 @@
         "supports_tool_choice": true
     },
     "deepseek/deepseek-v3.2": {
+        "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 2.8e-07,
         "input_cost_per_token_cache_hit": 2.8e-08,
         "litellm_provider": "deepseek",
@@ -37360,6 +37363,7 @@
         "supports_tool_choice": true
     },
     "openrouter/deepseek/deepseek-chat-v3.1": {
+        "cache_read_input_token_cost": 2e-08,
         "input_cost_per_token": 2e-07,
         "input_cost_per_token_cache_hit": 2e-08,
         "litellm_provider": "openrouter",
@@ -37375,6 +37379,7 @@
         "supports_tool_choice": true
     },
     "openrouter/deepseek/deepseek-v3.2": {
+        "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 2.8e-07,
         "input_cost_per_token_cache_hit": 2.8e-08,
         "litellm_provider": "openrouter",
@@ -37390,6 +37395,7 @@
         "supports_tool_choice": true
     },
     "openrouter/deepseek/deepseek-v3.2-exp": {
+        "cache_read_input_token_cost": 2e-08,
         "input_cost_per_token": 2e-07,
         "input_cost_per_token_cache_hit": 2e-08,
         "litellm_provider": "openrouter",
@@ -37405,6 +37411,7 @@
         "supports_tool_choice": true
     },
     "openrouter/deepseek/deepseek-r1": {
+        "cache_read_input_token_cost": 1.4e-07,
         "input_cost_per_token": 5.5e-07,
         "input_cost_per_token_cache_hit": 1.4e-07,
         "litellm_provider": "openrouter",
@@ -37420,6 +37427,7 @@
         "supports_tool_choice": true
     },
     "openrouter/deepseek/deepseek-r1-0528": {
+        "cache_read_input_token_cost": 1.4e-07,
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_cache_hit": 1.4e-07,
         "litellm_provider": "openrouter",
