@@ -77,15 +77,19 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        if api_key is None:
+        if api_key is None or not api_key.strip():
             api_key = get_secret_str("MISTRAL_API_KEY")
+        if api_key is None or not api_key.strip():
+            raise ValueError("Missing MISTRAL_API_KEY - set it in the environment or pass api_key to transcription")
 
         default_headers: Final = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
         }
-        default_headers.update(headers or {})
-        return default_headers
+        non_auth_headers: Final = {
+            name: value for name, value in (headers or {}).items() if name.lower() != "authorization"
+        }
+        return {**non_auth_headers, **default_headers}
 
     def transform_audio_transcription_request(
         self,

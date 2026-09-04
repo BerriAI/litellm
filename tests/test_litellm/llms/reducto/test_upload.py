@@ -11,6 +11,25 @@ from litellm.llms.reducto.common import (
     upload_bytes_async,
     upload_bytes_sync,
 )
+from litellm.llms.reducto.ocr.transformation import ReductoParseV3Config
+
+
+def test_reducto_exposes_api_key_environment_variable():
+    assert ReductoParseV3Config().get_api_key_env_var() == "REDUCTO_API_KEY"
+
+
+def test_reducto_configured_key_replaces_forwarded_auth():
+    headers = ReductoParseV3Config().validate_environment(
+        headers={"authorization": "Bearer forwarded", "x-trace": "trace"},
+        model="parse-v3",
+        api_key="configured",
+    )
+
+    assert headers == {
+        "Authorization": "Bearer configured",
+        "Content-Type": "application/json",
+        "x-trace": "trace",
+    }
 
 
 @pytest.fixture()
@@ -42,9 +61,7 @@ async def test_parse_v3_rejects_plain_http_urls(disable_aiohttp_transport):
 
 
 @pytest.mark.asyncio
-async def test_parse_v3_image_data_uri_upload_uses_image_mime(
-    disable_aiohttp_transport, respx_mock
-):
+async def test_parse_v3_image_data_uri_upload_uses_image_mime(disable_aiohttp_transport, respx_mock):
     upload_route = respx_mock.post("https://custom.reducto.test/upload").respond(
         json={"file_id": "reducto://uploaded-image.png"}
     )
@@ -85,9 +102,7 @@ async def test_parse_v3_image_data_uri_upload_uses_image_mime(
 
 
 @pytest.mark.asyncio
-async def test_parse_v3_uses_programmatic_api_key_over_env(
-    disable_aiohttp_transport, respx_mock
-):
+async def test_parse_v3_uses_programmatic_api_key_over_env(disable_aiohttp_transport, respx_mock):
     upload_route = respx_mock.post("https://platform.reducto.ai/upload").respond(
         json={"file_id": "reducto://uploaded.pdf"}
     )
@@ -98,9 +113,7 @@ async def test_parse_v3_uses_programmatic_api_key_over_env(
                 "chunks": [
                     {
                         "content": "Programmatic auth",
-                        "blocks": [
-                            {"content": "Programmatic auth", "bbox": {"page": 1}}
-                        ],
+                        "blocks": [{"content": "Programmatic auth", "bbox": {"page": 1}}],
                     }
                 ]
             },

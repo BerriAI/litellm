@@ -333,7 +333,7 @@ def get_azure_ad_token(
         scope = "https://cognitiveservices.azure.com/.default"
 
     # Try to get token provider from Entra ID
-    if azure_ad_token_provider is None and tenant_id and client_id and client_secret:
+    if azure_ad_token_provider is None and azure_ad_token is None and tenant_id and client_id and client_secret:
         verbose_logger.debug("Using Azure AD Token Provider from Entra ID for Azure Auth")
         azure_ad_token_provider = get_azure_ad_token_from_entra_id(
             tenant_id=tenant_id,
@@ -343,7 +343,7 @@ def get_azure_ad_token(
         )
 
     # Try to get token provider from username and password
-    if azure_ad_token_provider is None and azure_username and azure_password and client_id:
+    if azure_ad_token_provider is None and azure_ad_token is None and azure_username and azure_password and client_id:
         verbose_logger.debug("Using Azure Username and Password for Azure Auth")
         azure_ad_token_provider = get_azure_ad_token_from_username_password(
             azure_username=azure_username,
@@ -714,9 +714,15 @@ class BaseAzureLLM(BaseOpenAILLM):
     def _base_validate_azure_environment(headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
 
-        # Check if api-key is already in headers; if so, use it
-        if "api-key" in headers:
-            return headers
+        forwarded_api_key: Final = next(
+            (value for name, value in headers.items() if name.lower() == "api-key" and str(value).strip()),
+            None,
+        )
+        non_auth_headers: Final = {
+            name: value for name, value in headers.items() if name.lower() not in {"api-key", "authorization"}
+        }
+        if forwarded_api_key is not None:
+            return {**non_auth_headers, "api-key": forwarded_api_key}
 
         api_key: Final = (
             litellm_params.api_key
@@ -727,16 +733,15 @@ class BaseAzureLLM(BaseOpenAILLM):
         )
 
         if api_key:
-            headers["api-key"] = api_key
-            return headers
+            return {**non_auth_headers, "api-key": api_key}
 
         ### Fallback to Azure AD token-based authentication if no API key is available
         ### Retrieves Azure AD token and adds it to the Authorization header
         azure_ad_token: Final = get_azure_ad_token(litellm_params)
         if azure_ad_token:
-            headers["Authorization"] = f"Bearer {azure_ad_token}"
+            return {**non_auth_headers, "Authorization": f"Bearer {azure_ad_token}"}
 
-        return headers
+        return non_auth_headers
 
     @staticmethod
     def _get_base_azure_url(
