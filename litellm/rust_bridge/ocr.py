@@ -152,7 +152,7 @@ def _call_ocr(rust_ocr: RustOcr, request: RustOCRRequest) -> Mapping[str, object
         extra_headers=request.extra_headers,
         optional_params=request.optional_params,
         timeout_seconds=_timeout_to_seconds(request.timeout),
-        callback_adapter=request.callback_adapter,
+        **({"callback_adapter": request.callback_adapter} if request.callback_adapter is not None else {}),
     )
 
 
@@ -166,5 +166,5 @@ def _call_aocr(rust_aocr: RustAocr, request: RustOCRRequest) -> Awaitable[Mappin
         extra_headers=request.extra_headers,
         optional_params=request.optional_params,
         timeout_seconds=_timeout_to_seconds(request.timeout),
-        callback_adapter=request.callback_adapter,
+        **({"callback_adapter": request.callback_adapter} if request.callback_adapter is not None else {}),
     )

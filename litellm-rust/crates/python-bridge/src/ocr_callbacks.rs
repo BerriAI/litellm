@@ -62,7 +62,6 @@ impl PythonOcrObserver {
 impl OcrObserver for PythonOcrObserver {
     type Error = PyErr;
 
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     async fn pre_call(&mut self, input: &OcrPreCall) -> PyResult<()> {
         match self {
             Self::Disabled => Ok(()),
@@ -71,7 +70,6 @@ impl OcrObserver for PythonOcrObserver {
         }
     }
 
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     async fn post_call(&mut self, input: &OcrPostCall) -> PyResult<()> {
         match self {
             Self::Disabled => Ok(()),

@@ -3,7 +3,6 @@
 import importlib
 import os
 import subprocess
-import types
 from pathlib import Path
 from typing import Any, Final
 from unittest.mock import Mock

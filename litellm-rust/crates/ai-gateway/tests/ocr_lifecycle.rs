@@ -11,9 +11,7 @@ use litellm_ai_gateway::integrations::custom_logger::{
 use litellm_ai_gateway::integrations::types::RequestMetadata;
 use litellm_ai_gateway::ocr::{OcrRequest, ocr, ocr_with_observer};
 use litellm_core::error::Error;
-use litellm_core::http_utils::has_header;
 use litellm_core::ocr::observers::{OcrObserver, OcrPostCall, OcrPreCall};
-use litellm_core::ocr::transformation::OcrResponseHandling;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -140,11 +138,7 @@ async fn invalid_ocr_preparation_does_not_call_observers_or_provider() {
         document: json!(42),
         ..observer_request(&url)
     };
-    assert!(
-        ocr_with_observer(request, &mut observer)
-            .await
-            .is_err()
-    );
+    assert!(ocr_with_observer(request, &mut observer).await.is_err());
     assert!(events.lock().unwrap().is_empty());
     assert!(
         tokio::time::timeout(Duration::from_millis(50), listener.accept())
