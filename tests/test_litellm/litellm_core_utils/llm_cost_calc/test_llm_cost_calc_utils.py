@@ -2008,6 +2008,49 @@ def test_generic_cost_per_token_azure_gpt56(_local_model_cost_map,
     assert round(completion_cost, 10) == round(output_cost * completion_tokens, 10)
 
 
+@pytest.mark.parametrize("model,zone_multiplier", [("azure/gpt-6-astra", 1.0), ("azure/us/gpt-6-astra", 1.1)])
+@pytest.mark.parametrize(
+    "prompt_tokens,input_side_multiplier,output_multiplier",
+    [(100000, 1.0, 1.0), (300000, 2.0, 1.5)],
+)
+def test_generic_cost_per_token_azure_gpt_6_astra_foundry_price_sheet(
+    _local_model_cost_map,
+    model,
+    zone_multiplier,
+    prompt_tokens,
+    input_side_multiplier,
+    output_multiplier,
+):
+    """Microsoft Foundry sells gpt-6-astra at the OpenAI rates: $10 input, $1 cache read, $12.50 cache write,
+    $50 output per 1M tokens on Standard Global, with the input side doubling and output 1.5x above 272K
+    prompt tokens. Standard US Data Zone carries the usual 10% uplift on every rate.
+    """
+    cached_tokens = 50000
+    cache_write_tokens = 40000
+    text_tokens = prompt_tokens - cached_tokens - cache_write_tokens
+    completion_tokens = 1000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="azure",
+    )
+
+    input_side = zone_multiplier * input_side_multiplier
+    assert prompt_cost == pytest.approx(
+        input_side * (text_tokens * 1e-5 + cached_tokens * 1e-6 + cache_write_tokens * 1.25e-5)
+    )
+    assert completion_cost == pytest.approx(zone_multiplier * output_multiplier * completion_tokens * 5e-5)
+
+
 @pytest.mark.parametrize(
     "model,expected_none,expected_xhigh,expected_minimal",
     [
