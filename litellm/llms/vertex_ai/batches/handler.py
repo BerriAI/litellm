@@ -218,7 +218,17 @@ class VertexAIBatchPrediction(VertexLLM):
             model=model,
             vertex_location=vertex_location,
         )
-        response: Final = sync_handler.get(url=endpoint_url, headers=headers)
+        # ``api_base`` can come from caller-supplied request kwargs, so wrap the
+        # fetch in ``safe_get``: it rejects DNS-rebind / private / cloud-metadata
+        # targets before the bearer token leaves the process (mirrors retrieve_batch).
+        fetched: Final[_FetchedResponseView] = {
+            "response": safe_get(
+                sync_handler,
+                endpoint_url,
+                headers=headers,
+            )
+        }
+        response: Final = fetched["response"]
         if response.status_code != 200:
             raise VertexAIError(
                 status_code=response.status_code,
