@@ -845,7 +845,7 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
 def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     """
     Return a copy of the /health response with provider routing fields
-    (``api_base``, ``api_version``) removed from each healthy/unhealthy
+    (``ADMIN_ONLY_HEALTH_DISPLAY_PARAMS``) removed from each healthy/unhealthy
     endpoint entry. Used to hide those fields from non-admin callers while
     still showing them which deployments they own and whether each one is
     healthy. Proxy admins receive the unmodified result.
@@ -874,6 +874,18 @@ def _health_accessible_model_names(
             proxy_model_list=llm_router.get_model_names(team_id=user_api_key_dict.team_id),
             model_access_groups=llm_router.get_model_access_groups(),
         )
+    )
+
+
+def _caller_may_probe_deployment(
+    deployment: Mapping[str, object], allowed_models: frozenset[str], llm_router: Router | None, team_id: str | None
+) -> bool:
+    """Same deployment visibility rule as request auth: another team's deployment is never in scope."""
+    if llm_router is None:
+        return deployment.get("model_name") in allowed_models
+    model: Final = dict(deployment)
+    return any(
+        llm_router.should_include_deployment(model_name=name, model=model, team_id=team_id) for name in allowed_models
     )
 
 
@@ -1079,7 +1091,9 @@ async def health_endpoint(
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         if is_admin:
             return result
-        response.headers["Litellm-Health-Field-Notice"] = "api_base and api_version are admin-only on this endpoint"
+        response.headers["Litellm-Health-Field-Notice"] = (
+            f"{', '.join(ADMIN_ONLY_HEALTH_DISPLAY_PARAMS)} are admin-only on this endpoint"
+        )
         return _strip_admin_only_fields_from_health_result(result)
 
     try:
@@ -1106,7 +1120,10 @@ async def health_endpoint(
         allowed_models: Final = _health_accessible_model_names(user_api_key_dict, llm_router)
         restrict_to_allowed_models: Final = allowed_models is not None
         _llm_model_list: Final = [
-            m for m in copy.deepcopy(llm_model_list) if allowed_models is None or m.get("model_name") in allowed_models
+            m
+            for m in copy.deepcopy(llm_model_list)
+            if allowed_models is None
+            or _caller_may_probe_deployment(m, allowed_models, llm_router, user_api_key_dict.team_id)
         ]
         if use_background_health_checks:
             # The cached background result covers every model. When the
