@@ -3,14 +3,15 @@
 import builtins
 import importlib
 import types
-from typing import Any
+from typing import Any, Final
+from unittest.mock import Mock
 
 import httpx
 import pytest
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.rust_bridge import configuration
+from litellm.rust_bridge import bindings, configuration
 
 # `litellm/__init__.py` does `from .ocr.main import *`, which binds the `ocr`
 # function onto `litellm.ocr` and shadows the submodule, so import the modules
@@ -259,14 +260,14 @@ def test_env_var_enables_rust_ocr(monkeypatch):
 def test_explicit_false_overrides_process_enable():
     litellm.rust(True)
 
-    assert ocr_main._rust_ocr_enabled(build_prepared_request(litellm_params={"rust": False})) is False
+    assert ocr_main._rust_request_override(build_prepared_request(litellm_params={"rust": False})) is False
 
 
 def test_load_rust_ocr_returns_injected_impl():
     bridge = RecordingBridge()
     litellm.rust(True)
     rust_bridge.set_rust_ocr(ocr=bridge)
-    assert rust_bridge.load_rust_ocr() is bridge
+    assert rust_bridge._OCR.sync.load() is bridge
 
 
 def test_native_bridge_loader_returns_none_when_extension_absent(monkeypatch):
@@ -330,7 +331,7 @@ def test_load_rust_aocr_returns_injected_impl():
     bridge = RecordingAsyncBridge()
     litellm.rust(True)
     rust_bridge.set_rust_ocr(aocr=bridge)
-    assert rust_bridge.load_rust_aocr() is bridge
+    assert rust_bridge._OCR.asynchronous.load() is bridge
 
 
 def test_toggle_without_ocr_arg_preserves_injected_impl():
@@ -341,16 +342,16 @@ def test_toggle_without_ocr_arg_preserves_injected_impl():
     rust_bridge.set_rust_ocr(ocr=bridge, aocr=async_bridge)
 
     litellm.rust(False)
-    assert rust_bridge.load_rust_ocr() is bridge
-    assert rust_bridge.load_rust_aocr() is async_bridge
+    assert rust_bridge._OCR.sync.load() is bridge
+    assert rust_bridge._OCR.asynchronous.load() is async_bridge
     litellm.rust(True)
-    assert rust_bridge.load_rust_ocr() is bridge
-    assert rust_bridge.load_rust_aocr() is async_bridge
+    assert rust_bridge._OCR.sync.load() is bridge
+    assert rust_bridge._OCR.asynchronous.load() is async_bridge
 
 
 def test_explicit_ocr_none_clears_injected_impl(monkeypatch):
     monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge"),
+        bindings,
         "get_native_bridge",
         lambda: None,
     )
@@ -360,21 +361,21 @@ def test_explicit_ocr_none_clears_injected_impl(monkeypatch):
     rust_bridge.set_rust_ocr(ocr=bridge, aocr=async_bridge)
 
     rust_bridge.set_rust_ocr(ocr=None, aocr=None)
-    assert rust_bridge.load_rust_ocr() is None
-    assert rust_bridge.load_rust_aocr() is None
+    assert rust_bridge._OCR.sync.load() is None
+    assert rust_bridge._OCR.asynchronous.load() is None
 
 
 def test_load_rust_ocr_none_when_extension_absent(monkeypatch):
     """With no injected impl and no compiled wheel, the loader returns None so the
     caller degrades to the Python path instead of raising ImportError."""
     monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge"),
+        bindings,
         "get_native_bridge",
         lambda: None,
     )
     litellm.rust(True)  # no impl injected; extension isn't built in CI
-    assert rust_bridge.load_rust_ocr() is None
-    assert rust_bridge.load_rust_aocr() is None
+    assert rust_bridge._OCR.sync.load() is None
+    assert rust_bridge._OCR.asynchronous.load() is None
 
 
 def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
@@ -385,14 +386,14 @@ def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
     fake_module.ocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
     fake_module.aocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
     monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge"),
+        bindings,
         "get_native_bridge",
         lambda: fake_module,
     )
 
     litellm.rust(True)  # enabled, no impl injected -> import the extension
-    assert rust_bridge.load_rust_ocr() is fake_module.ocr
-    assert rust_bridge.load_rust_aocr() is fake_module.aocr
+    assert rust_bridge._OCR.sync.load() is fake_module.ocr
+    assert rust_bridge._OCR.asynchronous.load() is fake_module.aocr
 
 
 def test_timeout_to_seconds_handles_float_timeout_and_none():
@@ -408,14 +409,20 @@ def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():
 
     rust_bridge.set_rust_ocr(ocr=bridge)
     response = rust_bridge.ocr(
+        prepare=lambda: rust_bridge.RustOCRRequest(
+            model="mistral-ocr-latest",
+            document=DOCUMENT,
+            api_key="sk-test",
+            api_base="https://proxy.internal",
+            custom_llm_provider="mistral",
+            extra_headers={"Authorization": "Bearer sk-test", "x-trace-id": "trace-1"},
+            optional_params={"include_image_base64": True, "pages": [0]},
+            timeout=12.5,
+        ),
         model="mistral-ocr-latest",
-        document=DOCUMENT,
-        api_key="sk-test",
-        api_base="https://proxy.internal",
-        custom_llm_provider="mistral",
-        extra_headers={"Authorization": "Bearer sk-test", "x-trace-id": "trace-1"},
-        optional_params={"include_image_base64": True, "pages": [0]},
-        timeout=12.5,
+        provider="mistral",
+        request_override=True,
+        eligible=True,
     )
 
     assert response == FAKE_OCR_RESPONSE
@@ -443,14 +450,20 @@ async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response():
 
     rust_bridge.set_rust_ocr(aocr=bridge)
     response = await rust_bridge.aocr(
+        prepare=lambda: rust_bridge.RustOCRRequest(
+            model="mistral-ocr-maas",
+            document=DOCUMENT,
+            api_key=None,
+            api_base=None,
+            custom_llm_provider="vertex_ai",
+            extra_headers=None,
+            optional_params={"vertex_project": "project-1"},
+            timeout=httpx.Timeout(30.0, read=42.0),
+        ),
         model="mistral-ocr-maas",
-        document=DOCUMENT,
-        api_key=None,
-        api_base=None,
-        custom_llm_provider="vertex_ai",
-        extra_headers=None,
-        optional_params={"vertex_project": "project-1"},
-        timeout=httpx.Timeout(30.0, read=42.0),
+        provider="vertex_ai",
+        request_override=True,
+        eligible=True,
     )
 
     assert response == FAKE_OCR_RESPONSE
@@ -808,23 +821,27 @@ def test_ocr_passes_default_request_timeout_to_rust(fake_bridge):
     assert fake_bridge.calls[0]["timeout_seconds"] == float(request_timeout)
 
 
-def test_ocr_does_not_route_to_rust_when_disabled():
-    """With the flag off, the bridge must not be consulted even if an impl exists."""
-    bridge = RecordingBridge()
-    litellm.rust(False)
-    rust_bridge.set_rust_ocr(ocr=bridge)
+def test_ocr_disabled_never_loads_or_prepares_rust(monkeypatch: pytest.MonkeyPatch):
+    def fail() -> None:
+        pytest.fail("disabled OCR must not load or prepare Rust")
 
-    assert rust_bridge.rust_ocr_enabled() is False
-    # The impl stays available for injection, but the disabled flag gates usage,
-    # so ocr() never reaches the Rust path (asserted via the enabled-path test).
-    assert bridge.calls == []
+    python_ocr: Final = Mock(return_value=OCRResponse(pages=[], model="mistral-ocr-latest", object="ocr"))
+    litellm.rust(False)
+    monkeypatch.setattr(bindings, "get_native_bridge", fail)
+    monkeypatch.setattr(ocr_main, "_prepare_rust_ocr_call", fail)
+    monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", python_ocr)
+
+    response: Final = litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
+
+    assert isinstance(response, OCRResponse)
+    python_ocr.assert_called_once()
 
 
 def test_ocr_falls_back_to_python_when_bridge_unavailable(monkeypatch):
     """Rust enabled but no bridge available (no injected impl, no compiled wheel):
     ocr() must degrade to the Python HTTP handler instead of raising."""
-    monkeypatch.setattr(rust_bridge, "load_rust_ocr", lambda: None)
-    litellm.rust(True)  # enabled, but load_rust_ocr() returns None in CI
+    rust_bridge._OCR.sync.override(None)
+    litellm.rust(True)
 
     captured = {}
 

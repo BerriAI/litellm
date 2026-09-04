@@ -33,3 +33,21 @@ def test_binding_validates_native_attribute(
     binding: Final = bindings.NativeBinding("route", validate=lambda item: item if isinstance(item, int) else None)
 
     assert binding.load() == expected
+
+
+@pytest.mark.parametrize("value", (None, 3, "not callable"))
+def test_callable_binding_rejects_non_callables(monkeypatch: pytest.MonkeyPatch, value: object) -> None:
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: SimpleNamespace(route=value))
+
+    binding: bindings.NativeBinding[object] = bindings.NativeBinding.callable("route")
+
+    assert binding.load() is None
+
+
+def test_callable_binding_resolves_callable(monkeypatch: pytest.MonkeyPatch) -> None:
+    native = SimpleNamespace(route=lambda: "native")
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
+
+    binding: bindings.NativeBinding[object] = bindings.NativeBinding.callable("route")
+
+    assert binding.load() is native.route

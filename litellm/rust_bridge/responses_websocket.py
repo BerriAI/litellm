@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Final, Protocol
 
 import httpx
 from websockets.exceptions import ConnectionClosedOK
 
-from litellm.rust_bridge.loader import get_native_bridge
+from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
+from litellm.rust_bridge.configuration import rust_enabled
+from litellm.rust_bridge.runtime import (
+    BridgeErrorContext,
+    RustBridge,
+    async_none,
+)
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
 
@@ -30,39 +35,22 @@ class RustResponsesWebSocketConnection(Protocol):
     ) -> RustResponsesWebSocket: ...
 
 
-class _Unset:
-    pass
-
-
-_UNSET: Final[_Unset] = _Unset()
-
-
-@dataclass(slots=True)
-class _RustResponsesWebSocketState:
-    connection: RustResponsesWebSocketConnection | None = None
-
-
-_STATE: Final[_RustResponsesWebSocketState] = _RustResponsesWebSocketState()
+_RESPONSES_WEBSOCKET: Final[RustBridge[RustResponsesWebSocketConnection]] = RustBridge.native(
+    route="responses websocket",
+    attribute="ResponsesWebSocketConnection",
+    enabled=rust_enabled,
+)
 
 
 def set_rust_responses_websocket(
     *,
-    connection: RustResponsesWebSocketConnection | None | _Unset = _UNSET,
+    connection: RustResponsesWebSocketConnection | None | Unchanged = UNCHANGED,
 ) -> None:
-    if not isinstance(connection, _Unset):
-        _STATE.connection = connection
-
-
-def load_rust_responses_websocket() -> RustResponsesWebSocketConnection | None:
-    if _STATE.connection is not None:
-        return _STATE.connection
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    connection_type: Final[RustResponsesWebSocketConnection | None] = getattr(
-        native_bridge, "ResponsesWebSocketConnection", None
-    )
-    return connection_type
+    if not isinstance(connection, Unchanged):
+        if connection is None:
+            _RESPONSES_WEBSOCKET.reset()
+        else:
+            _RESPONSES_WEBSOCKET.override(connection)
 
 
 class _ConnectionAdapter:
@@ -87,16 +75,16 @@ async def connect(
     url: str,
     headers: dict[str, str],
     timeout: float | httpx.Timeout | None,
+    request_override: bool | None = None,
 ) -> _ConnectionAdapter | None:
-    connection_type: Final = load_rust_responses_websocket()
-    if connection_type is None:
-        return None
-    try:
-        connection: Final = await connection_type.connect(
+    return await _RESPONSES_WEBSOCKET.ainvoke(
+        call=lambda connection_type: connection_type.connect(
             url=url,
             headers=headers,
             timeout_seconds=timeout_to_seconds(timeout),
-        )
-    except Exception:  # noqa: BLE001  # bridge failures must fall back to Python
-        return None
-    return _ConnectionAdapter(connection)
+        ),
+        fallback=async_none,
+        adapt=_ConnectionAdapter,
+        context=BridgeErrorContext(provider="openai", model="responses websocket"),
+        request_override=request_override,
+    )

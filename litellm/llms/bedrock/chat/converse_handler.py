@@ -452,6 +452,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                         api_key=api_key,
                         skip_pre_call_logging=True,
                     ),
+                    request_override=rust_chat_completions_bridge.rust_request_override(litellm_params),
                 )
             rust_response: Final = rust_chat_completions_bridge.chat_completions(
                 model=model,
@@ -464,6 +465,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 extra_headers=headers,
                 timeout=timeout,
                 on_response=log_rust_post_call,
+                request_override=rust_chat_completions_bridge.rust_request_override(litellm_params),
             )
             if rust_response is not None:
                 return rust_response

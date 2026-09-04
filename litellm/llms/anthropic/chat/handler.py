@@ -465,6 +465,7 @@ class AnthropicChatCompletion(BaseLLM):
                     timeout=timeout,
                     on_response=log_rust_post_call,
                     python_fallback=python_fallback,
+                    request_override=rust_chat_completions_bridge.rust_request_override(litellm_params),
                 )
             rust_response: Final = rust_chat_completions_bridge.chat_completions(
                 model=model,
@@ -477,6 +478,7 @@ class AnthropicChatCompletion(BaseLLM):
                 extra_headers=headers,
                 timeout=timeout,
                 on_response=log_rust_post_call,
+                request_override=rust_chat_completions_bridge.rust_request_override(litellm_params),
             )
             if rust_response is not None:
                 return rust_response
