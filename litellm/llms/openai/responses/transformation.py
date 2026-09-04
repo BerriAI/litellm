@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _safe_convert_created_field,
 )
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
@@ -40,7 +41,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
     @staticmethod
     def _is_gpt_5_model(model: str) -> bool:
-        """Return True only for actual OpenAI GPT-5 models.
+        """Return True only for actual OpenAI GPT-5/GPT-6 reasoning models.
 
         Excludes pass-through models from other providers that happen to
         reference gpt-5 in their name (e.g. perplexity/openai/gpt-5.2).
@@ -48,7 +49,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         parts = model.split("/")
         if len(parts) > 1 and parts[0] not in ("openai",):
             return False
-        return "gpt-5" in model and "gpt-5-chat" not in model
+        return is_gpt_reasoning_series_name(model)
 
     @staticmethod
     def _supports_reasoning_effort_none(model: str) -> bool:

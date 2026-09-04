@@ -41,6 +41,8 @@ from litellm.llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 
 # Models that MUST be classified as GPT-5 (routed through GPT-5 reasoning path)
 GPT5_MODELS = [
+    "gpt-6-astra",
+    "openai/gpt-6-astra",
     "gpt-5",
     "gpt-5.1",
     "gpt-5.2",
@@ -234,3 +236,17 @@ class TestAzureOpenAIGPT5ConfigIsModelGpt5Model:
             assert AzureOpenAIGPT5Config.is_model_gpt_5_model(
                 model
             ), f"Azure '{model}' with gpt5_series/ prefix should be classified as GPT-5"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gpt-6-astra",
+        "openai/gpt-6-astra",
+        "gpt-5.4",
+        "gpt-5.5",
+        "gpt-5.5-pro",
+    ],
+)
+def test_gpt_6_and_gpt_5_4_plus_models_are_classified_as_gpt_5_4_plus(model: str):
+    assert OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)

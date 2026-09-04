@@ -44,6 +44,16 @@ def _get_effort_level(value: Union[str, dict, None]) -> Optional[str]:
     return None
 
 
+GPT_REASONING_SERIES_MARKERS = ("gpt-5", "gpt-6")
+
+
+def is_gpt_reasoning_series_name(model: str) -> bool:
+    normalized = model.split("/")[-1]
+    return any(
+        marker in model for marker in GPT_REASONING_SERIES_MARKERS
+    ) and not normalized.startswith("gpt-5-chat")
+
+
 class OpenAIGPT5Config(OpenAIGPTConfig):
     """Configuration for gpt-5 models including GPT-5-Codex variants.
 
@@ -56,21 +66,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
-        # The gpt-5-chat* family (gpt-5-chat, gpt-5-chat-latest, gpt-5-chat-2025-08-07,
-        # …) are regular chat models: they support temperature and tool_choice but NOT
-        # reasoning_effort.  They must NOT be routed through the GPT-5 reasoning path.
-        #
-        # Versioned chat models such as gpt-5.3-chat and gpt-5.1-chat ARE reasoning
-        # models and must stay on the GPT-5 path.  The distinguishing feature is that
-        # the gpt-5-chat family has a literal "-chat" immediately after "gpt-5"
-        # (i.e. "gpt-5-chat…"), while versioned chat models interpose a minor version
-        # number (i.e. "gpt-5.<digit>-chat").
-        #
-        # Using a startswith("gpt-5-chat") prefix check on the normalized name (rather
-        # than a substring check) makes this boundary explicit and avoids any ambiguity
-        # if future model names coincidentally contain "gpt-5-chat" as an interior run.
-        _normalized = model.split("/")[-1]  # strip provider prefix, e.g. "openai/"
-        return "gpt-5" in model and not _normalized.startswith("gpt-5-chat")
+        return is_gpt_reasoning_series_name(model)
 
     @classmethod
     def is_model_gpt_5_search_model(cls, model: str) -> bool:
@@ -110,6 +106,8 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         are handled by taking the minor version before the first ``-``.
         """
         model_name = model.split("/")[-1]
+        if model_name.startswith("gpt-6"):
+            return True
         if not model_name.startswith("gpt-5."):
             return False
         try:
