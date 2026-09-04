@@ -7216,7 +7216,12 @@ def _reserved_stamp_key(key_metadata: dict | None = None) -> UserAPIKeyAuth:
     )
 
 
-_PLANTED_STAMPS = {"attempted_fallbacks": 99, "original_model_group": "spoofed-group", "client_key": "client_value"}
+_PLANTED_STAMPS = {
+    "attempted_fallbacks": 99,
+    "original_model_group": "spoofed-group",
+    "litellm_guardrail_sampling_decisions": {"expensive-guard": False},
+    "client_key": "client_value",
+}
 
 
 @pytest.mark.asyncio
@@ -7245,6 +7250,7 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_bo
     assert "litellm_metadata" not in updated
     assert "attempted_fallbacks" not in updated["metadata"]
     assert "original_model_group" not in updated["metadata"]
+    assert "litellm_guardrail_sampling_decisions" not in updated["metadata"]
     assert updated["metadata"]["client_key"] == "client_value"
 
 
@@ -7270,6 +7276,7 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_js
     assert "litellm_metadata" not in updated
     assert "attempted_fallbacks" not in updated["metadata"]
     assert "original_model_group" not in updated["metadata"]
+    assert "litellm_guardrail_sampling_decisions" not in updated["metadata"]
     assert updated["metadata"]["client_key"] == "client_value"
 
 

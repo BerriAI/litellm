@@ -1005,6 +1005,18 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    sampling_percentage: float | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description=(
+            "Percentage (0-100) of eligible requests this guardrail evaluates; unset means 100. The "
+            "decision is drawn once per request and remembered in the request metadata, so every hook of "
+            "the same guardrail, its streaming chunks and router retries agree. Requests it skips are "
+            "recorded with guardrail_status 'not_run' and never count as evaluated or failed."
+        ),
+    )
+
     @field_validator(
         "mode",
         "default_action",

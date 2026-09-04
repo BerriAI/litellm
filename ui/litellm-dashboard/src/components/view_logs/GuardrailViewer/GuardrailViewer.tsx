@@ -137,6 +137,23 @@ const isEntrySuccess = (entry: GuardrailInformation): boolean => {
   return (entry.guardrail_status ?? "").toLowerCase() === "success";
 };
 
+export const isEntrySkipped = (entry: Pick<GuardrailInformation, "guardrail_status">): boolean => {
+  return (entry.guardrail_status ?? "").toLowerCase() === "not_run";
+};
+
+type EntryOutcome = "PASSED" | "FAILED" | "SKIPPED";
+
+const getEntryOutcome = (entry: GuardrailInformation): EntryOutcome => {
+  if (isEntrySkipped(entry)) return "SKIPPED";
+  return isEntrySuccess(entry) ? "PASSED" : "FAILED";
+};
+
+const OUTCOME_BADGE_CLASS: Record<EntryOutcome, string> = {
+  PASSED: "bg-success/15 text-success border border-success/20",
+  FAILED: "bg-destructive/15 text-destructive border border-destructive/20",
+  SKIPPED: "bg-muted text-muted-foreground border border-border",
+};
+
 const getRiskColor = (score: number): string => {
   if (score <= 3) return "text-success bg-success/10 border-success/20";
   if (score <= 6) return "text-warning bg-warning/10 border-warning/20";
@@ -214,6 +231,11 @@ const GrayDotIcon = () => (
     <circle cx="11" cy="11" r="5" fill="#9CA3AF" />
   </svg>
 );
+
+const OutcomeIcon = ({ outcome }: { outcome: EntryOutcome }) => {
+  if (outcome === "SKIPPED") return <GrayDotIcon />;
+  return outcome === "PASSED" ? <CheckCircleIcon /> : <FailCircleIcon />;
+};
 
 const ChevronIcon = ({ expanded }: { expanded: boolean }) => (
   <svg
@@ -318,8 +340,7 @@ interface TimelineEntry {
   type: "request" | "guardrail" | "llm" | "response";
   label: string;
   offsetMs: number;
-  status?: string;
-  isSuccess?: boolean;
+  status?: EntryOutcome;
 }
 
 const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
@@ -348,8 +369,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
         type: "guardrail",
         label: `Pre-call guardrail: ${getDisplayName(e)}`,
         offsetMs,
-        status: isEntrySuccess(e) ? "PASSED" : "FAILED",
-        isSuccess: isEntrySuccess(e),
+        status: getEntryOutcome(e),
       });
     }
 
@@ -372,8 +392,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
         type: "guardrail",
         label: `During-call guardrail: ${getDisplayName(e)}`,
         offsetMs,
-        status: isEntrySuccess(e) ? "PASSED" : "FAILED",
-        isSuccess: isEntrySuccess(e),
+        status: getEntryOutcome(e),
       });
     }
 
@@ -384,8 +403,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
         type: "guardrail",
         label: `Post-call guardrail: ${getDisplayName(e)}`,
         offsetMs,
-        status: isEntrySuccess(e) ? "PASSED" : "FAILED",
-        isSuccess: isEntrySuccess(e),
+        status: getEntryOutcome(e),
       });
     }
 
@@ -406,11 +424,11 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
             {/* Vertical line */}
             <div className="flex flex-col items-center">
               <div className="shrink-0">
-                {item.type === "request" || item.type === "response" ? (
+                {item.type === "request" || item.type === "response" || item.status === "SKIPPED" ? (
                   <GrayDotIcon />
                 ) : item.type === "llm" ? (
                   <PlayCircleIcon />
-                ) : item.isSuccess ? (
+                ) : item.status === "PASSED" ? (
                   <CheckCircleIcon />
                 ) : (
                   <FailCircleIcon />
@@ -427,9 +445,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
                 </span>
                 {item.status && (
                   <span
-                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
-                      item.isSuccess ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"
-                    }`}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${OUTCOME_BADGE_CLASS[item.status]}`}
                   >
                     {item.status}
                   </span>
@@ -456,6 +472,7 @@ const formatGuardrailCost = (cost: number): string => {
 const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
   const [expanded, setExpanded] = useState(false);
   const success = isEntrySuccess(entry);
+  const outcome = getEntryOutcome(entry);
   const totalMasked = getTotalMasked(entry);
   const displayName = getDisplayName(entry);
   const durationStr = formatDurationMs(entry.duration);
@@ -490,7 +507,9 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
         onClick={() => setExpanded(!expanded)}
       >
         {/* Status icon */}
-        <div className="shrink-0">{success ? <CheckCircleIcon /> : <FailCircleIcon />}</div>
+        <div className="shrink-0">
+          <OutcomeIcon outcome={outcome} />
+        </div>
 
         {/* Name + badges */}
         <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
@@ -501,13 +520,9 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
           </span>
 
           <span
-            className={`px-2 py-0.5 rounded text-[11px] font-semibold uppercase shrink-0 ${
-              success
-                ? "bg-success/15 text-success border border-success/20"
-                : "bg-destructive/15 text-destructive border border-destructive/20"
-            }`}
+            className={`px-2 py-0.5 rounded text-[11px] font-semibold uppercase shrink-0 ${OUTCOME_BADGE_CLASS[outcome]}`}
           >
-            {success ? "PASSED" : "FAILED"}
+            {outcome}
           </span>
 
           {matchCountStr && (
@@ -672,8 +687,10 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
         : [];
   }, [data]);
 
-  const passedCount = guardrailEntries.filter(isEntrySuccess).length;
-  const allPassed = passedCount === guardrailEntries.length;
+  const evaluatedEntries = guardrailEntries.filter((e) => !isEntrySkipped(e));
+  const skippedCount = guardrailEntries.length - evaluatedEntries.length;
+  const passedCount = evaluatedEntries.filter(isEntrySuccess).length;
+  const allPassed = passedCount === evaluatedEntries.length;
 
   const totalOverheadMs = useMemo(() => {
     return Math.round(guardrailEntries.reduce((sum, e) => sum + (e.duration ?? 0), 0) * 1000);
@@ -705,7 +722,8 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
             <h3 className="text-lg font-semibold text-foreground">Guardrails &amp; Policy Compliance</h3>
             <div className="flex items-center gap-2 mt-0.5">
               <span className="text-sm text-muted-foreground">
-                {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""} evaluated
+                {evaluatedEntries.length} guardrail{evaluatedEntries.length !== 1 ? "s" : ""} evaluated
+                {skippedCount > 0 ? `, ${skippedCount} skipped by sampling` : ""}
               </span>
               <span className="text-muted-foreground">|</span>
               <span

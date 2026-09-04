@@ -3,9 +3,13 @@ import copy
 import hashlib
 import os
 import secrets
+import time
 from collections.abc import Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, get_args
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -72,6 +76,71 @@ DEFAULT_ADVISORY_MESSAGE: Final = (
 _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
     "litellm_guardrail_self_recorded", default=False
 )
+
+
+_SAMPLING_DECISIONS_KEY: Final = "litellm_guardrail_sampling_decisions"
+_GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
+_METADATA_BUCKET_KEYS: Final = ("metadata", "litellm_metadata")
+_SYSTEM_RANDOM: Final = secrets.SystemRandom()
+_GUARDRAIL_INFORMATION_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+
+def _as_request_dict(value: object) -> dict[str, object] | None:  # mutable-ok: hooks share one request dict
+    return value if isinstance(value, dict) else None
+
+
+def _metadata_buckets(data: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    """Every proxy metadata bucket on the request. A guardrail run can add ``litellm_metadata`` next to
+    ``metadata``, which moves later writes to the new bucket, so readers must look at both."""
+    return tuple(bucket for key in _METADATA_BUCKET_KEYS if (bucket := _as_request_dict(data.get(key))) is not None)
+
+
+def _bucket_holding(
+    data: dict[str, object],  # mutable-ok: writes must land on the request dict the proxy logs from
+    key: str,
+) -> dict[str, object]:  # mutable-ok: the caller writes its entry into the returned bucket
+    """The metadata bucket that already carries ``key``, so one request keeps one list or map per key even
+    after ``litellm_metadata`` appears; falls back to the bucket the proxy currently writes to."""
+    holders: Final = tuple(
+        bucket
+        for bucket_key in _METADATA_BUCKET_KEYS
+        if (bucket := _as_request_dict(data.get(bucket_key))) is not None and key in bucket
+    )
+    return holders[0] if holders else get_or_create_metadata_bucket(data)[1]
+
+
+def _recorded_sampling_decisions(data: Mapping[str, object]) -> Mapping[str, bool]:
+    """Decisions already drawn for this request; entries that are not a bool are ignored, never raised on."""
+    return MappingProxyType(
+        {
+            name: decision
+            for bucket in _metadata_buckets(data)
+            if (recorded := _as_request_dict(bucket.get(_SAMPLING_DECISIONS_KEY))) is not None
+            for name, decision in recorded.items()
+            if isinstance(decision, bool)
+        }
+    )
+
+
+def _retained_guardrail_entries(bucket: Mapping[str, object]) -> tuple[object, ...]:
+    recorded: Final = bucket.get(_GUARDRAIL_INFORMATION_KEY)
+    return _GUARDRAIL_INFORMATION_ADAPTER.validate_python(recorded) if isinstance(recorded, list) else ()
+
+
+def _recorded_guardrail_information(data: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    """Guardrail entries other hooks already logged on this request; malformed entries are skipped."""
+    return tuple(
+        entry
+        for bucket in _metadata_buckets(data)
+        for raw in _retained_guardrail_entries(bucket)
+        if (entry := _as_request_dict(raw)) is not None
+    )
+
+
+class RequestSampler(Protocol):
+    def __call__(self) -> float:
+        """Returns a uniform draw in [0, 1)."""
+        ...
 
 
 def is_guardrail_intervention(e: Exception) -> bool:
@@ -169,6 +238,8 @@ class CustomGuardrail(CustomLogger):
         run_in_parallel: bool = False,
         scan_raw_request: bool = False,
         only_scan_new_messages: bool = False,
+        sampling_percentage: float = 100.0,
+        request_sampler: RequestSampler | None = None,
         **kwargs,
     ):
         """
@@ -197,6 +268,10 @@ class CustomGuardrail(CustomLogger):
                 guardrails: any data this guardrail returns is discarded, matching run_in_parallel's
                 contract, since applying its mutations on top of a stale snapshot would silently
                 undo whatever later guardrails already did to the live request.
+            sampling_percentage: Percentage (0-100) of eligible requests this guardrail evaluates. One
+                draw per request is remembered in the request metadata, so every hook, streaming chunk
+                and router retry of one request agrees; skipped requests are recorded as ``not_run``.
+            request_sampler: Returns a uniform draw in [0, 1). Inject a fixed one in tests.
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -214,6 +289,8 @@ class CustomGuardrail(CustomLogger):
         self.run_in_parallel: bool = run_in_parallel
         self.scan_raw_request: bool = scan_raw_request
         self.only_scan_new_messages: bool = only_scan_new_messages
+        self.sampling_percentage: float = sampling_percentage
+        self._request_sampler: Final = request_sampler or _SYSTEM_RANDOM.random
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks
@@ -946,8 +1023,71 @@ class CustomGuardrail(CustomLogger):
         event_type: GuardrailEventHooks,
     ) -> bool:
         """
-        Returns True if the guardrail should be run on the event_type
+        Returns True if the guardrail should be run on the event_type.
+
+        An eligible request that loses the sampling draw is recorded once in the request metadata
+        with guardrail_status ``not_run`` so Request Logs can tell "skipped by sampling" from "evaluated".
         """
+        if not self.is_eligible_for_event(data, event_type):
+            return False
+        if self._is_sampled_in(data):
+            return True
+        self._record_sampling_skip(data, event_type)
+        return False
+
+    def _is_sampled_in(self, data: object) -> bool:
+        """Draws once per request and remembers the outcome in the request metadata so every hook agrees."""
+        if self.sampling_percentage >= 100:
+            return True
+        if self.sampling_percentage <= 0:
+            return False
+        request: Final = _as_request_dict(data)
+        if request is None:
+            return self._request_sampler() * 100 < self.sampling_percentage
+        decisions: Final = _recorded_sampling_decisions(request)
+        name: Final = self.guardrail_name or ""
+        if name in decisions:
+            return decisions[name]
+        decision: Final = self._request_sampler() * 100 < self.sampling_percentage
+        metadata_bucket: Final = _bucket_holding(request, _SAMPLING_DECISIONS_KEY)
+        metadata_bucket[_SAMPLING_DECISIONS_KEY] = {  # mutable-ok: request metadata is deep-copied and JSON-serialised
+            **decisions,
+            name: decision,
+        }
+        return decision
+
+    def _record_sampling_skip(self, data: object, event_type: GuardrailEventHooks) -> None:
+        request: Final = _as_request_dict(data)
+        if request is None:
+            return
+        recorded: Final = _recorded_guardrail_information(request)
+        if any(
+            entry.get("guardrail_name") == self.guardrail_name and entry.get("guardrail_status") == "not_run"
+            for entry in recorded
+        ):
+            return
+        now: Final = time.time()
+        skipped: Final = StandardLoggingGuardrailInformation(
+            guardrail_name=self.guardrail_name,
+            guardrail_mode=event_type,
+            guardrail_response=f"skipped by sampling: guardrail evaluates {self.sampling_percentage:g}% of requests",
+            guardrail_status="not_run",
+            start_time=now,
+            end_time=now,
+            duration=0.0,
+        )
+        metadata_bucket: Final = _bucket_holding(request, _GUARDRAIL_INFORMATION_KEY)
+        metadata_bucket[_GUARDRAIL_INFORMATION_KEY] = [  # mutable-ok: later guardrail runs append to it
+            *_retained_guardrail_entries(metadata_bucket),
+            skipped,
+        ]
+
+    def is_eligible_for_event(
+        self,
+        data: dict[str, object],  # mutable-ok: the metadata readers below take the request dict
+        event_type: GuardrailEventHooks,
+    ) -> bool:
+        """Whether this guardrail applies to the request for ``event_type`` before any sampling draw."""
         requested_guardrails: Final = self.get_guardrail_from_metadata(data)
         disable_global_guardrail: Final = self.get_disable_global_guardrail(data)
         opted_out_global_guardrails: Final = self.get_opted_out_global_guardrails_from_metadata(data)

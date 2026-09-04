@@ -323,9 +323,13 @@ _CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.mod
 # guardrail cost.
 _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info", "standard_logging_guardrail_information"})
 # ``attempted_fallbacks`` and ``original_model_group`` are written by the router
-# and read by spend logs as fact; a client value has no legitimate meaning and no
-# key or team setting keeps it, so the strip is never gated.
-_ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset({"attempted_fallbacks", "original_model_group"})
+# and read by spend logs as fact; ``litellm_guardrail_sampling_decisions`` is the
+# guardrail layer's remembered per-request sampling draw, which a client could
+# otherwise seed to opt out of a sampled guardrail. A client value has no
+# legitimate meaning and no key or team setting keeps it, so the strip is never gated.
+_ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
+    {"attempted_fallbacks", "original_model_group", "litellm_guardrail_sampling_decisions"}
+)
 _ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY: Final = "allow_client_pricing_override"
 
 # Request fields whose value, when URL-valued, becomes the outbound destination

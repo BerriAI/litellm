@@ -325,7 +325,7 @@ class StraikerGuardrail(CustomGuardrail):
         )
 
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
-        super().__init__(**kwargs)
+        super().__init__(**kwargs)  # pyright: ignore[reportArgumentType]  # kwargs are forwarded as object
 
         self.configured_modes = _configured_modes(self.event_hook)
 

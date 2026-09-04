@@ -433,3 +433,65 @@ async def test_detail_prev_trend_query_is_bounded():
     prev_wheres = [w for w in wheres if "lt" in w.get("date", {})]
     assert prev_wheres
     assert all("gte" in w["date"] for w in prev_wheres)
+
+
+# ---- sampling-skipped runs (LIT-6893) ----------------------------------------
+
+
+def _index_row(request_id: str, guardrail_id: str = "db-1") -> MagicMock:
+    row = MagicMock()
+    row.request_id = request_id
+    row.guardrail_id = guardrail_id
+    row.policy_id = None
+    row.start_time = datetime(2026, 4, 21, 12, 0)
+    return row
+
+
+def _spend_log(request_id: str, guardrail_status: str, guardrail_id: str = "db-1") -> MagicMock:
+    log = MagicMock()
+    log.request_id = request_id
+    log.startTime = datetime(2026, 4, 21, 12, 0)
+    log.model = "gpt-4o"
+    log.response = None
+    log.messages = None
+    log.metadata = {
+        "guardrail_information": [
+            {"guardrail_id": guardrail_id, "guardrail_status": guardrail_status, "guardrail_response": "skipped"}
+        ]
+    }
+    return log
+
+
+@pytest.mark.asyncio
+async def test_logs_report_sampling_skipped_runs_as_skipped_not_passed():
+    """A ``not_run`` guardrail entry is a request the guardrail never evaluated, so the
+    Monitor must label it ``skipped`` rather than folding it into ``passed``."""
+    prisma = _prisma(find_unique=_db_row(), index_find_many=[_index_row("r-skip"), _index_row("r-pass")])
+    prisma.db.litellm_spendlogs.find_many = AsyncMock(
+        return_value=[_spend_log("r-skip", "not_run"), _spend_log("r-pass", "success")]
+    )
+    p1, p2 = _patches(prisma, InMemoryGuardrailHandler())
+    with p1, p2:
+        response = await guardrails_usage_logs(
+            guardrail_id="db-1",
+            policy_id=None,
+            page=1,
+            page_size=50,
+            action=None,
+            start_date=START,
+            end_date=END,
+            user_api_key_dict=ADMIN,
+        )
+        skipped_only = await guardrails_usage_logs(
+            guardrail_id="db-1",
+            policy_id=None,
+            page=1,
+            page_size=50,
+            action="skipped",
+            start_date=START,
+            end_date=END,
+            user_api_key_dict=ADMIN,
+        )
+
+    assert {log.id: log.action for log in response.logs} == {"r-skip": "skipped", "r-pass": "passed"}
+    assert [log.id for log in skipped_only.logs] == ["r-skip"]

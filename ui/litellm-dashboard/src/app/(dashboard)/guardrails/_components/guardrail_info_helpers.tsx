@@ -268,3 +268,28 @@ export function choiceToSkipToolForCreate(choice: SkipToolMessageChoice | undefi
   if (choice === "no") return false;
   return undefined;
 }
+
+/** `litellm_params.sampling_percentage`: share of eligible requests the guardrail evaluates. Unset means 100. */
+export const DEFAULT_SAMPLING_PERCENTAGE = 100;
+
+export function samplingPercentageToForm(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : DEFAULT_SAMPLING_PERCENTAGE;
+}
+
+export function validateSamplingPercentage(v: unknown): string | true {
+  if (v === undefined || v === null || v === "") return true;
+  if (typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 100) return true;
+  return "Sampling percentage must be a number between 0 and 100";
+}
+
+/** Create flow: omit the key when the user left the default so the backend default applies. */
+export function samplingPercentageForCreate(v: unknown): number | undefined {
+  if (typeof v !== "number" || v === DEFAULT_SAMPLING_PERCENTAGE) return undefined;
+  return v;
+}
+
+/** Update flow: `undefined` means unchanged (a blank field counts as the default). */
+export function samplingPercentageForUpdate(next: unknown, stored: unknown): number | undefined {
+  const nextValue = samplingPercentageToForm(next);
+  return nextValue === samplingPercentageToForm(stored) ? undefined : nextValue;
+}

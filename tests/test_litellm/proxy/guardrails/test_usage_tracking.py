@@ -320,3 +320,43 @@ async def test_payload_without_request_id_is_skipped_like_the_metrics_path():
         ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 1,
     }
     assert prisma.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]["requests_evaluated"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sampling_skipped_entries_are_indexed_but_never_counted_as_evaluated():
+    """
+    LIT-6893: a ``not_run`` entry (guardrail skipped by sampling) must show up in the
+    per-guardrail log index so the Monitor can list it, but it is neither evaluated,
+    passed, blocked nor flagged in the daily metrics.
+    """
+    prisma = _prisma()
+    logs = [
+        _payload("r1", guardrail_status="not_run"),
+        _payload("r2", guardrail_status="success"),
+        _payload("r3", guardrail_status="not_run"),
+    ]
+
+    await process_spend_logs_guardrail_usage(prisma, logs)
+
+    index_rows = prisma.db.litellm_spendlogguardrailindex.create_many.call_args.kwargs["data"]
+    assert sorted(row["request_id"] for row in index_rows) == ["r1", "r2", "r3"]
+    metrics_upsert = prisma.db.litellm_dailyguardrailmetrics.upsert
+    assert metrics_upsert.call_count == 1
+    assert metrics_upsert.call_args.kwargs["data"]["create"] == {
+        "guardrail_id": "bedrock-guard",
+        "date": "2026-08-17",
+        "requests_evaluated": 1,
+        "passed_count": 1,
+        "blocked_count": 0,
+        "flagged_count": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_only_sampling_skipped_entries_writes_no_daily_metrics_row():
+    prisma = _prisma()
+
+    await process_spend_logs_guardrail_usage(prisma, [_payload("r1", guardrail_status="not_run")])
+
+    assert prisma.db.litellm_spendlogguardrailindex.create_many.call_count == 1
+    assert prisma.db.litellm_dailyguardrailmetrics.upsert.call_count == 0

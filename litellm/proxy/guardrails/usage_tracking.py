@@ -160,8 +160,8 @@ async def _upsert_rows_with_retry(
     return await _upsert_rows_with_retry(retryable, upsert_row, label, sleep, retries_left - 1)
 
 
-def _guardrail_status_to_action(status: str | None) -> str:
-    """Map StandardLogging guardrail_status to blocked/passed/flagged."""
+def guardrail_status_to_action(status: str | None) -> str:
+    """Map StandardLogging guardrail_status to blocked/passed/flagged/skipped."""
     if not status:
         return "passed"
     s: Final = (status or "").lower()
@@ -169,6 +169,8 @@ def _guardrail_status_to_action(status: str | None) -> str:
         return "blocked"
     if "fail" in s or "error" in s:
         return "flagged"
+    if s == "not_run":
+        return "skipped"
     return "passed"
 
 
@@ -316,15 +318,6 @@ async def process_spend_logs_guardrail_usage(
             guardrail_id = entry.get("guardrail_id") or entry.get("guardrail_name") or ""
             if not guardrail_id:
                 continue
-            key = _MetricsKey(guardrail_id, date_key)
-            daily_guardrail[key]["requests_evaluated"] += 1
-            action = _guardrail_status_to_action(entry.get("guardrail_status"))
-            if action == "passed":
-                daily_guardrail[key]["passed_count"] += 1
-            elif action == "blocked":
-                daily_guardrail[key]["blocked_count"] += 1
-            else:
-                daily_guardrail[key]["flagged_count"] += 1
             policy_id = entry.get("policy_id")
             index_rows.append(
                 {
@@ -334,6 +327,18 @@ async def process_spend_logs_guardrail_usage(
                     "start_time": start_time,
                 }
             )
+            guardrail_status = entry.get("guardrail_status")
+            if guardrail_status == "not_run":
+                continue
+            key = _MetricsKey(guardrail_id, date_key)
+            daily_guardrail[key]["requests_evaluated"] += 1
+            action = guardrail_status_to_action(guardrail_status)
+            if action == "passed":
+                daily_guardrail[key]["passed_count"] += 1
+            elif action == "blocked":
+                daily_guardrail[key]["blocked_count"] += 1
+            else:
+                daily_guardrail[key]["flagged_count"] += 1
 
     async with pending.lock:
         pending_metrics: Final = pending.metrics

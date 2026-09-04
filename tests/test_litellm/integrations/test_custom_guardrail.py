@@ -2506,3 +2506,214 @@ class TestCustomGuardrailPostCallSuccessDeploymentHook:
         )
 
         assert result is replacement
+
+
+class TestSamplingPercentage:
+    """LIT-6893: a guardrail evaluates only ``sampling_percentage`` of the requests it is eligible for."""
+
+    @staticmethod
+    def _guardrail(sampling_percentage: float, draw: float | None = None) -> CustomGuardrail:
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return CustomGuardrail(
+            guardrail_name="sampled-guard",
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+            sampling_percentage=sampling_percentage,
+            request_sampler=None if draw is None else (lambda: draw),
+        )
+
+    @staticmethod
+    def _request(call_id: str = "call-1") -> dict[str, object]:
+        return {"messages": [{"role": "user", "content": "hi"}], "litellm_call_id": call_id, "metadata": {}}
+
+    def test_default_evaluates_every_request(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = CustomGuardrail(
+            guardrail_name="sampled-guard", event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+        data = self._request()
+
+        assert guardrail.sampling_percentage == 100.0
+        assert guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call) is True
+        assert "standard_logging_guardrail_information" not in data["metadata"]
+
+    @pytest.mark.parametrize(
+        "sampling_percentage, draw, expected",
+        [
+            (25.0, 0.10, True),
+            (25.0, 0.25, False),
+            (25.0, 0.90, False),
+            (0.0, 0.0, False),
+            (100.0, 0.9999, True),
+        ],
+    )
+    def test_draw_below_percentage_is_sampled_in(self, sampling_percentage, draw, expected):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = self._guardrail(sampling_percentage, draw)
+
+        assert (
+            guardrail.should_run_guardrail(data=self._request(), event_type=GuardrailEventHooks.pre_call) is expected
+        )
+
+    def test_skipped_request_is_recorded_once_as_not_run_and_never_as_a_failure(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = self._guardrail(25.0, draw=0.9)
+        data = self._request()
+
+        for hook in (GuardrailEventHooks.pre_call, GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call):
+            assert guardrail.should_run_guardrail(data=data, event_type=hook) is False
+
+        entries = data["metadata"]["standard_logging_guardrail_information"]
+        assert len(entries) == 1
+        assert entries[0]["guardrail_name"] == "sampled-guard"
+        assert entries[0]["guardrail_status"] == "not_run"
+        assert entries[0]["guardrail_mode"] == GuardrailEventHooks.pre_call
+        assert "25%" in entries[0]["guardrail_response"]
+
+    def test_ineligible_request_is_not_recorded_as_skipped(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = self._guardrail(25.0, draw=0.9)
+        data = self._request()
+
+        assert guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call) is False
+        assert "standard_logging_guardrail_information" not in data["metadata"]
+
+    def test_one_request_gets_one_decision_across_hooks_and_retries(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = CustomGuardrail(
+            guardrail_name="sampled-guard",
+            event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call],
+            default_on=True,
+            sampling_percentage=50.0,
+        )
+        requests = tuple(self._request(f"call-{i}") for i in range(200))
+        decisions = tuple(
+            {
+                guardrail.should_run_guardrail(data=data, event_type=hook)
+                for hook in (GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call)
+                for _ in range(3)
+            }
+            for data in requests
+        )
+
+        assert all(len(outcomes) == 1 for outcomes in decisions)
+        sampled_in = sum(True in outcomes for outcomes in decisions)
+        assert 60 <= sampled_in <= 140
+
+    @pytest.mark.parametrize("first_draw, second_draw", [(0.1, 0.9), (0.9, 0.1)])
+    def test_decision_survives_a_guardrail_run_adding_the_litellm_metadata_bucket(self, first_draw, second_draw):
+        """unified_guardrail adds ``litellm_metadata`` once a guardrail runs, which moves later metadata
+        writes to that bucket; the post_call hook must still see the pre_call draw and the skip record."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        draws = iter((first_draw, second_draw, second_draw))
+        guardrail = CustomGuardrail(
+            guardrail_name="sampled-guard",
+            event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call],
+            default_on=True,
+            sampling_percentage=50.0,
+            request_sampler=lambda: next(draws),
+        )
+        data = self._request()
+        pre_call = guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call)
+        data["litellm_metadata"] = {"user_api_key_hash": "hashed"}
+
+        assert guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call) is pre_call
+        assert pre_call is (first_draw < 0.5)
+        skips = [
+            entry
+            for bucket in (data["metadata"], data["litellm_metadata"])
+            for entry in bucket.get("standard_logging_guardrail_information", [])
+            if entry["guardrail_status"] == "not_run"
+        ]
+        assert len(skips) == (0 if pre_call else 1)
+
+    def test_skip_record_joins_the_list_an_earlier_guardrail_started(self):
+        """Standard logging merges the buckets key by key and keeps ``metadata`` on a clash, so a skip
+        written to a fresh list in ``litellm_metadata`` would never reach the spend log."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = self._guardrail(25.0, draw=0.9)
+        earlier = {"guardrail_name": "first-guard", "guardrail_status": "success"}
+        data = {
+            **self._request(),
+            "metadata": {"standard_logging_guardrail_information": [earlier]},
+            "litellm_metadata": {"user_api_key_hash": "hashed"},
+        }
+
+        assert guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call) is False
+        assert "standard_logging_guardrail_information" not in data["litellm_metadata"]
+        assert [e["guardrail_name"] for e in data["metadata"]["standard_logging_guardrail_information"]] == [
+            "first-guard",
+            "sampled-guard",
+        ]
+
+    def test_malformed_retained_metadata_is_kept_and_never_fails_the_request(self):
+        """Retained guardrail entries and decisions can be anything an earlier hook or callback wrote;
+        a sampled-out guardrail must record its skip around them rather than raise mid-request."""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = self._guardrail(25.0, draw=0.9)
+        data = {
+            **self._request(),
+            "metadata": {
+                "standard_logging_guardrail_information": ["not-a-mapping", None, 7],
+                "litellm_guardrail_sampling_decisions": {"sampled-guard": "yes", "other": None},
+            },
+        }
+
+        assert guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call) is False
+        entries = data["metadata"]["standard_logging_guardrail_information"]
+        assert entries[:3] == ["not-a-mapping", None, 7]
+        assert entries[3]["guardrail_name"] == "sampled-guard"
+        assert entries[3]["guardrail_status"] == "not_run"
+        assert data["metadata"]["litellm_guardrail_sampling_decisions"] == {"sampled-guard": False}
+
+    def test_decision_is_independent_of_a_client_chosen_call_id(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = self._guardrail(50.0)
+        replayed = tuple(
+            guardrail.should_run_guardrail(data=self._request("replayed-id"), event_type=GuardrailEventHooks.pre_call)
+            for _ in range(200)
+        )
+
+        assert 60 <= sum(replayed) <= 140
+
+    def test_decision_is_stable_without_a_call_id(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = self._guardrail(50.0)
+        requests = tuple({"messages": [], "metadata": {}} for _ in range(200))
+        decisions = tuple(
+            {guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call) for _ in range(5)}
+            for data in requests
+        )
+
+        assert all(len(outcomes) == 1 for outcomes in decisions)
+
+    @pytest.mark.parametrize("value", [-1, 100.5, "abc"])
+    def test_litellm_params_rejects_out_of_range_percentage(self, value):
+        from pydantic import ValidationError
+
+        from litellm.types.guardrails import LitellmParams
+
+        with pytest.raises(ValidationError):
+            LitellmParams(guardrail="custom_guardrail.myCustomGuardrail", mode="pre_call", sampling_percentage=value)
+
+    def test_litellm_params_defaults_to_unset(self):
+        from litellm.types.guardrails import LitellmParams
+
+        assert LitellmParams(guardrail="custom_guardrail.myCustomGuardrail", mode="pre_call").sampling_percentage is None
+        assert (
+            LitellmParams(
+                guardrail="custom_guardrail.myCustomGuardrail", mode="pre_call", sampling_percentage=0
+            ).sampling_percentage
+            == 0
+        )

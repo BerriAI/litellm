@@ -636,7 +636,9 @@ function RequestResponseSection({
 }
 
 export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[] }) {
-  const allPassed = guardrailEntries.every((e) => {
+  const evaluatedEntries = guardrailEntries.filter((e) => (e?.guardrail_status || e?.status) !== "not_run");
+  const skippedCount = guardrailEntries.length - evaluatedEntries.length;
+  const allPassed = evaluatedEntries.every((e) => {
     const status = e?.guardrail_status || e?.status;
     return status === "pass" || status === "passed" || status === "success";
   });
@@ -666,8 +668,8 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
           fontWeight: 500,
         }}
       >
-        {allPassed ? "\u2713" : "\u2717"} {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""}{" "}
-        evaluated
+        {allPassed ? "\u2713" : "\u2717"} {evaluatedEntries.length} guardrail{evaluatedEntries.length !== 1 ? "s" : ""}{" "}
+        evaluated{skippedCount > 0 ? `, ${skippedCount} skipped` : ""}
         <span style={{ fontSize: 11, opacity: 0.7 }}>{"\u2193"}</span>
       </div>
     </div>

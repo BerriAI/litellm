@@ -260,6 +260,18 @@ def test_has_pre_call_guardrails_follows_the_guardrail_event_hook(proxy_logging,
     assert proxy_logging.has_pre_call_guardrails({}) is expected
 
 
+def test_has_pre_call_guardrails_ignores_the_sampling_draw(proxy_logging, monkeypatch):
+    """The batch scan must be armed for every upload; each record draws its own sample later."""
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    guardrail = CustomGuardrail(
+        guardrail_name="g", event_hook="pre_call", default_on=True, sampling_percentage=1.0, request_sampler=lambda: 0.99
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    assert proxy_logging.has_pre_call_guardrails({}) is True
+
+
 def test_has_pre_call_guardrails_is_false_without_callbacks(proxy_logging, monkeypatch):
     monkeypatch.setattr(litellm, "callbacks", [])
 

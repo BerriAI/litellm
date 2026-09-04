@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { LogDetailContent } from "./LogDetailContent";
+import { GuardrailJumpLink, LogDetailContent } from "./LogDetailContent";
 import type { LogEntry } from "../columns";
 
 vi.mock("../GuardrailViewer/GuardrailViewer", () => ({
@@ -260,6 +260,21 @@ describe("LogDetailContent", () => {
 
     expect(screen.getByText("PII Filter")).toBeInTheDocument();
     expect(screen.getByText("2 masked")).toBeInTheDocument();
+  });
+
+  it("should count sampling-skipped guardrails as skipped, not evaluated or failed", () => {
+    render(
+      <GuardrailJumpLink
+        guardrailEntries={[
+          { guardrail_name: "pii", guardrail_status: "success" },
+          { guardrail_name: "expensive", guardrail_status: "not_run" },
+        ]}
+      />,
+    );
+
+    const pill = screen.getByText(/1 guardrail evaluated, 1 skipped/);
+    expect(pill).toHaveTextContent("\u2713");
+    expect(pill).toHaveClass("text-success");
   });
 
   it("should display a Response Cache 'Hit' tag when the response cache served the request", () => {

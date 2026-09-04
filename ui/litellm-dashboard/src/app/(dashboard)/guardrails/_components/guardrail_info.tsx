@@ -28,6 +28,7 @@ import {
   readRecord,
   requiredRule,
   type GuardrailFormValues,
+  SamplingPercentageField,
   SkipMessageSelect,
 } from "./GuardrailFormField";
 import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_filter/ContentFilterManager";
@@ -36,12 +37,15 @@ import {
   formatGuardrailMode,
   getGuardrailLogoAndName,
   guardrail_provider_map,
+  samplingPercentageForUpdate,
+  samplingPercentageToForm,
   skipSystemMessageToChoice,
   skipToolMessageToChoice,
   type SkipSystemMessageChoice,
   type SkipToolMessageChoice,
 } from "./guardrail_info_helpers";
 import GuardrailOptionalParams from "./guardrail_optional_params";
+import GuardrailSettingsSummary from "./GuardrailSettingsSummary";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import PiiConfiguration from "./pii_configuration";
 import ToolPermissionRulesEditor, { ToolPermissionConfig } from "./tool_permission/ToolPermissionRulesEditor";
@@ -219,6 +223,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     if (!guardrailData) return;
     form.setValue("guardrail_name", guardrailData.guardrail_name);
     form.setValue("default_on", guardrailData.litellm_params?.default_on);
+    form.setValue("sampling_percentage", samplingPercentageToForm(guardrailData.litellm_params?.sampling_percentage));
     form.setValue(
       "skip_system_message_choice",
       skipSystemMessageToChoice(guardrailData.litellm_params?.skip_system_message_in_guardrail),
@@ -293,6 +298,14 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       // Only include default_on if it has changed
       if (values.default_on !== guardrailData.litellm_params?.default_on) {
         updateData.litellm_params.default_on = values.default_on;
+      }
+
+      const nextSampling = samplingPercentageForUpdate(
+        values.sampling_percentage,
+        guardrailData.litellm_params?.sampling_percentage,
+      );
+      if (nextSampling !== undefined) {
+        updateData.litellm_params.sampling_percentage = nextSampling;
       }
 
       const prevSkipChoice = skipSystemMessageToChoice(guardrailData.litellm_params?.skip_system_message_in_guardrail);
@@ -566,6 +579,9 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                   <Badge variant={guardrailData.litellm_params?.default_on ? "secondary" : "outline"}>
                     {guardrailData.litellm_params?.default_on ? "Default On" : "Default Off"}
                   </Badge>
+                  <Badge variant="outline" className="ml-2">
+                    Samples {samplingPercentageToForm(guardrailData.litellm_params?.sampling_percentage)}% of requests
+                  </Badge>
                 </div>
               </Card>
 
@@ -725,6 +741,8 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                           )}
                         </GuardrailField>
 
+                        <SamplingPercentageField control={form.control} />
+
                         <GuardrailField
                           control={form.control}
                           name="skip_system_message_choice"
@@ -844,56 +862,12 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                     </form>
                   </TooltipProvider>
                 ) : (
-                  <div className="space-y-4">
-                    <div>
-                      <p className="font-medium">Guardrail ID</p>
-                      <div className="font-mono">{guardrailData.guardrail_id}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Guardrail Name</p>
-                      <div>{guardrailData.guardrail_name || "Unnamed Guardrail"}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Provider</p>
-                      <div>{displayName}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Mode</p>
-                      <div>{formatGuardrailMode(guardrailData.litellm_params?.mode) || "-"}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Default On</p>
-                      <Badge variant={guardrailData.litellm_params?.default_on ? "secondary" : "outline"}>
-                        {guardrailData.litellm_params?.default_on ? "Yes" : "No"}
-                      </Badge>
-                    </div>
-
-                    {guardrailData.litellm_params?.pii_entities_config &&
-                      Object.keys(guardrailData.litellm_params.pii_entities_config).length > 0 && (
-                        <div>
-                          <p className="font-medium">PII Protection</p>
-                          <div className="mt-2">
-                            <Badge variant="secondary">
-                              {Object.keys(guardrailData.litellm_params.pii_entities_config).length} PII entities
-                              configured
-                            </Badge>
-                          </div>
-                        </div>
-                      )}
-
-                    <div>
-                      <p className="font-medium">Created At</p>
-                      <div>{formatDate(guardrailData.created_at)}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Last Updated</p>
-                      <div>{formatDate(guardrailData.updated_at)}</div>
-                    </div>
-
-                    {guardrailData.litellm_params?.guardrail === "tool_permission" && (
-                      <ToolPermissionRulesEditor value={toolPermissionConfig} disabled />
-                    )}
-                  </div>
+                  <GuardrailSettingsSummary
+                    guardrailData={guardrailData}
+                    displayName={displayName}
+                    formatDate={formatDate}
+                    toolPermissionConfig={toolPermissionConfig}
+                  />
                 )}
               </Card>
             </TabsContent>

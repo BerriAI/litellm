@@ -415,15 +415,17 @@ class GuardrailRegistry:
             raise Exception(f"Error getting guardrail from DB: {e}")
 
 
-def _apply_configured_bool_overrides(instance: CustomGuardrail, litellm_params: LitellmParams) -> None:
-    """Override the parallel/raw-scan flags only when ``litellm_params`` explicitly
-    sets them, preserving whatever default the guardrail's own constructor chose
-    otherwise (its constructor default may be True, so blindly copying an
+def _apply_configured_overrides(instance: CustomGuardrail, litellm_params: LitellmParams) -> None:
+    """Override the parallel/raw-scan/sampling settings only when ``litellm_params``
+    explicitly sets them, preserving whatever default the guardrail's own constructor
+    chose otherwise (its constructor default may be True, so blindly copying an
     absent/None config value would silently clobber it back to False)."""
     if litellm_params.run_in_parallel is not None:
         instance.run_in_parallel = bool(litellm_params.run_in_parallel)
     if litellm_params.scan_raw_request is not None:
         instance.scan_raw_request = bool(litellm_params.scan_raw_request)
+    if litellm_params.sampling_percentage is not None:
+        instance.sampling_percentage = float(litellm_params.sampling_percentage)
 
 
 def _as_callback_tuple(
@@ -458,7 +460,7 @@ def _configure_callback_scoping(
             "skip_tool_message_in_guardrail are enabled together, which excludes every message from "
             "scanning, so no request content would ever be scanned. Remove one of the two."
         )
-    _apply_configured_bool_overrides(custom_guardrail_callback, litellm_params)
+    _apply_configured_overrides(custom_guardrail_callback, litellm_params)
 
 
 class InMemoryGuardrailHandler:

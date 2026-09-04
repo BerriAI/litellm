@@ -4,8 +4,10 @@ import { CircleHelp } from "lucide-react";
 import React, { useId } from "react";
 import { useController, type Control, type ControllerRenderProps, type RegisterOptions } from "react-hook-form";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { validateSamplingPercentage } from "./guardrail_info_helpers";
 
 export interface GuardrailCriterion {
   name: string;
@@ -123,3 +125,47 @@ export const SkipMessageSelect: React.FC<{ control: GuardrailFieldControlProps }
     </Select>
   );
 };
+
+const SamplingPercentageInput: React.FC<{ control: GuardrailFieldControlProps }> = ({ control }) => {
+  const {
+    id,
+    value,
+    onChange,
+    onBlur,
+    ref,
+    "aria-invalid": ariaInvalid,
+    "aria-describedby": ariaDescribedBy,
+  } = control;
+
+  return (
+    <Input
+      id={id}
+      ref={ref}
+      type="number"
+      step="any"
+      inputMode="decimal"
+      aria-invalid={ariaInvalid}
+      aria-describedby={ariaDescribedBy}
+      value={typeof value === "number" ? value : ""}
+      onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}
+      onBlur={onBlur}
+      className="w-32"
+    />
+  );
+};
+
+const SAMPLING_PERCENTAGE_RULES: GuardrailFieldRules = { validate: validateSamplingPercentage };
+
+export const SamplingPercentageField: React.FC<{ control: GuardrailFormControl }> = ({ control }) => (
+  <GuardrailField
+    control={control}
+    name="sampling_percentage"
+    label={labelWithHint(
+      "Sampling percentage",
+      "Share (0-100) of eligible requests this guardrail evaluates. Skipped requests are logged as not_run and never count as guardrail failures. Default 100.",
+    )}
+    rules={SAMPLING_PERCENTAGE_RULES}
+  >
+    {(fieldControl) => <SamplingPercentageInput control={fieldControl} />}
+  </GuardrailField>
+);

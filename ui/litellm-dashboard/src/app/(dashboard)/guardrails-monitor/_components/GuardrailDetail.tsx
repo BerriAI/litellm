@@ -59,7 +59,7 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
     return list.map((l: Record<string, unknown>) => ({
       id: l.id as string,
       timestamp: l.timestamp as string,
-      action: l.action as "blocked" | "passed" | "flagged",
+      action: l.action as "blocked" | "passed" | "flagged" | "skipped",
       score: l.score as number | undefined,
       model: l.model as string | undefined,
       input_snippet: l.input_snippet as string | undefined,

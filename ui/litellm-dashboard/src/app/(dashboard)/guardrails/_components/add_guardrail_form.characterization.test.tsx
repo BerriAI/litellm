@@ -1,5 +1,5 @@
 import React from "react";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { chooseSelectOption, renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -272,5 +272,33 @@ describe("AddGuardrailForm create payload characterization", () => {
         skip_tool_message_in_guardrail: false,
       },
     });
+  });
+
+  it("nests a lowered sampling percentage under litellm_params as a number", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderForm();
+
+    await user.type(await screen.findByLabelText("Guardrail Name"), "my-bedrock");
+    await pickProvider(user, "Bedrock Guardrail");
+    fireEvent.change(screen.getByLabelText(/Sampling percentage/), { target: { value: "12.5" } });
+    await user.type(await screen.findByPlaceholderText("The guardrail id on Bedrock"), "gr-123");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(await screen.findByRole("button", { name: "Create Guardrail" }));
+
+    await waitFor(() => expect(networking.createGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(payload()).toMatchObject({ litellm_params: { sampling_percentage: 12.5 } });
+  });
+
+  it("blocks Next when the sampling percentage is outside 0-100", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderForm();
+
+    await user.type(await screen.findByLabelText("Guardrail Name"), "my-bedrock");
+    await pickProvider(user, "Bedrock Guardrail");
+    fireEvent.change(screen.getByLabelText(/Sampling percentage/), { target: { value: "101" } });
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
+    expect(await screen.findByText("Sampling percentage must be a number between 0 and 100")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create Guardrail" })).not.toBeInTheDocument();
   });
 });

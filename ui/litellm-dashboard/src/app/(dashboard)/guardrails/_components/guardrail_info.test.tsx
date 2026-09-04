@@ -314,6 +314,78 @@ describe("Guardrail Info", () => {
     expect(secondCallArgs.litellm_params.blocked_words).toEqual(["new_word"]);
   });
 
+  const sampledGuardrailInfo = {
+    guardrail_id: "123",
+    guardrail_name: "Sampled Guardrail",
+    litellm_params: { guardrail: "bedrock", mode: "pre_call", default_on: true, sampling_percentage: 25 },
+    created_at: "2024-01-01T00:00:00Z",
+    updated_at: "2024-01-01T00:00:00Z",
+    guardrail_definition_location: "database",
+  };
+  const unsampledGuardrailInfo = {
+    ...sampledGuardrailInfo,
+    litellm_params: { guardrail: "bedrock", mode: "pre_call", default_on: true },
+  };
+  const samplingUiSettings = {
+    supported_entities: [],
+    supported_actions: [],
+    pii_entity_categories: [],
+    supported_modes: ["pre_call", "post_call"],
+  };
+
+  it("seeds the sampling percentage from the stored value and only sends it when changed", async () => {
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue(sampledGuardrailInfo);
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue(samplingUiSettings);
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
+    vi.mocked(networking.updateGuardrailCall).mockResolvedValue({ status: "success" });
+
+    render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />);
+
+    expect(await screen.findByText("Samples 25% of requests")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(await screen.findByText("Edit Settings"));
+
+    const samplingInput = screen.getByLabelText(/Sampling percentage/);
+    expect(samplingInput).toHaveValue(25);
+
+    fireEvent.change(screen.getByLabelText("Guardrail Name"), { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByText("Save Changes"));
+    await waitFor(() => {
+      expect(networking.updateGuardrailCall).toHaveBeenCalled();
+    });
+    const unchanged: any = vi.mocked(networking.updateGuardrailCall).mock.calls[0][2];
+    expect(unchanged.litellm_params?.sampling_percentage).toBeUndefined();
+
+    vi.clearAllMocks();
+    vi.mocked(networking.updateGuardrailCall).mockResolvedValue({ status: "success" });
+    fireEvent.click(await screen.findByText("Edit Settings"));
+    fireEvent.change(screen.getByLabelText(/Sampling percentage/), { target: { value: "10" } });
+    fireEvent.click(screen.getByText("Save Changes"));
+    await waitFor(() => {
+      expect(networking.updateGuardrailCall).toHaveBeenCalled();
+    });
+    const changed: any = vi.mocked(networking.updateGuardrailCall).mock.calls[0][2];
+    expect(changed.litellm_params.sampling_percentage).toBe(10);
+  });
+
+  it("rejects a sampling percentage above 100 without calling the API", async () => {
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue(unsampledGuardrailInfo);
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue(samplingUiSettings);
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
+
+    render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />);
+
+    fireEvent.click(await screen.findByText("Settings"));
+    fireEvent.click(await screen.findByText("Edit Settings"));
+    expect(screen.getByLabelText(/Sampling percentage/)).toHaveValue(100);
+    fireEvent.change(screen.getByLabelText(/Sampling percentage/), { target: { value: "150" } });
+    fireEvent.click(screen.getByText("Save Changes"));
+
+    expect(await screen.findByText("Sampling percentage must be a number between 0 and 100")).toBeInTheDocument();
+    expect(networking.updateGuardrailCall).not.toHaveBeenCalled();
+  });
+
   it("keeps the settings panel mounted while the overview tab is active", async () => {
     vi.mocked(networking.getGuardrailInfo).mockResolvedValue({
       guardrail_id: "123",

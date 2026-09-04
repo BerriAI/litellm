@@ -151,6 +151,23 @@ describe("GuardrailViewer", () => {
     expect(screen.queryByText(/Raw Bedrock Guardrail Response/)).not.toBeInTheDocument();
   });
 
+  it("reports sampling-skipped entries separately and never as failures", () => {
+    const evaluated = makeGuardrailInformation({ guardrail_name: "pii-rail", guardrail_status: "success" });
+    const skippedOverrides = {
+      guardrail_name: "expensive-rail",
+      guardrail_status: "not_run",
+      guardrail_response: [],
+      masked_entity_count: {},
+    };
+    const skipped = makeGuardrailInformation(skippedOverrides);
+    renderWithProviders(<GuardrailViewer data={[evaluated, skipped]} />);
+
+    expect(screen.getByText("1 guardrail evaluated, 1 skipped by sampling")).toBeInTheDocument();
+    expect(screen.getByText(/1 Passed/)).toHaveClass("text-success");
+    expect(screen.getByText("SKIPPED")).toBeInTheDocument();
+    expect(screen.queryByText("FAILED")).not.toBeInTheDocument();
+  });
+
   it("renders without crashing when guardrail_mode is null", () => {
     const data = makeGuardrailInformation({ guardrail_mode: null });
     renderWithProviders(<GuardrailViewer data={data} />);

@@ -12,12 +12,14 @@ import { type CompetitorIntentConfig } from "./content_filter/CompetitorIntentCo
 import {
   choiceToSkipSystemForCreate,
   choiceToSkipToolForCreate,
+  DEFAULT_SAMPLING_PERCENTAGE,
   getGuardrailLogo,
   getGuardrailProviders,
   getSupportedModesForProvider,
   guardrail_provider_map,
   populateGuardrailProviderMap,
   populateGuardrailProviders,
+  samplingPercentageForCreate,
   shouldRenderContentFilterConfigSettings,
   shouldRenderLLMJudgeFields,
   shouldRenderPIIConfigSettings,
@@ -49,6 +51,7 @@ import {
   requiredRule,
   type GuardrailCriterion,
   type GuardrailFormValues,
+  SamplingPercentageField,
   SkipMessageSelect,
 } from "./GuardrailFormField";
 import GuardrailOptionalParams from "./guardrail_optional_params";
@@ -160,6 +163,7 @@ type SkipMessageChoice = "inherit" | "yes" | "no";
 const INITIAL_VALUES: GuardrailFormValues = {
   mode: "pre_call",
   default_on: false,
+  sampling_percentage: DEFAULT_SAMPLING_PERCENTAGE,
   skip_system_message_choice: "inherit",
   skip_tool_message_choice: "inherit",
 };
@@ -374,7 +378,14 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     if (currentStep === 0) {
       const presidioFields =
         selectedProvider === "PresidioPII" ? ["presidio_analyzer_api_base", "presidio_anonymizer_api_base"] : [];
-      const isValid = await form.trigger(["guardrail_name", "provider", "mode", "default_on", ...presidioFields]);
+      const isValid = await form.trigger([
+        "guardrail_name",
+        "provider",
+        "mode",
+        "default_on",
+        "sampling_percentage",
+        ...presidioFields,
+      ]);
       if (!isValid) {
         return;
       }
@@ -451,6 +462,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         },
         guardrail_info: {},
       };
+
+      const samplingForCreate = samplingPercentageForCreate(values.sampling_percentage);
+      if (samplingForCreate !== undefined) {
+        guardrailData.litellm_params.sampling_percentage = samplingForCreate;
+      }
 
       const skipForCreate = choiceToSkipSystemForCreate(asSkipChoice(values.skip_system_message_choice));
       if (skipForCreate !== undefined) {
@@ -773,6 +789,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             </Select>
           )}
         </GuardrailField>
+
+        <SamplingPercentageField control={form.control} />
 
         <GuardrailField
           control={form.control}

@@ -23726,6 +23726,11 @@ export interface components {
              */
             run_in_parallel?: boolean | null;
             /**
+             * Sampling Percentage
+             * @description Percentage (0-100) of eligible requests this guardrail evaluates; unset means 100. The decision is drawn once per request and remembered in the request metadata, so every hook of the same guardrail, its streaming chunks and router retries agree. Requests it skips are recorded with guardrail_status 'not_run' and never count as evaluated or failed.
+             */
+            sampling_percentage?: number | null;
+            /**
              * Sanitize Error Detail
              * @description For guardrail='model_armor': omit the raw Model Armor response from caller-facing errors and logs by default. Set False to restore verbose output.
              * @default true
@@ -30836,6 +30841,11 @@ export interface components {
              * @description When True, this pre_call or post_call guardrail runs concurrently with other opted-in guardrails of the same hook, after the sequential guardrails have run. Use only for block-only guardrails that inspect and reject; do not enable it for guardrails that modify the request or response (e.g. PII masking or sensitive-data routing), since parallel runs share one snapshot and their mutations would race.
              */
             run_in_parallel?: boolean | null;
+            /**
+             * Sampling Percentage
+             * @description Percentage (0-100) of eligible requests this guardrail evaluates; unset means 100. The decision is drawn once per request and remembered in the request metadata, so every hook of the same guardrail, its streaming chunks and router retries agree. Requests it skips are recorded with guardrail_status 'not_run' and never count as evaluated or failed.
+             */
+            sampling_percentage?: number | null;
             /**
              * Sanitize Error Detail
              * @description For guardrail='model_armor': omit the raw Model Armor response from caller-facing errors and logs by default. Set False to restore verbose output.

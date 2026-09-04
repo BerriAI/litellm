@@ -1693,10 +1693,10 @@ class ProxyLogging:
         caps: Final = ProxyLogging._callback_capabilities()
         if caps.has_content_enforcer:
             return True
-        probe: Final = {"metadata": dict(request_metadata)}  # mutable-ok: should_run_guardrail takes a dict
+        probe: Final = {"metadata": dict(request_metadata)}  # mutable-ok: is_eligible_for_event takes a dict
         return any(
             isinstance(callback, CustomGuardrail)
-            and callback.should_run_guardrail(data=probe, event_type=GuardrailEventHooks.pre_call)
+            and callback.is_eligible_for_event(data=probe, event_type=GuardrailEventHooks.pre_call)
             for callback in caps.resolved_callbacks
         )
 

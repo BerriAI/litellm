@@ -1,4 +1,4 @@
-import { CircleCheck, ChevronDown, TriangleAlert, X } from "lucide-react";
+import { CircleCheck, ChevronDown, SkipForward, TriangleAlert, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import moment from "moment";
 import React, { useState } from "react";
@@ -10,7 +10,7 @@ import type { LogEntry as ViewLogsLogEntry } from "@/components/view_logs/column
 import type { LogEntry } from "./mockData";
 
 const actionConfig: Record<
-  "blocked" | "passed" | "flagged",
+  LogEntry["action"],
   { icon: React.ElementType; color: string; bg: string; border: string; label: string }
 > = {
   blocked: {
@@ -34,11 +34,20 @@ const actionConfig: Record<
     border: "border-warning/20",
     label: "Flagged",
   },
+  skipped: {
+    icon: SkipForward,
+    color: "text-muted-foreground",
+    bg: "bg-muted",
+    border: "border-border",
+    label: "Skipped",
+  },
 };
+
+type FilterAction = "all" | LogEntry["action"];
 
 interface LogViewerProps {
   guardrailName?: string;
-  filterAction?: "all" | "blocked" | "passed" | "flagged";
+  filterAction?: FilterAction;
   logs?: LogEntry[];
   logsLoading?: boolean;
   totalLogs?: number;
@@ -66,7 +75,7 @@ export function LogViewer({
   const displayLogs = filteredLogs.slice(0, sampleSize);
   const total = totalLogs ?? logs.length;
   const sampleSizes = [10, 50, 100];
-  const filters: Array<"all" | "blocked" | "flagged" | "passed"> = ["all", "blocked", "flagged", "passed"];
+  const filters: FilterAction[] = ["all", "blocked", "flagged", "passed", "skipped"];
 
   const startTime = startDate
     ? moment(startDate).utc().format("YYYY-MM-DD HH:mm:ss")

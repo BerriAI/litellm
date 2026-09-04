@@ -76,6 +76,49 @@ def test_initialize_guardrail_run_in_parallel_preserves_constructor_default(conf
         registry_module.guardrail_initializer_registry.pop("parallel_default_test", None)
 
 
+@pytest.mark.parametrize("configured, expected", [(None, 100.0), (0, 0.0), (12.5, 12.5)])
+def test_initialize_guardrail_applies_sampling_percentage_from_config(configured, expected):
+    """
+    LIT-6893: sampling_percentage from litellm_params must reach the instance even when the
+    guardrail's initializer does not forward config kwargs to the constructor; an omitted
+    key keeps the constructor default of 100.
+    """
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    def _initializer(litellm_params, guardrail):
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"], event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+
+    registry_module.guardrail_initializer_registry["sampling_test"] = _initializer
+    try:
+        params = {"guardrail": "sampling_test", "mode": "pre_call"}
+        if configured is not None:
+            params["sampling_percentage"] = configured
+
+        handler = InMemoryGuardrailHandler()
+        result = handler.initialize_guardrail(
+            guardrail={"guardrail_name": "cf-sampled", "litellm_params": params},
+        )
+
+        stored = handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
+        assert stored.sampling_percentage == expected
+    finally:
+        registry_module.guardrail_initializer_registry.pop("sampling_test", None)
+
+
+def test_initialize_guardrail_rejects_out_of_range_sampling_percentage():
+    handler = InMemoryGuardrailHandler()
+
+    with pytest.raises(Exception, match="sampling_percentage"):
+        handler.initialize_guardrail(
+            guardrail={
+                "guardrail_name": "cf-sampled",
+                "litellm_params": {"guardrail": "aim", "mode": "pre_call", "sampling_percentage": 150},
+            },
+        )
+
+
 def _register_noop_initializer(guardrail_type: str):
     from litellm.proxy.guardrails import guardrail_registry as registry_module
 

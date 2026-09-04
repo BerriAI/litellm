@@ -15,6 +15,10 @@ import {
   skipToolMessageToChoice,
   choiceToSkipToolForCreate,
   formatGuardrailMode,
+  samplingPercentageForCreate,
+  samplingPercentageForUpdate,
+  samplingPercentageToForm,
+  validateSamplingPercentage,
 } from "./guardrail_info_helpers";
 
 describe("guardrail_info_helpers", () => {
@@ -264,6 +268,41 @@ describe("guardrail_info_helpers", () => {
       expect(choiceToSkipToolForCreate(undefined)).toBeUndefined();
       expect(choiceToSkipToolForCreate("yes")).toBe(true);
       expect(choiceToSkipToolForCreate("no")).toBe(false);
+    });
+  });
+
+  describe("sampling percentage helpers", () => {
+    it("seeds the form with the stored value and falls back to 100 when unset", () => {
+      expect(samplingPercentageToForm(undefined)).toBe(100);
+      expect(samplingPercentageToForm(null)).toBe(100);
+      expect(samplingPercentageToForm(12.5)).toBe(12.5);
+      expect(samplingPercentageToForm(0)).toBe(0);
+    });
+
+    it("accepts blank or 0-100 and rejects anything else", () => {
+      expect(validateSamplingPercentage(undefined)).toBe(true);
+      expect(validateSamplingPercentage(0)).toBe(true);
+      expect(validateSamplingPercentage(100)).toBe(true);
+      expect(validateSamplingPercentage(33.3)).toBe(true);
+      expect(validateSamplingPercentage(-1)).toMatch(/between 0 and 100/);
+      expect(validateSamplingPercentage(100.5)).toMatch(/between 0 and 100/);
+      expect(validateSamplingPercentage(Number.NaN)).toMatch(/between 0 and 100/);
+    });
+
+    it("omits the key on create unless the user lowered it", () => {
+      expect(samplingPercentageForCreate(100)).toBeUndefined();
+      expect(samplingPercentageForCreate(undefined)).toBeUndefined();
+      expect(samplingPercentageForCreate(25)).toBe(25);
+      expect(samplingPercentageForCreate(0)).toBe(0);
+    });
+
+    it("sends the value on update only when it differs from what is stored", () => {
+      expect(samplingPercentageForUpdate(100, undefined)).toBeUndefined();
+      expect(samplingPercentageForUpdate(undefined, undefined)).toBeUndefined();
+      expect(samplingPercentageForUpdate(25, 25)).toBeUndefined();
+      expect(samplingPercentageForUpdate(25, undefined)).toBe(25);
+      expect(samplingPercentageForUpdate(100, 25)).toBe(100);
+      expect(samplingPercentageForUpdate(undefined, 25)).toBe(100);
     });
   });
 });
