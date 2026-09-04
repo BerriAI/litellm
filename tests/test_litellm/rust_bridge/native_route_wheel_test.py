@@ -243,13 +243,14 @@ def assert_success(route: str, response: object) -> None:
 
 
 def assert_rate_limit(native: object, route: str, error: BaseException) -> None:
-    case: Final = ROUTE_CASE_BY_NAME[route]
-    if case.native_upstream_error:
-        upstream_error: Final = native.RustUpstreamError
-        if not isinstance(error, upstream_error) or error.args[0] != 429:
-            raise AssertionError(f"{route} returned the wrong 429 error: {error!r}")
-        return
-    if not isinstance(error, RuntimeError) or "429" not in str(error):
+    execution_error: Final = native.RustExecutionError
+    if (
+        not isinstance(error, execution_error)
+        or getattr(error, "code", None) != "upstream"
+        or getattr(error, "status_code", None) != 429
+        or getattr(error, "provider_state", None) != "response_received"
+        or "native-rate-limit" in str(error)
+    ):
         raise AssertionError(f"{route} returned the wrong 429 error: {error!r}")
 
 
@@ -259,7 +260,7 @@ def exercise_sync(native: object, api_base: str) -> None:
         assert_success(case.name, function(**route_kwargs(case.name, api_base, "success")))
         try:
             function(**route_kwargs(case.name, api_base, "429"))
-        except (RuntimeError, native.RustUpstreamError) as error:
+        except native.RustExecutionError as error:
             assert_rate_limit(native, case.name, error)
         else:
             raise AssertionError(f"{case.name} accepted a 429 response")
@@ -271,7 +272,7 @@ async def exercise_async(native: object, api_base: str) -> None:
         assert_success(case.name, await function(**route_kwargs(case.name, api_base, "success")))
         try:
             await function(**route_kwargs(case.name, api_base, "429"))
-        except (RuntimeError, native.RustUpstreamError) as error:
+        except native.RustExecutionError as error:
             assert_rate_limit(native, case.name, error)
         else:
             raise AssertionError(f"a{case.name} accepted a 429 response")
