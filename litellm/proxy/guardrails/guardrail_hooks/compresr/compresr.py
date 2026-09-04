@@ -916,9 +916,10 @@ class CompresrGuardrail(CustomGuardrail):
     def _mirror_texts_channel(input_texts: object, applied: _CompressionResult) -> list[object] | None:
         """Compressed content mirrored into the Responses `texts` channel.
 
-        The chat/Anthropic handlers round-trip ``structured_messages``; the
-        Responses translation cannot rebuild its input from chat messages and
-        instead writes back through ``texts``. This matches by value, so a
+        The chat/Anthropic/Responses handlers round-trip
+        ``structured_messages``; translations without that round-trip write
+        back through ``texts``, so the compressed content is mirrored there
+        too. This matches by value, so a
         replacement is applied only when it is unambiguous: one compression per
         text, and every occurrence in ``texts`` accounted for by a compressed
         target. Anything else is left uncompressed rather than risk a wrong or

@@ -30,7 +30,10 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
-from litellm.proxy.vector_store_endpoints.utils import can_user_access_vector_store
+from litellm.proxy.vector_store_endpoints.utils import (
+    can_user_access_vector_store,
+    filter_listable_vector_stores,
+)
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
 from litellm.types.vector_stores import (
@@ -390,11 +393,10 @@ async def list_vector_stores(
 
         # Filter vector stores based on access control
         accessible_vector_stores: Final = []
-        for vs in vector_store_map.values():
-            if await _check_vector_store_access(vs, user_api_key_dict):
-                redacted = LiteLLM_ManagedVectorStore(**vs)
-                redacted["litellm_params"] = _redact_sensitive_litellm_params(vs.get("litellm_params"))
-                accessible_vector_stores.append(redacted)
+        for vs in await filter_listable_vector_stores(vector_store_map.values(), user_api_key_dict):
+            redacted = LiteLLM_ManagedVectorStore(**vs)
+            redacted["litellm_params"] = _redact_sensitive_litellm_params(vs.get("litellm_params"))
+            accessible_vector_stores.append(redacted)
 
         total_count: Final = len(accessible_vector_stores)
         total_pages: Final = (total_count + page_size - 1) // page_size

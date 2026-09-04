@@ -4,6 +4,7 @@ import {
   normalizeClassifierLlmConfig,
   getKeywordTierRulesError,
   getClassifierModelError,
+  getClassifierReasoningEffortError,
   getMissingTiersError,
   hydrateCustomTierSet,
   getSemanticConfigError,
@@ -70,6 +71,15 @@ describe("buildComplexityRouterConfig", () => {
     });
     expect(config.enable_context_window_escalation).toBe(false);
     expect(config.context_window_escalation_buffer).toBe(0.9);
+  });
+
+  it("omits session_affinity_ttl_seconds when untouched, so the router tracks the backend default", () => {
+    expect(buildComplexityRouterConfig(baseParams)).not.toHaveProperty("session_affinity_ttl_seconds");
+  });
+
+  it("emits an explicit session affinity idle window", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, sessionAffinityTtlSeconds: 300 });
+    expect(config.session_affinity_ttl_seconds).toBe(300);
   });
 
   it("trims escalation keywords and drops blank entries", () => {
@@ -506,6 +516,19 @@ describe("classifier prompt and fallback", () => {
     expect(buildComplexityRouterConfig(llmParams)).not.toHaveProperty("classifier_fallback");
   });
 
+  it("keeps an explicit classifier reasoning effort", () => {
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, reasoning_effort: "low" },
+    });
+    expect(config.classifier_llm_config?.reasoning_effort).toBe("low");
+  });
+
+  it("omits classifier reasoning effort when the provider default is selected", () => {
+    const config = buildComplexityRouterConfig(llmParams);
+    expect(config.classifier_llm_config).not.toHaveProperty("reasoning_effort");
+  });
+
   it("sends the chat preset the operator picked", () => {
     const config = buildComplexityRouterConfig({
       ...llmParams,
@@ -540,12 +563,16 @@ describe("classifier prompt and fallback", () => {
   });
 
   it("normalizeClassifierLlmConfig leaves a real prompt untouched and strips an empty one", () => {
-    expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "x" })).toEqual({
+    const customPromptConfig = { model: "m", timeout_ms: 1, reasoning_effort: "none" as const, system_prompt: "x" };
+    const emptyPromptConfig = { model: "m", timeout_ms: 1, system_prompt: "" };
+    const expectedCustomPromptConfig = {
       model: "m",
       timeout_ms: 1,
+      reasoning_effort: "none",
       system_prompt: "x",
-    });
-    expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "" })).toEqual({
+    };
+    expect(normalizeClassifierLlmConfig(customPromptConfig)).toEqual(expectedCustomPromptConfig);
+    expect(normalizeClassifierLlmConfig(emptyPromptConfig)).toEqual({
       model: "m",
       timeout_ms: 1,
     });
@@ -767,6 +794,26 @@ describe("getClassifierModelError", () => {
   });
 });
 
+describe("getClassifierReasoningEffortError", () => {
+  const classifier = {
+    classifier_type: "llm" as const,
+    classifier_llm_config: { model: "classifier", timeout_ms: 3000, reasoning_effort: "low" },
+  };
+
+  it.each([
+    [["low", "medium"], null],
+    [["medium", "high"], "low reasoning effort is not supported"],
+    [null, null],
+    [undefined, null],
+  ])("validates capability levels %o", (supportedReasoningEfforts, expectedError) => {
+    const error = getClassifierReasoningEffortError(classifier, [
+      { model_group: "classifier", supported_reasoning_efforts: supportedReasoningEfforts },
+    ]);
+    if (expectedError) expect(error).toContain(expectedError);
+    else expect(error).toBeNull();
+  });
+});
+
 describe("getKeywordTierRulesError orphaned tiers", () => {
   const rows = activeTierRows({ tiers });
 
@@ -944,11 +991,16 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
       classifierLlmConfig: {
         model: "gpt-4o-mini",
         timeout_ms: 3000,
+        reasoning_effort: "low",
         system_prompt: "replace the whole rubric",
         classification_rubric: "agentic",
       },
     });
-    expect(payload.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
+    expect(payload.classifier_llm_config).toEqual({
+      model: "gpt-4o-mini",
+      timeout_ms: 3000,
+      reasoning_effort: "low",
+    });
   });
 
   it.each(

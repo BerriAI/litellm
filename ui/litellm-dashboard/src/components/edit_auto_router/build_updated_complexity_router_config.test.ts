@@ -16,7 +16,7 @@ const storedCustomConfig = (overrides: Record<string, unknown> = {}) => ({
   ],
   fallback_tier: "CASUAL",
   classifier_type: "llm",
-  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
   ...overrides,
 });
 
@@ -111,7 +111,7 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
 const STORED_LLM = {
   tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
   classifier_type: "llm",
-  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
   classifier_context_window_size: 5,
   classifier_context_per_turn_chars: 300,
 };
@@ -254,6 +254,43 @@ describe("buildUpdatedComplexityRouterConfig session affinity", () => {
       { ...FORM_VALUE, session_affinity: false },
     );
     expect(result.session_affinity).toBe(false);
+  });
+});
+
+describe("buildUpdatedComplexityRouterConfig session affinity ttl", () => {
+  it("writes an edited idle window", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, { ...FORM_VALUE, session_affinity_ttl_seconds: 300 });
+    expect(result.session_affinity_ttl_seconds).toBe(300);
+  });
+
+  it("carries a stored idle window through an untouched open-and-save", () => {
+    const stored = { ...STORED, session_affinity_ttl_seconds: 900 };
+    const result = buildUpdatedComplexityRouterConfig(stored, hydrateComplexityRouterConfig(stored, undefined));
+    expect(result.session_affinity_ttl_seconds).toBe(900);
+  });
+
+  it("drops the key when the field is cleared, so the router goes back to tracking the backend default", () => {
+    const result = buildUpdatedComplexityRouterConfig(
+      { ...STORED, session_affinity_ttl_seconds: 900 },
+      { ...FORM_VALUE, session_affinity_ttl_seconds: undefined },
+    );
+    expect(result).not.toHaveProperty("session_affinity_ttl_seconds");
+  });
+
+  it("keeps the idle window on a custom tier set, whose deployment pin still uses it", () => {
+    const result = buildUpdatedComplexityRouterConfig(STORED, {
+      ...FORM_VALUE,
+      session_affinity_ttl_seconds: 300,
+      custom_tier_set: {
+        tiers: [
+          { id: "a", name: "CASUAL", definition: "small talk", models: ["gpt-4o-mini"] },
+          { id: "b", name: "AUDIT", definition: "security review", models: ["o1"] },
+        ],
+        fallback_tier_id: "a",
+      },
+    });
+    expect(result.session_affinity).toBe(false);
+    expect(result.session_affinity_ttl_seconds).toBe(300);
   });
 });
 
@@ -522,13 +559,14 @@ describe("managed keys survive an untouched open-and-save", () => {
     tier_labels: { SIMPLE: "Cheap" },
     classifier_type: "heuristic_first",
     heuristic_first_max_tier: "SIMPLE",
-    classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
     classifier_context_window_size: 5,
     classifier_context_budget_chars: 4000,
     classifier_context_include_assistant_turns: true,
     classifier_fallback: "default_model",
     classification_mode: "user_turn",
     session_affinity: true,
+    session_affinity_ttl_seconds: 300,
     modality_routing: true,
     modality_pin_override: true,
     deployment_affinity: false,

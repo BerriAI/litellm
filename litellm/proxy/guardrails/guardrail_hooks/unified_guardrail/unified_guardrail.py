@@ -121,9 +121,6 @@ def _a2a_jsonrpc_error_chunk(exc: HTTPException, request_id: str | None) -> Mapp
     }
 
 
-endpoint_guardrail_translation_mappings = None
-
-
 def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
     """Populate data['litellm_metadata'] from user_api_key_dict if absent."""
     if "litellm_metadata" not in data:
@@ -164,7 +161,6 @@ class UnifiedLLMGuardrails(CustomLogger):
         Use this if you want to MODIFY the input
         """
 
-        global endpoint_guardrail_translation_mappings
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
@@ -186,18 +182,15 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
             return data
 
-        if endpoint_guardrail_translation_mappings is None:
-            endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
+        mappings: Final = load_guardrail_translation_mappings()
 
         try:
-            if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
+            if CallTypes(call_type) not in mappings:
                 return data
         except ValueError:
             return data  # handle unmapped call types
 
-        endpoint_translation: Final = _as_endpoint_translation(
-            endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
-        )
+        endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
 
         _ensure_litellm_metadata(data, user_api_key_dict)
 
@@ -222,8 +215,6 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         This can NOT modify the input, only used to reject or accept a call before going to LLM API
         """
-        global endpoint_guardrail_translation_mappings
-
         verbose_proxy_logger.debug("Running UnifiedLLMGuardrails moderation hook")
 
         guardrail_to_apply: Final[CustomGuardrail] = data.pop("guardrail_to_apply", None)
@@ -241,14 +232,11 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
             return data
 
-        if endpoint_guardrail_translation_mappings is None:
-            endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
-        if call_type is not None and CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
+        mappings: Final = load_guardrail_translation_mappings()
+        if call_type is not None and CallTypes(call_type) not in mappings:
             return data
 
-        endpoint_translation: Final = _as_endpoint_translation(
-            endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
-        )
+        endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
 
         _ensure_litellm_metadata(data, user_api_key_dict)
 
@@ -271,7 +259,6 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         Uses Enkrypt AI guardrails to check the response for policy violations, PII, and injection attacks
         """
-        global endpoint_guardrail_translation_mappings
         # Local import avoids a module-level cyclic import with
         # litellm.integrations.custom_guardrail.
         from litellm.integrations.custom_guardrail import ModifyResponseException
@@ -319,10 +306,9 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
             return response
 
-        if endpoint_guardrail_translation_mappings is None:
-            endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
+        mappings: Final = load_guardrail_translation_mappings()
 
-        if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
+        if CallTypes(call_type) not in mappings:
             verbose_proxy_logger.warning(
                 "Guardrail '%s' selected for route '%s' but call type '%s' has no guardrail translation handler; "
                 "skipping post-call scanning.",
@@ -332,9 +318,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
             return response
 
-        endpoint_translation: Final = _as_endpoint_translation(
-            endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
-        )
+        endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
 
         try:
             response = await endpoint_translation.process_output_response(
@@ -906,8 +890,6 @@ class UnifiedLLMGuardrails(CustomLogger):
         sampling_rate=1 means every chunk, sampling_rate=5 means every 5th chunk, etc.
         """
 
-        global endpoint_guardrail_translation_mappings
-
         # Local import avoids a module-level cyclic import with
         # litellm.integrations.custom_guardrail.
         from litellm.integrations.custom_guardrail import ModifyResponseException
@@ -978,9 +960,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 yield item
             return
 
-        # Initialize translation mappings if needed
-        if endpoint_guardrail_translation_mappings is None:
-            endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
+        mappings: Final = load_guardrail_translation_mappings()
 
         # Streaming text transformation (incremental_diff) diverges enough from the
         # block_only path that it runs as its own iterator. It requires a route we
@@ -989,7 +969,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         if streaming_transform_mode == "incremental_diff":
             transform_call_type: Final = self._resolve_transform_call_type(
                 user_api_key_dict=user_api_key_dict,
-                mappings=endpoint_guardrail_translation_mappings,
+                mappings=mappings,
             )
             if transform_call_type is not None:
                 async for transformed_item in self._run_incremental_transform_stream(
@@ -1000,7 +980,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                     call_type=transform_call_type,
                     sampling_rate=sampling_rate,
                     end_of_stream_only=end_of_stream_only,
-                    mappings=endpoint_guardrail_translation_mappings,
+                    mappings=mappings,
                 ):
                     yield transformed_item
                 return
@@ -1037,7 +1017,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 call_type = _infer_call_type(call_type=None, completion_response=item)
 
             # If call type not supported, just pass through all chunks
-            if call_type is None or CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
+            if call_type is None or CallTypes(call_type) not in mappings:
                 yield item
                 async for remaining_item in response:
                     yield remaining_item
@@ -1049,7 +1029,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             # moderation runs below.
             if end_of_stream_only:
                 if not buffer_until_moderated:
-                    endpoint_translation = endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
+                    endpoint_translation = mappings[CallTypes(call_type)]()
                     stream_has_ended = hasattr(
                         endpoint_translation, "_check_streaming_has_ended"
                     ) and endpoint_translation._check_streaming_has_ended(responses_so_far)
@@ -1063,7 +1043,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
             # Process chunk based on sampling rate
             if chunk_counter % sampling_rate == 0:
-                endpoint_translation = endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
+                endpoint_translation = mappings[CallTypes(call_type)]()
                 scan_key = endpoint_translation.get_streaming_scan_key(responses_so_far)
                 if _is_redundant_scan(scan_key, last_scan_key):
                     verbose_proxy_logger.debug(
@@ -1143,14 +1123,14 @@ class UnifiedLLMGuardrails(CustomLogger):
                 yield item
 
         # Stream has ended - do final processing with all collected chunks
-        if call_type is not None and CallTypes(call_type) in endpoint_guardrail_translation_mappings:
+        if call_type is not None and CallTypes(call_type) in mappings:
             verbose_proxy_logger.debug(
                 "Processing final streaming response with all %s chunks for guardrail %s",
                 len(responses_so_far),
                 guardrail_to_apply.guardrail_name,
             )
 
-            endpoint_translation = endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
+            endpoint_translation = mappings[CallTypes(call_type)]()
 
             # When buffering, snapshot the original chunks before moderation.
             # A shallow copy suffices: end-of-stream
