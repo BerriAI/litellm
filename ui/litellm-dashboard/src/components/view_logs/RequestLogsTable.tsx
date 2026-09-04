@@ -86,6 +86,7 @@ export function RequestLogsTable({
       data={data}
       columns={columns}
       getRowId={(row) => row.request_id}
+      fillHeight
       sortingMode="server"
       sorting={sorting}
       onSortingChange={onSortingChange}
@@ -108,7 +109,7 @@ export function RequestLogsTable({
             table={table}
             searchValue={searchValue}
             onSearchChange={onSearchChange}
-            searchPlaceholder="Search by Request ID"
+            searchPlaceholder="Search logs by ID…"
             onRefresh={onRefresh}
             isRefreshing={isRefreshing}
             onOpenFilters={() => setFiltersOpen(true)}

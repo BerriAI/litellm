@@ -1,9 +1,8 @@
 import { describe, it, expect } from "vitest";
-import bundledPresets from "../../../../litellm/proxy/public_endpoints/autorouter_presets.json";
+import { BUNDLED_PRESETS_RESPONSE } from "../../tests/mocks/autoRouterPresets";
 import {
   hydratePresets,
   AutoRouterPreset,
-  AutoRouterPresetsResponse,
   getRequiredModelsInPreset,
   getMissingModelsInPreset,
   getRequiredModels,
@@ -21,7 +20,7 @@ import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKe
 const groupsOnly = (models: Iterable<string>) => buildModelAvailability(models, []);
 
 // Hydrated from the real bundled catalog so a catalog edit flows into these expectations.
-const PRESETS = hydratePresets(bundledPresets as AutoRouterPresetsResponse);
+const PRESETS = hydratePresets(BUNDLED_PRESETS_RESPONSE);
 const getAllPresets = (): AutoRouterPreset[] => PRESETS;
 const getPresetByKey = (key: string): AutoRouterPreset | undefined => PRESETS.find((p) => p.key === key);
 
@@ -84,7 +83,17 @@ describe("autorouter_presets", () => {
       expect(config.tier_boundaries).toBeUndefined();
       expect(config.token_thresholds).toBeUndefined();
       expect(config.dimension_weights).toBeUndefined();
+      expect(config.session_affinity_ttl_seconds).toBeUndefined();
     }
+  });
+
+  it("carries a preset's session affinity idle window into the prefilled form state", () => {
+    const config = getPresetByKey("anthropic_family")!.complexity_router_config;
+    const prefill = buildPresetPrefill({ ...config, session_affinity_ttl_seconds: 300 }, groupsOnly([]));
+    expect(prefill.complexityRouterConfig.session_affinity_ttl_seconds).toBe(300);
+    expect(
+      buildPresetPrefill(config, groupsOnly([])).complexityRouterConfig.session_affinity_ttl_seconds,
+    ).toBeUndefined();
   });
 
   it("keeps the model-family presets on the heuristic classifier", () => {
