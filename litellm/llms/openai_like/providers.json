@@ -200,5 +200,9 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "kyma": {
+    "base_url": "https://kymaapi.com/v1",
+    "api_key_env": "KYMA_API_KEY"
   }
 }
