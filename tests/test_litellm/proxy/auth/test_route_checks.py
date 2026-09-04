@@ -3320,10 +3320,6 @@ def test_user_daily_activity_routes_reachable_by_non_admin(route, user_role):
     ],
 )
 def test_team_spend_by_user_reachable_by_non_admin(user_role):
-    """Team admins are internal users, and /team/spend/by_user is how they read
-    per-member spend for their own team. The handler scopes non-admins itself, so
-    the route layer must let them through like the /team/daily/activity siblings.
-    """
     user_obj = LiteLLM_UserTable(
         user_id="test_user",
         user_email="test@example.com",

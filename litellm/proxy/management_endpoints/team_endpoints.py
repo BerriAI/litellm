@@ -6236,10 +6236,6 @@ async def get_team_daily_activity_aggregated(
 
 
 def _team_user_spend_sql(*, team_count: int, restrict_to_user: bool) -> str:
-    """Per-(team, user) rollup straight from LiteLLM_SpendLogs. The daily spend
-    tables key on (team_id, api_key) or (user_id, api_key) only, so this is the
-    one place both dimensions of a request survive, including JWT/SSO traffic
-    that carries no virtual key."""
     team_placeholders: Final = ", ".join(f"${i}" for i in range(3, 3 + team_count))
     user_clause: Final = f' AND sl."user" = ${3 + team_count}' if restrict_to_user else ""
     return f"""
@@ -6293,19 +6289,9 @@ async def get_team_spend_by_user(
     """
     Spend per user within the given teams, attributed per request from spend logs.
 
-    Unlike /team/daily/activity (grouped by api_key) and /user/daily/activity
-    (grouped by user across every team), this answers "which members of team X
-    spent what", which is what chargeback needs when users belong to several
-    teams and authenticate with JWT/SSO instead of virtual keys.
-
     Proxy admins may query any team. Team admins and members holding the
     `/team/daily/activity` permission see every user of the requested teams;
     other members only see their own row.
-
-    Args:
-        team_ids (str): Comma-separated list of team IDs. Required.
-        start_date (str): Start of the range, inclusive (YYYY-MM-DD, UTC).
-        end_date (str): End of the range, inclusive (YYYY-MM-DD, UTC).
     """
     from litellm.proxy.proxy_server import (
         prisma_client,

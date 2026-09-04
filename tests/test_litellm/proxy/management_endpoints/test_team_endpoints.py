@@ -13639,9 +13639,6 @@ def _team_spend_by_user_db_row(team_id: str, user_id: str, spend: float, request
 
 @pytest.mark.asyncio
 async def test_get_team_spend_by_user_admin_groups_spend_logs_by_team_and_user(mock_db_client):
-    """A proxy admin asking for two teams must get one row per (team, user) built
-    from LiteLLM_SpendLogs, filtered to exactly those teams and the UTC day range,
-    with the team alias attached, and with no per-user restriction."""
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
 
     admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -13685,8 +13682,6 @@ async def test_get_team_spend_by_user_admin_groups_spend_logs_by_team_and_user(m
 
 @pytest.mark.asyncio
 async def test_get_team_spend_by_user_team_admin_sees_every_member(mock_db_client):
-    """A team admin is not a proxy admin, yet chargeback for their team needs every
-    member's row, so the query must not be narrowed to their own user id."""
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
 
     caller = UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER)
@@ -13708,9 +13703,6 @@ async def test_get_team_spend_by_user_team_admin_sees_every_member(mock_db_clien
 
 @pytest.mark.asyncio
 async def test_get_team_spend_by_user_plain_member_only_sees_own_row(mock_db_client):
-    """A member without the /team/daily/activity permission may still see their own
-    spend inside the team, but the query must pin `sl."user"` to their user id so
-    other members' rows never leave the database."""
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
 
     caller = UserAPIKeyAuth(user_id="bob", user_role=LitellmUserRoles.INTERNAL_USER)
@@ -13735,8 +13727,6 @@ async def test_get_team_spend_by_user_plain_member_only_sees_own_row(mock_db_cli
 
 @pytest.mark.asyncio
 async def test_get_team_spend_by_user_member_of_other_team_gets_404(mock_db_client):
-    """Asking for a team the caller does not belong to must fail before any spend
-    log query runs, matching /team/daily/activity."""
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
 
     caller = UserAPIKeyAuth(user_id="bob", user_role=LitellmUserRoles.INTERNAL_USER)
@@ -13767,8 +13757,6 @@ async def test_get_team_spend_by_user_member_of_other_team_gets_404(mock_db_clie
     ],
 )
 async def test_get_team_spend_by_user_rejects_bad_input(mock_db_client, team_ids, start_date, end_date, expected_error):
-    """The spend-log scan has no pagination, so a missing team filter or an
-    unbounded range must 400 before the query runs."""
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
 
     mock_db_client.db.query_raw = AsyncMock(return_value=[])

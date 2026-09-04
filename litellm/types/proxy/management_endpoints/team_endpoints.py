@@ -146,12 +146,6 @@ class TeamMetadataSchemaResponse(BaseModel):
 
 
 class TeamUserSpendRow(BaseModel):
-    """Spend one user generated inside one team, aggregated from LiteLLM_SpendLogs.
-
-    Attribution is per request (`user` + `team_id` on the log row), so it works for
-    JWT/SSO traffic that never touches a virtual key.
-    """
-
     team_id: str
     team_alias: str | None = None
     user_id: str
@@ -167,8 +161,6 @@ class TeamUserSpendRow(BaseModel):
 
 
 class TeamUserSpendResponse(BaseModel):
-    """Response for GET /team/spend/by_user."""
-
     start_date: str
     end_date: str
     results: tuple[TeamUserSpendRow, ...]

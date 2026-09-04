@@ -15542,19 +15542,9 @@ export interface paths {
          * Get Team Spend By User
          * @description Spend per user within the given teams, attributed per request from spend logs.
          *
-         *     Unlike /team/daily/activity (grouped by api_key) and /user/daily/activity
-         *     (grouped by user across every team), this answers "which members of team X
-         *     spent what", which is what chargeback needs when users belong to several
-         *     teams and authenticate with JWT/SSO instead of virtual keys.
-         *
          *     Proxy admins may query any team. Team admins and members holding the
          *     `/team/daily/activity` permission see every user of the requested teams;
          *     other members only see their own row.
-         *
-         *     Args:
-         *         team_ids (str): Comma-separated list of team IDs. Required.
-         *         start_date (str): Start of the range, inclusive (YYYY-MM-DD, UTC).
-         *         end_date (str): End of the range, inclusive (YYYY-MM-DD, UTC).
          */
         get: operations["get_team_spend_by_user_team_spend_by_user_get"];
         put?: never;
@@ -36801,10 +36791,7 @@ export interface components {
             /** Team Id */
             team_id: string;
         };
-        /**
-         * TeamUserSpendResponse
-         * @description Response for GET /team/spend/by_user.
-         */
+        /** TeamUserSpendResponse */
         TeamUserSpendResponse: {
             /** End Date */
             end_date: string;
@@ -36813,13 +36800,7 @@ export interface components {
             /** Start Date */
             start_date: string;
         };
-        /**
-         * TeamUserSpendRow
-         * @description Spend one user generated inside one team, aggregated from LiteLLM_SpendLogs.
-         *
-         *     Attribution is per request (`user` + `team_id` on the log row), so it works for
-         *     JWT/SSO traffic that never touches a virtual key.
-         */
+        /** TeamUserSpendRow */
         TeamUserSpendRow: {
             /**
              * Api Requests
