@@ -2295,6 +2295,25 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
     assert retry_authorization != first_attempt_headers["Authorization"]
 
 
+def test_aws_signing_overrides_only_fills_missing_credentials():
+    from litellm.llms.custom_httpx.llm_http_handler import _aws_signing_overrides
+
+    overrides = _aws_signing_overrides(
+        {"temperature": 0.2, "aws_region_name": "us-west-2"},
+        {
+            "aws_role_name": "arn:aws:iam::000000000000:role/attributed",
+            "aws_session_name": "user-123",
+            "aws_region_name": "us-east-1",
+            "api_key": "not-an-aws-param",
+        },
+    )
+
+    assert dict(overrides) == {
+        "aws_role_name": "arn:aws:iam::000000000000:role/attributed",
+        "aws_session_name": "user-123",
+    }
+
+
 class TestServerFulfilledToolsInRequest:
     """_server_fulfilled_tools_in_request gates the buffered (non-leaking) streaming
     mode for server-fulfilled tools like headroom_retrieve."""
@@ -3079,3 +3098,91 @@ async def test_a_provider_that_keeps_rejecting_is_not_retried_forever_on_the_asy
             )
 
     assert len(recorder.bodies) == 2
+
+
+CONTAINER_NOT_FOUND_BODY = {
+    "error": {
+        "message": "Container with id 'cntr_gone' not found.",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": None,
+    }
+}
+
+INVALID_API_KEY_BODY = {
+    "error": {
+        "message": "Incorrect API key provided: sk-proj-***. You can find your API key at https://platform.openai.com/account/api-keys.",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "invalid_api_key",
+    },
+    "status": 401,
+}
+
+CONTAINER_LIST_BODY = {
+    "object": "list",
+    "data": [{"id": "cntr_a", "object": "container", "created_at": 1, "status": "running", "name": "a"}],
+    "first_id": "cntr_a",
+    "last_id": "cntr_a",
+    "has_more": True,
+}
+
+
+def _container_sync_client(response: httpx.Response) -> HTTPHandler:
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=httpx.MockTransport(lambda _request: response))
+    return client
+
+
+def _container_async_client(response: httpx.Response) -> AsyncHTTPHandler:
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: response))
+    return client
+
+
+def test_container_retrieve_handler_raises_upstream_error_status_and_message():
+    from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
+
+    with pytest.raises(BaseLLMException) as exc_info:
+        BaseLLMHTTPHandler().container_retrieve_handler(
+            container_id="cntr_gone",
+            container_provider_config=OpenAIContainerConfig(),
+            litellm_params=GenericLiteLLMParams(api_key="sk-test"),
+            logging_obj=Mock(),
+            client=_container_sync_client(httpx.Response(404, json=CONTAINER_NOT_FOUND_BODY)),
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.message == "Container with id 'cntr_gone' not found."
+
+
+@pytest.mark.asyncio
+async def test_async_container_list_handler_raises_upstream_error_status_and_message():
+    from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
+
+    with pytest.raises(BaseLLMException) as exc_info:
+        await BaseLLMHTTPHandler().async_container_list_handler(
+            container_provider_config=OpenAIContainerConfig(),
+            litellm_params=GenericLiteLLMParams(api_key="sk-rejected"),
+            logging_obj=Mock(),
+            client=_container_async_client(httpx.Response(401, json=INVALID_API_KEY_BODY)),
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.message == INVALID_API_KEY_BODY["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_async_container_list_handler_transforms_success_response():
+    from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
+
+    response = await BaseLLMHTTPHandler().async_container_list_handler(
+        container_provider_config=OpenAIContainerConfig(),
+        litellm_params=GenericLiteLLMParams(api_key="sk-test"),
+        logging_obj=Mock(),
+        limit=1,
+        client=_container_async_client(httpx.Response(200, json=CONTAINER_LIST_BODY)),
+    )
+
+    assert [container.id for container in response.data] == ["cntr_a"]
+    assert response.has_more is True
