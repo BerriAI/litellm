@@ -18089,7 +18089,7 @@
         "metadata": {
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 1.4e-05,
         "output_dbu_cost_per_token": 0.0002,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
