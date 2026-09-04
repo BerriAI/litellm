@@ -745,7 +745,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         return headers
 
     @staticmethod
-    def _get_raw_models_data(api_key: str | None = None, api_base: str | None = None) -> list[dict]:
+    def _get_raw_models_data(api_key: str | None = None, api_base: str | None = None) -> tuple[Mapping[str, object], ...]:
         """
         Calls the `/v1/models` endpoint and returns the raw list of model entries
         (not just the ids), so callers can inspect provider-specific fields such
@@ -770,14 +770,19 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         if response.status_code != 200:
             raise ValueError(f"Failed to get models: {response.text}")
 
-        return response.json()["data"]
+        data = response.json()["data"]
+        return tuple(
+            entry
+            for entry in data
+            if isinstance(entry, Mapping)
+        )
 
-    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> tuple[str, ...]:
         """
         Calls OpenAI's `/v1/models` endpoint and returns the list of models.
         """
         models: Final = self._get_raw_models_data(api_key=api_key, api_base=api_base)
-        return [model["id"] for model in models]
+        return tuple(str(model["id"]) for model in models if "id" in model)
 
     # Field names third-party OpenAI-compatible servers report on `/v1/models`
     # entries for the model's context window.
@@ -792,7 +797,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     _CONTEXT_LENGTH_FIELDS: Final = ("max_model_len",)
 
     @classmethod
-    def _extract_context_length(cls, model_entry: dict) -> int | None:
+    def _extract_context_length(
+        cls,
+        model_entry: Mapping[str, object],
+    ) -> int | None:
         """
         Best-effort extraction of a context-window size from a `/v1/models` entry.
         """
@@ -807,7 +815,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> Mapping[str, object] | None:
         """
         For custom (self-hosted / third-party) OpenAI-compatible providers,
         query `/v1/models` and use the context window the provider itself
@@ -846,7 +854,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             )
             return None
 
-        model_entry = next((m for m in models if isinstance(m, dict) and m.get("id") == model), None)
+        model_entry = next(
+            (m for m in models if m.get("id") == model),
+            None,
+        )
         if model_entry is None:
             return None
 
@@ -866,16 +877,17 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             output_cost = existing.get("output_cost_per_token", 0.0)
             max_output_tokens = existing.get("max_output_tokens")
 
-        return {
-            "key": model,
-            "litellm_provider": "openai",
-            "mode": "chat",
-            "input_cost_per_token": input_cost,
-            "output_cost_per_token": output_cost,
-            "max_tokens": max_output_tokens,
-            "max_input_tokens": context_length,
-            "max_output_tokens": max_output_tokens,
-        }
+        return MappingProxyType(
+            {
+                "key": model,
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": input_cost,
+                "output_cost_per_token": output_cost,
+                "max_tokens": max_output_tokens,
+                "max_input_tokens": context_length,
+            }
+        )
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
