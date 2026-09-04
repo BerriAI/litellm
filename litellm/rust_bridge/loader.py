@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from types import ModuleType
 from collections.abc import Mapping, Set
+from types import ModuleType
 from typing import Final
 
 _BRIDGE_SENTINEL: Final = object()
