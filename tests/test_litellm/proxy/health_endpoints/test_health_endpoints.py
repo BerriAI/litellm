@@ -1517,7 +1517,7 @@ async def test_health_endpoint_filters_model_list_by_user_access():
     ):
         from fastapi import Response
 
-        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict)
+        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict, model=None, model_id=None)
 
     assert "model_list" in captured, "health_endpoint did not call _perform_health_check_and_save"
     returned_names = {m["model_name"] for m in captured["model_list"]}
@@ -1580,7 +1580,7 @@ async def test_health_endpoint_keeps_full_model_list_for_all_proxy_models():
     ):
         from fastapi import Response
 
-        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict)
+        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict, model=None, model_id=None)
 
     returned_names = {m["model_name"] for m in captured["model_list"]}
     assert returned_names == {
@@ -1648,7 +1648,7 @@ async def test_health_endpoint_resolves_all_team_models_to_team_allowlist():
     ):
         from fastapi import Response
 
-        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict)
+        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict, model=None, model_id=None)
 
     returned_names = {m["model_name"] for m in captured["model_list"]}
     assert returned_names == {"model-b"}, f"all-team-models key should health-check the team's models: {returned_names}"
@@ -1769,6 +1769,8 @@ async def test_health_endpoint_expands_access_group_on_live_path():
         await health_endpoint(
             response=Response(),
             user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"]),
+            model=None,
+            model_id=None,
         )
 
     assert [m["model_name"] for m in captured["model_list"]] == ["bedrock-nova"]
@@ -2149,7 +2151,7 @@ async def test_health_endpoint_blocks_cross_scope_model_id_under_background_cach
     cache filter was driven by an unvalidated ID and the global cache
     leaked id-b's entry to the caller.
     """
-    from fastapi import Response
+    from fastapi import HTTPException, Response
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
@@ -2200,21 +2202,18 @@ async def test_health_endpoint_blocks_cross_scope_model_id_under_background_cach
     ):
         # Calling with model="model-b" rather than model_id="id-b" because
         # the model_id branch raises 404 when llm_router is None. The bug
-        # being verified is the same: targeted resolver must drop entries
-        # not in the caller's scoped model_list. With the fix, the result
-        # has no leaked endpoints and the targeted-503 path fires.
-        result = await health_endpoint(
-            response=response,
-            user_api_key_dict=user_api_key_dict,
-            model="model-b",
-            model_id=None,
-        )
+        # being verified is the same: a target outside the caller's scoped
+        # model_list is refused before the cache is read.
+        with pytest.raises(HTTPException) as refused:
+            await health_endpoint(
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                model="model-b",
+                model_id=None,
+            )
 
-    leaked_ids = {ep.get("model_id") for ep in result.get("healthy_endpoints", [])}
-    leaked_ids |= {ep.get("model_id") for ep in result.get("unhealthy_endpoints", [])}
-    assert "id-b" not in leaked_ids, "background cache leaked an out-of-scope deployment to a scoped caller"
-    assert result["healthy_count"] == 0
-    assert response.status_code == 503
+    assert refused.value.status_code == 403
+    assert "leaky-internal.test" not in str(refused.value.detail)
 
 
 @pytest.mark.asyncio
@@ -2810,7 +2809,7 @@ async def _live_probed_model_ids(
             side_effect=fake_perform,
         ),
     ):
-        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict)
+        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict, model=None, model_id=None)
 
     return {m["model_info"]["id"] for m in captured["model_list"]}
 
@@ -2881,6 +2880,63 @@ async def test_health_endpoint_hides_another_teams_deployment_on_background_cach
 
     assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-bedrock"]
     assert result["healthy_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_refuses_a_targeted_deployment_outside_the_callers_scope_on_live_path():
+    """
+    A scoped key asking for a deployment it may not see must get a 403 and no
+    probe at all: probing the rest of its scope instead would report another
+    deployment's health under the requested id and store it as such.
+    """
+    from fastapi import HTTPException, Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    fake_perform = AsyncMock()
+
+    with (
+        _proxy_health_globals(_TEAM_MODEL_LIST, _router_for(_TEAM_MODEL_LIST)),
+        patch(  # test-quality-ok: the probe must never run; no injection seam
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            fake_perform,
+        ),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"], team_id=None),
+            model=None,
+            model_id="id-team-b",
+        )
+
+    assert excinfo.value.status_code == 403
+    fake_perform.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_refuses_a_targeted_deployment_outside_the_callers_scope_on_background_cache_path():
+    from fastapi import HTTPException, Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with (
+        _proxy_health_globals(
+            _TEAM_MODEL_LIST,
+            _router_for(_TEAM_MODEL_LIST),
+            use_background_health_checks=True,
+            health_check_results=_TEAM_CACHED_RESULTS,
+        ),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-group"], team_id="team-a"),
+            model="bedrock-nova_team-b_9f2c",
+            model_id=None,
+        )
+
+    assert excinfo.value.status_code == 403
 
 
 @pytest.mark.asyncio
