@@ -17,7 +17,7 @@ from ...shared.tracing.pytest_usage import (
 from ...shared.tracing.steps import pipeline_projection
 from ...shared.unit_runners.python_runner import collect_python_tests, contract_nodeid
 from ...shared.unit_runners.rust_runner import RustTarget, RustTestIdentity, RustTestScope, enumerate_rust_tests
-from .contracts import PythonFunctionDiscoverySpec, TestMapping, UnitTestContract
+from .contracts import PythonFunctionDiscoverySpec, RustTestFamily, TestMapping, UnitTestContract
 
 PythonInventory: TypeAlias = Callable[[Sequence[str], Path], frozenset[str]]
 RustInventory: TypeAlias = Callable[[Path, tuple[RustTestScope, ...]], frozenset[RustTestIdentity]]
@@ -155,6 +155,15 @@ def _traced_rust_scope(
     return scopes
 
 
+def _owned_rust_tests(
+    rust: RustTestIdentity | RustTestFamily,
+    inventory: frozenset[RustTestIdentity],
+) -> frozenset[RustTestIdentity]:
+    if isinstance(rust, RustTestFamily):
+        return frozenset(identity for identity in inventory if rust.contains(identity))
+    return frozenset((rust,)) if rust in inventory else frozenset()
+
+
 class MappingReport(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -217,13 +226,24 @@ def audit_mapping(
     )
     rust_tests: Final = rust_inventory(repo_root, rust_scope)
     mapped_python: Final = frozenset(item.python for item in mapping.mappings)
-    mapped_rust: Final = frozenset(item.rust for item in mapping.mappings)
+    rust_ownership: Final = tuple((item.rust, _owned_rust_tests(item.rust, rust_tests)) for item in mapping.mappings)
+    mapped_rust: Final = frozenset(identity for _, identities in rust_ownership for identity in identities)
     duplicate_python: Final = tuple(
         sorted(nodeid for nodeid, count in Counter(item.python for item in mapping.mappings).items() if count > 1)
     )
-    duplicate_rust: Final = tuple(
-        sorted(identity.key for identity, count in Counter(item.rust for item in mapping.mappings).items() if count > 1)
+    duplicate_exact_rust: Final = frozenset(
+        identity.key
+        for identity, count in Counter(
+            item.rust for item in mapping.mappings if isinstance(item.rust, RustTestIdentity)
+        ).items()
+        if count > 1
     )
+    duplicate_owned_rust: Final = frozenset(
+        identity.key
+        for identity, count in Counter(identity for _, identities in rust_ownership for identity in identities).items()
+        if count > 1
+    )
+    duplicate_rust: Final = tuple(sorted(duplicate_exact_rust | duplicate_owned_rust))
     return MappingReport(
         python_tests=tuple(sorted(python_tests)),
         rust_tests=tuple(sorted(identity.key for identity in rust_tests)),
@@ -231,7 +251,7 @@ def audit_mapping(
         unmapped_python_tests=tuple(sorted(python_tests - mapped_python)),
         rust_only_tests=tuple(sorted(identity.key for identity in rust_tests - mapped_rust)),
         missing_python_tests=tuple(sorted(mapped_python - python_tests)),
-        missing_rust_tests=tuple(sorted(identity.key for identity in mapped_rust - rust_tests)),
+        missing_rust_tests=tuple(sorted(rust.key for rust, identities in rust_ownership if not identities)),
         duplicate_python_mappings=duplicate_python,
         duplicate_rust_mappings=duplicate_rust,
         invalid_unit_parity_exclusions=tuple(

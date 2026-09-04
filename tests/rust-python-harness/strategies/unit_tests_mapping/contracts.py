@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from typing_extensions import Self
@@ -28,9 +28,30 @@ def _selector_contains(parent: str, child: str) -> bool:
     return child == parent or child.startswith(f"{parent}/")
 
 
+class RustTestFamily(_ContractModel):
+    kind: Literal["family"] = "family"
+    target: RustTarget
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        stripped: Final = value.strip()
+        if not stripped or stripped.endswith("::"):
+            raise ValueError("must be a non-empty Rust test base name")
+        return stripped
+
+    @property
+    def key(self) -> str:
+        return f"{self.target.key}::{self.name}::case_*"
+
+    def contains(self, identity: RustTestIdentity) -> bool:
+        return identity.target == self.target and identity.name.startswith(f"{self.name}::case_")
+
+
 class TestMapping(_ContractModel):
     python: str
-    rust: RustTestIdentity
+    rust: RustTestIdentity | RustTestFamily
 
     @field_validator("python")
     @classmethod

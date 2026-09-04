@@ -9,12 +9,13 @@ from pydantic import ValidationError
 from ...shared.unit_runners.rust_runner import RustTarget, RustTestIdentity, RustTestScope
 from .contracts import (
     MappingSpec,
+    RustTestFamily,
     RustUnitSpec,
-    TestMapping as MappingPair,
     UnitParityExclusionSpec,
     UnitParitySpec,
     UnitTestContract,
 )
+from .contracts import TestMapping as MappingPair
 from .mapping_validator import audit_mapping
 
 _TARGET: Final = RustTarget(package="example", name="example", kind="lib")
@@ -90,6 +91,71 @@ def test_reports_duplicate_rust_mapping_and_invalid_exclusion(tmp_path: Path) ->
     assert not report.is_valid
     assert report.duplicate_rust_mappings == (_RUST_TEST.key,)
     assert report.invalid_unit_parity_exclusions == ("test_api.py::removed",)
+
+
+def test_resolves_rstest_family_to_generated_cases(tmp_path: Path) -> None:
+    first_case: Final = RustTestIdentity(target=_TARGET, name="api::tests::decodes::case_1_png")
+    second_case: Final = RustTestIdentity(target=_TARGET, name="api::tests::decodes::case_2_pdf")
+    family: Final = RustTestFamily(target=_TARGET, name="api::tests::decodes")
+    contract: Final = _contract(MappingPair(python="test_api.py::test_decode", rust=family))
+
+    report: Final = audit_mapping(
+        contract,
+        tmp_path,
+        python_inventory=_python_inventory,
+        rust_inventory=lambda *_: frozenset((first_case, second_case)),
+    )
+
+    assert report.is_valid
+    assert report.mapped_python_tests == ("test_api.py::test_decode",)
+    assert report.missing_rust_tests == ()
+
+
+def test_reports_missing_rstest_family(tmp_path: Path) -> None:
+    family: Final = RustTestFamily(target=_TARGET, name="api::tests::decodes")
+    contract: Final = _contract(MappingPair(python="test_api.py::test_decode", rust=family))
+
+    report: Final = audit_mapping(
+        contract, tmp_path, python_inventory=_python_inventory, rust_inventory=_rust_inventory
+    )
+
+    assert not report.is_valid
+    assert report.missing_rust_tests == (family.key,)
+
+
+def test_reports_concrete_test_owned_by_exact_and_family_mappings(tmp_path: Path) -> None:
+    generated: Final = RustTestIdentity(target=_TARGET, name="api::tests::decodes::case_1_png")
+    family: Final = RustTestFamily(target=_TARGET, name="api::tests::decodes")
+    contract: Final = _contract(
+        MappingPair(python="test_api.py::test_decode", rust=family),
+        MappingPair(python="test_api.py::test_unmapped", rust=generated),
+    )
+
+    report: Final = audit_mapping(
+        contract,
+        tmp_path,
+        python_inventory=_python_inventory,
+        rust_inventory=lambda *_: frozenset((generated,)),
+    )
+
+    assert not report.is_valid
+    assert report.duplicate_rust_mappings == (generated.key,)
+
+
+def test_rstest_family_cases_are_not_rust_only(tmp_path: Path) -> None:
+    generated: Final = RustTestIdentity(target=_TARGET, name="api::tests::decodes::case_1_png")
+    unrelated: Final = RustTestIdentity(target=_TARGET, name="api::tests::rust_only")
+    family: Final = RustTestFamily(target=_TARGET, name="api::tests::decodes")
+    contract: Final = _contract(MappingPair(python="test_api.py::test_decode", rust=family))
+
+    report: Final = audit_mapping(
+        contract,
+        tmp_path,
+        python_inventory=_python_inventory,
+        rust_inventory=lambda *_: frozenset((generated, unrelated)),
+    )
+
+    assert report.rust_only_tests == (unrelated.key,)
 
 
 def test_accepts_descendant_unit_parity_selector() -> None:
