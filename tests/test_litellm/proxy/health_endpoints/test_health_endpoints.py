@@ -1836,6 +1836,8 @@ async def test_health_endpoint_treats_no_team_all_team_models_as_unrestricted():
             user_api_key_dict=UserAPIKeyAuth(
                 api_key="hashed-test-key", models=[SpecialModelNames.all_team_models.value], team_id=None
             ),
+            model=None,
+            model_id=None,
         )
 
     assert {m["model_name"] for m in captured["model_list"]} == {"bedrock-nova", "gpt-5.4-mini"}
@@ -2842,6 +2844,57 @@ async def test_health_endpoint_hides_team_deployments_from_a_key_with_no_team():
     )
 
     assert probed == {"id-bedrock"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_id", "expected_ids"),
+    [(None, {"id-bedrock"}), ("team-a", {"id-bedrock"}), ("team-b", {"id-bedrock", "id-team-b"})],
+)
+async def test_health_endpoint_keeps_an_unrestricted_non_admin_key_to_its_own_team(team_id, expected_ids):
+    """
+    A key with no model restriction is still bound by routing's team rule:
+    it may probe global deployments and its own team's, never another team's.
+    """
+    probed = await _live_probed_model_ids(
+        _TEAM_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], team_id=team_id),
+    )
+
+    assert probed == expected_ids
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_lets_a_proxy_admin_probe_every_teams_deployment():
+    probed = await _live_probed_model_ids(
+        _TEAM_MODEL_LIST,
+        UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert probed == {"id-bedrock", "id-team-b"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_keeps_an_unrestricted_non_admin_key_to_its_own_team_on_background_cache_path():
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    with _proxy_health_globals(
+        _TEAM_MODEL_LIST,
+        _router_for(_TEAM_MODEL_LIST),
+        use_background_health_checks=True,
+        health_check_results=_TEAM_CACHED_RESULTS,
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=[], team_id="team-a"),
+            model=None,
+            model_id=None,
+        )
+
+    assert [ep["model_id"] for ep in result["healthy_endpoints"]] == ["id-bedrock"]
+    assert result["healthy_count"] == 1
 
 
 @pytest.mark.asyncio

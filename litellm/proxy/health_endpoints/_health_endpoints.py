@@ -878,11 +878,17 @@ def _health_accessible_model_names(
 
 
 def _caller_may_probe_deployment(
-    deployment: Mapping[str, object], allowed_models: frozenset[str], llm_router: Router | None, team_id: str | None
+    deployment: Mapping[str, object],
+    allowed_models: frozenset[str] | None,
+    llm_router: Router | None,
+    team_id: str | None,
+    caller_is_admin: bool,
 ) -> bool:
     """Same deployment visibility rule as routing: another team's deployment is never in scope, team-less callers included."""
-    if not Router._deployment_usable_by_team(deployment, team_id):
+    if not caller_is_admin and not Router._deployment_usable_by_team(deployment, team_id):
         return False
+    if allowed_models is None:
+        return True
     if llm_router is None:
         return deployment.get("model_name") in allowed_models
     model: Final = dict(deployment)
@@ -1120,12 +1126,12 @@ async def health_endpoint(
                 detail={"error": "Model list not initialized"},
             )
         allowed_models: Final = _health_accessible_model_names(user_api_key_dict, llm_router)
-        restrict_to_allowed_models: Final = allowed_models is not None
+        restrict_to_allowed_models: Final = not is_admin or allowed_models is not None
         _llm_model_list: Final = [
             m
             for m in copy.deepcopy(llm_model_list)
-            if allowed_models is None
-            or _caller_may_probe_deployment(m, allowed_models, llm_router, user_api_key_dict.team_id)
+            if not restrict_to_allowed_models
+            or _caller_may_probe_deployment(m, allowed_models, llm_router, user_api_key_dict.team_id, is_admin)
         ]
         targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id)
         if restrict_to_allowed_models and targeted_ids is not None and not targeted_ids:
