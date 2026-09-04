@@ -14,6 +14,7 @@ import pytest
 
 from litellm.llms.minimax.image_generation.transformation import (
     MinimaxImageGenerationConfig,
+    MinimaxImageGenerationException,
 )
 from litellm.types.utils import ImageResponse
 
@@ -148,7 +149,7 @@ class TestMinimaxImageGenerationTransformation:
     def test_validate_environment_missing_api_key(self, mock_get_secret):
         mock_get_secret.return_value = None
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="MiniMax API key is required"):
             self.config.validate_environment(
                 headers={},
                 model=self.model,
@@ -250,7 +251,7 @@ class TestMinimaxImageGenerationTransformation:
             }
         )
 
-        with pytest.raises(Exception):
+        with pytest.raises(MinimaxImageGenerationException, match="invalid api key"):
             self.config.transform_image_generation_response(
                 model=self.model,
                 raw_response=raw_response,
