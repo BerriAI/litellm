@@ -22,6 +22,9 @@ if TYPE_CHECKING:
 
 
 class _BaseReductoOCRConfig(BaseOCRConfig):
+    def get_api_key_env_var(self) -> str | None:
+        return "REDUCTO_API_KEY"
+
     def map_ocr_params(
         self,
         non_default_params: dict,
@@ -52,10 +55,11 @@ class _BaseReductoOCRConfig(BaseOCRConfig):
                 "Missing REDUCTO_API_KEY - set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()"
             )
 
+        non_auth_headers: Final = {name: value for name, value in headers.items() if name.lower() != "authorization"}
         return {
+            **non_auth_headers,
             "Authorization": f"Bearer {resolved_key}",
             "Content-Type": "application/json",
-            **headers,
         }
 
     def get_complete_url(

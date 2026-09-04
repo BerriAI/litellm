@@ -52,10 +52,21 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         # Use Azure authentication logic
         headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
-        # Azure Anthropic uses x-api-key header (not api-key)
-        # Convert api-key to x-api-key if present
-        if "api-key" in headers and "x-api-key" not in headers:
-            headers["x-api-key"] = headers.pop("api-key")
+        azure_api_key: Final = next(
+            (value for name, value in headers.items() if name.lower() == "api-key"),
+            None,
+        )
+        if azure_api_key is not None:
+            headers = {
+                **{
+                    name: value
+                    for name, value in headers.items()
+                    if name.lower() not in {"api-key", "x-api-key", "authorization"}
+                },
+                "x-api-key": azure_api_key,
+            }
+        elif any(name.lower() == "authorization" for name in headers):
+            headers = {name: value for name, value in headers.items() if name.lower() != "x-api-key"}
 
         # Set anthropic-version header
         if "anthropic-version" not in headers:

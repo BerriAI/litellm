@@ -827,11 +827,17 @@ class BaseAWSLLM:
         import boto3
 
         verbose_logger.debug(
-            "IN Web Identity Token: %s | Role Name: %s | Session Name: %s",
-            aws_web_identity_token,
+            "Using web identity token [set=%s] | Role Name: %s | Session Name: %s",
+            bool(aws_web_identity_token),
             aws_role_name,
             aws_session_name,
         )
+
+        if aws_external_id is not None:
+            raise AwsAuthError(
+                message="aws_external_id is not supported with web identity authentication.",
+                status_code=400,
+            )
 
         # get_secret() expands environment-variable references (an os.environ/<VAR>
         # prefix, or a bare name matching an environment variable). Config-sourced
@@ -924,10 +930,6 @@ class BaseAWSLLM:
             "DurationSeconds": 3600,
             "Policy": json.dumps(bedrock_session_policy, separators=(",", ":")),
         }
-
-        # Add ExternalId parameter if provided
-        if aws_external_id is not None:
-            assume_role_params["ExternalId"] = aws_external_id
 
         try:
             sts_response: Final = sts_client.assume_role_with_web_identity(**assume_role_params)

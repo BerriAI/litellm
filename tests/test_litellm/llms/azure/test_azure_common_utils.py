@@ -2132,3 +2132,29 @@ def test_an_azure_client_litellm_built_its_own_http_client_for_is_still_closed(m
     closer.reap()
 
     assert wrapper.is_closed() is True
+
+
+def test_static_azure_ad_token_is_not_replaced_by_inferred_service_principal(monkeypatch):
+    from litellm.llms.azure.common_utils import get_azure_ad_token
+
+    monkeypatch.setenv("AZURE_TENANT_ID", "tenant")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "client")
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "secret")
+
+    assert get_azure_ad_token({"azure_ad_token": "static-token"}) == "static-token"
+
+
+def test_azure_auth_header_matching_is_case_insensitive_and_keeps_one_identity():
+    from litellm.llms.azure.common_utils import BaseAzureLLM
+    from litellm.types.router import GenericLiteLLMParams
+
+    headers = BaseAzureLLM._base_validate_azure_environment(
+        headers={
+            "API-Key": "forwarded",
+            "authorization": "Bearer conflicting",
+            "x-trace": "trace",
+        },
+        litellm_params=GenericLiteLLMParams(api_key="configured"),
+    )
+
+    assert headers == {"api-key": "forwarded", "x-trace": "trace"}

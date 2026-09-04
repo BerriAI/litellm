@@ -19,6 +19,21 @@ class TestAzureAnthropicConfig:
         config = AzureAnthropicConfig()
         assert config.custom_llm_provider == "azure_ai"
 
+    def test_api_key_auth_emits_only_x_api_key(self):
+        config = AzureAnthropicConfig()
+
+        result = config.validate_environment(
+            headers={"Authorization": "Bearer forwarded"},
+            model="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={"api_key": "configured-key"},
+            api_key="configured-key",
+        )
+
+        assert result["x-api-key"] == "configured-key"
+        assert not any(name.lower() in {"api-key", "authorization"} for name in result)
+
     def test_validate_environment_with_dict_litellm_params(self):
         """Test validate_environment with dict litellm_params"""
         config = AzureAnthropicConfig()
