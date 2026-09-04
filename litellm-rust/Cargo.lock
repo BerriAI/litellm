@@ -1463,6 +1463,7 @@ dependencies = [
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "criterion",
  "futures-util",
  "litellm-ai-gateway",

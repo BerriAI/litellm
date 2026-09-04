@@ -4,6 +4,7 @@ mod execution;
 #[cfg(feature = "trace-parity")]
 mod function_trace;
 mod marshal;
+mod python_token_provider;
 mod routes;
 
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
