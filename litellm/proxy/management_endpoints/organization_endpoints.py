@@ -312,7 +312,7 @@ def handle_nested_budget_structure_in_organization_update_request(
             # Extract valid budget fields and merge into top level
             budget_fields: Final = LiteLLM_BudgetTable.model_fields.keys()
             for key, value in budget_data.items():
-                if key in budget_fields and value is not None:
+                if key in budget_fields:
                     transformed_data[key] = value
 
     return transformed_data
@@ -708,9 +708,8 @@ async def update_organization(
             existing_organization_row=existing_organization_row,
         )
 
-    # Handle budget updates if budget fields are provided
     budget_fields: Final = {
-        k: v for k, v in data.model_dump().items() if k in LiteLLM_BudgetTable.model_fields and v is not None
+        k: v for k, v in data.model_dump().items() if k in _BUDGET_SETTABLE_FIELDS and k in data.model_fields_set
     }
 
     if budget_fields and existing_organization_row.budget_id:
