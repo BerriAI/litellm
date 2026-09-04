@@ -79,7 +79,7 @@ def promoted_baggage(
     ``team_metadata_keys`` selects sub-keys of the team's metadata to promote
     under ``litellm.team.metadata``. Empty values are dropped.
     """
-    out: dict[str, str] = {}
+    out: Final[dict[str, str]] = {}
     for key, extract in _PROMOTABLE.items():
         if key in promoted_keys:
             value = extract(identity, request_model, team_metadata_keys)
@@ -104,7 +104,7 @@ def _filtered_team_metadata_json(
     """
     if not isinstance(metadata, Mapping) or not allowed_keys:
         return None
-    filtered = {key: metadata[key] for key in allowed_keys if key in metadata}
+    filtered: Final = {key: metadata[key] for key in allowed_keys if key in metadata}
     if not filtered:
         return None
     return json.dumps(filtered, default=str, sort_keys=True)

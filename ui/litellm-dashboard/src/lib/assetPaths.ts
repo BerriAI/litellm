@@ -3,6 +3,8 @@ import { normalizeRootPath } from "@/lib/http/resolveApiBase";
 
 const EXTERNAL_SRC = /^(https?:|data:|blob:|\/\/)/i;
 
+export const isExternalAssetSrc = (value: string): boolean => EXTERNAL_SRC.test(value);
+
 /**
  * Prefix a root-relative asset path (e.g. "/ui/assets/logos/openai.svg") with the
  * proxy's server root path so it resolves when the UI is mounted under a sub-path
@@ -22,7 +24,7 @@ export const withServerRoot = (path: string, root: string): string => {
  */
 export const resolveLogoSrc = (value: string | null | undefined, root: string = serverRootPath): string | undefined => {
   if (!value) return undefined;
-  if (EXTERNAL_SRC.test(value)) return value;
+  if (isExternalAssetSrc(value)) return value;
   if (value.includes("/_next/static/")) return value;
   const prefix = normalizeRootPath(root);
   if (prefix && (value === prefix || value.startsWith(`${prefix}/`))) return value;

@@ -20,6 +20,7 @@ import uuid
 import weakref
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from typing import Final
 
 import httpx
 import jwt
@@ -52,10 +53,10 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 # The cache stores (fingerprint, token); anything else in the slot is treated as absent.
-_CACHED_ENTRY_ADAPTER: TypeAdapter[tuple[str, str]] = TypeAdapter(tuple[str, str])
+_CACHED_ENTRY_ADAPTER: Final[TypeAdapter[tuple[str, str]]] = TypeAdapter(tuple[str, str])
 
-CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
-CLIENT_ASSERTION_LIFETIME_SECONDS = 60
+CLIENT_ASSERTION_TYPE: Final = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+CLIENT_ASSERTION_LIFETIME_SECONDS: Final = 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +81,7 @@ class TokenEndpointClient:
         client_auth: ClientAuth,
     ) -> Result[ExchangedToken, CredError]:
         try:
-            data = {**grant_params, **_client_auth_params(endpoint, client_id, client_auth)}
+            data: Final = {**grant_params, **_client_auth_params(endpoint, client_id, client_auth)}
         except (ValueError, TypeError, NotImplementedError, jwt.PyJWTError):
             verbose_proxy_logger.warning("MCP token endpoint %s: could not sign the client assertion", endpoint)
             return Error(
@@ -90,7 +91,7 @@ class TokenEndpointClient:
                 )
             )
         try:
-            raw = await _post_form(endpoint, data)
+            raw: Final = await _post_form(endpoint, data)
         except httpx.HTTPStatusError as exc:
             verbose_proxy_logger.warning(
                 "MCP token endpoint %s failed with status %s", endpoint, exc.response.status_code
@@ -110,17 +111,31 @@ class TokenEndpointClient:
             return Error(
                 CredError.of_upstream_unavailable("token exchange failed: token endpoint returned a non-JSON response")
             )
-        if raw is None:
-            verbose_proxy_logger.warning("MCP token endpoint %s returned no response", endpoint)
-            return Error(CredError.of_upstream_unavailable("token exchange failed: no response from token endpoint"))
         try:
-            parsed = _TokenEndpointResponse.model_validate(raw)
+            parsed: Final = _TokenEndpointResponse.model_validate(raw)
         except ValidationError:
             verbose_proxy_logger.warning("MCP token endpoint %s response missing access_token", endpoint)
             return Error(
                 CredError.of_upstream_unavailable("token exchange failed: token endpoint response missing access_token")
             )
         return Ok(ExchangedToken(access_token=parsed.access_token, expires_in=parsed.expires_in))
+
+
+class _KeyGuard:
+    """The per-key single-flight lock plus the invalidation generation that lock protects.
+
+    Both live on one object so their lifetimes cannot diverge. `get_or_compute` binds the guard to
+    a local for its whole critical section, which keeps the weak map's entry alive for as long as
+    that compute could still write; an `invalidate` overlapping the compute therefore reaches the
+    very same object and its bump is guaranteed to be observed. Conversely a guard nobody holds is
+    collectible precisely because no write is outstanding for it to fence.
+    """
+
+    __slots__ = ("__weakref__", "generation", "lock")
+
+    def __init__(self) -> None:
+        self.lock = asyncio.Lock()
+        self.generation = 0
 
 
 class ExchangedTokenCache:
@@ -131,7 +146,7 @@ class ExchangedTokenCache:
             max_size_in_memory=MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE,
             default_ttl=MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL,
         )
-        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+        self._guards: weakref.WeakValueDictionary[str, _KeyGuard] = weakref.WeakValueDictionary()
 
     async def get_or_compute(
         self,
@@ -146,28 +161,50 @@ class ExchangedTokenCache:
         guaranteeing the token it gets back was minted for the *current* inputs: a stored entry
         whose fingerprint differs reads as a miss and is re-minted over. That keeps eviction
         addressable without the key having to encode the credential material it protects.
+
+        An `invalidate` landing while `compute` is in flight wins over that compute's write. The
+        token is still returned to the caller it was minted for, but it is not stored, so the next
+        resolution re-mints rather than serving a bearer that predates the invalidation for the
+        rest of its TTL.
         """
         cached = self._get(cache_key, fingerprint)
         if cached is not None:
             return Ok(cached)
-        async with self._lock(cache_key):
+        guard = self._guard(cache_key)
+        async with guard.lock:
             cached = self._get(cache_key, fingerprint)
             if cached is not None:
                 return Ok(cached)
+            generation = guard.generation
             match await compute():
                 case Ok(token):
-                    self._cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
-                        cache_key,
-                        (fingerprint, token.access_token),
-                        ttl=_cache_ttl_seconds(token.expires_in),
-                    )
+                    if guard.generation == generation:
+                        self._store(cache_key, fingerprint, token)
                     return Ok(token.access_token)
                 case Error(err):
                     return Error(err)
 
     def invalidate(self, cache_key: str) -> None:
-        """Evict one cached token so the next `get_or_compute` re-mints (e.g. after an upstream 401)."""
+        """Evict one cached token so the next `get_or_compute` re-mints (e.g. after an upstream 401).
+
+        Bumping the guard's generation is what makes the eviction stick against a compute already
+        awaiting the token endpoint: that compute snapshotted the old generation and so skips its
+        write. No guard means no compute is in flight, since an in-flight one pins its own.
+
+        Stays synchronous: callers invalidate from plain `def`s.
+        """
         self._cache.delete_cache(cache_key)  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
+        guard = self._guards.get(cache_key)
+        if guard is None:
+            return
+        guard.generation += 1
+
+    def _store(self, cache_key: str, fingerprint: str, token: ExchangedToken) -> None:
+        self._cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
+            cache_key,
+            (fingerprint, token.access_token),
+            ttl=_cache_ttl_seconds(token.expires_in),
+        )
 
     def _get(self, cache_key: str, fingerprint: str) -> str | None:
         """The stored token, or None when absent or minted for different inputs.
@@ -182,23 +219,23 @@ class ExchangedTokenCache:
             return None
         return token if stored_fingerprint == fingerprint else None
 
-    def _lock(self, cache_key: str) -> asyncio.Lock:
-        lock = self._locks.get(cache_key)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._locks[cache_key] = lock
-        return lock
+    def _guard(self, cache_key: str) -> _KeyGuard:
+        guard = self._guards.get(cache_key)
+        if guard is None:
+            guard = _KeyGuard()
+            self._guards[cache_key] = guard
+        return guard
 
 
 def _cache_ttl_seconds(expires_in: int | None) -> int:
-    lifetime = expires_in if expires_in is not None else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
+    lifetime: Final = expires_in if expires_in is not None else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
     return max(
         lifetime - MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
         MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
     )
 
 
-async def _post_form(endpoint: str, data: dict[str, str]) -> object | None:
+async def _post_form(endpoint: str, data: dict[str, str]) -> object:
     # litellm's httpx handler and httpx.Response are only partially typed; the token endpoint
     # returns a JSON object that `_TokenEndpointResponse` validates, so the untyped boundary is
     # contained here. A non-2xx raises `httpx.HTTPStatusError`, an unreachable endpoint raises
@@ -207,8 +244,6 @@ async def _post_form(endpoint: str, data: dict[str, str]) -> object | None:
     # each to a CredError.
     client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore[reportUnknownVariableType]  # litellm http handler is untyped
     response = await client.post(endpoint, data=data)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # litellm http handler is untyped
-    if response is None:
-        return None
     response.raise_for_status()
     return response.json()  # pyright: ignore[reportAny]  # untyped JSON; validated by _TokenEndpointResponse in fetch
 
@@ -230,7 +265,7 @@ def _client_auth_params(endpoint: str, client_id: str, client_auth: ClientAuth) 
 
 
 def _client_assertion(endpoint: str, client_id: str, auth: PrivateKeyJwtAuth) -> str:
-    now = int(time.time())
+    now: Final = int(time.time())
     return jwt.encode(
         {
             "iss": client_id,

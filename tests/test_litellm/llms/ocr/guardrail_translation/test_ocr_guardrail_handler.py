@@ -2,13 +2,10 @@
 Unit tests for OCR Guardrail Translation Handler
 """
 
-import os
 import re
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms import get_guardrail_translation_mapping
