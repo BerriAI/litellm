@@ -921,6 +921,66 @@ class TestEvictionSafety:
 
         assert stray.shutdown_calls == 1
 
+    def test_a_processor_built_during_shutdown_is_not_left_in_a_cleared_cache(self):
+        """The build runs outside the lock, so shutdown can finish inside it. Inserting
+        afterwards leaves a live exporter, with its batch thread and its connection
+        pool, in a map nothing will read again."""
+        import threading
+
+        built = []
+
+        def slow(_destination):
+            time.sleep(0.4)
+            built.append(self.Recording())
+            return built[-1]
+
+        fan_out = TenantFanOutSpanProcessor(processor_factory=slow)
+        acquired = []
+        caller = threading.Thread(target=lambda: acquired.append(fan_out._acquire(self._dest(0))))
+        caller.start()
+        time.sleep(0.1)
+        fan_out.shutdown()
+        caller.join(timeout=10)
+
+        assert acquired == [None], "an exporter built after shutdown was handed out"
+        assert fan_out._processors == {}, "an exporter was left in a cleared cache"
+        assert built[0].shutdown_calls == 1, "the exporter that lost the race was never closed"
+
+    def test_a_submit_racing_close_is_never_stranded_behind_the_sentinels(self):
+        """A submit that read the closed state and then let ``close`` run queues its
+        processor after every sentinel, where the workers have already exited."""
+        import queue
+        import threading
+
+        from litellm.integrations.otel.plumbing.providers import _DrainPool
+
+        at_the_put, close_returned = threading.Event(), threading.Event()
+
+        class Gated(queue.Queue):
+            def put(self, item, *args, **kwargs):
+                if item is not None:
+                    at_the_put.set()
+                    close_returned.wait(timeout=1)
+                super().put(item, *args, **kwargs)
+
+        pool = _DrainPool(pending=Gated())
+        submitted = self.Recording()
+        submitter = threading.Thread(target=pool.submit, args=(submitted,))
+        submitter.start()
+        assert at_the_put.wait(timeout=5)
+        closer = threading.Thread(target=pool.close)
+        closer.start()
+        closer.join(timeout=1.5)
+        close_returned.set()
+        submitter.join(timeout=5)
+        closer.join(timeout=5)
+        for _ in range(250):
+            if submitted.shutdown_calls:
+                break
+            time.sleep(0.02)
+
+        assert submitted.shutdown_calls == 1, "a processor was queued behind the sentinels and never closed"
+
     def test_a_retired_processor_is_still_closed_on_shutdown(self):
         from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
 

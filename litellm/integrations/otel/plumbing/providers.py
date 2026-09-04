@@ -233,20 +233,32 @@ class _DrainPool:
     hold the proxy open on the way down.
     """
 
-    def __init__(self, workers: int = _DRAIN_WORKERS) -> None:
+    def __init__(
+        self,
+        workers: int = _DRAIN_WORKERS,
+        pending: "queue.Queue[SpanProcessor | None] | None" = None,
+    ) -> None:
         self._workers: Final = workers
-        self._closed: Final = threading.Event()
-        self._pending: Final[queue.Queue[SpanProcessor | None]] = queue.Queue()
+        self._lock: Final = threading.Lock()
+        self._closed = False
+        self._pending: Final[queue.Queue[SpanProcessor | None]] = pending if pending is not None else queue.Queue()
         for _ in range(workers):
             threading.Thread(
                 target=self._drain_until_closed, daemon=True, name="litellm-otel-destination-drain"
             ).start()
 
     def submit(self, processor: SpanProcessor) -> None:
-        if self._closed.is_set():
-            _shutdown_quietly(processor)
-            return
-        self._pending.put(processor)
+        """Queue ``processor`` for closing, or close it here once the pool is retired.
+
+        The check and the put share one lock. Reading a closed flag on its own leaves
+        room for :meth:`close` to run in between, and the processor would land behind
+        the sentinels every worker has already exited on.
+        """
+        with self._lock:
+            if not self._closed:
+                self._pending.put(processor)
+                return
+        _shutdown_quietly(processor)
 
     def close(self) -> None:
         """Retire the workers once they have closed everything already queued.
@@ -254,11 +266,12 @@ class _DrainPool:
         A proxy that rebuilds its telemetry builds another fan-out, so workers that
         outlive the one that started them are two more threads per reload, forever.
         """
-        if self._closed.is_set():
-            return
-        self._closed.set()
-        for _ in range(self._workers):
-            self._pending.put(None)
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            for _ in range(self._workers):
+                self._pending.put(None)
 
     def _drain_until_closed(self) -> None:
         while True:
@@ -321,7 +334,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
     ) -> None:
         self._drain_seconds: Final = shutdown_drain_seconds
         self._lock: Final = threading.Condition()
-        self._closed: Final = threading.Event()
+        self._closed = False  # guarded by ``_lock``: an unlocked read races the teardown it gates
         self._build: Final = processor_factory if processor_factory is not None else _destination_processor
         self._processors: OrderedDict[object, SpanProcessor] = OrderedDict()  # mutable-ok: bounded LRU
         self._retired: OrderedDict[int, SpanProcessor] = OrderedDict()  # mutable-ok: drains as exports finish
@@ -352,8 +365,8 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         will ever close. Refusing new work and then waiting out the in-flight ones
         keeps both from happening.
         """
-        self._closed.set()
         with self._lock:
+            self._closed = True
             self._lock.wait_for(lambda: not self._exporting, timeout=self._drain_seconds)
         # Snapshot: ``on_end`` mutates the cache on whichever thread ends a span, so
         # iterating the live mapping risks a "mutated during iteration" the per-item
@@ -386,10 +399,10 @@ class TenantFanOutSpanProcessor(SpanProcessor):
 
     def _acquire(self, destination: "OtelDestination") -> SpanProcessor | None:
         """The processor for ``destination``, marked busy until ``_release``."""
-        if self._closed.is_set():
-            return None
         key: Final = destination.cache_key()
         with self._lock:
+            if self._closed:
+                return None
             cached = self._processors.get(key)  # rebind-ok: reassigned after the build below
             if cached is not None:
                 self._processors.move_to_end(key)
@@ -399,6 +412,10 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         if built is None:
             return None
         with self._lock:
+            if self._closed:
+                # Shutdown ran while this one was being built, so it belongs to nobody.
+                _shutdown_quietly(built)
+                return None
             existing: Final = self._processors.get(key)
             if existing is not None:
                 # Another thread won the race; drop ours rather than leak its thread.
