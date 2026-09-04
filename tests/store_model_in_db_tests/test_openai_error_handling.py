@@ -106,15 +106,22 @@ def test_missing_model_parameter_curl(curl_command):
     # Run the curl command and capture the output
     key = generate_key_sync()
     curl_command = curl_command.replace("sk-1234", key)
-    result = subprocess.run(curl_command, shell=True, capture_output=True, text=True)
+    result = subprocess.run(
+        f'{curl_command} -s -w "\\n%{{http_code}}"',
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+    body, _, status_code = result.stdout.rpartition("\n")
     # Parse the JSON response
-    response = json.loads(result.stdout)
+    response = json.loads(body)
 
     # Check that we got an error response
     assert "error" in response
     print("error in response", json.dumps(response, indent=4))
 
-    assert "litellm.BadRequestError" in response["error"]["message"]
+    assert status_code == "400", f"expected HTTP 400, got {status_code}: {response}"
+    assert isinstance(response["error"]["message"], str) and response["error"]["message"]
 
 
 @pytest.mark.asyncio
