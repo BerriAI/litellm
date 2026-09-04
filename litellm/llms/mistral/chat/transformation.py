@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, get_type_hints, overload
 
 import httpx
@@ -107,13 +107,14 @@ class MistralConfig(OpenAIGPTConfig):
 
         return supported_params
 
-    def _map_tool_choice(self, tool_choice: str) -> str:
-        if tool_choice == "auto" or tool_choice == "none":
-            return tool_choice
-        elif tool_choice == "required":
-            return "any"
-        else:  # openai 'tool_choice' object param not supported by Mistral API
-            return "any"
+    def _map_tool_choice(self, tool_choice: str | Mapping[str, object]) -> str | Mapping[str, object]:
+        match tool_choice:
+            case "auto" | "none":
+                return tool_choice
+            case {"type": "function", "function": {"name": str()}}:
+                return tool_choice
+            case _:
+                return "any"
 
     @staticmethod
     def _get_mistral_reasoning_system_prompt() -> str:
@@ -165,7 +166,7 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["top_p"] = value
             if param == "stop":
                 optional_params["stop"] = value
-            if param == "tool_choice" and isinstance(value, str):
+            if param == "tool_choice" and isinstance(value, (str, Mapping)):
                 optional_params["tool_choice"] = self._map_tool_choice(tool_choice=value)
             if param == "seed":
                 optional_params["extra_body"] = {"random_seed": value}
