@@ -389,7 +389,7 @@ def test_get_admission_control_settings(
 def test_invalid_admission_control_settings_logs_once(caplog: pytest.LogCaptureFixture) -> None:
     _parse_admission_control_settings.cache_clear()
     caplog.set_level("ERROR")
-    settings: Final = {"max_in_flight_requests_per_worker": "many"}
+    settings: Final = {"max_in_flight_requests_per_worker": [1]}
 
     assert get_admission_control_settings(settings) is None
     assert get_admission_control_settings(settings) is None

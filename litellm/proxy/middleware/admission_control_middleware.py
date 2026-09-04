@@ -252,17 +252,14 @@ _NonNegativeInt: TypeAlias = Annotated[int, Field(ge=0)]
 _PositiveFloat: TypeAlias = Annotated[float, Field(gt=0)]
 _AdmissionControlRaw: TypeAlias = int | float | str | None
 
+
+def _hashable(value: object) -> _AdmissionControlRaw:
+    return value if value is None or isinstance(value, (int, float, str)) else repr(value)
+
+
 _POSITIVE_INT_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(_PositiveInt)
 _NON_NEGATIVE_INT_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(_NonNegativeInt)
 _POSITIVE_FLOAT_ADAPTER: Final[TypeAdapter[float]] = TypeAdapter(_PositiveFloat)
-
-
-@lru_cache(maxsize=16)
-def _log_invalid_admission_control_settings(raw_values: tuple[str, str, str], error: str) -> None:
-    verbose_proxy_logger.error(
-        "Ignoring invalid admission control settings, per-worker admission control is disabled: %s",
-        error,
-    )
 
 
 @lru_cache(maxsize=16)
@@ -294,22 +291,11 @@ def get_admission_control_settings(settings: Mapping[str, object]) -> AdmissionC
     max_in_flight_raw: Final = settings.get("max_in_flight_requests_per_worker")
     if max_in_flight_raw is None:
         return None
-    max_queued_raw: Final = settings.get("max_queued_requests_per_worker")
-    queue_timeout_raw: Final = settings.get("admission_queue_timeout_seconds", 1.0)
-    raw_values: Final = (max_in_flight_raw, max_queued_raw, queue_timeout_raw)
-    if not all(value is None or isinstance(value, (int, float, str)) for value in raw_values):
-        error: Final = TypeError("admission control settings must be int, float, str, or None")
-        _log_invalid_admission_control_settings(tuple(repr(value) for value in raw_values), str(error))
-        return None
-    try:
-        return _parse_admission_control_settings(
-            max_in_flight_raw,
-            max_queued_raw,
-            queue_timeout_raw,
-        )
-    except TypeError as exc:
-        _log_invalid_admission_control_settings(tuple(repr(value) for value in raw_values), str(exc))
-        return None
+    return _parse_admission_control_settings(
+        _hashable(max_in_flight_raw),
+        _hashable(settings.get("max_queued_requests_per_worker")),
+        _hashable(settings.get("admission_queue_timeout_seconds", 1.0)),
+    )
 
 
 def _overloaded_response(state: AdmissionControlState) -> JSONResponse:
