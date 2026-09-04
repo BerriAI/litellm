@@ -7,7 +7,7 @@ use crate::chat_completions::transformation::{
 };
 use crate::chat_completions::types::{
     ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse, ChatMessage,
-    ProviderChatRequestData, ProviderChatResponseData,
+    LiteLlmRequestContext, ProviderChatRequestData, ProviderChatResponseData,
 };
 use crate::constants::ANTHROPIC_OAUTH_TOKEN_PREFIX;
 use crate::error::Error;
@@ -126,9 +126,22 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         &self,
         messages: &[ChatMessage],
         optional_params: &Map<String, Value>,
+        context: &LiteLlmRequestContext,
     ) -> Option<Unsupported> {
         unsupported_param(self.supported_openai_params(), &[], optional_params)
             .or_else(|| messages.iter().find_map(unsupported_message))
+            .or_else(|| {
+                context
+                    .metadata
+                    .iter()
+                    .chain(context.litellm_metadata.iter())
+                    .any(|metadata| {
+                        metadata
+                            .get("user_id")
+                            .is_some_and(|value| !value.is_null())
+                    })
+                    .then_some(Unsupported("LiteLLM user metadata"))
+            })
             // Anthropic rejects a request whose first turn is not a user turn.
             // Python only repairs that under `litellm.modify_params`, which the
             // core cannot observe, so decline instead of guessing.

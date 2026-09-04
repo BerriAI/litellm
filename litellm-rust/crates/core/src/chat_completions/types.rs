@@ -19,7 +19,15 @@ pub struct ChatCompletionsRequest<'a> {
     pub api_base: Option<&'a str>,
     pub custom_llm_provider: Option<&'a str>,
     pub extra_headers: Option<Map<String, Value>>,
+    pub context: LiteLlmRequestContext,
     pub timeout: Option<Duration>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LiteLlmRequestContext {
+    pub metadata: Option<Map<String, Value>>,
+    pub litellm_metadata: Option<Map<String, Value>>,
+    pub request_metadata_fields: Vec<String>,
 }
 
 pub(super) struct ResolvedChatCompletionsRequest<'a> {

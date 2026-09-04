@@ -47,7 +47,9 @@ pub(super) fn resolve_request(
             "chat completions requires at least one message".to_string(),
         ));
     }
-    if let Some(reason) = config.unsupported_reason(&messages, &request.optional_params) {
+    if let Some(reason) =
+        config.unsupported_reason(&messages, &request.optional_params, &request.context)
+    {
         return Err(Error::Unsupported(reason.0));
     }
     Ok(ResolvedChatCompletionsRequest {

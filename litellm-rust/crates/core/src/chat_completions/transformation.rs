@@ -2,8 +2,8 @@ use crate::Error;
 use serde_json::{Map, Value};
 
 use super::types::{
-    ChatCompletionsResponse, ChatMessage, ChatMessageContent, ProviderChatRequestData,
-    ProviderChatResponseData,
+    ChatCompletionsResponse, ChatMessage, ChatMessageContent, LiteLlmRequestContext,
+    ProviderChatRequestData, ProviderChatResponseData,
 };
 
 /// How the upstream call is authenticated. API-key strategies are resolved in
@@ -75,6 +75,7 @@ pub trait ChatCompletionsProviderConfig: Sync {
         &self,
         messages: &[ChatMessage],
         optional_params: &Map<String, Value>,
+        _context: &LiteLlmRequestContext,
     ) -> Option<Unsupported> {
         unsupported_param(
             self.supported_openai_params(),

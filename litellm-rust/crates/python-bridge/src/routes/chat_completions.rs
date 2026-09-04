@@ -2,12 +2,45 @@ use litellm_core::Error;
 use std::future::Future;
 
 use litellm_core::chat_completions::chat_completions as run_chat_completions;
-use litellm_core::chat_completions::types::{ChatCompletionsRequest, ChatCompletionsResponse};
+use litellm_core::chat_completions::types::{
+    ChatCompletionsRequest, ChatCompletionsResponse, LiteLlmRequestContext,
+};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::errors::chat_completions_error_to_pyerr;
 use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty, required_value};
+
+fn optional_context_mapping(
+    context: &Bound<'_, PyAny>,
+    attribute: &str,
+) -> PyResult<Option<Map<String, Value>>> {
+    let field = context
+        .getattr(attribute)
+        .or_else(|_| context.get_item(attribute))?;
+    let value: Option<Value> = litellm_python_interop::from_py(&field)?;
+    value
+        .map(|entry| {
+            entry.as_object().cloned().ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "request_context.{attribute} must be a mapping or None"
+                ))
+            })
+        })
+        .transpose()
+}
+
+fn request_context_from_py(context: &Bound<'_, PyAny>) -> PyResult<LiteLlmRequestContext> {
+    let request_metadata_fields = context
+        .getattr("request_metadata_fields")
+        .or_else(|_| context.get_item("request_metadata_fields"))?;
+    Ok(LiteLlmRequestContext {
+        metadata: optional_context_mapping(context, "metadata")?,
+        litellm_metadata: optional_context_mapping(context, "litellm_metadata")?,
+        request_metadata_fields: litellm_python_interop::from_py(&request_metadata_fields)?,
+    })
+}
 
 fn prepare_chat_completions(
     inputs: ChatCompletionsInputs,
@@ -41,6 +74,7 @@ fn prepare_chat_completions(
             api_base: api_base.as_deref(),
             custom_llm_provider: custom_llm_provider.as_deref(),
             extra_headers,
+            context: inputs.request_context,
             timeout,
         })
         .await
@@ -55,6 +89,8 @@ bridge_route! {
         model: String,
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
         messages: serde_json::Value,
+        #[pyo3(from_py_with = request_context_from_py)]
+        request_context: LiteLlmRequestContext,
     },
     optional = {
         #[pyo3(from_py_with = litellm_python_interop::from_py)]

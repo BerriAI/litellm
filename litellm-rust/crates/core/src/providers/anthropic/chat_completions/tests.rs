@@ -26,7 +26,26 @@ fn transform_response(body: Value) -> Result<ChatCompletionsResponse, Error> {
 }
 
 fn reason(msgs: Value, opts: Value) -> Option<Unsupported> {
-    ANTHROPIC_CHAT_COMPLETIONS_CONFIG.unsupported_reason(&messages(msgs), &params(opts))
+    ANTHROPIC_CHAT_COMPLETIONS_CONFIG.unsupported_reason(
+        &messages(msgs),
+        &params(opts),
+        &LiteLlmRequestContext::default(),
+    )
+}
+
+#[test]
+fn declines_user_metadata_owned_by_the_python_transform() {
+    let context = LiteLlmRequestContext {
+        metadata: Some(Map::from_iter([("user_id".to_string(), json!("user-1"))])),
+        ..LiteLlmRequestContext::default()
+    };
+    let actual = ANTHROPIC_CHAT_COMPLETIONS_CONFIG.unsupported_reason(
+        &messages(json!([{"role": "user", "content": "hi"}])),
+        &params(json!({})),
+        &context,
+    );
+
+    assert_eq!(actual, Some(Unsupported("LiteLLM user metadata")));
 }
 
 #[test]

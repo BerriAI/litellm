@@ -34,16 +34,21 @@ RUST_RESPONSE: Final[dict[str, object]] = {
 }
 MESSAGES: Final[tuple[dict[str, str], ...]] = ({"role": "user", "content": "hi"},)
 OPTIONAL_PARAMS: Final[dict[str, object]] = {"max_tokens": 16}
+REQUEST_CONTEXT: Final = bridge.NativeChatContext(
+    metadata={"user_id": "user-1"},
+    litellm_metadata={"trace_id": "trace-1"},
+    request_metadata_fields=("user_api_key_team_id",),
+)
 
 
 @pytest.fixture(autouse=True)
 def reset_bridge(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     monkeypatch.delenv("LITELLM_RUST", raising=False)
     configuration.reset_rust_configuration()
-    bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None)
+    bridge.set_rust_chat_completions(sync=None, asynchronous=None)
     yield
     configuration.reset_rust_configuration()
-    bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None)
+    bridge.set_rust_chat_completions(sync=None, asynchronous=None)
 
 
 class RecordingCall:
@@ -52,15 +57,17 @@ class RecordingCall:
 
     def __call__(
         self,
+        *,
         model: str,
         messages: Sequence[object],
-        optional_params: Mapping[str, object] | None,
+        optional_params: Mapping[str, object],
         api_key: str | None,
         api_base: str | None,
         custom_llm_provider: str | None,
         extra_headers: Mapping[str, object] | None,
         timeout_seconds: float | None,
-        callback_adapter: OneShotCallbackHandle | None = None,
+        request_context: bridge.NativeChatContext,
+        callback_adapter: OneShotCallbackHandle,
     ) -> Mapping[str, object]:
         self.calls.append(
             {
@@ -72,39 +79,42 @@ class RecordingCall:
                 "custom_llm_provider": custom_llm_provider,
                 "extra_headers": extra_headers,
                 "timeout_seconds": timeout_seconds,
+                "request_context": request_context,
             }
         )
-        if callback_adapter is not None:
-            callback_adapter.pre_call(
-                {"request": {"model": model, "messages": messages}, "api_base": api_base, "headers": extra_headers}
-            )
-            callback_adapter.post_call({"response": RUST_RESPONSE})
+        callback_adapter.pre_call(
+            {"request": {"model": model, "messages": messages}, "api_base": api_base, "headers": extra_headers}
+        )
+        callback_adapter.post_call({"response": RUST_RESPONSE})
         return RUST_RESPONSE
 
 
 class RecordingAsyncCall(RecordingCall):
     async def __call__(
         self,
+        *,
         model: str,
         messages: Sequence[object],
-        optional_params: Mapping[str, object] | None,
+        optional_params: Mapping[str, object],
         api_key: str | None,
         api_base: str | None,
         custom_llm_provider: str | None,
         extra_headers: Mapping[str, object] | None,
         timeout_seconds: float | None,
-        callback_adapter: OneShotCallbackHandle | None = None,
+        request_context: bridge.NativeChatContext,
+        callback_adapter: OneShotCallbackHandle,
     ) -> Mapping[str, object]:
         return super().__call__(
-            model,
-            messages,
-            optional_params,
-            api_key,
-            api_base,
-            custom_llm_provider,
-            extra_headers,
-            timeout_seconds,
-            callback_adapter,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            timeout_seconds=timeout_seconds,
+            request_context=request_context,
+            callback_adapter=callback_adapter,
         )
 
 
@@ -125,115 +135,6 @@ class RecordingCallbacks:
         return None
 
 
-def accepts(
-    *,
-    custom_llm_provider: str | None = "anthropic",
-    litellm_params: Mapping[str, object] | None = None,
-    stream: object = None,
-) -> bool:
-    return bridge.rust_chat_completions_accepts(
-        custom_llm_provider=custom_llm_provider,
-        litellm_params=litellm_params,
-        stream=stream,
-    )
-
-
-@pytest.mark.parametrize(
-    ("enablement", "expected"),
-    (
-        pytest.param("request-true", True, id="request-true"),
-        pytest.param("request-false", False, id="request-false-over-process"),
-        pytest.param("process", True, id="process-override"),
-        pytest.param("environment", True, id="environment"),
-        pytest.param("disabled", False, id="disabled"),
-    ),
-)
-def test_gate_applies_enablement_before_native_invocation(
-    monkeypatch: pytest.MonkeyPatch,
-    enablement: str,
-    expected: bool,
-) -> None:
-    native: Final = RecordingCall()
-    bridge.set_rust_chat_completions(chat_completions=native)
-    if enablement in {"request-false", "process"}:
-        configuration.rust(True)
-    if enablement == "environment":
-        monkeypatch.setenv("LITELLM_RUST", "true")
-    litellm_params: Final = (
-        {"rust": True} if enablement == "request-true" else {"rust": False} if enablement == "request-false" else {}
-    )
-
-    assert accepts(litellm_params=litellm_params) is expected
-    assert native.calls == []
-
-
-@pytest.mark.parametrize(
-    ("provider", "litellm_params", "stream", "bedrock_metadata_fields"),
-    (
-        pytest.param("openai", {"rust": True}, None, None, id="unsupported-provider"),
-        pytest.param(None, {"rust": True}, None, None, id="missing-provider"),
-        pytest.param("anthropic", {"rust": True}, True, None, id="streaming"),
-        pytest.param(
-            "anthropic",
-            {"rust": True, "metadata": {"user_id": "u-123"}},
-            None,
-            None,
-            id="anthropic-user-id",
-        ),
-        pytest.param(
-            "bedrock",
-            {"rust": True},
-            None,
-            ["user_api_key_team_id"],
-            id="bedrock-owned-request-metadata",
-        ),
-    ),
-)
-def test_gate_short_circuits_python_only_requests(
-    monkeypatch: pytest.MonkeyPatch,
-    provider: str | None,
-    litellm_params: Mapping[str, object],
-    stream: object,
-    bedrock_metadata_fields: list[str] | None,
-) -> None:
-    native: Final = RecordingCall()
-    bridge.set_rust_chat_completions(chat_completions=native)
-    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", bedrock_metadata_fields)
-
-    assert (
-        accepts(
-            custom_llm_provider=provider,
-            litellm_params=litellm_params,
-            stream=stream,
-        )
-        is False
-    )
-    assert native.calls == []
-
-
-@pytest.mark.parametrize(
-    ("provider", "litellm_params"),
-    (
-        pytest.param("anthropic", {"rust": True}, id="anthropic"),
-        pytest.param("anthropic", {"rust": True, "metadata": {"trace_id": "t-1"}}, id="metadata-unrelated"),
-        pytest.param("anthropic", {"rust": True, "metadata": {"user_id": None}}, id="user-id-none"),
-        pytest.param("anthropic", {"rust": True, "metadata": None}, id="metadata-none"),
-        pytest.param("bedrock", {"rust": True}, id="bedrock-unowned-metadata"),
-    ),
-)
-def test_gate_accepts_eligible_requests_with_ready_binding(
-    monkeypatch: pytest.MonkeyPatch,
-    provider: str,
-    litellm_params: Mapping[str, object],
-) -> None:
-    native: Final = RecordingCall()
-    bridge.set_rust_chat_completions(chat_completions=native)
-    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
-
-    assert accepts(custom_llm_provider=provider, litellm_params=litellm_params) is True
-    assert native.calls == []
-
-
 def call_kwargs(model_response: ModelResponse, observed: list[Mapping[str, object]]) -> dict[str, object]:
     return {
         "model": "claude-sonnet-4-5",
@@ -245,37 +146,47 @@ def call_kwargs(model_response: ModelResponse, observed: list[Mapping[str, objec
         "custom_llm_provider": "anthropic",
         "extra_headers": {"x-request-id": "req-1"},
         "timeout": 30.0,
-        "callback_adapter": RecordingCallbacks(observed),
+        "request_context": REQUEST_CONTEXT,
         "request_override": True,
+        "has_custom_client": False,
+        "callback_adapter": RecordingCallbacks(observed),
     }
+
+
+def assert_model_response(result: object, original_id: str) -> None:
+    assert isinstance(result, ModelResponse)
+    assert result.id == original_id
+    assert result.model == "claude-sonnet-4-5-20260101"
+    assert result.choices[0].message.content == "hello from rust"
+    assert result.usage.prompt_tokens == 11
+    assert result._hidden_params["additional_headers"] == {"x-litellm-rust": "true"}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", (pytest.param("sync", id="sync"), pytest.param("async", id="async")))
-async def test_call_builds_model_response_and_forwards_exact_request(mode: str) -> None:
+async def test_dispatch_builds_model_response_and_forwards_exact_request(mode: str) -> None:
     observed: list[Mapping[str, object]] = []
     model_response: Final = ModelResponse()
-    original_id: Final = model_response.id
     if mode == "sync":
         native: RecordingCall = RecordingCall()
-        bridge.set_rust_chat_completions(chat_completions=native)
-        result: Final = bridge.chat_completions(**call_kwargs(model_response, observed))
+        bridge.set_rust_chat_completions(sync=native)
+        result: Final = bridge.dispatch_chat_completions(
+            **call_kwargs(model_response, observed),
+            python_fallback=lambda: "python",
+        )
     else:
         native = RecordingAsyncCall()
-        bridge.set_rust_chat_completions(achat_completions=native)
-        result = await bridge.achat_completions(**call_kwargs(model_response, observed))
+        bridge.set_rust_chat_completions(asynchronous=native)
 
-    assert result is not None
-    assert result.id == original_id
-    assert result.model == "claude-sonnet-4-5-20260101"
-    assert result.choices[0].message.content == "hello from rust"
-    assert result.choices[0].finish_reason == "stop"
-    assert (
-        result.usage.prompt_tokens,
-        result.usage.completion_tokens,
-        result.usage.total_tokens,
-    ) == (11, 4, 15)
-    assert result._hidden_params["additional_headers"] == {"x-litellm-rust": "true"}
+        async def fallback() -> str:
+            return "python"
+
+        result = await bridge.adispatch_chat_completions(
+            **call_kwargs(model_response, observed),
+            python_fallback=fallback,
+        )
+
+    assert_model_response(result, model_response.id)
     assert native.calls == [
         {
             "model": "claude-sonnet-4-5",
@@ -286,68 +197,89 @@ async def test_call_builds_model_response_and_forwards_exact_request(mode: str) 
             "custom_llm_provider": "anthropic",
             "extra_headers": {"x-request-id": "req-1"},
             "timeout_seconds": 30.0,
+            "request_context": REQUEST_CONTEXT,
         }
     ]
     assert observed == [RUST_RESPONSE]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("native_available", "expected", "expected_fallback_calls"),
-    (
-        pytest.param(True, "hello from rust", 0, id="native-success"),
-        pytest.param(False, "python", 1, id="bridge-unavailable"),
-    ),
-)
-async def test_async_fallback_wrapper_selects_exactly_one_path(
-    monkeypatch: pytest.MonkeyPatch,
-    native_available: bool,
-    expected: str,
-    expected_fallback_calls: int,
-) -> None:
-    observed: list[Mapping[str, object]] = []
+async def test_async_dispatch_falls_back_once_when_binding_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
     fallback_calls = 0
-    if native_available:
-        bridge.set_rust_chat_completions(achat_completions=RecordingAsyncCall())
-    else:
-        monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
 
     async def fallback() -> str:
         nonlocal fallback_calls
         fallback_calls += 1
         return "python"
 
-    result: Final = await bridge.achat_completions_or_fallback(
-        **call_kwargs(ModelResponse(), observed),
+    result: Final = await bridge.adispatch_chat_completions(
+        **call_kwargs(ModelResponse(), []),
         python_fallback=fallback,
     )
-    actual: Final = result.choices[0].message.content if isinstance(result, ModelResponse) else result
 
-    assert actual == expected
-    assert fallback_calls == expected_fallback_calls
-    assert observed == ([RUST_RESPONSE] if native_available else [])
+    assert result == "python"
+    assert fallback_calls == 1
 
 
-def test_public_chat_dispatches_before_the_python_provider_switch() -> None:
+@pytest.mark.parametrize(
+    ("provider", "optional_params"),
+    (
+        pytest.param("openai", OPTIONAL_PARAMS, id="provider-policy"),
+        pytest.param("anthropic", {**OPTIONAL_PARAMS, "stream": True}, id="stream-policy"),
+    ),
+)
+def test_provider_and_stream_compatibility_are_deferred_to_rust(
+    provider: str,
+    optional_params: Mapping[str, object],
+) -> None:
     native: Final = RecordingCall()
-    bridge.set_rust_chat_completions(chat_completions=native)
+    bridge.set_rust_chat_completions(sync=native)
+    kwargs: Final = {
+        **call_kwargs(ModelResponse(), []),
+        "custom_llm_provider": provider,
+        "optional_params": optional_params,
+    }
+
+    bridge.dispatch_chat_completions(**kwargs, python_fallback=lambda: "python")
+
+    assert len(native.calls) == 1
+
+
+def test_custom_python_client_stays_on_python_path() -> None:
+    native: Final = RecordingCall()
+    bridge.set_rust_chat_completions(sync=native)
+    kwargs: Final = {**call_kwargs(ModelResponse(), []), "has_custom_client": True}
+
+    result: Final = bridge.dispatch_chat_completions(**kwargs, python_fallback=lambda: "python")
+
+    assert result == "python"
+    assert native.calls == []
+
+
+def test_public_chat_passes_provider_visible_context_to_rust(monkeypatch: pytest.MonkeyPatch) -> None:
+    native: Final = RecordingCall()
+    bridge.set_rust_chat_completions(sync=native)
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ["user_api_key_team_id"])
 
     result: Final = litellm.completion(
         model="anthropic/claude-sonnet-4-5",
         messages=list(MESSAGES),
         max_tokens=16,
+        metadata={"user_id": "user-1"},
+        litellm_metadata={"trace_id": "trace-1"},
         rust=True,
     )
 
     assert result.choices[0].message.content == "hello from rust"
-    assert len(native.calls) == 1
-    assert native.calls[0]["api_base"] is None
+    context: Final = native.calls[0]["request_context"]
+    assert context == REQUEST_CONTEXT
 
 
 @pytest.mark.asyncio
 async def test_public_async_chat_dispatches_before_the_python_provider_switch() -> None:
     native: Final = RecordingAsyncCall()
-    bridge.set_rust_chat_completions(achat_completions=native)
+    bridge.set_rust_chat_completions(asynchronous=native)
 
     result: Final = await litellm.acompletion(
         model="anthropic/claude-sonnet-4-5",

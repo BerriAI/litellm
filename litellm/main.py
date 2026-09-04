@@ -5130,6 +5130,21 @@ def _dispatch_chat_completion(ctx: _CompletionDispatchContext) -> _CompletionDis
     """Select one complete native or Python chat provider operation."""
     from litellm.rust_bridge import chat_completions as bridge
 
+    raw_litellm_metadata: Final = ctx.litellm_params.get("litellm_metadata")
+    litellm_metadata: Final = dict(raw_litellm_metadata) if isinstance(raw_litellm_metadata, dict) else None
+    configured_metadata_fields: Final = litellm.bedrock_request_metadata_fields
+    request_metadata_fields: Final = (
+        tuple(str(field) for field in configured_metadata_fields)
+        if isinstance(configured_metadata_fields, (list, tuple))
+        else ()
+    )
+    request_context: Final = bridge.NativeChatContext(
+        metadata=dict(ctx.metadata) if ctx.metadata is not None else None,
+        litellm_metadata=litellm_metadata,
+        request_metadata_fields=request_metadata_fields,
+    )
+    raw_request_override: Final = ctx.litellm_params.get("rust")
+    request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
     callback_adapter: Final = bridge.ChatCompletionsCallbackHandle(
         logging_obj=ctx.logging,
         messages=ctx.messages,
@@ -5156,7 +5171,8 @@ def _dispatch_chat_completion(ctx: _CompletionDispatchContext) -> _CompletionDis
                 custom_llm_provider=ctx.custom_llm_provider,
                 extra_headers=ctx.extra_headers,
                 timeout=ctx.timeout if not isinstance(ctx.timeout, str) else None,
-                litellm_params=ctx.litellm_params,
+                request_context=request_context,
+                request_override=request_override,
                 has_custom_client=ctx.client is not None,
                 callback_adapter=callback_adapter,
                 python_fallback=python_fallback,
@@ -5174,7 +5190,8 @@ def _dispatch_chat_completion(ctx: _CompletionDispatchContext) -> _CompletionDis
             custom_llm_provider=ctx.custom_llm_provider,
             extra_headers=ctx.extra_headers,
             timeout=ctx.timeout if not isinstance(ctx.timeout, str) else None,
-            litellm_params=ctx.litellm_params,
+            request_context=request_context,
+            request_override=request_override,
             has_custom_client=ctx.client is not None,
             callback_adapter=callback_adapter,
             python_fallback=lambda: _dispatch_completion_to_python(ctx),

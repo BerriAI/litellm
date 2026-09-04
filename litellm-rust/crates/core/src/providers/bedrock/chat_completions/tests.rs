@@ -32,7 +32,29 @@ fn transform_response(body: Value) -> Result<ChatCompletionsResponse, Error> {
 }
 
 fn reason(msgs: Value, opts: Value) -> Option<Unsupported> {
-    BEDROCK_CHAT_COMPLETIONS_CONFIG.unsupported_reason(&messages(msgs), &params(opts))
+    BEDROCK_CHAT_COMPLETIONS_CONFIG.unsupported_reason(
+        &messages(msgs),
+        &params(opts),
+        &LiteLlmRequestContext::default(),
+    )
+}
+
+#[test]
+fn declines_operator_owned_request_metadata() {
+    let context = LiteLlmRequestContext {
+        request_metadata_fields: vec!["user_api_key_team_id".to_string()],
+        ..LiteLlmRequestContext::default()
+    };
+    let actual = BEDROCK_CHAT_COMPLETIONS_CONFIG.unsupported_reason(
+        &messages(json!([{"role": "user", "content": "hi"}])),
+        &params(json!({})),
+        &context,
+    );
+
+    assert_eq!(
+        actual,
+        Some(Unsupported("LiteLLM request metadata forwarding"))
+    );
 }
 
 #[test]

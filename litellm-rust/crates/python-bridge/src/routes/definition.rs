@@ -149,6 +149,20 @@ mod tests {
 
     use super::*;
 
+    fn chat_context(py: Python<'_>) -> Bound<'_, PyDict> {
+        let context = PyDict::new(py);
+        context
+            .set_item("metadata", py.None())
+            .expect("context should accept metadata");
+        context
+            .set_item("litellm_metadata", py.None())
+            .expect("context should accept litellm_metadata");
+        context
+            .set_item("request_metadata_fields", PyList::empty(py))
+            .expect("context should accept request_metadata_fields");
+        context
+    }
+
     mod synthetic {
         use std::future::{Future, pending};
 
@@ -240,7 +254,7 @@ mod tests {
                 (
                     "chat_completions",
                     "achat_completions",
-                    "(model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None, callback_adapter=None)",
+                    "(model, messages, request_context, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None, callback_adapter=None)",
                 ),
             ];
 
@@ -270,13 +284,14 @@ mod tests {
             crate::routes::register(&module).expect("routes should register");
 
             let invalid_messages = PyDict::new(py);
+            let context = chat_context(py);
             let sync_chat_error = module
                 .getattr("chat_completions")
-                .and_then(|function| function.call1(("model", &invalid_messages)))
+                .and_then(|function| function.call1(("model", &invalid_messages, &context)))
                 .expect_err("sync chat should reject a non-list messages value");
             let async_chat_error = module
                 .getattr("achat_completions")
-                .and_then(|function| function.call1(("model", &invalid_messages)))
+                .and_then(|function| function.call1(("model", &invalid_messages, &context)))
                 .expect_err("async chat should reject a non-list messages value");
 
             assert_eq!(
@@ -346,10 +361,11 @@ mod tests {
                 .set_item("extra_headers", &invalid)
                 .expect("kwargs should accept extra_headers");
             let invalid_messages = PyDict::new(py);
+            let context = chat_context(py);
             let error = module
                 .getattr("chat_completions")
                 .and_then(|function| {
-                    function.call(("model", &invalid_messages), Some(&chat_kwargs))
+                    function.call(("model", &invalid_messages, &context), Some(&chat_kwargs))
                 })
                 .expect_err("messages should be validated first");
             assert_eq!(error.to_string(), "ValueError: messages must be a list");
@@ -357,7 +373,9 @@ mod tests {
             let valid_messages = PyList::empty(py);
             let error = module
                 .getattr("chat_completions")
-                .and_then(|function| function.call(("model", &valid_messages), Some(&chat_kwargs)))
+                .and_then(|function| {
+                    function.call(("model", &valid_messages, &context), Some(&chat_kwargs))
+                })
                 .expect_err("optional_params should be validated before headers");
             assert_eq!(
                 error.to_string(),
