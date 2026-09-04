@@ -13,10 +13,16 @@ from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from .config import ComplexityRouterConfig
+from .config import (
+    AutoSetupCandidate,
+    AutoSetupConfig,
+    AutoSetupObjective,
+    AutoSetupQualityLevel,
+    AutoSetupTierPolicy,
+    ComplexityRouterConfig,
+)
 
 SnapshotComplexity = Literal["trivial", "simple", "standard", "complex"]
-AutoSetupQualityLevel = Literal["economy", "balanced", "high", "max"]
 
 _SNAPSHOT_FILENAME: Final = "auto_router_snapshot_v0.json"
 _TIER_COMPLEXITIES: Final[Mapping[str, SnapshotComplexity]] = MappingProxyType(
@@ -27,6 +33,7 @@ _TIER_COMPLEXITIES: Final[Mapping[str, SnapshotComplexity]] = MappingProxyType(
         "REASONING": "complex",
     }
 )
+_EASY_COMPLEXITIES: Final = frozenset(("trivial", "simple"))
 _VERSION_SEPARATOR: Final = re.compile(r"(?<=\d)\.(?=\d)")
 _SNAPSHOT_PAYLOAD_ADAPTER: Final = TypeAdapter(dict[str, object])
 
@@ -68,12 +75,36 @@ class SnapshotQualityProfile(BaseModel):
     subtask_count: int = Field(gt=0)
 
 
+class SnapshotSpeedProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    attempt_count: int = Field(gt=0)
+    benchmark_model_id: str
+    cohort_id: str
+    complexity: SnapshotComplexity
+    cost_per_completed_task_usd: float | None = Field(default=None, ge=0)
+    excluded_infrastructure_trials: int = Field(ge=0)
+    mean_attempt_cost_usd: float | None = Field(default=None, ge=0)
+    mean_cache_read_input_tokens: float | None = Field(default=None, ge=0)
+    mean_output_tokens: float | None = Field(default=None, ge=0)
+    mean_uncached_input_tokens: float | None = Field(default=None, ge=0)
+    observed_duration_p50_ms: float = Field(ge=0)
+    observed_duration_p95_ms: float = Field(ge=0)
+    quality_lower_bound: float = Field(ge=0, le=1)
+    retry_adjusted_completion_ms: float | None = Field(default=None, ge=0)
+    source_id: str
+    success_probability: float = Field(ge=0, le=1)
+    task_count: int = Field(gt=0)
+    terminal_bench_model_id: str
+
+
 class SnapshotModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     benchmark_model_id: str
     identity: SnapshotIdentity
     quality_by_complexity: Mapping[SnapshotComplexity, SnapshotQualityProfile]
+    task_completion_speed_by_complexity: Mapping[SnapshotComplexity, tuple[SnapshotSpeedProfile, ...]]
 
 
 class AutoRouterSnapshot(BaseModel):
@@ -88,7 +119,8 @@ class AutoRouterSnapshot(BaseModel):
     models: Mapping[str, SnapshotModel]
     provenance: Mapping[str, object]
     quality_tiers: Mapping[AutoSetupQualityLevel, SnapshotQualityTier]
-    schema_version: Literal["3.0"]
+    reference_routes: Mapping[str, object]
+    schema_version: Literal["2.1"]
     snapshot_id: str
     task_complexities: Mapping[str, Mapping[str, SnapshotComplexity]]
 
@@ -105,12 +137,24 @@ class AutoRouterSnapshot(BaseModel):
                 raise ValueError(f"Auto Router snapshot model identity mismatch for {model_id}")
             if frozenset(model.quality_by_complexity) != expected_complexities:
                 raise ValueError(f"Auto Router snapshot model {model_id} lacks complete quality evidence")
+            if frozenset(model.task_completion_speed_by_complexity) != expected_complexities:
+                raise ValueError(f"Auto Router snapshot model {model_id} lacks complete speed buckets")
             if model.identity.is_routable != bool(model.identity.litellm_model_keys):
                 raise ValueError(f"Auto Router snapshot routability mismatch for {model_id}")
             for complexity in expected_complexities:
                 quality = model.quality_by_complexity[complexity]
                 if quality.benchmark_model_id != model_id or quality.complexity != complexity:
                     raise ValueError(f"Auto Router snapshot quality identity mismatch for {model_id}/{complexity}")
+                for speed in model.task_completion_speed_by_complexity[complexity]:
+                    token_values = (
+                        speed.mean_uncached_input_tokens,
+                        speed.mean_cache_read_input_tokens,
+                        speed.mean_output_tokens,
+                    )
+                    if any(value is None for value in token_values) != all(value is None for value in token_values):
+                        raise ValueError(f"Auto Router snapshot has partial token evidence for {model_id}/{complexity}")
+                    if speed.benchmark_model_id != model_id or speed.complexity != complexity:
+                        raise ValueError(f"Auto Router snapshot speed identity mismatch for {model_id}/{complexity}")
             for alias in model.identity.litellm_model_keys:
                 normalized = _normalized_model_key(alias)
                 owner = seen_aliases.setdefault(normalized, model.identity.family_id)
@@ -149,7 +193,7 @@ class AutoSetupDeployment(BaseModel):
     pricing: AutoSetupDeploymentPricing | None = None
 
 
-AutoSetupExclusionReason = Literal["no_benchmark_match", "mixed_model_group"]
+AutoSetupExclusionReason = Literal["no_benchmark_match", "mixed_model_group", "pricing_unavailable"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,8 +206,9 @@ class AutoSetupInventoryExclusion:
 class _AvailableProfile:
     model_name: str
     benchmark_model_id: str
-    cost_per_completed_task_usd: float | None
+    cost_per_completed_task_usd: float
     quality: SnapshotQualityProfile
+    speed: tuple[SnapshotSpeedProfile, ...]
     required_parameters: Mapping[str, object]
 
 
@@ -253,7 +298,18 @@ def analyze_auto_setup_inventory(
     """Return identity-safe groups and explicit reasons for every excluded group."""
 
     groups, exclusions = _resolve_groups(snapshot, available_model_deployments)
-    return tuple(group.model_name for group in groups), exclusions
+    eligible: list[str] = []
+    mutable_exclusions = list(exclusions)
+    for group in groups:
+        if any(
+            _quality_completion_cost(model.quality_by_complexity[complexity], group.deployments) is not None
+            for model in group.matches
+            for complexity in _TIER_COMPLEXITIES.values()
+        ):
+            eligible.append(group.model_name)
+        else:
+            mutable_exclusions.append(AutoSetupInventoryExclusion(group.model_name, "pricing_unavailable"))
+    return tuple(eligible), tuple(mutable_exclusions)
 
 
 def _rate_for_input_size(
@@ -289,6 +345,19 @@ def _rate_for_input_size(
     return base
 
 
+def _base_rate(
+    pricing: AutoSetupDeploymentPricing,
+    field: Literal["input", "output", "cache"],
+) -> float:
+    if field == "input":
+        return pricing.input_cost_per_token
+    if field == "output":
+        return pricing.output_cost_per_token
+    if pricing.cache_read_input_token_cost is not None:
+        return pricing.cache_read_input_token_cost
+    return pricing.input_cost_per_token
+
+
 def _quality_completion_cost(
     profile: SnapshotQualityProfile,
     deployments: Sequence[AutoSetupDeployment],
@@ -309,6 +378,31 @@ def _quality_completion_cost(
         ) + profile.mean_output_tokens * _rate_for_input_size(pricing, "output", profile.mean_input_tokens)
         adjusted_request_cost = profile.mean_request_cost_usd * deployed_bill / source_bill
         costs.append(adjusted_request_cost / profile.completion_probability)
+    return max(costs, default=None)
+
+
+def _speed_completion_cost(
+    speed: SnapshotSpeedProfile,
+    deployments: Sequence[AutoSetupDeployment],
+) -> float | None:
+    if (
+        speed.success_probability <= 0
+        or speed.mean_uncached_input_tokens is None
+        or speed.mean_cache_read_input_tokens is None
+        or speed.mean_output_tokens is None
+    ):
+        return None
+    costs: list[float] = []
+    for deployment in deployments:
+        pricing = deployment.pricing
+        if pricing is None:
+            return None
+        attempt_cost = (
+            speed.mean_uncached_input_tokens * _base_rate(pricing, "input")
+            + speed.mean_cache_read_input_tokens * _base_rate(pricing, "cache")
+            + speed.mean_output_tokens * _base_rate(pricing, "output")
+        )
+        costs.append(attempt_cost / speed.success_probability)
     return max(costs, default=None)
 
 
@@ -333,12 +427,19 @@ def _available_profiles(
             ),
         )
         cost = _quality_completion_cost(best.quality_by_complexity[complexity], group.deployments)
+        if cost is None:
+            continue
+        priced_speed = tuple(
+            speed.model_copy(update={"cost_per_completed_task_usd": _speed_completion_cost(speed, group.deployments)})
+            for speed in best.task_completion_speed_by_complexity[complexity]
+        )
         profiles.append(
             _AvailableProfile(
                 model_name=group.model_name,
                 benchmark_model_id=best.benchmark_model_id,
                 cost_per_completed_task_usd=cost,
                 quality=best.quality_by_complexity[complexity],
+                speed=priced_speed,
                 required_parameters=best.identity.required_parameters,
             )
         )
@@ -350,12 +451,138 @@ def _cost_rank(profiles: Sequence[_AvailableProfile]) -> tuple[_AvailableProfile
         sorted(
             profiles,
             key=lambda profile: (
-                profile.cost_per_completed_task_usd is None,
-                profile.cost_per_completed_task_usd if profile.cost_per_completed_task_usd is not None else math.inf,
+                profile.cost_per_completed_task_usd,
                 -profile.quality.quality_lower_bound,
                 profile.model_name,
             ),
         )
+    )
+
+
+def _normalize_log(value: float, values: Sequence[float]) -> float:
+    logged: Final = tuple(math.log(max(item, 1e-12)) for item in values)
+    low: Final = min(logged)
+    high: Final = max(logged)
+    if low == high:
+        return 0.0
+    return (math.log(max(value, 1e-12)) - low) / (high - low)
+
+
+def _hard_task_rank(
+    profiles: Sequence[_AvailableProfile], objective: AutoSetupObjective
+) -> tuple[tuple[_AvailableProfile, ...], str]:
+    cost_ranked: Final = _cost_rank(profiles)
+    speed_profiles: Final = tuple(
+        (profile, speed)
+        for profile in profiles
+        for speed in profile.speed
+        if speed.retry_adjusted_completion_ms is not None
+    )
+    if not speed_profiles:
+        return cost_ranked, "fallback_no_speed_evidence"
+    cohorts: dict[  # mutable-ok: local cohort index never escapes
+        str, dict[str, tuple[_AvailableProfile, SnapshotSpeedProfile]]
+    ] = {}  # mutable-ok: local cohort index is populated before selection
+    for profile, speed in speed_profiles:
+        by_model = cohorts.setdefault(
+            speed.cohort_id,
+            {},  # mutable-ok: local cohort index needs an empty per-cohort bucket
+        )
+        current = by_model.get(profile.model_name)
+        if current is None or speed.attempt_count > current[1].attempt_count:
+            by_model[profile.model_name] = (profile, speed)
+    measured_profiles: Final = tuple(
+        {  # mutable-ok: transient dict provides deterministic model-name deduplication
+            profile.model_name: profile for profile, _ in speed_profiles
+        }.values()
+    )
+    anchor: Final = max(
+        measured_profiles,
+        key=lambda profile: (profile.quality.quality_lower_bound, -profile.cost_per_completed_task_usd),
+    )
+    anchor_cohorts: Final = tuple(cohort_id for cohort_id, by_model in cohorts.items() if anchor.model_name in by_model)
+    selected_cohort = max(
+        anchor_cohorts,
+        key=lambda cohort_id: (
+            len(cohorts[cohort_id]),
+            sum(speed.attempt_count for _, speed in cohorts[cohort_id].values()),
+            cohort_id,
+        ),
+    )
+    comparable = tuple(cohorts[selected_cohort].values())
+    if objective == "task_completion_speed":
+        return tuple(
+            profile
+            for profile, _ in sorted(
+                comparable,
+                key=lambda item: (
+                    item[1].retry_adjusted_completion_ms or math.inf,
+                    -item[0].quality.quality_lower_bound,
+                    item[0].model_name,
+                ),
+            )
+        ), "cohort_scoped"
+    balanced_comparable: list[  # mutable-ok: local typed accumulator is consumed immediately
+        tuple[_AvailableProfile, float, float]
+    ] = []  # mutable-ok: local typed accumulator is frozen by the return expression
+    for profile, speed in comparable:
+        cost = speed.cost_per_completed_task_usd
+        completion_ms = speed.retry_adjusted_completion_ms
+        if cost is not None and completion_ms is not None:
+            balanced_comparable.append((profile, cost, completion_ms))
+    if not balanced_comparable:
+        return cost_ranked, "fallback_no_comparable_cost_evidence"
+    costs: Final = tuple(cost for _, cost, _ in balanced_comparable)
+    times: Final = tuple(completion_ms for _, _, completion_ms in balanced_comparable)
+    return tuple(
+        profile
+        for profile, _, _ in sorted(
+            balanced_comparable,
+            key=lambda item: (
+                math.hypot(
+                    _normalize_log(item[1], costs),
+                    _normalize_log(item[2], times),
+                ),
+                -item[0].quality.quality_lower_bound,
+                item[0].model_name,
+            ),
+        )
+    ), "cohort_scoped"
+
+
+def _policy_candidate(profile: _AvailableProfile) -> AutoSetupCandidate:
+    return AutoSetupCandidate(
+        model_name=profile.model_name,
+        benchmark_model_id=profile.benchmark_model_id,
+        quality_lower_bound=profile.quality.quality_lower_bound,
+        cost_per_completed_task_usd=profile.cost_per_completed_task_usd,
+    )
+
+
+def _tier_policy(
+    profiles: Sequence[_AvailableProfile],
+    complexity: SnapshotComplexity,
+    objective: AutoSetupObjective,
+) -> AutoSetupTierPolicy:
+    cost_ranked: Final = _cost_rank(profiles)
+    if objective == "cost":
+        return AutoSetupTierPolicy(
+            selection_mode="snapshot_ranked",
+            candidates=tuple(_policy_candidate(profile) for profile in cost_ranked),
+            evidence_status="direct",
+        )
+    if complexity in _EASY_COMPLEXITIES:
+        return AutoSetupTierPolicy(
+            selection_mode="runtime_response_latency",
+            candidates=tuple(_policy_candidate(profile) for profile in cost_ranked),
+            cold_start_model=cost_ranked[0].model_name,
+            evidence_status="runtime_response_speed_required",
+        )
+    ranked, evidence_status = _hard_task_rank(profiles, objective)
+    return AutoSetupTierPolicy(
+        selection_mode="snapshot_ranked",
+        candidates=tuple(_policy_candidate(profile) for profile in ranked),
+        evidence_status=evidence_status,
     )
 
 
@@ -364,10 +591,14 @@ def build_auto_setup_config(
     snapshot: AutoRouterSnapshot,
     available_model_deployments: Mapping[str, Sequence[AutoSetupDeployment]],
     quality_level: AutoSetupQualityLevel,
+    optimize_for: AutoSetupObjective,
 ) -> ComplexityRouterConfig:
     """Recompute quality gates and rankings over only the caller's available groups."""
 
     maximum_regret: Final = snapshot.quality_tiers[quality_level].maximum_quality_regret
+    policies: Final[  # mutable-ok: Pydantic config assembly is local to this builder
+        dict[str, AutoSetupTierPolicy]
+    ] = {}  # mutable-ok: Pydantic config assembly is local to this builder
     tiers: Final[dict[str, list[str]]] = {}  # mutable-ok: Pydantic config assembly is local to this builder
     tier_model_configs: Final[  # mutable-ok: Pydantic config assembly is local to this builder
         dict[str, list[dict[str, object]]]
@@ -379,20 +610,21 @@ def build_auto_setup_config(
         best_quality = max(profile.quality.quality_lower_bound for profile in profiles)
         floor = max(0.0, best_quality - maximum_regret)
         admitted = tuple(profile for profile in profiles if profile.quality.quality_lower_bound >= floor)
-        selected = _cost_rank(admitted)[0]
-        tiers[tier_name] = [selected.model_name]
-        parameterized: list[dict[str, object]] = (
-            [  # mutable-ok: Pydantic validates and owns these JSON-shaped rows
-                {  # mutable-ok: each row is a Pydantic input payload
-                    "model_name": selected.model_name,
-                    "litellm_params": dict(  # mutable-ok: Pydantic needs a concrete JSON-shaped params object
-                        selected.required_parameters
-                    ),
-                }
-            ]
-            if selected.required_parameters
-            else []
-        )
+        policy = _tier_policy(admitted, complexity, optimize_for)
+        policies[tier_name] = policy
+        tiers[tier_name] = [  # mutable-ok: ComplexityRouterConfig owns this JSON-shaped tier list
+            candidate.model_name for candidate in policy.candidates
+        ]
+        parameterized: list[dict[str, object]] = [  # mutable-ok: Pydantic validates and owns these JSON-shaped rows
+            {  # mutable-ok: each row is a Pydantic input payload
+                "model_name": profile.model_name,
+                "litellm_params": dict(  # mutable-ok: Pydantic needs a concrete JSON-shaped params object
+                    profile.required_parameters
+                ),
+            }
+            for profile in admitted
+            if profile.model_name in frozenset(tiers[tier_name]) and profile.required_parameters
+        ]
         if parameterized:
             tier_model_configs[tier_name] = parameterized
 
@@ -401,5 +633,12 @@ def build_auto_setup_config(
             "tiers": tiers,
             "tier_model_configs": tier_model_configs,
             "classifier_type": "heuristic_v2",
+            "auto_setup": AutoSetupConfig(
+                snapshot_id=snapshot.snapshot_id,
+                snapshot_sha256=snapshot.artifact_sha256,
+                quality_level=quality_level,
+                optimize_for=optimize_for,
+                tier_policies=policies,
+            ).model_dump(mode="json"),
         }
     )

@@ -459,6 +459,10 @@ async def get_auto_router_recommendation(
         Literal["economy", "balanced", "high", "max"],
         Query(description="How close every admitted model must be to the best available quality score"),
     ] = "balanced",
+    optimize_for: Annotated[
+        Literal["cost", "task_completion_speed", "balanced"],
+        Query(description="What to minimize after the selected quality gate is applied"),
+    ] = "balanced",
     team_id: Annotated[str | None, Query(description="Team whose model access the recommendation must use")] = None,
 ) -> AutoRouterRecommendationResponse:
     """Build an editable four-tier router from only the model groups this caller can use."""
@@ -502,6 +506,7 @@ async def get_auto_router_recommendation(
             snapshot=snapshot,
             available_model_deployments=available_deployments,
             quality_level=quality_level,
+            optimize_for=optimize_for,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -519,6 +524,7 @@ async def get_auto_router_recommendation(
     )
     return AutoRouterRecommendationResponse(
         quality_level=quality_level,
+        optimize_for=optimize_for,
         snapshot_id=snapshot.snapshot_id,
         snapshot_generated_at=snapshot.generated_at,
         available_model_group_count=len(available_deployments),

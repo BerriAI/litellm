@@ -1,3 +1,5 @@
+import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
+
 export type SetupMode = "auto" | "manual";
 
 export interface RecommendationStatus {
@@ -23,3 +25,18 @@ export const getRecommendationBlockedReason = ({
   }
   return null;
 };
+
+const autoSetupPoolShape = (value: ComplexityRouterConfigValue): string =>
+  JSON.stringify({
+    tiers: value.tiers,
+    customTierSet: value.custom_tier_set,
+    tierModelParams: value.tier_model_params,
+  });
+
+export const detachAutoSetupAfterPoolEdit = (
+  previous: ComplexityRouterConfigValue,
+  next: ComplexityRouterConfigValue,
+): ComplexityRouterConfigValue =>
+  previous.auto_setup && autoSetupPoolShape(previous) !== autoSetupPoolShape(next)
+    ? { ...next, auto_setup: undefined }
+    : next;

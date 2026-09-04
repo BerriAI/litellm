@@ -136,6 +136,7 @@ async def test_recommendation_uses_caller_groups_and_returns_an_editable_complex
     response = await get_auto_router_recommendation(
         user_api_key_dict=ADMIN,
         quality_level="economy",
+        optimize_for="task_completion_speed",
     )
 
     authorize.assert_awaited_once_with(user_api_key_dict=ADMIN, team_id=None)
@@ -144,8 +145,11 @@ async def test_recommendation_uses_caller_groups_and_returns_an_editable_complex
     assert response.excluded_model_groups == ()
     assert "unavailable-group" not in response.matched_model_groups
     assert response.complexity_router_config.classifier_type == "heuristic_v2"
-    assert all(len(models) == 1 for models in response.complexity_router_config.tiers.values())
-    assert "auto_setup" not in response.complexity_router_config.model_dump(mode="json", exclude_none=True)
+    assert response.complexity_router_config.auto_setup is not None
+    assert response.complexity_router_config.auto_setup.optimize_for == "task_completion_speed"
+    assert response.complexity_router_config.auto_setup.tier_policies["SIMPLE"].selection_mode == (
+        "runtime_response_latency"
+    )
 
 
 def test_auto_setup_pricing_honors_custom_token_rates_and_rejects_non_token_charges() -> None:
@@ -194,7 +198,7 @@ def test_auto_setup_pricing_resolves_an_explicit_base_model_before_a_deployment_
 
 
 @pytest.mark.asyncio
-async def test_recommendation_excludes_mixed_and_unmatched_but_keeps_unpriced_groups(
+async def test_recommendation_excludes_mixed_unmatched_and_unpriced_groups(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import litellm.proxy.management_endpoints.auto_router_endpoints as endpoint_module
@@ -222,14 +226,15 @@ async def test_recommendation_excludes_mixed_and_unmatched_but_keeps_unpriced_gr
     response = await get_auto_router_recommendation(
         user_api_key_dict=ADMIN,
         quality_level="max",
+        optimize_for="cost",
     )
 
     assert response.available_model_group_count == 4
-    assert set(response.matched_model_groups) <= {"safe", "unpriced"}
-    assert response.matched_model_groups
+    assert response.matched_model_groups == ("safe",)
     assert {(item.model_group, item.reason) for item in response.excluded_model_groups} == {
         ("mixed", "mixed_model_group"),
         ("unknown", "no_benchmark_match"),
+        ("unpriced", "pricing_unavailable"),
     }
 
 

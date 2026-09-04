@@ -7865,6 +7865,12 @@ class Router:
             # WS session wrappers fire with result=None; per-turn costs tracked by inner calls.
             if kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime"):
                 return
+            await self._record_auto_setup_response_latency(
+                kwargs=kwargs,
+                completion_response=completion_response,
+                start_time=start_time,
+                end_time=end_time,
+            )
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object is None")
@@ -7975,6 +7981,56 @@ class Router:
             verbose_router_logger.debug(
                 "litellm.router.Router::deployment_callback_on_success(): Exception occured - %s", e
             )
+
+    async def _record_auto_setup_response_latency(
+        self,
+        *,
+        kwargs: Mapping[str, object],
+        completion_response: object,
+        start_time: object,
+        end_time: object,
+    ) -> None:
+        try:
+            metadata: Final = _SESSION_ADAPTER.validate_python(
+                get_litellm_metadata_from_kwargs(
+                    dict(kwargs)  # mutable-ok: legacy metadata helper requires a concrete dict copy
+                )
+            )
+            decision: Final = _SESSION_ADAPTER.validate_python(metadata.get("routing_decision"))
+        except ValidationError:
+            return
+        if decision.get("auto_setup_selection_mode") != "runtime_response_latency":
+            return
+        router_model_name = decision.get("router_model_name")
+        tier = decision.get("tier")
+        routed_model = decision.get("routed_model")
+        if not isinstance(router_model_name, str) or not router_model_name:
+            return
+        if not isinstance(tier, str) or not tier:
+            return
+        if not isinstance(routed_model, str) or not routed_model:
+            return
+        registered: Final = self.complexity_routers.get(router_model_name)
+        if not registered or not any(tagged.strategy.config.auto_setup is not None for tagged in registered):
+            return
+
+        from litellm.router_strategy.complexity_router.response_latency import (
+            record_runtime_response_latency,
+        )
+
+        try:
+            await record_runtime_response_latency(
+                router_cache=self.cache,
+                router_model_name=router_model_name,
+                tier=tier,
+                routed_model=routed_model,
+                kwargs=kwargs,
+                response_obj=completion_response,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        except Exception as exc:  # noqa: BLE001 -- optional telemetry must never fail a successful completion
+            verbose_router_logger.warning("Could not record Auto setup response latency: %s", exc)
 
     def sync_deployment_callback_on_success(
         self,

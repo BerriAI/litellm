@@ -30,11 +30,12 @@ import ComplexityRouterConfig, {
   DEFAULT_DEPLOYMENT_AFFINITY,
   DEFAULT_TIER_DISTANCE_PENALTY,
 } from "./ComplexityRouterConfig";
-import { getRecommendationBlockedReason, type SetupMode } from "./auto_setup_policy";
+import { detachAutoSetupAfterPoolEdit, getRecommendationBlockedReason, type SetupMode } from "./auto_setup_policy";
 import { KeywordTierRule } from "./KeywordTierRules";
 import { DEFAULT_ESCALATION_KEYWORDS } from "./EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
 import {
+  AutoSetupObjective,
   AutoSetupQualityLevel,
   BuildComplexityRouterConfigParams,
   buildComplexityRouterConfig,
@@ -187,6 +188,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
   const [setupMode, setSetupMode] = useState<SetupMode>("manual");
   const [qualityLevel, setQualityLevel] = useState<AutoSetupQualityLevel>("balanced");
+  const [optimizeFor, setOptimizeFor] = useState<AutoSetupObjective>("balanced");
   const appliedRecommendationKey = useRef<string | null>(null);
 
   const [complexityRouterConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
@@ -278,6 +280,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const recommendationParams = {
     accessToken,
     qualityLevel,
+    optimizeFor,
     teamId: requiresTeamScope ? watchedTeamId : undefined,
     enabled: recommendationEnabled,
   };
@@ -354,6 +357,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     const key = [
       recommendation.snapshot_id,
       qualityLevel,
+      optimizeFor,
       watchedTeamId ?? "",
       ...recommendation.matched_model_groups,
     ].join(":");
@@ -362,7 +366,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     setSelectedPreset(undefined);
     applyPrefill(buildPresetPrefill(recommendation.complexity_router_config, availability));
     setDetailsExpanded(false);
-  }, [recommendation, setupMode, qualityLevel, watchedTeamId, availability, applyPrefill]);
+  }, [recommendation, setupMode, qualityLevel, optimizeFor, watchedTeamId, availability, applyPrefill]);
 
   const handlePresetChange = (presetKey: string | undefined) => {
     if (!presetKey || presetKey === "custom") {
@@ -401,6 +405,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     hasRecommendation: recommendation !== undefined,
   };
   const recommendationBlockedReason = getRecommendationBlockedReason(recommendationStatus);
+  const regenerateAutoSetup = () => {
+    if (!recommendation) return;
+    applyPrefill(buildPresetPrefill(recommendation.complexity_router_config, availability));
+    setDetailsExpanded(false);
+  };
   const submitBlockedReason =
     recommendationBlockedReason ??
     getSubmitBlockedReason(
@@ -449,6 +458,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     reasoningOverrideMinScore: complexityRouterConfig.reasoning_override_min_score,
     enableContextWindowEscalation: complexityRouterConfig.enable_context_window_escalation,
     contextWindowEscalationBuffer: complexityRouterConfig.context_window_escalation_buffer,
+    autoSetup: complexityRouterConfig.auto_setup,
   };
 
   const submitRecommendedRouter = async (name: string) => {
@@ -588,14 +598,18 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               {setupMode === "auto" ? (
                 <AutoSetupControls
                   qualityLevel={qualityLevel}
+                  optimizeFor={optimizeFor}
                   onQualityLevelChange={setQualityLevel}
+                  onOptimizeForChange={setOptimizeFor}
                   recommendation={recommendation}
                   recommendationEnabled={recommendationEnabled}
                   recommendationPending={recommendationPending}
                   recommendationFailed={recommendationFailed}
                   recommendationError={recommendationError}
                   requiresTeamScope={requiresTeamScope}
+                  hasAutoPolicy={Boolean(complexityRouterConfig.auto_setup)}
                   onRetry={() => void refetchRecommendation()}
+                  onRegenerate={regenerateAutoSetup}
                   onBack={returnToManualSetup}
                 />
               ) : (
@@ -700,7 +714,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                       onEditingTiersChange={setEditingTiers}
                       modelInfo={modelInfo}
                       value={complexityRouterConfig}
-                      onChange={setComplexityRouterConfig}
+                      onChange={(next) =>
+                        setComplexityRouterConfig((previous) => detachAutoSetupAfterPoolEdit(previous, next))
+                      }
                       customTechnicalKeywords={customTechnicalKeywords}
                       onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
                       keywordTierRules={keywordTierRules}
