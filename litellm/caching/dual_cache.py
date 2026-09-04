@@ -257,7 +257,7 @@ class DualCache(BaseCache):
         self,
         current_time: float,
         keys: list[str],
-        result: Sequence[Any],
+        result: Sequence[object],
     ) -> tuple[list[str], dict[str, float | None]]:
         """
         Atomically choose keys to fetch from Redis and reserve their access time.

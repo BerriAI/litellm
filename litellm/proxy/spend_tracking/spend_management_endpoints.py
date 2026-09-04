@@ -3365,23 +3365,24 @@ async def view_spend_logs(
             )
             sql_query, params = summary_sql_and_params
             rows: Final[Sequence[_SpendDailySummaryRow]] = await _query_raw(prisma_client, sql_query, *params)
-            if len(rows) == 0:
-                return []  # pyright: ignore[reportUnknownVariableType]  # empty summary has no element type
-
             summary_items: Final = tuple(
                 _daily_summary_item(date.fromisoformat(day), tuple(day_rows))
                 for day, day_rows in groupby(rows, key=lambda row: row["day"])
             )
-            final_date: Final = date.fromisoformat(rows[-1]["day"])
+            final_date: Final = date.fromisoformat(rows[-1]["day"]) if len(rows) > 0 else None
             end_date_date: Final = end_date_obj.date()
-            padding: Final[tuple[Mapping[str, object], ...]] = tuple(
-                {
-                    "startTime": final_date + timedelta(days=offset),
-                    "spend": 0,
-                    "users": {},
-                    "models": {},
-                }
-                for offset in range(1, (end_date_date - final_date).days + 1)
+            padding: Final[tuple[Mapping[str, object], ...]] = (
+                ()
+                if final_date is None
+                else tuple(
+                    {
+                        "startTime": final_date + timedelta(days=offset),
+                        "spend": 0,
+                        "users": {},
+                        "models": {},
+                    }
+                    for offset in range(1, (end_date_date - final_date).days + 1)
+                )
             )
             return [*summary_items, *padding]
 
