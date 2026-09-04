@@ -3,22 +3,8 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import RoutingStrategySelector from "./RoutingStrategySelector";
 
-// Ant Design's Select is complex to drive in JSDOM; swap it for a plain
-// <select> so we can assert options and fire change events normally.
-vi.mock("antd", () => ({
-  Select: Object.assign(
-    ({ value, onChange, children }: any) => (
-      <div data-testid="ant-select">
-        <select data-testid="strategy-select" value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
-          {children}
-        </select>
-      </div>
-    ),
-    {
-      Option: ({ value, children }: any) => <option value={value}>{children}</option>,
-    },
-  ),
-}));
+const openStrategyDropdown = async (user: ReturnType<typeof userEvent.setup>) =>
+  user.click(screen.getByRole("combobox"));
 
 const baseProps = {
   selectedStrategy: null,
@@ -34,7 +20,7 @@ const baseProps = {
 describe("RoutingStrategySelector", () => {
   it("should render", () => {
     render(<RoutingStrategySelector {...baseProps} />);
-    expect(screen.getByTestId("ant-select")).toBeInTheDocument();
+    expect(screen.getByRole("combobox")).toBeInTheDocument();
   });
 
   it("should display default label when no metadata is provided", () => {
@@ -57,23 +43,35 @@ describe("RoutingStrategySelector", () => {
     expect(screen.getByText("How to pick a deployment")).toBeInTheDocument();
   });
 
-  it("should render all available strategies as options", () => {
+  it("should render all available strategies as options", async () => {
+    const user = userEvent.setup();
     render(<RoutingStrategySelector {...baseProps} />);
-    expect(screen.getByText("simple-shuffle")).toBeInTheDocument();
-    expect(screen.getByText("latency-based-routing")).toBeInTheDocument();
-    expect(screen.getByText("least-busy")).toBeInTheDocument();
+
+    await openStrategyDropdown(user);
+
+    expect(await screen.findByRole("option", { name: /simple-shuffle/ })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /latency-based-routing/ })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /least-busy/ })).toBeInTheDocument();
   });
 
-  it("should display strategy descriptions alongside option labels", () => {
+  it("should display strategy descriptions alongside option labels", async () => {
+    const user = userEvent.setup();
     render(<RoutingStrategySelector {...baseProps} />);
-    expect(screen.getByText("Randomly pick a deployment")).toBeInTheDocument();
+
+    await openStrategyDropdown(user);
+
+    expect(await screen.findByText("Randomly pick a deployment")).toBeInTheDocument();
     expect(screen.getByText("Pick the lowest-latency deployment")).toBeInTheDocument();
   });
 
-  it("should not render a description for a strategy that has none", () => {
+  it("should not render a description for a strategy that has none", async () => {
+    const user = userEvent.setup();
     render(<RoutingStrategySelector {...baseProps} />);
-    // "least-busy" has no entry in routingStrategyDescriptions — it still renders without crashing
-    expect(screen.getByText("least-busy")).toBeInTheDocument();
+
+    await openStrategyDropdown(user);
+
+    // "least-busy" has no entry in routingStrategyDescriptions - it still offers the bare option
+    expect(await screen.findByRole("option", { name: "least-busy" })).toBeInTheDocument();
   });
 
   it("should call onStrategyChange with the selected strategy value", async () => {
@@ -81,7 +79,8 @@ describe("RoutingStrategySelector", () => {
     const user = userEvent.setup();
     render(<RoutingStrategySelector {...baseProps} onStrategyChange={onStrategyChange} />);
 
-    await user.selectOptions(screen.getByTestId("strategy-select"), "latency-based-routing");
+    await openStrategyDropdown(user);
+    await user.click(await screen.findByRole("option", { name: /latency-based-routing/ }));
 
     expect(onStrategyChange).toHaveBeenCalledWith("latency-based-routing");
   });

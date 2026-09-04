@@ -7,7 +7,12 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
-from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.runwayml.videos.transformation import (
+    RunwayMLError,
+    RunwayMLVideoConfig,
+    _ratio_to_resolution,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoObject
 
@@ -48,6 +53,158 @@ class TestRunwayMLVideoTransformation:
 
         # Validate URL has correct endpoint
         assert url == "https://api.dev.runwayml.com/v1/image_to_video"
+
+    def test_transform_video_create_request_text_to_video(self):
+        """A prompt-only request must hit /text_to_video, not /image_to_video."""
+        data, files, url = self.config.transform_video_create_request(
+            model="veo3.1",
+            prompt="A serene mountain lake at sunrise",
+            api_base="https://api.dev.runwayml.com/v1",
+            video_create_optional_request_params={"duration": 8, "ratio": "1280:720"},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert url == "https://api.dev.runwayml.com/v1/text_to_video"
+        assert "promptImage" not in data
+        assert data["promptText"] == "A serene mountain lake at sunrise"
+
+    def test_transform_video_create_request_video_to_video(self):
+        """A promptVideo request must hit /video_to_video with promptImage stripped."""
+        data, files, url = self.config.transform_video_create_request(
+            model="aleph2",
+            prompt="Make it snow",
+            api_base="https://api.dev.runwayml.com/v1",
+            video_create_optional_request_params={
+                "promptVideo": "https://example.com/source.mp4",
+                "promptImage": "https://example.com/reference.png",
+                "ratio": "1280:720",
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert url == "https://api.dev.runwayml.com/v1/video_to_video"
+        assert data["promptVideo"] == "https://example.com/source.mp4"
+        assert "promptImage" not in data
+
+    def test_transform_video_create_request_video_uri_routes_to_video_to_video(self):
+        _, _, url = self.config.transform_video_create_request(
+            model="aleph2",
+            prompt="Make it snow",
+            api_base="https://api.dev.runwayml.com/v1",
+            video_create_optional_request_params={"videoUri": "https://example.com/source.mp4"},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert url == "https://api.dev.runwayml.com/v1/video_to_video"
+
+    def test_status_progress_fraction_scales_to_percent(self):
+        """Runway reports progress as a 0..1 float; VideoObject.progress is an int percent."""
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "id": "63fd0f13-f29d-4e58-99d3-1cb9efa14a5b",
+            "createdAt": "2025-11-11T21:48:50.448Z",
+            "status": "RUNNING",
+            "progress": 0.027,
+        }
+
+        result = self.config.transform_video_status_retrieve_response(
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="runwayml",
+        )
+
+        assert result.status == "in_progress"
+        assert result.progress == 3
+
+    def test_status_progress_null_leaves_progress_unset(self):
+        """Runway sends an explicit null progress for pending polls; scaling it must not crash."""
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "id": "63fd0f13-f29d-4e58-99d3-1cb9efa14a5b",
+            "createdAt": "2025-11-11T21:48:50.448Z",
+            "status": "PENDING",
+            "progress": None,
+        }
+
+        result = self.config.transform_video_status_retrieve_response(
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="runwayml",
+        )
+
+        assert result.status == "queued"
+        assert result.progress is None
+
+    def test_get_error_class_returns_exception_instead_of_raising(self):
+        error = self.config.get_error_class(
+            error_message="Invalid API key",
+            status_code=401,
+            headers={},
+        )
+
+        assert isinstance(error, RunwayMLError)
+        assert isinstance(error, BaseLLMException)
+        assert error.status_code == 401
+        assert error.message == "Invalid API key"
+
+    def test_create_response_usage_includes_resolution_and_provider_cost(self):
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "id": "test-video-id-123",
+            "createdAt": "2025-11-11T21:48:50.448Z",
+            "status": "PENDING",
+            "estimatedCost": {"credits": 25.0},
+        }
+
+        video_obj = self.config.transform_video_create_response(
+            model="gen4_turbo",
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="runwayml",
+            request_data={"model": "gen4_turbo", "ratio": "1280:720", "duration": 5},
+        )
+
+        assert video_obj.usage == {
+            "duration_seconds": 5.0,
+            "video_resolution": "720p",
+            "provider_reported_cost_usd": 0.25,
+        }
+
+    def test_create_response_usage_omits_unknown_fields(self):
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "id": "test-video-id-123",
+            "createdAt": "2025-11-11T21:48:50.448Z",
+            "status": "PENDING",
+        }
+
+        video_obj = self.config.transform_video_create_response(
+            model="gen4_turbo",
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="runwayml",
+            request_data={"model": "gen4_turbo"},
+        )
+
+        assert video_obj.usage == {}
+
+    @pytest.mark.parametrize(
+        "ratio,expected",
+        [
+            ("848:480", "480p"),
+            ("1280:720", "720p"),
+            ("1920:1080", "1080p"),
+            ("2560:1440", "1080p"),
+            ("3840:2160", "4k"),
+            (None, None),
+            ("banana", None),
+        ],
+    )
+    def test_ratio_to_resolution_tiers(self, ratio, expected):
+        assert _ratio_to_resolution(ratio) == expected
 
     def test_transform_video_status_with_timestamp_handling(self):
         """Test status retrieval handles RunwayML's ISO 8601 timestamps correctly."""

@@ -1,15 +1,16 @@
 """The span engine: dedup, start, run the mapper chain, set status, end."""
 
 from collections import OrderedDict
-from typing import Callable, Sequence
+from collections.abc import Callable, Sequence
+from typing import Final
 
 from opentelemetry.context import Context
 from opentelemetry.trace import Link, Span, Tracer
 from opentelemetry.trace.status import Status, StatusCode
 
-from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.mappers.base import AttributeMapper, SpanData
+from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
@@ -18,8 +19,6 @@ from litellm.integrations.otel.model.payloads import (
     ServiceSpanData,
     SpanError,
 )
-from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
-from litellm.integrations.otel.plumbing.providers import to_otel_span_kind
 from litellm.integrations.otel.model.semconv import Error, ExceptionEvent, LiteLLMError
 from litellm.integrations.otel.model.spans import (
     SPAN_REGISTRY,
@@ -30,11 +29,13 @@ from litellm.integrations.otel.model.spans import (
     mcp_tool_call_span_name,
     service_span_name,
 )
+from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
+from litellm.integrations.otel.plumbing.providers import to_otel_span_kind
 
 # Roles emit() knows how to name and emit. PROXY_REQUEST and the management
 # routes are SERVER spans owned by the mounted FastAPI instrumentor, so they
 # have no builder here.
-_NAME_BUILDERS: dict[SpanRole, Callable[..., str]] = {
+_NAME_BUILDERS: Final[dict[SpanRole, Callable[..., str]]] = {
     SpanRole.LLM_CALL: llm_call_span_name,
     SpanRole.MCP_TOOL_CALL: mcp_tool_call_span_name,
     SpanRole.MCP_LIST_TOOLS: mcp_list_tools_span_name,
@@ -48,7 +49,7 @@ _NAME_BUILDERS: dict[SpanRole, Callable[..., str]] = {
 # Cap on the dedup cache. It only needs to coalesce the sync+async firing window
 # of a single in-flight request, so a bounded LRU keeps memory flat on a
 # long-running proxy while still covering every concurrently-open call.
-_DEDUP_CACHE_MAX = 10_000
+_DEDUP_CACHE_MAX: Final = 10_000
 
 
 def _stamp_otel_error_attributes(span: Span, error_type: str, resolved_message: str) -> None:
@@ -72,6 +73,42 @@ def _stamp_litellm_error_attributes(span: Span, error: SpanError) -> None:
         span.set_attribute(LiteLLMError.LLM_PROVIDER, error.llm_provider)
 
 
+def stamp_error(
+    span: Span,
+    error: SpanError,
+    *,
+    record_event: bool = True,
+    set_status: bool = True,
+) -> tuple[str, str] | None:
+    """Stamp the full v2 error attribute set on ``span`` and return the resolved
+    ``(error_type, message)`` pair, or ``None`` when the error carries neither a
+    type nor a message.
+
+    Shared by the LLM-call span (``finish_span``) and the proxy-level failure
+    spans (the FastAPI SERVER span and the ``auth`` phase span) so every v2 error
+    span carries identical keys. The semconv ``exception`` event rides alongside
+    the attributes so backends that map unknown string attrs to a truncated
+    ``keyword`` (e.g. Elasticsearch's 1024-char ``ignore_above``) still see the
+    full untruncated message on the recognized event field. ``record_event`` and
+    ``set_status`` are opt-outs for callers whose span lifecycle (``use_span``) or
+    owner (the FastAPI instrumentor) already records the event or the status.
+    """
+    if not (error.error_type or error.message):
+        return None
+    error_type: Final = error.error_type or "error"
+    message: Final = error.message or error.error_type or "error"
+    _stamp_otel_error_attributes(span, error_type, message)
+    _stamp_litellm_error_attributes(span, error)
+    if set_status:
+        span.set_status(Status(StatusCode.ERROR, message))
+    if record_event:
+        span.add_event(
+            ExceptionEvent.NAME,
+            {ExceptionEvent.TYPE: error_type, ExceptionEvent.MESSAGE: message},
+        )
+    return error_type, message
+
+
 class SpanEmitter:
     def __init__(
         self,
@@ -90,7 +127,7 @@ class SpanEmitter:
         )
         # Bounded LRU (ordered by insertion / most-recent touch). Storing keys
         # only — the value is unused — so it behaves like a capped set.
-        self._emitted: "OrderedDict[tuple[str, SpanRole], None]" = OrderedDict()
+        self._emitted: OrderedDict[tuple[str, SpanRole], None] = OrderedDict()
 
     # -- low-level helpers --------------------------------------------------- #
 
@@ -109,7 +146,7 @@ class SpanEmitter:
         For callers that own and manage their own span lifecycle. ``tracer``
         overrides the bound tracer for this span only, used for per-request
         multi-tenant credential routing. ``links`` records related-but-not-parent
-        spans (e.g. the transport span of an MCP message, per MCP semconv).
+        spans (e.g. the trace context an MCP client propagated in ``params._meta``).
         """
         return (tracer or self._tracer).start_span(
             name,
@@ -119,6 +156,12 @@ class SpanEmitter:
             links=list(links) if links else None,
         )
 
+    def mark_emitted(self, dedup_key: str | None, role: SpanRole) -> None:
+        """Register a span emitted outside :meth:`emit` (the boundary-opened
+        LLM-call span closed via :meth:`finish_span`) so a later :meth:`emit`
+        for the same ``(dedup_key, role)`` deduplicates against it."""
+        self._seen(dedup_key, role)
+
     def _seen(self, dedup_key: str | None, role: SpanRole) -> bool:
         """Return True once a ``(dedup_key, role)`` pair has been emitted.
 
@@ -127,7 +170,7 @@ class SpanEmitter:
         """
         if not dedup_key:
             return False
-        marker = (dedup_key, role)
+        marker: Final = (dedup_key, role)
         if marker in self._emitted:
             self._emitted.move_to_end(marker)
             return True
@@ -153,20 +196,20 @@ class SpanEmitter:
 
         Return the span, or ``None`` if it was deduplicated away. ``tracer``
         overrides the bound tracer for this span, used for per-request routing.
-        ``links`` records related-but-not-parent spans (the transport span of an
-        MCP message).
+        ``links`` records related-but-not-parent spans (e.g. the trace context an
+        MCP client propagated in ``params._meta``).
         """
         # LLM-call and MCP tool-call spans carry a dedup key (their request's
         # call id), so a sync+async double-firing coalesces. ``isinstance`` narrows
         # the type for mypy and keeps the engine free of duck-typed attribute reads.
-        dedup_key = (
+        dedup_key: Final = (
             data.identity.call_id
             if isinstance(data, (LLMCallSpanData, MCPToolCallSpanData, MCPListToolsSpanData))
             else None
         )
         if self._seen(dedup_key, role):
             return None
-        span = self.start_span(
+        span: Final = self.start_span(
             role,
             _NAME_BUILDERS[role](data),
             parent_context=parent_context,
@@ -198,7 +241,7 @@ class SpanEmitter:
         for mapper in self._mappers:
             for key, value in mapper.map(data).items():
                 span.set_attribute(key, value)
-        error = (
+        error: Final = (
             data.error
             if isinstance(
                 data,
@@ -212,21 +255,10 @@ class SpanEmitter:
             )
             else None
         )
-        if error and (error.error_type or error.message):
-            error_type = error.error_type or "error"
-            message = error.message or error.error_type or "error"
-            _stamp_otel_error_attributes(span, error_type, message)
-            _stamp_litellm_error_attributes(span, error)
-            span.set_status(Status(StatusCode.ERROR, message))
-            # Also emit the semconv ``exception`` event so backends that
-            # dynamic-map unknown string span attrs to ``keyword`` (e.g.
-            # Elasticsearch with a 1024-char ``ignore_above``) still see the
-            # full untruncated message on the recognized event field.
-            span.add_event(
-                ExceptionEvent.NAME,
-                {ExceptionEvent.TYPE: error_type, ExceptionEvent.MESSAGE: message},
-            )
-            if self._event_recorder is not None and role is SpanRole.LLM_CALL:
+        if error:
+            stamped: Final = stamp_error(span, error)
+            if stamped is not None and self._event_recorder is not None and role is SpanRole.LLM_CALL:
+                error_type, message = stamped
                 self._event_recorder.record_operation_exception(
                     span_context=span.get_span_context(),
                     error_type=error_type,

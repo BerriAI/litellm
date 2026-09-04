@@ -1,7 +1,7 @@
 """Realtime suite's `client` and `realtime_models` fixtures.
 
-The shared lifecycle (resources/scoped_key), proxy liveness skip, and e2e marker
-live in the parent tests/e2e/conftest.py. RealtimeClient holds the shared Gateway,
+The shared lifecycle (resources/scoped_key), proxy liveness gate, and e2e marker
+live in the parent tests/e2e/conftest.py. RealtimeClient holds the shared ProxyClient,
 so the `resources` fixture cleans up keys this suite creates.
 
 `realtime_models` registers every provider's realtime deployment through /model/new
@@ -15,11 +15,12 @@ from collections.abc import Iterator
 import pytest
 
 from realtime_client import PROVIDERS, RealtimeClient, build_client
+from proxy_client import ProxyClient
 
 
 @pytest.fixture(scope="session")
-def client() -> RealtimeClient:
-    return build_client()
+def client(proxy: ProxyClient) -> RealtimeClient:
+    return build_client(proxy)
 
 
 @pytest.fixture(scope="session")
@@ -34,4 +35,4 @@ def realtime_models(client: RealtimeClient) -> Iterator[dict[str, str]]:
         yield {provider_id: model_name for provider_id, model_name, _ in records}
     finally:
         for _, _, model_id in records:
-            client.gateway.delete_model(model_id)
+            client.proxy.delete_model(model_id)

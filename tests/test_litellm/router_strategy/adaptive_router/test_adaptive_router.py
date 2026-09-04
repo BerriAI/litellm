@@ -7,9 +7,6 @@ from litellm.router_strategy.adaptive_router import adaptive_router as ar_module
 import pytest
 
 from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
-from litellm.router_strategy.adaptive_router.config import (
-    OWNER_CACHE_TTL_SECONDS,
-)
 from litellm.router_strategy.adaptive_router.signals import Turn
 from litellm.types.router import (
     AdaptiveRouterConfig,
@@ -22,9 +19,7 @@ def _make_router() -> AdaptiveRouter:
     cfg = AdaptiveRouterConfig(available_models=["fast", "smart"])
     prefs = {
         "fast": AdaptiveRouterPreferences(quality_tier=1, strengths=[]),
-        "smart": AdaptiveRouterPreferences(
-            quality_tier=3, strengths=[RequestType.CODE_GENERATION]
-        ),
+        "smart": AdaptiveRouterPreferences(quality_tier=3, strengths=[RequestType.CODE_GENERATION]),
     }
     costs = {"fast": 0.0001, "smart": 0.001}
     return AdaptiveRouter(
@@ -56,85 +51,6 @@ async def test_pick_model_min_quality_tier_filter_raises_when_no_eligible():
     r = _make_router()
     with pytest.raises(ValueError, match="min_quality_tier=4"):
         await r.pick_model(RequestType.GENERAL, min_quality_tier=4)
-
-
-@pytest.mark.asyncio
-async def test_pick_model_is_stateless_no_owner_cache_writes():
-    """pick_model must not touch the owner cache — that's gated post-call."""
-    r = _make_router()
-    for _ in range(5):
-        await r.pick_model(RequestType.GENERAL)
-    assert r._owner_cache == {}
-
-
-# ---- claim_or_check_owner -----------------------------------------------
-
-
-def test_claim_or_check_owner_first_call_claims_and_returns_true(monkeypatch):
-    r = _make_router()
-    monkeypatch.setattr(ar_module.time, "time", lambda: 1_000.0)
-
-    assert r.claim_or_check_owner("sess-A", "fast") is True
-    assert r._owner_cache["sess-A"] == ("fast", 1_000.0 + OWNER_CACHE_TTL_SECONDS)
-    assert r._skipped_updates_total == 0
-
-
-def test_claim_or_check_owner_same_model_returns_true_without_extending_ttl(
-    monkeypatch,
-):
-    r = _make_router()
-    monkeypatch.setattr(ar_module.time, "time", lambda: 1_000.0)
-    r.claim_or_check_owner("sess-A", "fast")
-    original_expiry = r._owner_cache["sess-A"][1]
-
-    monkeypatch.setattr(ar_module.time, "time", lambda: 1_500.0)
-    assert r.claim_or_check_owner("sess-A", "fast") is True
-    # No extension on hit — owner cache snapshots the first claim.
-    assert r._owner_cache["sess-A"][1] == original_expiry
-
-
-def test_claim_or_check_owner_mismatch_skips_and_increments_counter(monkeypatch):
-    r = _make_router()
-    monkeypatch.setattr(ar_module.time, "time", lambda: 1_000.0)
-    r.claim_or_check_owner("sess-A", "fast")
-
-    assert r.claim_or_check_owner("sess-A", "smart") is False
-    assert r._skipped_updates_total == 1
-    # Owner unchanged.
-    assert r._owner_cache["sess-A"][0] == "fast"
-
-
-def test_claim_or_check_owner_expired_owner_reclaims_for_new_model(monkeypatch):
-    r = _make_router()
-    monkeypatch.setattr(ar_module.time, "time", lambda: 1_000.0)
-    r.claim_or_check_owner("sess-A", "fast")
-
-    monkeypatch.setattr(
-        ar_module.time, "time", lambda: 1_000.0 + OWNER_CACHE_TTL_SECONDS + 1
-    )
-    assert r.claim_or_check_owner("sess-A", "smart") is True
-    assert r._owner_cache["sess-A"][0] == "smart"
-    # Reclaim isn't a skip.
-    assert r._skipped_updates_total == 0
-
-
-def test_owner_cache_evicts_expired_entries_when_threshold_crossed(monkeypatch):
-    """Past _OWNER_CACHE_SWEEP_THRESHOLD live entries, new claims sweep stale."""
-    r = _make_router()
-    monkeypatch.setattr(ar_module, "_OWNER_CACHE_SWEEP_THRESHOLD", 5)
-    monkeypatch.setattr(ar_module.time, "time", lambda: 1_000.0)
-    for i in range(5):
-        r.claim_or_check_owner(f"old-{i}", "fast")
-    assert len(r._owner_cache) == 5
-
-    # Jump past TTL so all "old-*" entries are now expired.
-    monkeypatch.setattr(
-        ar_module.time, "time", lambda: 1_000.0 + OWNER_CACHE_TTL_SECONDS + 1
-    )
-    r.claim_or_check_owner("new-1", "fast")
-    # Sweep ran -> only the new entry remains.
-    assert "new-1" in r._owner_cache
-    assert all(k.startswith("new-") for k in r._owner_cache)
 
 
 # ---- record_turn --------------------------------------------------------
@@ -185,9 +101,7 @@ async def test_record_turn_satisfaction_increments_alpha():
     # Prime with 2 prior turns to clear the MIN_TURNS_FOR_CLEAN_CREDIT gate.
     # Use distinct content to avoid incidentally firing stagnation/misalignment.
     priming_turns = [
-        Turn(
-            user_content="alpha bravo charlie", assistant_content="delta echo foxtrot"
-        ),
+        Turn(user_content="alpha bravo charlie", assistant_content="delta echo foxtrot"),
         Turn(
             user_content="golf hotel india juliet",
             assistant_content="kilo lima mike november",
@@ -233,6 +147,128 @@ async def test_record_turn_failure_increments_beta():
 
 
 @pytest.mark.asyncio
+async def test_record_turn_detects_exhaustion_in_tool_results():
+    r = _make_router()
+
+    delta = await r.record_turn(
+        session_id="exhausted",
+        model_name="smart",
+        request_type=RequestType.GENERAL,
+        turn=Turn(tool_results=[{"content": "rate limit exceeded"}]),
+    )
+
+    assert delta.exhaustion == 1
+    assert r._session_states[("exhausted", "smart")].exhaustion_count == 1
+
+
+@pytest.mark.asyncio
+async def test_record_turn_attributes_user_feedback_to_previous_response_model():
+    r = _make_router()
+    fast_before = r._cells[(RequestType.CODE_GENERATION, "fast")]
+    smart_before = r._cells[(RequestType.GENERAL, "smart")]
+
+    await r.record_turn(
+        session_id="feedback-switch",
+        model_name="fast",
+        request_type=RequestType.CODE_GENERATION,
+        turn=Turn(
+            user_content="fix this python retry bug",
+            assistant_content="clear the cache on every retry",
+        ),
+    )
+    await r.record_turn(
+        session_id="feedback-switch",
+        model_name="smart",
+        request_type=RequestType.GENERAL,
+        turn=Turn(
+            user_content="the python fix is still broken",
+            assistant_content="keep successful cache entries",
+        ),
+    )
+
+    fast_after = r._cells[(RequestType.CODE_GENERATION, "fast")]
+    smart_after = r._cells[(RequestType.GENERAL, "smart")]
+    assert fast_after.beta == pytest.approx(fast_before.beta + 1.0)
+    assert smart_after.beta == pytest.approx(smart_before.beta)
+    snapshot = await r.get_state_snapshot()
+    assert snapshot["feedback_attributed_total"] == 1
+    assert snapshot["cross_model_feedback_total"] == 1
+    assert snapshot["feedback_without_context_total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_record_turn_attributes_satisfaction_to_previous_response_model():
+    r = _make_router()
+    await r.record_turn(
+        session_id="satisfaction-switch",
+        model_name="smart",
+        request_type=RequestType.CODE_GENERATION,
+        turn=Turn(
+            user_content="write a python retry helper",
+            assistant_content="first draft",
+        ),
+    )
+    await r.record_turn(
+        session_id="satisfaction-switch",
+        model_name="fast",
+        request_type=RequestType.CODE_GENERATION,
+        turn=Turn(
+            user_content="add exponential backoff to the python helper",
+            assistant_content="updated draft",
+        ),
+    )
+    fast_before = r._cells[(RequestType.CODE_GENERATION, "fast")]
+    smart_before = r._cells[(RequestType.GENERAL, "smart")]
+
+    await r.record_turn(
+        session_id="satisfaction-switch",
+        model_name="smart",
+        request_type=RequestType.GENERAL,
+        turn=Turn(
+            user_content="thanks, that worked",
+            assistant_content="glad to help",
+        ),
+    )
+
+    fast_after = r._cells[(RequestType.CODE_GENERATION, "fast")]
+    smart_after = r._cells[(RequestType.GENERAL, "smart")]
+    assert fast_after.alpha == pytest.approx(fast_before.alpha + 1.0)
+    assert smart_after.alpha == pytest.approx(smart_before.alpha)
+
+
+@pytest.mark.asyncio
+async def test_record_turn_bounds_feedback_contexts_and_evicts_least_recent_session():
+    r = _make_router()
+    context_limit = ar_module._FEEDBACK_CONTEXT_MAX_ENTRIES
+
+    for index in range(context_limit):
+        await r.record_turn(
+            session_id=f"session-{index}",
+            model_name="fast",
+            request_type=RequestType.GENERAL,
+            turn=Turn(user_content="question", assistant_content="answer"),
+        )
+
+    await r.record_turn(
+        session_id="session-0",
+        model_name="fast",
+        request_type=RequestType.GENERAL,
+        turn=Turn(user_content="follow up", assistant_content="updated answer"),
+    )
+    await r.record_turn(
+        session_id="overflow",
+        model_name="fast",
+        request_type=RequestType.GENERAL,
+        turn=Turn(user_content="question", assistant_content="answer"),
+    )
+
+    assert len(r._feedback_contexts) == context_limit
+    assert "session-0" in r._feedback_contexts
+    assert "session-1" not in r._feedback_contexts
+    assert "overflow" in r._feedback_contexts
+
+
+@pytest.mark.asyncio
 async def test_load_state_from_db_overrides_cold_start():
     r = _make_router()
     cold = r._cells[(RequestType.GENERAL, "fast")]
@@ -270,9 +306,7 @@ async def test_load_state_from_db_handles_unknown_request_type():
     good_row.beta = 3.0
 
     prisma = MagicMock()
-    prisma.db.litellm_adaptiverouterstate.find_many = AsyncMock(
-        return_value=[bad_row, good_row]
-    )
+    prisma.db.litellm_adaptiverouterstate.find_many = AsyncMock(return_value=[bad_row, good_row])
     await r.load_state_from_db(prisma)
 
     # Unknown skipped; good applied.

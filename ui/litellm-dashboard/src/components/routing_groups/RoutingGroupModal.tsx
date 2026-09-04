@@ -1,10 +1,37 @@
 "use client";
 
-import React, { useMemo } from "react";
-import { Form, Input, Modal, Select, Space, Typography } from "antd";
-import type { RoutingGroup, RoutingStrategy } from "./types";
-
-const { Text, Paragraph } = Typography;
+import React, { useEffect, useMemo } from "react";
+import { useWatch } from "react-hook-form";
+import { z } from "zod/v4";
+import { FieldGroup } from "@/components/ui/field";
+import { FormField } from "@/components/shared/form/FormField";
+import {
+  Combobox,
+  ComboboxChip,
+  ComboboxChips,
+  ComboboxChipsInput,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxValue,
+  useComboboxAnchor,
+} from "@/components/ui/combobox";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import {
+  GROUP_NAME_MAX_LENGTH,
+  GROUP_NAME_PATTERN,
+  STRATEGIES_WITH_ARGS,
+  argsForStrategy,
+  buildRoutingGroupPayload,
+  toRoutingGroupFormValues,
+} from "./routingGroupPayload";
+import type { RoutingGroup } from "./types";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 interface RoutingGroupModalProps {
   open: boolean;
@@ -19,17 +46,9 @@ interface RoutingGroupModalProps {
   saving?: boolean;
 }
 
-interface FormValues {
-  group_name: string;
-  models: string[];
-  routing_strategy: RoutingStrategy | string;
-  routing_strategy_args?: string;
-}
-
-const STRATEGIES_WITH_ARGS = new Set<string>(["latency-based-routing", "usage-based-routing"]);
-
-const GROUP_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
-const GROUP_NAME_MAX_LENGTH = 64;
+const ARGS_EXAMPLES: Record<string, string> = {
+  "latency-based-routing": 'Example: { "ttl": 3600, "lowest_latency_buffer": 0 }',
+};
 
 const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
   open,
@@ -43,141 +62,166 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
   onSubmit,
   saving,
 }) => {
-  const [form] = Form.useForm<FormValues>();
-  const selectedStrategy = Form.useWatch("routing_strategy", form);
-
-  const initialValues: FormValues = {
-    group_name: initialValue?.group_name ?? "",
-    models: initialValue?.models ?? [],
-    routing_strategy: initialValue?.routing_strategy ?? availableStrategies[0] ?? "simple-shuffle",
-    routing_strategy_args: initialValue?.routing_strategy_args
-      ? JSON.stringify(initialValue.routing_strategy_args, null, 2)
-      : "",
-  };
+  const modelsAnchor = useComboboxAnchor();
+  const strategyItems = availableStrategies.map((strategy) => ({ label: strategy, value: strategy }));
 
   const reservedNames = useMemo(() => {
     const others = existingGroupNames.filter((n) => n !== initialValue?.group_name);
     return new Set(others.map((n) => n.toLowerCase()));
   }, [existingGroupNames, initialValue]);
 
-  const handleSubmit = async () => {
-    const values = await form.validateFields();
-    const strategySupportsArgs = STRATEGIES_WITH_ARGS.has(String(values.routing_strategy));
-    let parsedArgs: Record<string, unknown> | null = null;
-    if (strategySupportsArgs && values.routing_strategy_args && values.routing_strategy_args.trim()) {
-      try {
-        parsedArgs = JSON.parse(values.routing_strategy_args);
-      } catch {
-        form.setFields([
-          {
-            name: "routing_strategy_args",
-            errors: ["Must be valid JSON"],
-          },
-        ]);
-        return;
-      }
-    }
+  const schema = useMemo(() => {
+    const shape = {
+      group_name: z
+        .string()
+        .min(1, "Group name is required")
+        .max(GROUP_NAME_MAX_LENGTH, `Must be ${GROUP_NAME_MAX_LENGTH} characters or fewer`)
+        .regex(GROUP_NAME_PATTERN, "Only letters, numbers, dot, underscore, and dash are allowed")
+        .refine((value) => !reservedNames.has(value.trim().toLowerCase()), "A group with this name already exists"),
+      models: z.array(z.string()).min(1, "Select at least one model"),
+      routing_strategy: z.string().min(1, "Strategy is required"),
+      routing_strategy_args: z.string(),
+    };
+    return z.object(shape);
+  }, [reservedNames]);
 
-    await onSubmit({
-      group_name: values.group_name.trim(),
-      models: values.models,
-      routing_strategy: values.routing_strategy,
-      routing_strategy_args: parsedArgs,
-    });
+  const form = useZodForm(schema, { defaultValues: toRoutingGroupFormValues(initialValue, availableStrategies) });
+
+  useEffect(() => {
+    form.reset(toRoutingGroupFormValues(initialValue, availableStrategies));
+  }, [open, initialValue, availableStrategies, form]);
+
+  const selectedStrategy = useWatch({ control: form.control, name: "routing_strategy" });
+
+  const handleSubmit = async (values: z.infer<typeof schema>) => {
+    const payload = buildRoutingGroupPayload(values);
+    if (!payload.ok) {
+      form.setError("routing_strategy_args", { message: payload.argsError });
+      return;
+    }
+    await onSubmit(payload.group);
   };
 
   return (
-    <Modal
-      title={mode === "create" ? "Create Routing Group" : `Edit ${initialValue?.group_name ?? ""}`}
-      open={open}
-      onCancel={onClose}
-      onOk={handleSubmit}
-      okText={mode === "create" ? "Create Group" : "Save Changes"}
-      cancelText="Cancel"
-      confirmLoading={saving}
-      destroyOnClose
-      width={560}
-    >
-      <Form<FormValues>
-        key={mode === "edit" ? `edit-${initialValue?.group_name ?? ""}` : "create"}
-        form={form}
-        layout="vertical"
-        preserve={false}
-        initialValues={initialValues}
-      >
-        <Form.Item
-          label="Group Name"
-          name="group_name"
-          rules={[
-            { required: true, message: "Group name is required" },
-            { max: GROUP_NAME_MAX_LENGTH, message: `Must be ${GROUP_NAME_MAX_LENGTH} characters or fewer` },
-            {
-              pattern: GROUP_NAME_PATTERN,
-              message: "Only letters, numbers, dot, underscore, and dash are allowed",
-            },
-            {
-              validator: (_, value: string) => {
-                if (!value) return Promise.resolve();
-                if (reservedNames.has(value.trim().toLowerCase())) {
-                  return Promise.reject(new Error("A group with this name already exists"));
-                }
-                return Promise.resolve();
-              },
-            },
-          ]}
-          extra="Use this name as the model in API calls — LiteLLM routes the request to one of the group's models."
-        >
-          <Input placeholder="fast-chat" disabled={mode === "edit"} />
-        </Form.Item>
+    <Dialog open={open} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[560px]">
+        <DialogHeader>
+          <DialogTitle>
+            {mode === "create" ? "Create Routing Group" : `Edit ${initialValue?.group_name ?? ""}`}
+          </DialogTitle>
+        </DialogHeader>
+        <form onSubmit={(event) => event.preventDefault()} noValidate>
+          <FieldGroup>
+            <FormField
+              control={form.control}
+              name="group_name"
+              label="Group Name"
+              description="Use this name as the model in API calls — LiteLLM routes the request to one of the group's models."
+            >
+              {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="fast-chat" disabled={mode === "edit"} />}
+            </FormField>
 
-        <Form.Item
-          label="Models"
-          name="models"
-          rules={[{ required: true, message: "Select at least one model" }]}
-          extra="Models from your model list that this group routes between."
-        >
-          <Select
-            mode="multiple"
-            allowClear
-            placeholder="Select models"
-            options={modelOptions.map((m) => ({ label: m, value: m }))}
-            optionFilterProp="label"
-          />
-        </Form.Item>
+            <FormField
+              control={form.control}
+              name="models"
+              label="Models"
+              description="Models from your model list that this group routes between."
+            >
+              {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                <Combobox multiple items={modelOptions} value={value} onValueChange={onChange}>
+                  <ComboboxChips render={<div ref={modelsAnchor} />}>
+                    <ComboboxValue>
+                      {(selected: string[]) => (
+                        <>
+                          {selected.map((model) => (
+                            <ComboboxChip key={model} aria-label={model}>
+                              {model}
+                            </ComboboxChip>
+                          ))}
+                          <ComboboxChipsInput
+                            id={id}
+                            aria-invalid={ariaInvalid}
+                            aria-describedby={ariaDescribedBy}
+                            placeholder="Select models"
+                          />
+                        </>
+                      )}
+                    </ComboboxValue>
+                  </ComboboxChips>
+                  <ComboboxContent anchor={modelsAnchor}>
+                    <ComboboxEmpty>No models found</ComboboxEmpty>
+                    <ComboboxList>
+                      {(model: string) => (
+                        <ComboboxItem key={model} value={model}>
+                          {model}
+                        </ComboboxItem>
+                      )}
+                    </ComboboxList>
+                  </ComboboxContent>
+                </Combobox>
+              )}
+            </FormField>
 
-        <Form.Item
-          label="Routing Strategy"
-          name="routing_strategy"
-          rules={[{ required: true, message: "Strategy is required" }]}
-        >
-          <Select options={availableStrategies.map((s) => ({ label: s, value: s }))} placeholder="Select strategy" />
-        </Form.Item>
+            <FormField
+              control={form.control}
+              name="routing_strategy"
+              label="Routing Strategy"
+              description={strategyDescriptions[selectedStrategy]}
+            >
+              {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                <Select
+                  items={strategyItems}
+                  value={value}
+                  onValueChange={(next: string | null) => {
+                    onChange(next ?? "");
+                    form.setValue(
+                      "routing_strategy_args",
+                      argsForStrategy(next ?? "", form.getValues("routing_strategy_args")),
+                    );
+                  }}
+                >
+                  <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy}>
+                    <SelectValue placeholder="Select strategy" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableStrategies.map((strategy) => (
+                      <SelectItem key={strategy} value={strategy}>
+                        {strategy}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </FormField>
 
-        {selectedStrategy && strategyDescriptions[selectedStrategy] && (
-          <Paragraph className="text-xs text-gray-500 -mt-2 mb-4">{strategyDescriptions[selectedStrategy]}</Paragraph>
-        )}
+            {STRATEGIES_WITH_ARGS.has(selectedStrategy) && (
+              <FormField
+                control={form.control}
+                name="routing_strategy_args"
+                label="Strategy Arguments (JSON)"
+                description={ARGS_EXAMPLES[selectedStrategy] ?? 'Example: { "ttl": 60 }'}
+              >
+                {({ ref, ...field }) => (
+                  <Textarea {...field} ref={ref} rows={4} placeholder='{ "ttl": 3600 }' className="font-mono text-xs" />
+                )}
+              </FormField>
+            )}
 
-        {STRATEGIES_WITH_ARGS.has(String(selectedStrategy)) && (
-          <Form.Item
-            label="Strategy Arguments (JSON)"
-            name="routing_strategy_args"
-            extra={
-              selectedStrategy === "latency-based-routing"
-                ? 'Example: { "ttl": 3600, "lowest_latency_buffer": 0 }'
-                : 'Example: { "ttl": 60 }'
-            }
-          >
-            <Input.TextArea rows={4} placeholder='{ "ttl": 3600 }' className="font-mono text-xs" />
-          </Form.Item>
-        )}
-
-        <Space direction="vertical" className="w-full mt-2">
-          <Text type="secondary" className="text-xs">
-            Models not claimed by an explicit group fall through to the proxy&apos;s top-level routing strategy.
-          </Text>
-        </Space>
-      </Form>
-    </Modal>
+            <p className="text-xs text-muted-foreground">
+              Models not claimed by an explicit group fall through to the proxy&apos;s top-level routing strategy.
+            </p>
+          </FieldGroup>
+        </form>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={() => void form.handleSubmit(handleSubmit)()} disabled={saving} aria-busy={saving}>
+            {mode === "create" ? "Create Group" : "Save Changes"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

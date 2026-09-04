@@ -1,6 +1,5 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -8,17 +7,19 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
-import { Separator } from "@/components/ui/separator";
+import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { getBreadcrumb } from "@/components/leftnav";
 import { BlogDropdown } from "@/components/Navbar/BlogDropdown/BlogDropdown";
+import { DocsLink } from "@/components/Navbar/DocsLink/DocsLink";
 import { CommunityEngagementButtons } from "@/components/Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
 import { NotificationsBell } from "@/components/Navbar/NotificationsBell/NotificationsBell";
 import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
+import ThemeToggle from "@/components/ThemeToggle/ThemeToggle";
 import WorkerDropdown from "@/components/Navbar/WorkerDropdown/WorkerDropdown";
 import { useWorker } from "@/hooks/useWorker";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { clearTokenCookies } from "@/utils/cookieUtils";
-import { clearStoredReturnUrl } from "@/utils/returnUrlUtils";
+import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
 
 interface DashboardHeaderProps {
   page: string;
@@ -27,7 +28,7 @@ interface DashboardHeaderProps {
 // Top bar for the dashboard shell. Sits only over the content column (the brand
 // lives in the sidebar header); mirrors the design's breadcrumb-left / tools-right layout.
 export function DashboardHeader({ page }: DashboardHeaderProps) {
-  const { section, title } = getBreadcrumb(page);
+  const { title } = getBreadcrumb(page);
   const { isControlPlane, selectedWorker } = useWorker();
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
   const hideCommunityLinks = useDisableShowPrompts();
@@ -37,19 +38,17 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
     clearStoredReturnUrl();
     localStorage.removeItem("litellm_selected_worker_id");
     localStorage.removeItem("litellm_worker_url");
-    window.location.href = `/ui/login?worker=${encodeURIComponent(workerId)}`;
+    window.location.href = `${getLoginUrl()}?worker=${encodeURIComponent(workerId)}`;
   };
 
   return (
     <header className="flex h-14 flex-none items-center justify-between gap-4 border-b border-border bg-background px-4">
       <Breadcrumb className="min-w-0">
         <BreadcrumbList className="flex-nowrap">
-          {section && (
-            <>
-              <BreadcrumbItem className="whitespace-nowrap">{section}</BreadcrumbItem>
-              <BreadcrumbSeparator />
-            </>
-          )}
+          <BreadcrumbItem className="flex-none">
+            <ViewSwitcher />
+          </BreadcrumbItem>
+          <BreadcrumbSeparator />
           <BreadcrumbItem className="min-w-0">
             <BreadcrumbPage className="truncate">{title}</BreadcrumbPage>
           </BreadcrumbItem>
@@ -60,24 +59,15 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
         {showWorkerSwitch && (
           <>
             <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
-            <Separator orientation="vertical" className="mx-1.5 h-5" />
+            <ToolbarSeparator />
           </>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          nativeButton={false}
-          render={<a href="https://docs.litellm.ai/docs/" target="_blank" rel="noopener noreferrer" />}
-          className="text-muted-foreground"
-        >
-          Docs
-        </Button>
+        <DocsLink />
         <BlogDropdown />
         {!hideCommunityLinks && <CommunityEngagementButtons />}
-        <Separator orientation="vertical" className="mx-1.5 h-5" />
+        <ToolbarSeparator />
+        <ThemeToggle />
         <NotificationsBell />
-        <Separator orientation="vertical" className="mx-1.5 h-5" />
-        <ViewSwitcher />
       </div>
     </header>
   );

@@ -313,3 +313,13 @@ def test_agent_card_with_0_3_pin_and_supported_interfaces_is_lowered():
 def test_agent_card_same_version_passthrough():
     card = _extended_card_1_0()
     assert normalize_agent_card(card, "1.0") is card
+
+
+def test_detect_card_version_normalizes_semver_protocol_version():
+    from litellm.proxy.a2a.version_convert import _detect_card_version
+
+    assert _detect_card_version({"protocolVersion": "1.0.0"}) == "1.0"
+    assert (
+        _detect_card_version({"protocolVersion": "0.3.0", "supportedInterfaces": []})
+        == "0.3"
+    )

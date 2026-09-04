@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import ViewSwitcher from "./ViewSwitcher";
 
 const { mockUsePluginMode, mockUseUISettings, mockUsePathname, state } = vi.hoisted(() => {
@@ -49,9 +49,23 @@ describe("ViewSwitcher", () => {
     state.setMode.mockClear();
   });
 
-  it("renders nothing with no plugins, chat disabled, and a non-admin user", () => {
-    const { container } = render(<ViewSwitcher />);
-    expect(container.firstChild).toBeNull();
+  it("still renders the selector with a disabled Chat hint when there are no plugins and chat is off", async () => {
+    render(<ViewSwitcher />);
+
+    const button = screen.getByRole("button");
+    expect(button).toHaveTextContent("AI Gateway");
+
+    act(() => {
+      fireEvent.click(button);
+    });
+    expect(await screen.findByText("Chat")).toBeInTheDocument();
+    expect(screen.getByText(/Admins can enable in Settings/i)).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.click(screen.getByText("Chat"));
+    });
+    expect(assignSpy).not.toHaveBeenCalled();
+    expect(state.setMode).not.toHaveBeenCalled();
   });
 
   it("labels the button from the active plugin and lists AI Gateway + each plugin", async () => {
@@ -67,7 +81,7 @@ describe("ViewSwitcher", () => {
     act(() => {
       fireEvent.click(screen.getByRole("button"));
     });
-    await waitFor(() => expect(screen.getByText("AI Gateway")).toBeInTheDocument());
+    expect(await screen.findByText("AI Gateway")).toBeInTheDocument();
     expect(screen.getByText("Observability")).toBeInTheDocument();
   });
 
@@ -79,7 +93,7 @@ describe("ViewSwitcher", () => {
     act(() => {
       fireEvent.click(screen.getByRole("button"));
     });
-    await waitFor(() => expect(screen.getByText("Chat UI")).toBeInTheDocument());
+    expect(await screen.findByText("Chat UI")).toBeInTheDocument();
     act(() => {
       fireEvent.click(screen.getByText("Chat UI"));
     });
@@ -94,8 +108,8 @@ describe("ViewSwitcher", () => {
     act(() => {
       fireEvent.click(screen.getByRole("button"));
     });
-    await waitFor(() => expect(screen.getByText("Chat")).toBeInTheDocument());
-    expect(screen.queryByText(/Enable in Admin Settings/i)).not.toBeInTheDocument();
+    expect(await screen.findByText("Chat")).toBeInTheDocument();
+    expect(screen.queryByText(/Admins can enable in Settings/i)).not.toBeInTheDocument();
 
     act(() => {
       fireEvent.click(screen.getByText("Chat"));
@@ -113,7 +127,7 @@ describe("ViewSwitcher", () => {
     act(() => {
       fireEvent.click(screen.getByRole("button"));
     });
-    await waitFor(() => expect(screen.getByText("AI Gateway")).toBeInTheDocument());
+    expect(await screen.findByText("AI Gateway")).toBeInTheDocument();
     act(() => {
       fireEvent.click(screen.getByText("AI Gateway"));
     });
@@ -121,7 +135,7 @@ describe("ViewSwitcher", () => {
     expect(assignSpy).toHaveBeenCalledWith("/ui/");
   });
 
-  it("hides the Chat entry from everyone when disabled", async () => {
+  it("shows Chat as a disabled, non-navigating entry with an admin hint when disabled", async () => {
     state.enableChatUI = false;
     state.plugins = [{ name: "obs", display_name: "Observability", url: "http://localhost:9000" }];
     render(<ViewSwitcher />);
@@ -129,7 +143,13 @@ describe("ViewSwitcher", () => {
     act(() => {
       fireEvent.click(screen.getByRole("button"));
     });
-    await waitFor(() => expect(screen.getByText("Observability")).toBeInTheDocument());
-    expect(screen.queryByText("Chat")).not.toBeInTheDocument();
+    expect(await screen.findByText("Observability")).toBeInTheDocument();
+    expect(screen.getByText("Chat")).toBeInTheDocument();
+    expect(screen.getByText(/Admins can enable in Settings/i)).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.click(screen.getByText("Chat"));
+    });
+    expect(assignSpy).not.toHaveBeenCalled();
   });
 });

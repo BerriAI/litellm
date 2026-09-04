@@ -1,0 +1,97 @@
+"""prompt_caching_1h x Bedrock (Converse).
+
+Drive the real `claude` CLI against a running LiteLLM proxy that routes
+Claude requests to AWS Bedrock via the `Converse` API, opt into the
+1-hour cache TTL via `ENABLE_PROMPT_CACHING_1H`, and assert the
+upstream's usage block reports a non-zero cache token count.
+
+Bedrock Converse expresses prompt caching via `cachePoint` markers in
+the message list, with TTL controlled out-of-band; this cell catches
+proxy regressions where the 1h opt-in fails to translate into the
+correct Converse cache configuration.
+
+The (feature, provider) for this cell is inferred from the file path by
+`tests/e2e/claude_code/conftest.py`:
+
+    tests/e2e/claude_code/prompt_caching_1h/test_bedrock_converse.py
+                       ^^^^^^^^^^^^^^^^^      ^^^^^^^^^^^^^^^^
+                       feature_id             provider
+"""
+
+from __future__ import annotations
+
+from typing import Any, Mapping, Optional
+
+import pytest
+
+from claude_code._env import require_proxy
+from claude_code.cli_driver import (
+    ClaudeCLIError,
+    failure_diagnostic,
+    run_claude_models_parallel,
+)
+
+
+BEDROCK_CONVERSE_MODELS = [
+    "claude-haiku-4-5-bedrock-converse",
+    "claude-sonnet-4-5-bedrock-converse",
+    "claude-opus-4-7-bedrock-converse",
+]
+
+CACHE_1H_ENV = {
+    "ENABLE_PROMPT_CACHING_1H": "1",
+    "ENABLE_PROMPT_CACHING_1H_BEDROCK": "1",
+}
+
+
+def _cache_tokens(usage: Optional[Mapping[str, Any]]) -> int:
+    if not isinstance(usage, Mapping):
+        return 0
+    creation = usage.get("cache_creation_input_tokens") or 0
+    read = usage.get("cache_read_input_tokens") or 0
+    try:
+        return int(creation) + int(read)
+    except (TypeError, ValueError):
+        return 0
+
+
+@pytest.mark.covers("llm.messages.bedrock_converse.prompt_cache_1h.nonstream.works")
+def test_prompt_caching_1h_bedrock_converse(compat_result):
+    base_url, api_key = require_proxy(compat_result)
+
+    outcomes = run_claude_models_parallel(
+        models=BEDROCK_CONVERSE_MODELS,
+        prompt="Reply with the single word 'pong' and nothing else.",
+        base_url=base_url,
+        api_key=api_key,
+        extra_env=CACHE_1H_ENV,
+    )
+
+    failures = []
+    for model in BEDROCK_CONVERSE_MODELS:
+        outcome = outcomes[model]
+        if isinstance(outcome, ClaudeCLIError):
+            error = f"[{model}] {outcome}"
+            compat_result.add({"status": "fail", "error": error})
+            failures.append(error)
+            continue
+
+        if outcome.exit_code != 0:
+            error = f"[{model}] claude CLI failed: {failure_diagnostic(outcome)}"
+            compat_result.add({"status": "fail", "error": error})
+            failures.append(error)
+            continue
+
+        if _cache_tokens(outcome.usage) <= 0:
+            error = (
+                f"[{model}] usage block reported zero cache tokens with "
+                "1h-TTL opt-in env vars set"
+            )
+            compat_result.add({"status": "fail", "error": error})
+            failures.append(error)
+            continue
+
+        compat_result.add({"status": "pass"})
+
+    if failures:
+        pytest.fail("; ".join(failures), pytrace=False)

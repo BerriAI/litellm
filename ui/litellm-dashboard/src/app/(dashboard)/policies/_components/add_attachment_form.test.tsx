@@ -1,5 +1,5 @@
 import React from "react";
-import { screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,13 +9,13 @@ import { Policy } from "@/components/policies/types";
 
 vi.mock("@/components/networking");
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: { success: vi.fn(), fromBackend: vi.fn(), error: vi.fn(), info: vi.fn() },
-}));
-
 vi.mock("./impact_preview_alert", () => ({
   default: ({ impactResult }: { impactResult: any }) =>
     React.createElement("div", { "data-testid": "impact-preview" }, `${impactResult.affected_keys_count} keys`),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({ userId: "admin-user-id", userRole: "Admin", accessToken: "test-token" }),
 }));
 
 const makePolicy = (overrides: Partial<Policy> = {}): Policy => ({
@@ -69,6 +69,12 @@ describe("AddAttachmentForm", () => {
       expect(networking.keyListCall).toHaveBeenCalled();
       expect(networking.modelAvailableCall).toHaveBeenCalled();
     });
+  });
+
+  it("fetches all teams, not just teams the caller is a member of (LIT-4199)", async () => {
+    renderWithProviders(<AddAttachmentForm {...defaultProps} />);
+    await waitFor(() => expect(networking.teamListCall).toHaveBeenCalled());
+    expect(networking.teamListCall).toHaveBeenCalledWith("test-token", null, null);
   });
 
   it("should not fetch teams, keys, or models when accessToken is null", () => {
@@ -129,8 +135,7 @@ describe("AddAttachmentForm", () => {
   };
 
   const enterTeam = async (user: UserEvent, value: string) => {
-    const item = screen.getByText("Teams").closest(".ant-form-item") as HTMLElement;
-    const input = within(item).getByRole("combobox");
+    const input = screen.getByLabelText("Teams");
     await user.click(input);
     await user.type(input, `${value}{Enter}`);
   };

@@ -5,25 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import AddProviderForm from "./add_provider_form";
 import { DiscountConfig } from "./types";
-
-vi.mock("@/components/provider_info_helpers", () => ({
-  Providers: {
-    OpenAI: "OpenAI",
-    Anthropic: "Anthropic",
-  },
-  provider_map: {
-    OpenAI: "openai",
-    Anthropic: "anthropic",
-  },
-  providerLogoMap: {
-    OpenAI: "https://example.com/openai.png",
-    Anthropic: "https://example.com/anthropic.png",
-  },
-}));
-
-vi.mock("./provider_display_helpers", () => ({
-  handleImageError: vi.fn(),
-}));
+import { Providers, providerLogoMap } from "@/components/provider_info_helpers";
 
 const DEFAULT_PROPS = {
   discountConfig: {} as DiscountConfig,
@@ -66,7 +48,7 @@ describe("AddProviderForm", () => {
 
   it("should enable the submit button when both a provider and a discount value are provided", () => {
     renderWithProviders(<AddProviderForm {...DEFAULT_PROPS} selectedProvider="OpenAI" newDiscount="5" />);
-    expect(screen.getByRole("button", { name: /add provider discount/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /add provider discount/i })).toBeEnabled();
   });
 
   it("should call onAddProvider when the enabled submit button is clicked", async () => {
@@ -80,8 +62,31 @@ describe("AddProviderForm", () => {
     expect(onAddProvider).toHaveBeenCalledTimes(1);
   });
 
+  it("should report the edited discount as the user types", async () => {
+    const onDiscountChange = vi.fn();
+    const user = userEvent.setup();
+    renderWithProviders(<AddProviderForm {...DEFAULT_PROPS} newDiscount="1" onDiscountChange={onDiscountChange} />);
+
+    await user.type(screen.getByPlaceholderText("5"), "5");
+    expect(onDiscountChange).toHaveBeenCalledWith("15");
+  });
+
   it("should show the percent sign next to the discount input", () => {
     renderWithProviders(<AddProviderForm {...DEFAULT_PROPS} />);
     expect(screen.getByText("%")).toBeInTheDocument();
+  });
+
+  it("renders the selected provider's bundled logo via the shared Logo component", async () => {
+    renderWithProviders(<AddProviderForm {...DEFAULT_PROPS} selectedProvider="OpenAI" />);
+
+    const logo = await screen.findByRole("img", { name: `${Providers.OpenAI} logo` });
+    expect(logo).toHaveAttribute("src", providerLogoMap[Providers.OpenAI]);
+  });
+
+  it("falls back to a letter avatar for a selected provider that has no bundled logo", () => {
+    renderWithProviders(<AddProviderForm {...DEFAULT_PROPS} selectedProvider="PG_VECTOR" />);
+
+    expect(screen.queryByRole("img", { name: `${Providers.PG_VECTOR} logo` })).not.toBeInTheDocument();
+    expect(screen.getByText(Providers.PG_VECTOR.charAt(0))).toBeInTheDocument();
   });
 });

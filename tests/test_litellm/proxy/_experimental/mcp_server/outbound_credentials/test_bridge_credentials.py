@@ -10,15 +10,20 @@ through the consumer; and no path leaks the upstream token in a repr.
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from pydantic import SecretStr
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
     BridgeEnvelopeAdmitted,
     BridgeEnvelopeInvalid,
+    BridgeRefreshInvalid,
+    BridgeRefreshOpened,
     NotBridgeEnvelope,
+    build_bridge_refresh_token_response,
     build_bridge_token_response,
     envelope_keys_from_master_key,
     is_bridge_envelope_shaped,
+    open_bridge_refresh_envelope,
     resolve_bridge_envelope,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
@@ -26,15 +31,17 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
     EnvelopeIdentity,
     EnvelopeKeys,
     EnvelopeTooLarge,
+    RefreshCredential,
     SealedEnvelope,
     UpstreamTokenGrant,
+    key_hash_identity,
     mint_envelope,
 )
 
 _NOW = datetime(2026, 7, 9, 12, 0, 0, tzinfo=timezone.utc)
 _MASTER_KEY = "sk-master-key-for-derivation-tests-0123456789"
 _ACCESS_TOKEN = "upstream-access-token-do-not-leak-8f14e45fceea"
-_IDENTITY = EnvelopeIdentity(user_id="user-123", server_id="srv-456")
+_IDENTITY = key_hash_identity(server_id="srv-456", key_hash="hashed-key-123")
 _SERVER_ID = _IDENTITY.server_id
 
 
@@ -46,6 +53,76 @@ def _sealed_token(keys: EnvelopeKeys, now: datetime = _NOW, identity: EnvelopeId
     sealed = mint_envelope(identity, _grant(), keys, now)
     assert isinstance(sealed, SealedEnvelope)
     return sealed.token.get_secret_value()
+
+
+_UPSTREAM_REFRESH = "upstream-refresh-do-not-leak-9b2c"
+
+
+def _sealed_refresh(keys: EnvelopeKeys, now: datetime = _NOW, identity: EnvelopeIdentity = _IDENTITY) -> str:
+    sealed = build_bridge_refresh_token_response(
+        identity, RefreshCredential(refresh_token=SecretStr(_UPSTREAM_REFRESH)), keys, now
+    )
+    assert isinstance(sealed, SealedEnvelope)
+    return sealed.token.get_secret_value()
+
+
+def test_open_bridge_refresh_envelope_round_trips_identity_and_refresh():
+    keys = envelope_keys_from_master_key(_MASTER_KEY)
+    result = open_bridge_refresh_envelope(_sealed_refresh(keys), keys, _NOW, _SERVER_ID)
+    assert isinstance(result, BridgeRefreshOpened)
+    assert result.identity == _IDENTITY
+    assert result.refresh.refresh_token.get_secret_value() == _UPSTREAM_REFRESH
+
+
+def test_open_bridge_refresh_envelope_strips_bearer_scheme():
+    keys = envelope_keys_from_master_key(_MASTER_KEY)
+    result = open_bridge_refresh_envelope(f"Bearer {_sealed_refresh(keys)}", keys, _NOW, _SERVER_ID)
+    assert isinstance(result, BridgeRefreshOpened)
+
+
+def test_open_bridge_refresh_envelope_rejects_wrong_server():
+    keys = envelope_keys_from_master_key(_MASTER_KEY)
+    result = open_bridge_refresh_envelope(_sealed_refresh(keys), keys, _NOW, "a-different-server")
+    assert isinstance(result, BridgeRefreshInvalid)
+
+
+def test_open_bridge_refresh_envelope_rejects_non_refresh_bearers():
+    keys = envelope_keys_from_master_key(_MASTER_KEY)
+    # an access envelope is not a refresh envelope; a raw upstream refresh token is not one either
+    assert isinstance(open_bridge_refresh_envelope(_sealed_token(keys), keys, _NOW, _SERVER_ID), BridgeRefreshInvalid)
+    assert isinstance(open_bridge_refresh_envelope("raw-refresh-token", keys, _NOW, _SERVER_ID), BridgeRefreshInvalid)
+
+
+def test_open_bridge_refresh_envelope_rejects_under_wrong_master_key():
+    minted = envelope_keys_from_master_key(_MASTER_KEY)
+    other = envelope_keys_from_master_key(_MASTER_KEY + "-rotated")
+    result = open_bridge_refresh_envelope(_sealed_refresh(minted), other, _NOW, _SERVER_ID)
+    assert isinstance(result, BridgeRefreshInvalid)
+
+
+def test_refresh_envelope_is_never_admitted_at_the_tool_call_edge():
+    """A refresh envelope must never authenticate a tool call. The admission edge engages the bridge arm
+    for it (is_bridge_envelope_shaped is true for either envelope kind), and the consumer rejects it as
+    BridgeEnvelopeInvalid, which admission fails closed (401): a refresh credential is only ever
+    presented back to the token endpoint."""
+    keys = envelope_keys_from_master_key(_MASTER_KEY)
+    refresh = _sealed_refresh(keys)
+    assert is_bridge_envelope_shaped(refresh) is True
+    assert is_bridge_envelope_shaped(f"Bearer {refresh}") is True
+    result = resolve_bridge_envelope(refresh, keys, _NOW, _SERVER_ID)
+    assert isinstance(result, BridgeEnvelopeInvalid)
+
+
+def test_refresh_jwt_wearing_the_access_prefix_is_rejected_at_the_edge():
+    """Belt-and-suspenders against a swapped wire prefix: a refresh JWT re-prefixed as an access envelope
+    opens far enough to hit the signed kind claim, which rejects it, so admission fails closed rather
+    than forwarding a refresh credential's contents upstream."""
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import REFRESH_ENVELOPE_PREFIX
+
+    keys = envelope_keys_from_master_key(_MASTER_KEY)
+    swapped = ENVELOPE_PREFIX + _sealed_refresh(keys).removeprefix(REFRESH_ENVELOPE_PREFIX)
+    result = resolve_bridge_envelope(swapped, keys, _NOW, _SERVER_ID)
+    assert isinstance(result, BridgeEnvelopeInvalid)
 
 
 def test_key_derivation_is_deterministic():
@@ -112,6 +189,31 @@ def test_resolve_strips_optional_bearer_scheme_before_detection():
     assert prefixed.upstream_authorization.get_secret_value() == bare.upstream_authorization.get_secret_value()
 
 
+@pytest.mark.parametrize("token_type", ("bearer", "BEARER", "beArEr"))
+def test_resolve_canonicalizes_case_insensitive_bearer_token_type(token_type: str):
+    keys = envelope_keys_from_master_key(_MASTER_KEY)
+    grant = UpstreamTokenGrant(access_token=SecretStr(_ACCESS_TOKEN), token_type=token_type, expires_in=600)
+    sealed = mint_envelope(_IDENTITY, grant, keys, _NOW)
+    assert isinstance(sealed, SealedEnvelope)
+
+    result = resolve_bridge_envelope(sealed.token.get_secret_value(), keys, _NOW, _SERVER_ID)
+
+    assert isinstance(result, BridgeEnvelopeAdmitted)
+    assert result.upstream_authorization.get_secret_value() == f"Bearer {_ACCESS_TOKEN}"
+
+
+def test_resolve_preserves_non_bearer_token_type():
+    keys = envelope_keys_from_master_key(_MASTER_KEY)
+    grant = UpstreamTokenGrant(access_token=SecretStr(_ACCESS_TOKEN), token_type="DPoP", expires_in=600)
+    sealed = mint_envelope(_IDENTITY, grant, keys, _NOW)
+    assert isinstance(sealed, SealedEnvelope)
+
+    result = resolve_bridge_envelope(sealed.token.get_secret_value(), keys, _NOW, _SERVER_ID)
+
+    assert isinstance(result, BridgeEnvelopeAdmitted)
+    assert result.upstream_authorization.get_secret_value() == f"DPoP {_ACCESS_TOKEN}"
+
+
 def test_resolve_expired_envelope_is_invalid_not_admitted():
     keys = envelope_keys_from_master_key(_MASTER_KEY)
     token = _sealed_token(keys, now=_NOW)
@@ -138,7 +240,7 @@ def test_resolve_envelope_minted_for_another_server_is_invalid():
     captured or misrouted envelope cannot forward one server's upstream credential to
     another. The valid access token stays sealed; the mismatch alone fails the resolve."""
     keys = envelope_keys_from_master_key(_MASTER_KEY)
-    other_server_identity = EnvelopeIdentity(user_id=_IDENTITY.user_id, server_id="srv-OTHER")
+    other_server_identity = key_hash_identity(server_id="srv-OTHER", key_hash=_IDENTITY.subject)
     token = _sealed_token(keys, identity=other_server_identity)
     result = resolve_bridge_envelope(token, keys, _NOW, _SERVER_ID)
     assert isinstance(result, BridgeEnvelopeInvalid)
@@ -155,7 +257,7 @@ def test_resolve_non_ascii_server_id_stays_total_and_does_not_raise():
     unicode server_id); it stays total and returns a typed result. A matching non-ASCII id admits,
     a mismatching one is BridgeEnvelopeInvalid, and neither raises."""
     keys = envelope_keys_from_master_key(_MASTER_KEY)
-    unicode_identity = EnvelopeIdentity(user_id=_IDENTITY.user_id, server_id="srv-café")
+    unicode_identity = key_hash_identity(server_id="srv-café", key_hash=_IDENTITY.subject)
     token = _sealed_token(keys, identity=unicode_identity)
     assert isinstance(resolve_bridge_envelope(token, keys, _NOW, "srv-café"), BridgeEnvelopeAdmitted)
     assert isinstance(resolve_bridge_envelope(token, keys, _NOW, "srv-cafe"), BridgeEnvelopeInvalid)

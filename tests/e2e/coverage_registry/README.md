@@ -14,7 +14,8 @@ grouped `module > feature > test`, with LLM cells split into `Core LLMs` and
 `fail_before_fix` flag.
 
 The rows live in per-prefix YAML files (`llm_*.yaml`, `mgmt.yaml`, `mcp.yaml`,
-`reliability.yaml`, `logging.yaml`, `guardrail.yaml`, `other.yaml`) and validate against
+`reliability.yaml`, `quota_management.yaml`, `logging.yaml`, `guardrail.yaml`,
+`other.yaml`) and validate against
 the discriminated union in `schema.py`, so an LLM row cannot carry a guardrail field and
 vice versa. `llm` rows with `subject_endpoint` of `chat_completions`, `messages`, or
 `responses` roll up to `Core LLMs`; all other LLM endpoints roll up to `Non-Core LLMs`.
@@ -35,6 +36,16 @@ def test_openai_streaming_tool_calls(self) -> None:
 `collector.py` diffs the registry against those markers and reports coverage per module.
 It is static: a collect-only pass reads the markers, so it runs no test and needs no live
 proxy. Whether a covered cell currently passes or fails is a separate, live concern.
+
+A skipped test asserts nothing, so its markers do not count. A cell is covered only when
+at least one test pytest would actually run declares it; a cell claimed by both a live
+test and a skipped one stays covered. Skip state comes from pytest's own evaluator, so
+`skip` and `skipif` resolve exactly as they do in the e2e run, which also means a
+`skipif` on an absent credential makes that cell uncovered in the environments where the
+test cannot run. Cells left uncovered this way are listed under the headline (and counted
+by `litellm_e2e_coverage_skipped_markers`) so an unskipped-pending gap is visible rather
+than inflating the number. The one skip the collector cannot see is `pytest.skip()`
+called from inside a test body, since it does not exist until the test runs.
 
 ```
 cd tests/e2e && PYTHONPATH=. python -m coverage_registry.collector
@@ -65,6 +76,24 @@ cd tests/e2e && PYTHONPATH=. python -m coverage_registry.collector --strict
 Strict mode exits non-zero on `@pytest.mark.covers(...)` ids that are not checked into
 the registry. Add `--fail-on-collection-errors` when the job should also fail on pytest
 collection errors.
+
+## Provider x feature matrix: customer-run Bedrock combinations
+
+The provider and feature combinations customers actually run get explicit cells, expanded
+here as incidents surface new ones. The current Bedrock set, seeded from a customer's
+production shape (regional `us.anthropic.*` inference-profile ids over both chat routes,
+provider response headers for AWS-side correlation, and the Test Connection probe for a
+responses-mode Bedrock Mantle deployment):
+
+| Cell | Feature | Covering test |
+|------|---------|---------------|
+| `llm.chat_completions.bedrock_converse.basic.nonstream.works` | regional `us.` id, Converse | `llm_translation/test_chat_completions_regression_e2e.py` |
+| `llm.chat_completions.bedrock_converse.basic.stream.works` | regional `us.` id, Converse stream | `llm_translation/test_chat_completions_regression_e2e.py` |
+| `llm.chat_completions.bedrock_invoke.basic.nonstream.works` | regional `us.` id, Invoke | `llm_translation/test_bedrock_provider_matrix_e2e.py` |
+| `llm.chat_completions.bedrock_invoke.basic.stream.works` | regional `us.` id, Invoke stream | `llm_translation/test_bedrock_provider_matrix_e2e.py` |
+| `llm.chat_completions.bedrock_converse.response_headers.nonstream.works` | `llm_provider-*` headers | `llm_translation/test_bedrock_provider_matrix_e2e.py` |
+| `llm.chat_completions.bedrock_converse.response_headers.stream.works` | `llm_provider-*` headers, stream | `llm_translation/test_bedrock_provider_matrix_e2e.py` |
+| `mgmt.model.test_connection.happy_path` | Test Connection, Bedrock Mantle | `management/test_model_test_connection_e2e.py` |
 
 ## Status: this is a draft for review
 

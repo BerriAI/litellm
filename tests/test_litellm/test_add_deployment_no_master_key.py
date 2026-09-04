@@ -6,12 +6,10 @@ failed when master_key was None. [https://github.com/BerriAI/litellm/issues/1642
 """
 
 import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.proxy.proxy_server import ProxyConfig
@@ -62,7 +60,7 @@ async def test_add_deployment_without_master_key():
 
 
 @pytest.mark.asyncio
-async def test_add_deployment_without_salt_key_or_master_key():
+async def test_add_deployment_without_salt_key_or_master_key(monkeypatch):
     """
     Test that add_deployment() works when both master_key and LITELLM_SALT_KEY are None.
 
@@ -70,55 +68,50 @@ async def test_add_deployment_without_salt_key_or_master_key():
     such as in a local/dev environment or when just saving spend logs.
     """
     # Remove LITELLM_SALT_KEY from environment
-    old_salt_key = os.environ.pop("LITELLM_SALT_KEY", None)
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
 
-    try:
-        # Set master_key to None
-        with patch("litellm.proxy.proxy_server.master_key", None):
-            # Mock the required dependencies
-            mock_prisma_client = MagicMock(spec=PrismaClient)
-            mock_prisma_client.db = MagicMock()
-            mock_prisma_client.db.litellm_config = MagicMock()
-            mock_prisma_client.db.litellm_config.find_first = AsyncMock(
-                return_value=None
+    # Set master_key to None
+    with patch("litellm.proxy.proxy_server.master_key", None):
+        # Mock the required dependencies
+        mock_prisma_client = MagicMock(spec=PrismaClient)
+        mock_prisma_client.db = MagicMock()
+        mock_prisma_client.db.litellm_config = MagicMock()
+        mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+            return_value=None
+        )
+
+        mock_proxy_logging = MagicMock(spec=ProxyLogging)
+
+        # Create ProxyConfig instance
+        proxy_config = ProxyConfig()
+
+        # Mock the internal methods
+        proxy_config._should_load_db_object = MagicMock(return_value=False)
+        proxy_config._init_non_llm_objects_in_db = AsyncMock()
+
+        # This should NOT raise an exception
+        try:
+            await proxy_config.add_deployment(
+                prisma_client=mock_prisma_client,
+                proxy_logging_obj=mock_proxy_logging,
             )
-
-            mock_proxy_logging = MagicMock(spec=ProxyLogging)
-
-            # Create ProxyConfig instance
-            proxy_config = ProxyConfig()
-
-            # Mock the internal methods
-            proxy_config._should_load_db_object = MagicMock(return_value=False)
-            proxy_config._init_non_llm_objects_in_db = AsyncMock()
-
-            # This should NOT raise an exception
-            try:
-                await proxy_config.add_deployment(
-                    prisma_client=mock_prisma_client,
-                    proxy_logging_obj=mock_proxy_logging,
+            assert True
+        except ValueError as e:
+            if "Master key is not initialized" in str(
+                e
+            ) or "Encryption key is not initialized" in str(e):
+                pytest.fail(
+                    f"add_deployment raised ValueError about encryption key: {e}"
                 )
-                assert True
-            except ValueError as e:
-                if "Master key is not initialized" in str(
-                    e
-                ) or "Encryption key is not initialized" in str(e):
-                    pytest.fail(
-                        f"add_deployment raised ValueError about encryption key: {e}"
-                    )
-                raise
-            except Exception as e:
-                if "Master key is not initialized" in str(
-                    e
-                ) or "Encryption key is not initialized" in str(e):
-                    pytest.fail(
-                        f"add_deployment raised exception about encryption key: {e}"
-                    )
-                raise
-    finally:
-        # Restore LITELLM_SALT_KEY if it was set
-        if old_salt_key:
-            os.environ["LITELLM_SALT_KEY"] = old_salt_key
+            raise
+        except Exception as e:
+            if "Master key is not initialized" in str(
+                e
+            ) or "Encryption key is not initialized" in str(e):
+                pytest.fail(
+                    f"add_deployment raised exception about encryption key: {e}"
+                )
+            raise
 
 
 def test_add_deployment_sync_without_master_key():

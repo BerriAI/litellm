@@ -19,6 +19,8 @@ import pytest
 from litellm.proxy._experimental.mcp_server.db import (
     _decode_user_credential,
     _prepare_mcp_server_data,
+    decrypt_credentials,
+    encrypt_credentials,
     get_user_credential,
     get_user_oauth_credential,
     is_oauth_credential_expired,
@@ -93,6 +95,17 @@ def _identity_server(**overrides):
         {"credentials": {"client_id": "new", "client_secret": "csec", "scopes": ["a"]}},
         {"credentials": {"client_id": "cid", "client_secret": "rotated", "scopes": ["a"]}},
         {"credentials": {"client_id": "cid", "client_secret": "csec", "scopes": ["b"]}},
+        # RFC 8707: upstream_resource is the audience the token is minted for, so changing it
+        # alone strands every stored per-user token on the previous audience.
+        {"credentials": {"client_id": "cid", "client_secret": "csec", "scopes": ["a"], "upstream_resource": "auto"}},
+        {
+            "credentials": {
+                "client_id": "cid",
+                "client_secret": "csec",
+                "scopes": ["a"],
+                "upstream_resource": "api://new-audience",
+            }
+        },
     ],
 )
 def test_mcp_oauth_token_identity_changes_on_mint_relevant_fields(overrides):
@@ -332,6 +345,29 @@ def _stored_value(prisma) -> str:
     return create_value
 
 
+# ── MCP server credentials at rest ──────────────────────────────────────────────
+
+
+def test_client_private_key_encrypted_at_rest():
+    """An ID-JAG client_private_key is a secret and must be encrypted in the stored
+    credentials blob, never persisted in plaintext, and must round-trip back. The
+    pre-fix code left client_private_key out of encrypt_credentials, so it was stored
+    verbatim."""
+    private_key = (
+        "-----BEGIN PRIVATE KEY-----\nsensitive-rsa-material\n-----END PRIVATE KEY-----"
+    )
+    credentials = {"client_secret": "shh", "client_private_key": private_key}
+
+    encrypted = encrypt_credentials(dict(credentials), encryption_key=None)
+    assert encrypted["client_private_key"] != private_key
+    assert private_key not in encrypted["client_private_key"]
+    assert encrypted["client_secret"] != "shh"
+
+    decrypted = decrypt_credentials(dict(encrypted))
+    assert decrypted["client_private_key"] == private_key
+    assert decrypted["client_secret"] == "shh"
+
+
 # ── BYOK round-trip ───────────────────────────────────────────────────────────
 
 
@@ -497,6 +533,164 @@ async def test_byok_guard_allows_overwriting_existing_oauth():
     await store_user_oauth_credential(prisma, "alice", "srv-1", "tok-2")
     # Final upsert wrote a new payload (different from the first)
     assert _stored_value(prisma) != oauth_row.credential_b64
+
+
+# ── Recovery from an unplanned LITELLM_SALT_KEY change ────────────────────────
+
+PREVIOUS_SALT_KEY = "the-salt-key-this-deployment-used-before-9999"
+
+
+def _row_written_under_previous_salt_key(monkeypatch, payload: str):
+    """A row encrypted under a salt key the proxy no longer holds.
+
+    Asserts the fixture really is undecryptable under the current key, so a test
+    built on it cannot pass by accident.
+    """
+    monkeypatch.setenv("LITELLM_SALT_KEY", PREVIOUS_SALT_KEY)
+    encrypted = encrypt_value_helper(payload)
+    monkeypatch.setenv("LITELLM_SALT_KEY", SALT_KEY)
+    assert _decode_user_credential(encrypted) is None, "fixture must not decrypt under the current salt key"
+    row = MagicMock()
+    row.credential_b64 = encrypted
+    row.user_id = "alice"
+    row.server_id = "srv-1"
+    return row
+
+
+@pytest.mark.asyncio
+async def test_reauthorization_replaces_row_written_under_previous_salt_key(monkeypatch):
+    # The wedged user: their row cannot be decrypted, so refusing preserves nothing.
+    old_payload = json.dumps({"type": "oauth2", "access_token": "tok-written-before-rotation"})
+    prisma = _make_prisma_with_existing(row=_row_written_under_previous_salt_key(monkeypatch, old_payload))
+
+    await store_user_oauth_credential(prisma, "alice", "srv-1", "tok-after-reauthorization")
+
+    # The replacement must decrypt under the CURRENT key and be the newly authorized token.
+    replacement = MagicMock()
+    replacement.credential_b64 = _stored_value(prisma)
+    replacement.server_id = "srv-1"
+    prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=replacement)
+    stored = await get_user_oauth_credential(prisma, "alice", "srv-1")
+    assert stored is not None
+    assert stored["access_token"] == "tok-after-reauthorization"
+
+
+@pytest.mark.asyncio
+async def test_readable_byok_is_still_refused_after_a_salt_key_change(monkeypatch):
+    # A legacy plain-base64 BYOK secret stays readable across a salt-key change, so
+    # the recovery path must not use it as an excuse to clobber a live credential.
+    monkeypatch.setenv("LITELLM_SALT_KEY", "a-completely-different-salt-key-4321")
+    prisma = _make_prisma_with_existing(row=_legacy_row("sk-live-byok-secret"))
+
+    with pytest.raises(ValueError, match="could not be verified as an OAuth2"):
+        await store_user_oauth_credential(prisma, "alice", "srv-1", "tok")
+
+    prisma.db.litellm_mcpusercredentials.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recovery_warns_with_identifiers_and_never_logs_credentials(monkeypatch, caplog):
+    import logging
+
+    old_payload = json.dumps({"type": "oauth2", "access_token": "tok-written-before-rotation"})
+    row = _row_written_under_previous_salt_key(monkeypatch, old_payload)
+    prisma = _make_prisma_with_existing(row=row)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await store_user_oauth_credential(prisma, "alice", "srv-1", "tok-after-reauthorization")
+
+    messages = [rec.getMessage() for rec in caplog.records]
+    matching = [m for m in messages if "could not be decrypted" in m and "replacing it" in m]
+    assert len(matching) == 1, f"expected one recovery warning, got {messages}"
+    assert "user=alice" in matching[0] and "server=srv-1" in matching[0]
+    for secret in ("tok-after-reauthorization", "tok-written-before-rotation", row.credential_b64):
+        assert secret not in matching[0]
+
+
+@pytest.mark.asyncio
+async def test_get_user_oauth_credential_warns_when_row_cannot_be_decrypted(monkeypatch, caplog):
+    import logging
+
+    old_payload = json.dumps({"type": "oauth2", "access_token": "tok-written-before-rotation"})
+    prisma = _make_prisma_with_existing(row=_row_written_under_previous_salt_key(monkeypatch, old_payload))
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        assert await get_user_oauth_credential(prisma, "alice", "srv-1") is None
+
+    matching = [rec.getMessage() for rec in caplog.records if "could not be decrypted" in rec.getMessage()]
+    assert len(matching) == 1, f"expected one read-path warning, got {[r.getMessage() for r in caplog.records]}"
+    assert "user=alice" in matching[0] and "server=srv-1" in matching[0]
+
+
+@pytest.mark.asyncio
+async def test_list_user_oauth_credentials_warns_per_row_when_rows_cannot_be_decrypted(monkeypatch, caplog):
+    # The bulk prefetch is the other read path, and it is by definition the multi-server case:
+    # a warning naming the wrong server sends the operator to the wrong place. Two wedged rows
+    # plus one healthy one, so a warning built from a constant or from the first row is caught.
+    import logging
+
+    old_payload = json.dumps({"type": "oauth2", "access_token": "tok-written-before-rotation"})
+    wedged_one = _row_written_under_previous_salt_key(monkeypatch, old_payload)
+    wedged_two = _row_written_under_previous_salt_key(monkeypatch, old_payload)
+    wedged_two.server_id = "srv-2"
+
+    prisma = _make_prisma_with_existing(row=None)
+    await store_user_oauth_credential(prisma, "alice", "srv-3", "tok-healthy")
+    healthy = MagicMock()
+    healthy.credential_b64 = _stored_value(prisma)
+    healthy.server_id = "srv-3"
+    prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[wedged_one, healthy, wedged_two])
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await list_user_oauth_credentials(prisma, "alice")
+
+    assert [cred["server_id"] for cred in result] == ["srv-3"]
+    matching = [rec.getMessage() for rec in caplog.records if "could not be decrypted" in rec.getMessage()]
+    assert len(matching) == 2, f"expected one warning per wedged row, got {matching}"
+    assert all("user=alice" in message for message in matching)
+    assert {"srv-1", "srv-2"} == {message.split("server=")[1].split(" ")[0] for message in matching}
+
+
+@pytest.mark.asyncio
+async def test_skip_byok_guard_does_not_read_the_existing_row(monkeypatch):
+    # The refresh paths pass skip_byok_guard=True precisely to save a DB round-trip on the
+    # hottest MCP path, so the flag has to actually suppress the lookup, not just the raise.
+    prisma = _make_prisma_with_existing(row=_legacy_row("plain-byok-key"))
+
+    await store_user_oauth_credential(prisma, "alice", "srv-1", "tok", skip_byok_guard=True)
+
+    prisma.db.litellm_mcpusercredentials.find_unique.assert_not_awaited()
+    prisma.db.litellm_mcpusercredentials.upsert.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_blank_credential_row_is_replaced_rather_than_refused():
+    # A blank value decodes to "" rather than None, so it is not a decryption failure, but it
+    # holds no secret either. Pinned deliberately: the guard exists to protect readable
+    # content, and refusing here would wedge the user while preserving nothing.
+    blank = MagicMock()
+    blank.credential_b64 = ""
+    blank.user_id = "alice"
+    blank.server_id = "srv-1"
+    assert _decode_user_credential(blank.credential_b64) == "", "fixture must decode to empty, not None"
+    prisma = _make_prisma_with_existing(row=blank)
+
+    await store_user_oauth_credential(prisma, "alice", "srv-1", "tok-after-reauthorization")
+
+    prisma.db.litellm_mcpusercredentials.upsert.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_readable_byok_row_does_not_warn_on_the_read_path(caplog):
+    # A BYOK row is not a decryption failure; warning on it would train operators to ignore the log.
+    import logging
+
+    prisma = _make_prisma_with_existing(row=_legacy_row("sk-live-byok-secret"))
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        assert await get_user_oauth_credential(prisma, "alice", "srv-1") is None
+
+    assert [rec.getMessage() for rec in caplog.records if "could not be decrypted" in rec.getMessage()] == []
 
 
 # ── list_user_oauth_credentials ───────────────────────────────────────────────
@@ -802,6 +996,82 @@ async def test_resolve_returns_none_for_missing_credential(monkeypatch):
     refresh.assert_not_called()
 
 
+class _RefreshResponse:
+    def __init__(self, body):
+        self._body = body
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._body
+
+
+def _refresh_server(**overrides):
+    base = dict(
+        token_url="https://idp.example.com/token",
+        server_id="srv-1",
+        client_id="cid",
+        client_secret="csec",
+        token_endpoint_auth_method=None,
+        upstream_resource=None,
+        url="https://up.example.com/mcp",
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+async def _run_refresh(monkeypatch, server, response_body=None):
+    import litellm.proxy._experimental.mcp_server.db as db_mod
+
+    captured: dict = {}
+
+    async def _post(url, headers=None, data=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["data"] = data
+        return _RefreshResponse(response_body or {"access_token": "at-new", "expires_in": 3600})
+
+    monkeypatch.setattr(db_mod, "get_async_httpx_client", lambda **_: SimpleNamespace(post=_post))
+    monkeypatch.setattr(db_mod, "store_user_oauth_credential", AsyncMock())
+    monkeypatch.setattr(db_mod, "get_user_oauth_credential", AsyncMock(return_value={"access_token": "at-new"}))
+
+    result = await db_mod.refresh_user_oauth_token(
+        prisma_client=MagicMock(),
+        user_id="alice",
+        server=server,
+        cred={"refresh_token": "rt-old", "scopes": ["a"]},
+    )
+    return result, captured
+
+
+@pytest.mark.asyncio
+async def test_refresh_user_oauth_token_sends_upstream_resource_when_set(monkeypatch):
+    """The server-side silent refresh must carry the same RFC 8707 resource the authorize and initial
+    token legs sent; a strict authorization server rejects a refresh whose resource is absent with
+    invalid_target, forcing a needless re-auth."""
+    result, captured = await _run_refresh(monkeypatch, _refresh_server(upstream_resource="api://audience"))
+    assert result is not None
+    assert captured["data"]["grant_type"] == "refresh_token"
+    assert captured["data"]["resource"] == "api://audience"
+
+
+@pytest.mark.asyncio
+async def test_refresh_user_oauth_token_sends_auto_derived_resource(monkeypatch):
+    result, captured = await _run_refresh(
+        monkeypatch, _refresh_server(upstream_resource="auto", url="https://mcp.example.com/mcp")
+    )
+    assert result is not None
+    assert captured["data"]["resource"] == "https://mcp.example.com/mcp"
+
+
+@pytest.mark.asyncio
+async def test_refresh_user_oauth_token_omits_resource_when_unset(monkeypatch):
+    result, captured = await _run_refresh(monkeypatch, _refresh_server(upstream_resource=None))
+    assert result is not None
+    assert "resource" not in captured["data"]
+
+
 # ── per-user env-var rotation ─────────────────────────────────────────────────
 
 
@@ -978,3 +1248,117 @@ def test_prepare_mcp_server_data_update_carries_token_exchange_columns():
     assert data["audience"] == "https://upstream.example.com"
     assert data["subject_token_type"] == "urn:ietf:params:oauth:token-type:jwt"
     assert data["token_exchange_profile"] == "entra_obo"
+
+
+@pytest.mark.asyncio
+async def test_master_key_rotation_reencrypts_oauth_client_store(monkeypatch):
+    """The server-scoped DCR client store (LiteLLM_MCPServerOAuthClient) is encrypted at rest, so a
+    master-key rotation must re-encrypt it alongside the server rows. Skipping it leaves
+    config-declared DCR clients under the retired key, where they decrypt back to ciphertext and
+    force a full re-authorization."""
+    import litellm.proxy.common_utils.encrypt_decrypt_utils as enc
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+    from litellm.proxy._experimental.mcp_server.db import (
+        decrypt_credentials,
+        encrypt_credentials,
+        rotate_mcp_server_credentials_master_key,
+    )
+
+    key_old, key_new = "salt-old-key", "salt-new-key"
+
+    blob_old = safe_dumps(
+        encrypt_credentials(
+            credentials={"client_id": "cid-123", "client_secret": "sec-456"},
+            encryption_key=key_old,
+        )
+    )
+
+    monkeypatch.setattr(enc, "_get_salt_key", lambda: key_old)
+
+    prisma = MagicMock()
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_mcpserveroauthclient.find_many = AsyncMock(
+        return_value=[SimpleNamespace(server_id="config_faros", credentials=blob_old)]
+    )
+    store_update = AsyncMock()
+    prisma.db.litellm_mcpserveroauthclient.update = store_update
+
+    await rotate_mcp_server_credentials_master_key(prisma, touched_by="test", new_master_key=key_new)
+
+    store_update.assert_awaited_once()
+    assert store_update.await_args.kwargs["where"] == {"server_id": "config_faros"}
+    rotated_blob = store_update.await_args.kwargs["data"]["credentials"]
+
+    monkeypatch.setattr(enc, "_get_salt_key", lambda: key_new)
+    recovered = decrypt_credentials(credentials=json.loads(rotated_blob))
+    assert recovered["client_id"] == "cid-123"
+    assert recovered["client_secret"] == "sec-456"
+
+
+@pytest.mark.asyncio
+async def test_delete_mcp_server_cleans_oauth_client_store():
+    """Deleting a server must remove its server-scoped DCR client store entry alongside the per-user
+    credential and env-var rows, or a re-created server reusing the same server_id would inherit the
+    deleted server's OAuth client."""
+    from litellm.proxy._experimental.mcp_server.db import delete_mcp_server
+
+    prisma = MagicMock()
+    prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=SimpleNamespace(server_id="s1"))
+    prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock()
+    prisma.db.litellm_mcpuserenvvars.delete_many = AsyncMock()
+    prisma.db.litellm_mcpserveroauthclient.delete_many = AsyncMock()
+
+    await delete_mcp_server(prisma, "s1", invalidate_token_cache=AsyncMock())
+
+    prisma.db.litellm_mcpserveroauthclient.delete_many.assert_awaited_once_with(where={"server_id": "s1"})
+
+
+def test_mcp_oauth_token_identity_changes_when_only_upstream_resource_is_edited():
+    """A resource-only update must purge stored per-user tokens.
+
+    Changing ``upstream_resource`` changes the audience the next token is minted for, so every
+    token already stored for this server was minted for the old (or unbounded) audience. Without
+    this field in the identity, an administrator retargeting a server leaves authenticated users
+    calling tools with the previous audience's token until it expires, which is the token-reuse
+    RFC 8707 exists to stop.
+    """
+    from litellm.proxy._experimental.mcp_server.db import mcp_oauth_token_identity
+
+    creds = {"client_id": "cid", "client_secret": "csec", "scopes": ["a"]}
+    unset = _identity_server(credentials=dict(creds))
+    set_to_auto = _identity_server(credentials={**creds, "upstream_resource": "auto"})
+    set_to_explicit = _identity_server(credentials={**creds, "upstream_resource": "api://audience-one"})
+    retargeted = _identity_server(credentials={**creds, "upstream_resource": "api://audience-two"})
+
+    assert mcp_oauth_token_identity(unset) != mcp_oauth_token_identity(set_to_auto)
+    assert mcp_oauth_token_identity(unset) != mcp_oauth_token_identity(set_to_explicit)
+    assert mcp_oauth_token_identity(set_to_explicit) != mcp_oauth_token_identity(retargeted)
+    assert mcp_oauth_token_identity(set_to_explicit) == mcp_oauth_token_identity(
+        _identity_server(credentials={**creds, "upstream_resource": "api://audience-one"})
+    )
+
+
+@pytest.mark.asyncio
+async def test_refresh_user_oauth_token_uses_admin_entered_token_url_when_issuer_yield_empties_resolved(monkeypatch):
+    """A pinned issuer empties the resolved token_url while configured_token_url keeps the
+    admin-entered value; the silent per-user refresh must POST there instead of bailing."""
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="srv-1",
+        name="test",
+        url="https://up.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="cid",
+        client_secret="csec",
+        token_url=None,
+        configured_token_url="https://idp.example.com/token",
+    )
+    result, captured = await _run_refresh(monkeypatch, server)
+
+    assert result is not None
+    assert captured["url"] == "https://idp.example.com/token"

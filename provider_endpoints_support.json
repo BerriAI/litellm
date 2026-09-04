@@ -563,6 +563,23 @@
         "interactions": true
       }
     },
+    "cognition": {
+      "display_name": "Cognition (`cognition`)",
+      "url": "https://docs.litellm.ai/docs/providers/cognition",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "cohere": {
       "display_name": "Cohere (`cohere`)",
       "url": "https://docs.litellm.ai/docs/providers/cohere",
@@ -703,6 +720,42 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "qwencloud": {
+      "display_name": "QwenCloud (`qwencloud`)",
+      "url": "https://docs.litellm.ai/docs/providers/qwencloud",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": true,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": true,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "qwen_ai_platform": {
+      "display_name": "Qwen AI Platform (`qwen_ai_platform`)",
+      "url": "https://docs.litellm.ai/docs/providers/qwencloud",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": true,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": true,
         "a2a": true,
         "interactions": true
       }
@@ -1260,7 +1313,8 @@
         "files": true,
         "rerank": true,
         "a2a": true,
-        "interactions": true
+        "interactions": true,
+        "video_generations": true
       }
     },
     "huggingface": {
@@ -2244,6 +2298,23 @@
         "interactions": true
       }
     },
+    "scx-ai": {
+      "display_name": "SCX.ai (`scx-ai`)",
+      "url": "https://docs.litellm.ai/docs/providers/scx_ai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "snowflake": {
       "display_name": "Snowflake (`snowflake`)",
       "url": "https://docs.litellm.ai/docs/providers/snowflake",
@@ -2419,6 +2490,13 @@
     "tinyfish": {
       "display_name": "TinyFish (`tinyfish`)",
       "url": "https://docs.tinyfish.ai/search-api",
+      "endpoints": {
+        "search": true
+      }
+    },
+    "nimble": {
+      "display_name": "Nimble (`nimble`)",
+      "url": "https://docs.nimbleway.com/api-reference/search/search",
       "endpoints": {
         "search": true
       }
@@ -2798,6 +2876,13 @@
     "pg_vector": {
       "display_name": "PG Vector (`pg_vector`)",
       "url": "https://docs.litellm.ai/docs/providers/pg_vector",
+      "endpoints": {
+        "vector_stores_search": true
+      }
+    },
+    "valkey": {
+      "display_name": "Valkey (`valkey`)",
+      "url": "https://docs.litellm.ai/docs/providers/valkey_vector_stores",
       "endpoints": {
         "vector_stores_search": true
       }

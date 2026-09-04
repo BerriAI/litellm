@@ -13,15 +13,15 @@ The ``LITELLM_OTEL_V2`` env var gates whether the factory in
 class (from :mod:`logger`).
 """
 
-from litellm.integrations.otel.model.config import (
-    OTEL_V2_ENV,
-    OpenTelemetryV2Config,
-    is_otel_v2_enabled,
-)
 from litellm.integrations.otel.model.baggage import (
     BAGGAGE_PROMOTED_KEYS,
     DEFAULT_BAGGAGE_METADATA_KEYS,
     promoted_baggage,
+)
+from litellm.integrations.otel.model.config import (
+    OTEL_V2_ENV,
+    OpenTelemetryV2Config,
+    is_otel_v2_enabled,
 )
 from litellm.integrations.otel.model.metadata import (
     RequestContext,
@@ -49,6 +49,7 @@ from litellm.integrations.otel.model.semconv import (
     Error,
     GenAI,
     GenAIOperation,
+    GenAIOutputType,
     GenAIProvider,
     JsonRpc,
     LiteLLM,
@@ -57,8 +58,10 @@ from litellm.integrations.otel.model.semconv import (
     Metric,
     Network,
     NetworkTransport,
+    RpcSystem,
     Server,
     resolve_operation,
+    resolve_output_type,
     resolve_provider,
 )
 from litellm.integrations.otel.model.spans import (
@@ -72,53 +75,52 @@ from litellm.integrations.otel.model.spans import (
 )
 
 __all__ = [
-    # config
-    "OTEL_V2_ENV",
-    "OpenTelemetryV2Config",
-    "is_otel_v2_enabled",
-    # semconv
     "BAGGAGE_PROMOTED_KEYS",
     "DB",
     "DEFAULT_BAGGAGE_METADATA_KEYS",
+    "HTTP",
+    "MCP",
+    "OTEL_V2_ENV",
+    "SPAN_REGISTRY",
     "Client",
     "Error",
     "GenAI",
     "GenAIOperation",
+    "GenAIOutputType",
     "GenAIProvider",
-    "HTTP",
-    "JsonRpc",
-    "LiteLLM",
-    "LiteLLMError",
-    "MCP",
-    "MCPMethod",
-    "Metric",
-    "Network",
-    "NetworkTransport",
-    "Server",
-    "resolve_operation",
-    "resolve_provider",
-    # spans
-    "SPAN_REGISTRY",
-    "LiteLLMSpanKind",
-    "SpanRole",
-    "SpanSpec",
-    "db_system",
-    "span_role_for_service",
-    "validate_registry",
-    # payloads
     "GuardrailSpanData",
+    "JsonRpc",
     "LLMCallSpanData",
     "LLMRequestParams",
     "LLMUsage",
+    "LiteLLM",
+    "LiteLLMError",
+    "LiteLLMSpanKind",
     "MCPListToolsSpanData",
+    "MCPMethod",
     "MCPToolCallSpanData",
+    "Metric",
+    "Network",
+    "NetworkTransport",
+    "OpenTelemetryV2Config",
     "ProxyRequestSpanData",
     "RequestContext",
     "RequestIdentity",
+    "RpcSystem",
+    "Server",
     "ServerInfo",
     "ServiceSpanData",
     "SpanError",
+    "SpanRole",
+    "SpanSpec",
+    "db_system",
     "is_mcp_list_tools",
     "is_mcp_tool_call",
+    "is_otel_v2_enabled",
     "promoted_baggage",
+    "resolve_operation",
+    "resolve_output_type",
+    "resolve_provider",
+    "span_role_for_service",
+    "validate_registry",
 ]

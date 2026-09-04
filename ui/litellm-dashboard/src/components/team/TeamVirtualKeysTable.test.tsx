@@ -1,28 +1,13 @@
-import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi, MockedFunction } from "vitest";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
-import { fetchTeamFilterOptions } from "../key_team_helpers/filter_helpers";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useKeys: vi.fn(),
-}));
-
-vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
-  default: vi.fn(),
-}));
-
-vi.mock("../key_team_helpers/filter_helpers", () => ({
-  fetchTeamFilterOptions: vi.fn().mockResolvedValue({
-    keyAliases: [],
-    organizationIds: [],
-    userIds: [],
-  }),
 }));
 
 vi.mock("../key_team_helpers/fetch_available_models_team_key", () => ({
@@ -38,8 +23,14 @@ vi.mock("../templates/key_info_view", () => ({
   )),
 }));
 
+// Resolve the debounced search synchronously so typed input lands in the useKeys query within the test tick.
+vi.mock("@tanstack/react-pacer/debouncer", () => ({
+  useDebouncedValue: (value: unknown) => [value, { cancel: vi.fn(), flush: vi.fn() }],
+}));
+
 const mockUseKeys = useKeys as MockedFunction<typeof useKeys>;
-const mockUseAuthorized = useAuthorized as MockedFunction<typeof useAuthorized>;
+
+const KEY_HASH = "88a145505dd6e87e2ea166fcef1e4b53948dbdb32af6431dfd05ec06b571ee52";
 
 const createMockKey = (overrides: Partial<KeyResponse> = {}): KeyResponse =>
   ({
@@ -85,7 +76,6 @@ describe("TeamVirtualKeysTable", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUseAuthorized.mockReturnValue({ accessToken: "test-token" } as any);
     mockUseKeys.mockReturnValue({
       data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 } as KeysResponse,
       isPending: false,
@@ -224,7 +214,7 @@ describe("TeamVirtualKeysTable", () => {
 
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
-    await waitFor(() => expect(screen.getByTestId("sort-header-created_at")).toBeInTheDocument());
+    expect(await screen.findByTestId("sort-header-created_at")).toBeInTheDocument();
     await user.click(screen.getByTestId("sort-header-created_at"));
 
     await waitFor(() =>
@@ -262,31 +252,80 @@ describe("TeamVirtualKeysTable", () => {
     await waitFor(() => expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.anything()));
   });
 
-  it("resets the sort order to the default when filters are reset", async () => {
+  it("maps the User ID drawer filter to a server-side useKeys query and clears it", async () => {
     const user = userEvent.setup();
-    const result = {
+    mockUseKeys.mockReturnValue({
       data: { keys: [createMockKey()], total_count: 1, current_page: 1, total_pages: 1 },
       isPending: false,
       isFetching: false,
       refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useKeys>;
-    mockUseKeys.mockReturnValue(result);
+    } as unknown as ReturnType<typeof useKeys>);
 
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
-    await user.click(await screen.findByTestId("sort-header-created_at"));
+    await user.click(await screen.findByTestId("datatable-filters-trigger"));
+    const drawerBody = await screen.findByTestId("filter-drawer-body");
+    const userInput = within(drawerBody).getByPlaceholderText("Filter by user ID…");
+    fireEvent.change(userInput, { target: { value: "user-42" } });
+    await user.click(screen.getByTestId("filter-drawer-apply"));
+
     await waitFor(() =>
-      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ sortOrder: "asc" })),
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: "user-42" })),
     );
 
-    await user.click(screen.getByRole("button", { name: "Reset Filters" }));
+    await user.click(screen.getByTestId("datatable-clear-filters"));
     await waitFor(() =>
-      expect(mockUseKeys).toHaveBeenLastCalledWith(
-        1,
-        50,
-        expect.objectContaining({ sortBy: "created_at", sortOrder: "desc" }),
-      ),
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ userID: undefined })),
     );
+  });
+
+  it("maps the Key ID drawer filter to a server-side useKeys query and clears it", async () => {
+    const user = userEvent.setup();
+    mockUseKeys.mockReturnValue({
+      data: { keys: [createMockKey()], total_count: 1, current_page: 1, total_pages: 1 },
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useKeys>);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    await user.click(await screen.findByTestId("datatable-filters-trigger"));
+    const drawerBody = await screen.findByTestId("filter-drawer-body");
+    fireEvent.change(within(drawerBody).getByPlaceholderText("Enter Key ID…"), { target: { value: KEY_HASH } });
+    await user.click(screen.getByTestId("filter-drawer-apply"));
+
+    await waitFor(() =>
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ keyHash: KEY_HASH })),
+    );
+    expect(screen.getByTestId("filter-chip-key_hash")).toHaveTextContent("Key ID");
+
+    await user.click(screen.getByTestId("datatable-clear-filters"));
+    await waitFor(() =>
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ keyHash: undefined })),
+    );
+  });
+
+  it("maps the search box to the combined alias-or-ID search rather than the key-alias filter", async () => {
+    mockUseKeys.mockReturnValue({
+      data: { keys: [createMockKey()], total_count: 1, current_page: 1, total_pages: 1 },
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useKeys>);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    const searchBox = await screen.findByTestId("datatable-search");
+    expect(searchBox).toHaveAttribute("placeholder", "Search by key alias or ID…");
+    fireEvent.change(searchBox, { target: { value: KEY_HASH } });
+
+    await waitFor(() =>
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ search: KEY_HASH })),
+    );
+    const lastOptions = mockUseKeys.mock.calls.at(-1)?.[2];
+    expect(lastOptions?.selectedKeyAlias).toBeUndefined();
+    expect(lastOptions?.keyHash).toBeUndefined();
   });
 
   it("should show Loading keys when isPending", async () => {
@@ -304,7 +343,7 @@ describe("TeamVirtualKeysTable", () => {
     });
   });
 
-  it("should show No keys found when keys array is empty", async () => {
+  it("should show the empty state when keys array is empty", async () => {
     mockUseKeys.mockReturnValue({
       data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 } as KeysResponse,
       isPending: false,
@@ -315,26 +354,7 @@ describe("TeamVirtualKeysTable", () => {
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("No keys found")).toBeInTheDocument();
-    });
-  });
-
-  it("should fetch team-scoped filter options for Key Alias, Organization ID, and User ID", async () => {
-    const mockFetchTeamFilterOptions = vi.mocked(fetchTeamFilterOptions);
-    mockFetchTeamFilterOptions.mockResolvedValue({
-      keyAliases: ["alice_key_team1", "charlie_key_team1"],
-      organizationIds: ["org-123"],
-      userIds: [
-        { id: "user-1", email: "alice@example.com" },
-        { id: "user-2", email: "charlie@example.com" },
-      ],
-    });
-
-    // Use unique teamId to avoid cache hit from previous tests (refetchOnMount: false)
-    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} teamId="team-filter-options-test" />);
-
-    await waitFor(() => {
-      expect(mockFetchTeamFilterOptions).toHaveBeenCalledWith("test-token", "team-filter-options-test");
+      expect(screen.getByText("No rows match your search or filters.")).toBeInTheDocument();
     });
   });
 

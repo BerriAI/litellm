@@ -3,9 +3,9 @@
 The envelope is the single client-held bearer carrying both a litellm identity and the
 encrypted upstream grant, with zero server-side storage. These tests pin the security
 contract: an envelope opens only under the exact keys that minted it, tampering with any
-signed byte is detected, expiry is enforced against the injected clock (capped by the
-module TTL ceiling), oversized envelopes are rejected rather than truncated, and no
-error value, model repr, or raised exception ever contains the inner access token.
+signed byte is detected, expiry is enforced against the injected clock and provider
+lifetime, oversized envelopes are rejected rather than truncated, and no error value,
+model repr, or raised exception ever contains the inner access token.
 """
 
 import base64
@@ -24,20 +24,31 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
     ENVELOPE_PREFIX,
     MAX_ENVELOPE_BYTES,
     MAX_ENVELOPE_TTL_SECONDS,
+    MAX_REFRESH_ENVELOPE_TTL_SECONDS,
+    REFRESH_ENVELOPE_PREFIX,
     BadSignature,
     DecryptFailed,
     EnvelopeIdentity,
     EnvelopeKeys,
+    EnvelopeLifetimeUnrepresentable,
+    EnvelopeMintError,
     EnvelopeTooLarge,
     Expired,
     MalformedPayload,
     NotAnEnvelope,
     OpenedEnvelope,
+    OpenedRefreshEnvelope,
+    RefreshCredential,
     SealedEnvelope,
     UpstreamTokenGrant,
     is_envelope,
+    is_refresh_envelope,
+    key_hash_identity,
     mint_envelope,
+    mint_refresh_envelope,
     open_envelope,
+    open_refresh_envelope,
+    user_identity,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value, encrypt_value
 
@@ -51,7 +62,7 @@ _WRONG_SIGNING = EnvelopeKeys(signing_key=SecretStr(_OTHER_SIGNING_KEY), encrypt
 _WRONG_ENCRYPTION = EnvelopeKeys(signing_key=SecretStr(_SIGNING_KEY), encryption_key=SecretStr(_OTHER_ENCRYPTION_KEY))
 _ACCESS_TOKEN = "upstream-access-token-do-not-leak-8f14e45fceea"
 _REFRESH_TOKEN = "upstream-refresh-token-do-not-leak-1d0aa4b7"
-_IDENTITY = EnvelopeIdentity(user_id="user-123", server_id="srv-456")
+_IDENTITY = key_hash_identity(server_id="srv-456", key_hash="hashed-key-123")
 
 
 def _full_grant() -> UpstreamTokenGrant:
@@ -137,14 +148,110 @@ def test_minimal_grant_round_trips_without_none_leakage_into_claims():
 def test_claim_layout_and_no_plaintext_token_in_envelope():
     token = _sealed_token(_full_grant())
     claims = _unverified_claims(token)
-    assert set(claims) == {"iss", "iat", "exp", "user_id", "server_id", "grant"}
+    assert set(claims) == {"iss", "iat", "exp", "kind", "server_id", "subject_type", "subject", "grant"}
     assert claims["iss"] == ENVELOPE_ISSUER
     assert claims["iat"] == int(_NOW.timestamp())
     assert claims["exp"] == int(_NOW.timestamp()) + 600
-    assert claims["user_id"] == "user-123"
+    assert claims["kind"] == "access"
     assert claims["server_id"] == "srv-456"
+    assert claims["subject_type"] == "key_hash"
+    assert claims["subject"] == "hashed-key-123"
     assert _ACCESS_TOKEN not in token
     assert _ACCESS_TOKEN not in json.dumps(claims)
+    assert _REFRESH_TOKEN not in json.dumps(claims)
+
+
+def test_unrepresentable_access_lifetime_is_a_typed_mint_error():
+    grant = UpstreamTokenGrant(
+        access_token=SecretStr(_ACCESS_TOKEN),
+        token_type="Bearer",
+        expires_in=10**30,
+    )
+
+    result = mint_envelope(_IDENTITY, grant, _KEYS, _NOW)
+
+    assert isinstance(result, EnvelopeLifetimeUnrepresentable)
+    assert result.tag == "envelope_lifetime_unrepresentable"
+    assert result.expires_in == 10**30
+
+
+def _refresh_credential() -> RefreshCredential:
+    return RefreshCredential(refresh_token=SecretStr(_REFRESH_TOKEN), scope="read:tools", expires_in=None)
+
+
+def _sealed_refresh_token(refresh: RefreshCredential | None = None, keys: EnvelopeKeys = _KEYS) -> str:
+    sealed = mint_refresh_envelope(_IDENTITY, refresh or _refresh_credential(), keys, _NOW)
+    assert isinstance(sealed, SealedEnvelope)
+    return sealed.token.get_secret_value()
+
+
+def test_refresh_envelope_round_trips_identity_and_refresh_token():
+    token = _sealed_refresh_token()
+    assert is_refresh_envelope(token)
+    assert not is_envelope(token)
+    opened = open_refresh_envelope(token, _KEYS, _NOW)
+    assert isinstance(opened, OpenedRefreshEnvelope)
+    assert opened.identity == _IDENTITY
+    assert opened.refresh.refresh_token.get_secret_value() == _REFRESH_TOKEN
+    assert opened.refresh.scope == "read:tools"
+
+
+def test_refresh_envelope_ttl_is_min_of_upstream_refresh_lifetime_and_cap():
+    short = mint_refresh_envelope(
+        _IDENTITY, RefreshCredential(refresh_token=SecretStr("r"), expires_in=120), _KEYS, _NOW
+    )
+    assert isinstance(short, SealedEnvelope)
+    assert short.expires_at == _NOW + timedelta(seconds=120)
+    capped = mint_refresh_envelope(
+        _IDENTITY,
+        RefreshCredential(refresh_token=SecretStr("r"), expires_in=MAX_REFRESH_ENVELOPE_TTL_SECONDS + 86400),
+        _KEYS,
+        _NOW,
+    )
+    assert isinstance(capped, SealedEnvelope)
+    assert capped.expires_at == _NOW + timedelta(seconds=MAX_REFRESH_ENVELOPE_TTL_SECONDS)
+    default = mint_refresh_envelope(_IDENTITY, RefreshCredential(refresh_token=SecretStr("r")), _KEYS, _NOW)
+    assert isinstance(default, SealedEnvelope)
+    assert default.expires_at == _NOW + timedelta(seconds=MAX_REFRESH_ENVELOPE_TTL_SECONDS)
+
+
+def test_access_and_refresh_envelopes_do_not_cross_open():
+    access = _sealed_token(_full_grant())
+    refresh = _sealed_refresh_token()
+    # each opener rejects the other kind's prefix outright
+    assert isinstance(open_refresh_envelope(access, _KEYS, _NOW), NotAnEnvelope)
+    assert isinstance(open_envelope(refresh, _KEYS, _NOW), NotAnEnvelope)
+
+
+def test_prefix_swap_is_rejected_by_the_signed_kind_claim():
+    # the wire prefix is not signed, so swap it; the signed kind claim must still reject the cross-use
+    refresh = _sealed_refresh_token()
+    swapped_to_access = ENVELOPE_PREFIX + refresh.removeprefix(REFRESH_ENVELOPE_PREFIX)
+    assert isinstance(open_envelope(swapped_to_access, _KEYS, _NOW), MalformedPayload)
+    access = _sealed_token(_full_grant())
+    swapped_to_refresh = REFRESH_ENVELOPE_PREFIX + access.removeprefix(ENVELOPE_PREFIX)
+    assert isinstance(open_refresh_envelope(swapped_to_refresh, _KEYS, _NOW), MalformedPayload)
+
+
+def test_refresh_envelope_total_over_hostile_input():
+    token = _sealed_refresh_token()
+    # expired against the injected clock
+    assert isinstance(
+        open_refresh_envelope(token, _KEYS, _NOW + timedelta(seconds=MAX_REFRESH_ENVELOPE_TTL_SECONDS)), Expired
+    )
+    # wrong signing key
+    assert isinstance(open_refresh_envelope(token, _WRONG_SIGNING, _NOW), BadSignature)
+    # right signature, wrong encryption key
+    assert isinstance(open_refresh_envelope(token, _WRONG_ENCRYPTION, _NOW), DecryptFailed)
+    # not an envelope at all
+    assert isinstance(open_refresh_envelope("raw-upstream-refresh-token", _KEYS, _NOW), NotAnEnvelope)
+
+
+def test_refresh_envelope_never_leaks_the_refresh_token_in_plaintext():
+    token = _sealed_refresh_token()
+    assert _REFRESH_TOKEN not in token
+    claims = jwt.decode(token.removeprefix(REFRESH_ENVELOPE_PREFIX), options={"verify_signature": False})
+    assert claims["kind"] == "refresh"
     assert _REFRESH_TOKEN not in json.dumps(claims)
 
 
@@ -152,11 +259,11 @@ def test_claim_layout_and_no_plaintext_token_in_envelope():
     "expires_in, expected_ttl",
     [
         (600, 600),
-        (MAX_ENVELOPE_TTL_SECONDS + 82800, MAX_ENVELOPE_TTL_SECONDS),
+        (MAX_ENVELOPE_TTL_SECONDS + 82800, MAX_ENVELOPE_TTL_SECONDS + 82800),
         (None, MAX_ENVELOPE_TTL_SECONDS),
     ],
 )
-def test_exp_is_min_of_upstream_expires_in_and_cap(expires_in, expected_ttl):
+def test_exp_matches_upstream_lifetime_or_uses_missing_lifetime_fallback(expires_in: int | None, expected_ttl: int):
     grant = UpstreamTokenGrant(access_token=SecretStr(_ACCESS_TOKEN), token_type="Bearer", expires_in=expires_in)
     sealed = mint_envelope(_IDENTITY, grant, _KEYS, _NOW)
     assert isinstance(sealed, SealedEnvelope)
@@ -170,13 +277,13 @@ def test_expiry_honored_against_injected_clock():
     assert isinstance(open_envelope(token, _KEYS, _NOW + timedelta(seconds=601)), Expired)
 
 
-def test_ttl_cap_enforced_on_open_even_when_upstream_token_lives_longer():
+def test_upstream_token_lifetime_is_enforced_on_open():
     grant = UpstreamTokenGrant(access_token=SecretStr(_ACCESS_TOKEN), token_type="Bearer", expires_in=86400)
     token = _sealed_token(grant)
-    just_before_cap = _NOW + timedelta(seconds=MAX_ENVELOPE_TTL_SECONDS - 1)
-    at_cap = _NOW + timedelta(seconds=MAX_ENVELOPE_TTL_SECONDS)
-    assert isinstance(open_envelope(token, _KEYS, just_before_cap), OpenedEnvelope)
-    assert isinstance(open_envelope(token, _KEYS, at_cap), Expired)
+    just_before_expiry = _NOW + timedelta(seconds=86399)
+    at_expiry = _NOW + timedelta(seconds=86400)
+    assert isinstance(open_envelope(token, _KEYS, just_before_expiry), OpenedEnvelope)
+    assert isinstance(open_envelope(token, _KEYS, at_expiry), Expired)
 
 
 def test_tampering_any_payload_or_signature_byte_is_bad_signature():
@@ -226,11 +333,11 @@ def test_wrong_issuer_is_malformed_payload():
 
 def test_missing_identity_claim_is_malformed_payload():
     claims = _unverified_claims(_sealed_token(_full_grant()))
-    forged = _forge({key: value for key, value in claims.items() if key != "user_id"})
+    forged = _forge({key: value for key, value in claims.items() if key != "subject"})
     assert isinstance(open_envelope(forged, _KEYS, _NOW), MalformedPayload)
 
 
-@pytest.mark.parametrize("identity_claim", ["user_id", "server_id"])
+@pytest.mark.parametrize("identity_claim", ["server_id", "subject"])
 def test_signed_empty_identity_claim_is_malformed_payload_not_a_raise(identity_claim):
     claims = _unverified_claims(_sealed_token(_full_grant()))
     forged = _forge({**claims, identity_claim: ""})
@@ -329,7 +436,7 @@ def test_decryptable_blob_that_is_not_a_grant_is_malformed_payload():
     assert isinstance(open_envelope(forged, _KEYS, _NOW), MalformedPayload)
 
 
-def _mint_with_token_len(n: int) -> SealedEnvelope | EnvelopeTooLarge:
+def _mint_with_token_len(n: int) -> SealedEnvelope | EnvelopeMintError:
     grant = UpstreamTokenGrant(access_token=SecretStr("a" * n), token_type="Bearer")
     return mint_envelope(_IDENTITY, grant, _KEYS, _NOW)
 
@@ -463,15 +570,31 @@ def test_non_positive_expires_in_is_rejected_at_construction_without_leaking():
 
 def test_empty_identity_and_key_fields_are_rejected_at_construction():
     with pytest.raises(ValidationError):
-        EnvelopeIdentity(user_id="", server_id="srv-456")
+        EnvelopeIdentity(server_id="", subject_type="key_hash", subject="hashed-key-123")
     with pytest.raises(ValidationError):
-        EnvelopeIdentity(user_id="user-123", server_id="")
+        EnvelopeIdentity(server_id="srv-456", subject_type="key_hash", subject="")
+    with pytest.raises(ValidationError):
+        EnvelopeIdentity(server_id="srv-456", subject_type="not-a-subject-type", subject="x")
     with pytest.raises(ValidationError):
         EnvelopeKeys(signing_key=SecretStr(""), encryption_key=SecretStr(_ENCRYPTION_KEY))
     with pytest.raises(ValidationError):
         EnvelopeKeys(signing_key=SecretStr(_SIGNING_KEY), encryption_key=SecretStr(""))
     with pytest.raises(ValidationError):
         UpstreamTokenGrant(access_token=SecretStr(""), token_type="Bearer")
+
+
+def test_user_subject_identity_round_trips():
+    """The user_id subject variant seals and opens with its discriminator intact, so the edge can
+    tell an interactively-minted (user) envelope from a scripted (key_hash) one and reload the right
+    kind of record."""
+    identity = user_identity(server_id="srv-456", user_id="user-42")
+    sealed = mint_envelope(identity, _full_grant(), _KEYS, _NOW)
+    assert isinstance(sealed, SealedEnvelope)
+    opened = open_envelope(sealed.token.get_secret_value(), _KEYS, _NOW)
+    assert isinstance(opened, OpenedEnvelope)
+    assert opened.identity.server_id == "srv-456"
+    assert opened.identity.subject_type == "user_id"
+    assert opened.identity.subject == "user-42"
 
 
 def test_public_models_are_frozen():
@@ -484,4 +607,4 @@ def test_public_models_are_frozen():
     with pytest.raises(ValidationError):
         opened.grant = _minimal_grant()
     with pytest.raises(ValidationError):
-        _IDENTITY.user_id = "someone-else"
+        _IDENTITY.subject = "someone-elses-hash"
