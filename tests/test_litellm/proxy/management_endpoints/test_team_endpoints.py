@@ -1974,6 +1974,7 @@ async def test_add_team_members_runs_member_writes_on_the_lock_holding_transacti
     tx.litellm_usertable.upsert = AsyncMock(return_value=added_user)
     tx.litellm_usertable.update_many = AsyncMock()
     tx.litellm_budgettable.create = AsyncMock(return_value=created_budget)
+    tx.litellm_teammembership.find_unique = AsyncMock(return_value=None)
     tx.litellm_teammembership.create = AsyncMock(return_value=membership)
 
     tx_cm = MagicMock()
@@ -5111,6 +5112,7 @@ async def test_new_team_max_budget_within_user_limit():
             "budget_id": None,
         }
         mock_prisma.db.litellm_teammembership = MagicMock()
+        mock_prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_teammembership.create = AsyncMock(
             return_value=mock_membership
         )
@@ -5254,6 +5256,7 @@ async def test_new_team_org_scoped_budget_bypasses_user_limit():
             "budget_id": None,
         }
         mock_prisma.db.litellm_teammembership = MagicMock()
+        mock_prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_teammembership.create = AsyncMock(
             return_value=mock_membership
         )
@@ -5402,6 +5405,7 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
             "budget_id": None,
         }
         mock_prisma.db.litellm_teammembership = MagicMock()
+        mock_prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_teammembership.create = AsyncMock(
             return_value=mock_membership
         )
@@ -8675,6 +8679,7 @@ async def test_new_team_soft_budget_validation(
             "budget_id": None,
         }
         mock_prisma.db.litellm_teammembership = MagicMock()
+        mock_prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_teammembership.create = AsyncMock(
             return_value=mock_membership
         )
