@@ -1,38 +1,22 @@
-"""
-Tests for Kyma API provider configuration and integration.
-
-Kyma API (https://kymaapi.com) is an OpenAI-compatible LLM gateway. Registered
-here as a JSON-configured provider (litellm/llms/openai_like/providers.json).
-
-No real network calls: config/registration assertions use JSONProviderRegistry
-directly, and the routing/cost assertions use litellm's own `mock_response`
-completion path (see litellm/main.py) rather than patching internals -- the
-previous submission (PR #25543) patched `litellm.main.completion`, which is
-never called because `litellm.completion` is bound at import time via
-`from .main import *`, so the mock silently never fired.
-"""
-
 import json
-import os
 from pathlib import Path
 
 import pytest
 
 import litellm
 
+EXPECTED_KYMA_MODEL_COUNT = 70
 
-@pytest.fixture(autouse=True, scope="module")
-def _use_local_model_cost_map():
-    """Force litellm's bundled backup instead of a live fetch from
-    raw.githubusercontent.com/BerriAI/litellm/main. Without this, cost/model-info
-    lookups race against whether `kyma` has reached the remote main branch's
-    model_prices_and_context_window.json yet, rather than testing the file this
-    PR ships. Same idiom used elsewhere in this suite, e.g.
-    tests/litellm_utils_tests/test_utils.py::test_supports_reasoning and
-    tests/_vcr_conftest_common.py.
-    """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"  # test-quality-ok: kyma not on remote map yet
-    litellm.model_cost = litellm.get_model_cost_map(url="")  # test-quality-ok: reload after env set
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    from litellm.utils import _cached_get_model_info
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    _cached_get_model_info.cache_clear()
+    yield
+    _cached_get_model_info.cache_clear()
 
 
 class TestKymaProviderConfig:
@@ -127,8 +111,6 @@ class TestKymaProviderConfig:
 
 
 class TestKymaModelMetadata:
-    # A small, deliberately mixed sample: a plain model, a vision model, a
-    # model with prompt-caching enabled, and the one 2-tier step-pricing model.
     SAMPLE_MODELS = (
         "kyma/deepseek-v3",
         "kyma/claude-haiku-4-5",
@@ -154,44 +136,38 @@ class TestKymaModelMetadata:
             assert info["supports_reasoning"] is True
 
     def test_kyma_prompt_caching_is_a_ninety_percent_discount(self):
-        """Kyma's documented cache-read price is 10% of the input price
-        (90% discount) -- see CLAUDE.md, Prompt Caching. Any model with
-        supports_prompt_caching=True must carry the discounted rate, or
-        LiteLLM's own cost calculator prices cache reads at $0."""
         model_cost = self._load("model_prices_and_context_window.json")
-        checked = 0
+        prompt_caching_kyma_models_checked = 0
         for model, info in model_cost.items():
             if not model.startswith("kyma/"):
                 continue
             if info.get("supports_prompt_caching") is True:
-                checked += 1
+                prompt_caching_kyma_models_checked += 1
                 assert "cache_read_input_token_cost" in info, f"{model} missing cache_read_input_token_cost"
                 assert info["cache_read_input_token_cost"] == pytest.approx(info["input_cost_per_token"] * 0.1)
-        assert checked > 0, "expected at least one kyma model with supports_prompt_caching=True"
+        assert prompt_caching_kyma_models_checked > 0
 
-    def test_kyma_two_tier_step_pricing(self):
-        """qwen3.7-flash is Kyma's only 2-step model: the 256k-token rate
-        must win over the 32k-token rate for a prompt past both thresholds."""
+    def test_kyma_two_tier_step_pricing(self, local_model_cost_map):
         info = litellm.get_model_info(model="kyma/qwen3.7-flash")
 
         assert info["input_cost_per_token_above_32k_tokens"] > info["input_cost_per_token"]
         assert info["input_cost_per_token_above_256k_tokens"] > info["input_cost_per_token_above_32k_tokens"]
 
+        prompt_tokens_past_both_thresholds = 300_000
         prompt_cost, _ = litellm.cost_per_token(
             model="kyma/qwen3.7-flash",
-            prompt_tokens=300_000,
+            prompt_tokens=prompt_tokens_past_both_thresholds,
             completion_tokens=0,
         )
-        # 300k tokens is past both the 32k and 256k thresholds -- the whole
-        # prompt bills at the 256k rate, not the 32k rate (Kyma's tiers, like
-        # ours, apply to the whole request once crossed -- not marginally).
-        assert prompt_cost == pytest.approx(300_000 * info["input_cost_per_token_above_256k_tokens"])
+        assert prompt_cost == pytest.approx(
+            prompt_tokens_past_both_thresholds * info["input_cost_per_token_above_256k_tokens"]
+        )
 
     def test_kyma_models_synced_to_backup(self):
         model_cost = self._load("model_prices_and_context_window.json")
         backup = self._load("litellm", "model_prices_and_context_window_backup.json")
         kyma_models = [m for m in model_cost if m.startswith("kyma/")]
-        assert len(kyma_models) == 70
+        assert len(kyma_models) == EXPECTED_KYMA_MODEL_COUNT
         for model in kyma_models:
             assert model in backup, f"{model} missing from backup json"
             assert backup[model] == model_cost[model], f"{model} differs between root and backup json"
@@ -202,11 +178,6 @@ class TestKymaSupportedEndpoints:
         matrix = self._load()
         endpoints = matrix["providers"]["kyma"]["endpoints"]
         assert endpoints["chat_completions"] is True
-        # The JSON-configured-provider path only wires chat routing (see
-        # litellm/llms/openai_like/json_loader.py); Kyma's own /v1/messages,
-        # /v1/embeddings and /v1/rerank surfaces are not reachable through
-        # this provider slug, so they are advertised false here rather than
-        # overclaimed. Matches the libertai/scx-ai precedent.
         assert endpoints["embeddings"] is False
 
     def test_root_and_backup_endpoints_agree_for_kyma(self):
@@ -223,11 +194,7 @@ class TestKymaSupportedEndpoints:
 
 class TestKymaRouting:
     @pytest.mark.asyncio
-    async def test_router_spend_is_attributed_to_kyma_pricing(self):
-        """Routed traffic is costed off the kyma entry, not an OpenAI one.
-        Uses litellm's built-in `mock_response` -- no network call, and no
-        risk of the mock being silently skipped (the bug that killed the
-        previous Kyma submission)."""
+    async def test_router_spend_is_attributed_to_kyma_pricing(self, local_model_cost_map):
         from litellm import Router
 
         router = Router(
