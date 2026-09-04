@@ -754,6 +754,84 @@ def test_expand_wildcard_invalid_litellm_params_passthrough():
     assert result == [deployment]
 
 
+def test_get_complete_model_list_excludes_wildcard_routes_by_default():
+    """Regression (LIT-4108): a wildcard with a matching router deployment leaked into /v1/models."""
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4"},
+            },
+        ]
+    )
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["bedrock/*", "gpt-4"],
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=False,
+        llm_router=router,
+    )
+
+    assert "bedrock/*" not in result
+    assert "gpt-4" in result
+    assert any(m.startswith("bedrock/") for m in result)
+
+
+def test_get_complete_model_list_excludes_wildcard_routes_without_router():
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["bedrock/*", "gpt-4"],
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=False,
+        llm_router=None,
+    )
+
+    assert "bedrock/*" not in result
+    assert "gpt-4" in result
+    assert any(m.startswith("bedrock/") for m in result)
+
+
+def test_get_complete_model_list_includes_wildcard_routes_when_requested():
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+            },
+        ]
+    )
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["bedrock/*"],
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=True,
+        llm_router=router,
+    )
+
+    assert result.count("bedrock/*") == 1
+    assert any(m.startswith("bedrock/") and m != "bedrock/*" for m in result)
+
+
 def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
     """models_by_provider was a frozen import-time snapshot of set unions, so cost map
     reloads (which call add_known_models) never reached wildcard expansion until a

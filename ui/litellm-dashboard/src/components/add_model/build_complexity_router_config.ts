@@ -138,6 +138,7 @@ export interface BuildComplexityRouterConfigParams {
   tierModelParams?: TierModelParamsByTier;
   enableContextWindowEscalation?: boolean;
   contextWindowEscalationBuffer?: number;
+  sessionAffinityTtlSeconds?: number;
 }
 
 /**
@@ -175,6 +176,7 @@ export interface ComplexityRouterConfigPayload {
   hybrid_boundary_margin?: number;
   classification_mode: ClassificationMode;
   session_affinity: boolean;
+  session_affinity_ttl_seconds?: number;
   deployment_affinity: boolean;
   modality_routing: boolean;
   modality_pin_override: boolean;
@@ -456,6 +458,7 @@ export const buildComplexityRouterConfig = ({
   tierModelParams,
   enableContextWindowEscalation,
   contextWindowEscalationBuffer,
+  sessionAffinityTtlSeconds,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
   const serializedTierModelConfigs = customTierSet
     ? serializeTierModelConfigs(
@@ -521,6 +524,9 @@ export const buildComplexityRouterConfig = ({
     }),
     ...(contextWindowEscalationBuffer !== undefined && {
       context_window_escalation_buffer: contextWindowEscalationBuffer,
+    }),
+    ...(sessionAffinityTtlSeconds !== undefined && {
+      session_affinity_ttl_seconds: sessionAffinityTtlSeconds,
     }),
     ...scorerKnobs,
   };

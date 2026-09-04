@@ -8,15 +8,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final, Literal, Protocol, TypeVar, cast
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
 
+from . import JSON_OBJECT_ADAPTER
 from .cassette import deserialize_cassette, serialize_cassette
 from .recording import RecordedInteraction
 
 FIXTURE_SCHEMA_VERSION: Final = 1
-JSON_OBJECT: Final = TypeAdapter(dict[str, object])
-
-
 class FixtureInput(Protocol):
     def canonical_input(self) -> dict[str, object]: ...
 
@@ -40,10 +38,13 @@ def fixture_cache_key(case_input: FixtureInput) -> dict[str, object]:
     return case_input.canonical_input()
 
 
-def fixture_path(directory: Path, case_input: FixtureInput) -> Path:
+def _fixture_digest(case_input: FixtureInput) -> str:
     input_json: Final = canonical_json(fixture_cache_key(case_input))
-    digest: Final = hashlib.sha256(input_json.encode("utf-8")).hexdigest()
-    return directory / f"{digest}.yaml"
+    return hashlib.sha256(input_json.encode("utf-8")).hexdigest()
+
+
+def fixture_path(directory: Path, case_input: FixtureInput) -> Path:
+    return directory / f"{_fixture_digest(case_input)}.yaml"
 
 
 def load_fixture(directory: Path, case_input: FixtureInput, case_type: type[CaseT]) -> CaseT | None:
@@ -87,7 +88,7 @@ def save_fixture(
 def read_fixture(path: Path, case_type: type[CaseT]) -> CaseT:
     contents: Final = path.read_text(encoding="utf-8")
     if path.suffix == ".json":
-        return _load_fixture(JSON_OBJECT.validate_json(contents), path, case_type)
+        return _load_fixture(JSON_OBJECT_ADAPTER.validate_json(contents), path, case_type)
     try:
         cassette: Final = deserialize_cassette(contents)
         return case_type.model_validate(cassette.case_data())
@@ -117,10 +118,12 @@ def recorded_fixtures(directory: Path, case_type: type[CaseT]) -> tuple[CaseT, .
 
 
 def fixture_directory(configured: Path | None, env_value: str | None, default: Path) -> Path:
-    return (configured or Path(env_value or default)).expanduser()
+    if configured is not None:
+        return configured.expanduser()
+    if env_value == "":
+        raise ValueError("fixture directory environment variable is set but empty")
+    return Path(env_value).expanduser() if env_value is not None else default.expanduser()
 
 
 def fixture_id(case_input: FixtureInput, prefix: str) -> str:
-    input_json: Final = canonical_json(case_input.canonical_input())
-    digest: Final = hashlib.sha256(input_json.encode("utf-8")).hexdigest()[:8]
-    return f"{prefix}-{digest}"
+    return f"{prefix}-{_fixture_digest(case_input)[:8]}"

@@ -3,14 +3,12 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from pathlib import Path
-from typing import Final, TypeVar
+from typing import Final
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
-from .store import recorded_fixtures
-
-CaseT = TypeVar("CaseT", bound=BaseModel)
+from .store import CaseT, fixture_directory, recorded_fixtures
 
 
 def parametrize_recorded_fixtures(
@@ -27,9 +25,10 @@ def parametrize_recorded_fixtures(
     if fixture_name not in metafunc.fixturenames:
         return
     configured: Final = os.environ.get(env_var)
-    if configured == "":
-        raise pytest.UsageError(f"{env_var} is set but empty")
-    directory: Final = Path(configured).expanduser() if configured is not None else default_directory
+    try:
+        directory: Final = fixture_directory(None, configured, default_directory)
+    except ValueError as error:
+        raise pytest.UsageError(f"{env_var} is set but empty") from error
     try:
         fixtures: Final = recorded_fixtures(directory, case_type)
     except (ValidationError, ValueError) as error:
