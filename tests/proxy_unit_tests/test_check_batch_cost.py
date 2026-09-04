@@ -2561,7 +2561,7 @@ class TestBatchCostAttribution:
         from types import SimpleNamespace
 
         instance = self._instance(
-            key_row=SimpleNamespace(key_alias="prod-key", org_id="org-moved-to"),
+            key_row=SimpleNamespace(key_alias="prod-key", organization_id="org-moved-to"),
             team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
         )
 
@@ -2578,7 +2578,7 @@ class TestBatchCostAttribution:
         from types import SimpleNamespace
 
         instance = self._instance(
-            key_row=SimpleNamespace(key_alias="prod-key", org_id="org-42"),
+            key_row=SimpleNamespace(key_alias="prod-key", organization_id="org-42"),
             team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
         )
 
@@ -2593,7 +2593,7 @@ class TestBatchCostAttribution:
         from types import SimpleNamespace
 
         instance = self._instance(
-            key_row=SimpleNamespace(key_alias="prod-key", org_id=None),
+            key_row=SimpleNamespace(key_alias="prod-key", organization_id=None),
             team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
         )
 
@@ -2625,7 +2625,7 @@ class TestBatchCostAttribution:
         from types import SimpleNamespace
 
         instance = self._instance(
-            key_row=SimpleNamespace(key_alias="prod-key", org_id=None),
+            key_row=SimpleNamespace(key_alias="prod-key", organization_id=None),
             team_row=SimpleNamespace(team_alias="Team Alpha", organization_id=None),
         )
 
