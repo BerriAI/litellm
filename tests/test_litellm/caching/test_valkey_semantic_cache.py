@@ -534,3 +534,45 @@ def test_importing_caching_does_not_require_redis():
     )
     assert result.returncode == 0, result.stderr
     assert "ok" in result.stdout
+
+
+def test_valkey_cache_supports_redis_py_4_index_module():
+    code = textwrap.dedent(
+        """
+        import builtins
+        import sys
+        import types
+
+        from redis.commands.search.index_definition import IndexDefinition, IndexType
+
+        legacy = types.ModuleType("redis.commands.search.indexDefinition")
+        legacy.IndexDefinition = IndexDefinition
+        legacy.IndexType = IndexType
+        sys.modules[legacy.__name__] = legacy
+        original_import = builtins.__import__
+
+        def compatibility_import(name, *args, **kwargs):
+            if name == "redis.commands.search.index_definition":
+                raise ModuleNotFoundError(name=name)
+            return original_import(name, *args, **kwargs)
+
+        builtins.__import__ = compatibility_import
+        from litellm.caching.valkey_semantic_cache import ValkeySemanticCache
+
+        cache = ValkeySemanticCache(
+            similarity_threshold=0.8,
+            sync_client=object(),
+            async_client=object(),
+        )
+        assert cache._index_definition().__class__ is IndexDefinition
+        print("ok")
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": _REPO_ROOT},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "ok" in result.stdout
