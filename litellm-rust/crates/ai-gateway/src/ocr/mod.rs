@@ -12,15 +12,28 @@ pub use types::OcrRequest;
 
 use handler::execute_ocr_provider_call;
 use prepare::{PreparedOcrCall, prepare_ocr_call};
+use types::ProviderOcrRequest;
+
+pub struct PreparedOcrDispatch {
+    request: ProviderOcrRequest,
+}
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
     let PreparedOcrCall { request, hooks } = prepare_ocr_call(request);
     CallLifecycle::default()
-        .run_request(request, &hooks, |request| {
-            execute_ocr_provider_call(request, &hooks)
-        })
+        .run_request(request, &hooks, execute_ocr_provider_call)
         .await
+}
+
+pub async fn prepare_ocr_dispatch(request: OcrRequest<'_>) -> Result<PreparedOcrDispatch, Error> {
+    let PreparedOcrCall { request, hooks } = prepare_ocr_call(request);
+    let request = hooks.prepare_for_dispatch(request).await?;
+    Ok(PreparedOcrDispatch { request })
+}
+
+pub async fn execute_ocr_dispatch(prepared: PreparedOcrDispatch) -> Result<Value, Error> {
+    execute_ocr_provider_call(prepared.request).await
 }
 
 #[cfg(test)]
@@ -29,7 +42,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
-    use super::{OcrRequest, ocr};
+    use super::{Error, OcrRequest, execute_ocr_dispatch, ocr, prepare_ocr_dispatch};
     use crate::integrations::types::RequestMetadata;
 
     async fn read_http_request(socket: &mut TcpStream) -> String {
@@ -83,6 +96,58 @@ mod tests {
             request_metadata: RequestMetadata::default(),
             litellm_call_id: None,
         }
+    }
+
+    #[tokio::test]
+    async fn prepared_dispatch_opens_provider_socket_only_during_execute() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("test listener binds");
+        listener
+            .set_nonblocking(true)
+            .expect("test listener becomes nonblocking");
+        let address = listener.local_addr().expect("listener has local address");
+        let api_base = format!("http://{address}");
+        let mut request = base_ocr_request("mistral-ocr-latest");
+        request.api_base = Some(&api_base);
+        request.custom_llm_provider = Some("mistral");
+
+        let prepared = prepare_ocr_dispatch(request)
+            .await
+            .expect("request preparation succeeds");
+        assert_eq!(
+            listener
+                .accept()
+                .expect_err("preparation must not connect")
+                .kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+
+        let listener = TcpListener::from_std(listener).expect("listener enters Tokio runtime");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("execution connects");
+            let request = read_http_request(&mut socket).await;
+            let body = r#"{"message":"rate limited"}"#;
+            let response = format!(
+                "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("writes response");
+            request
+        });
+        let error = execute_ocr_dispatch(prepared)
+            .await
+            .expect_err("provider error is returned");
+
+        assert!(matches!(error, Error::Http { status: 429, .. }));
+        assert!(
+            server
+                .await
+                .expect("server task completes")
+                .contains("POST /v1/ocr")
+        );
     }
 
     #[tokio::test]

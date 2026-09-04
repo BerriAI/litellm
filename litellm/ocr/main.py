@@ -255,19 +255,6 @@ def _prepare_rust_ocr_call(
     )
     rust_api_base: Final = _rust_bridge_api_base(prepared_request, resolve_api_key)
     rust_optional_params: Final = _rust_bridge_optional_params(prepared_request, resolve_api_key)
-    prepared_request.litellm_logging_obj.pre_call(
-        input="OCR document processing",
-        api_key=resolved_api_key,
-        additional_args={
-            "complete_input_dict": {
-                "model": prepared_request.model,
-                "document": prepared_request.document,
-                **rust_optional_params,
-            },
-            "api_base": resolved_complete_url,
-            "headers": resolved_headers,
-        },
-    )
     return rust_ocr_bridge.RustOCRRequest(
         model=prepared_request.model,
         document=prepared_request.document,
@@ -277,6 +264,26 @@ def _prepare_rust_ocr_call(
         extra_headers=cast(dict[str, object], resolved_headers),
         optional_params=rust_optional_params,
         timeout=prepared_request.effective_timeout,
+        logging_api_base=resolved_complete_url,
+    )
+
+
+def _log_rust_ocr_call(
+    request: rust_ocr_bridge.RustOCRRequest,
+    logging_obj: LiteLLMLoggingObj,
+) -> None:
+    logging_obj.pre_call(
+        input="OCR document processing",
+        api_key=request.api_key,
+        additional_args={
+            "complete_input_dict": {
+                "model": request.model,
+                "document": request.document,
+                **request.optional_params,
+            },
+            "api_base": request.logging_api_base,
+            "headers": request.extra_headers,
+        },
     )
 
 
@@ -320,6 +327,10 @@ def _run_rust_ocr(
             prepared_request=prepared_request,
             resolve_api_key=resolve_api_key,
         ),
+        on_accepted=lambda request: _log_rust_ocr_call(
+            request=request,
+            logging_obj=prepared_request.litellm_logging_obj,
+        ),
     )
     return _rust_ocr_response(attempt_result, context)
 
@@ -338,6 +349,10 @@ async def _run_rust_aocr(
         prepare_request=lambda: _prepare_rust_ocr_call(
             prepared_request=prepared_request,
             resolve_api_key=resolve_api_key,
+        ),
+        on_accepted=lambda request: _log_rust_ocr_call(
+            request=request,
+            logging_obj=prepared_request.litellm_logging_obj,
         ),
     )
     return _rust_ocr_response(attempt_result, context)

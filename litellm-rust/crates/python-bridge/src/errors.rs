@@ -60,6 +60,10 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("RustUpstreamError", py.get_type::<RustUpstreamError>())
 }
 
+pub(crate) fn ocr_prepare_error_to_pyerr(err: Error) -> PyErr {
+    RustBridgeDeclined::new_err(err.to_string())
+}
+
 pub(crate) fn ocr_error_to_pyerr(err: Error) -> PyErr {
     match err {
         Error::Http { status, body } => RustUpstreamError::new_err((status, body)),
@@ -86,9 +90,12 @@ mod ocr_error_tests {
     fn ocr_errors_classify_dispatch_safety() {
         Python::initialize();
         Python::attach(|py| {
-            let rejected = ocr_error_to_pyerr(Error::InvalidProvider("unsupported".to_string()));
-            assert!(rejected.is_instance_of::<RustUpstreamError>(py));
-            let args: (u16, String) = rejected
+            let rejected =
+                ocr_prepare_error_to_pyerr(Error::InvalidProvider("unsupported".to_string()));
+            assert!(rejected.is_instance_of::<RustBridgeDeclined>(py));
+            let failed = ocr_error_to_pyerr(Error::InvalidProvider("unsupported".to_string()));
+            assert!(failed.is_instance_of::<RustUpstreamError>(py));
+            let args: (u16, String) = failed
                 .value(py)
                 .getattr("args")
                 .and_then(|args| args.extract())

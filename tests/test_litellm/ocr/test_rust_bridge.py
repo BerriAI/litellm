@@ -450,6 +450,7 @@ def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():
             optional_params={"include_image_base64": True, "pages": [0]},
             timeout=12.5,
         ),
+        on_accepted=lambda _request: None,
     )
 
     assert result == runtime.RustHandled(FAKE_OCR_RESPONSE)
@@ -492,6 +493,7 @@ async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response():
             optional_params={"vertex_project": "project-1"},
             timeout=httpx.Timeout(30.0, read=42.0),
         ),
+        on_accepted=lambda _request: None,
     )
 
     assert result == runtime.RustHandled(FAKE_OCR_RESPONSE)
@@ -960,10 +962,11 @@ def test_ocr_decline_falls_back_without_native_preparation(monkeypatch: pytest.M
 
 
 def test_ocr_failed_attempt_never_falls_back(monkeypatch: pytest.MonkeyPatch):
-    native_ocr: Final = Mock(side_effect=RustUpstreamError(429, "rate limited"))
+    native_execute: Final = Mock(side_effect=RustUpstreamError(429, "rate limited"))
     python_ocr: Final = Mock()
     native: Final = SimpleNamespace(
-        ocr=native_ocr,
+        ocr_prepare=Mock(return_value=object()),
+        ocr_execute=native_execute,
         ocr_decline=Mock(return_value=None),
         RustBridgeDeclined=RustBridgeDeclined,
         RustUpstreamError=RustUpstreamError,
@@ -976,8 +979,64 @@ def test_ocr_failed_attempt_never_falls_back(monkeypatch: pytest.MonkeyPatch):
         litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
 
     assert caught.value.status_code == 429
-    native_ocr.assert_called_once()
+    native_execute.assert_called_once()
     python_ocr.assert_not_called()
+
+
+def test_ocr_native_prepare_logs_before_execution(monkeypatch: pytest.MonkeyPatch):
+    prepared_token: Final = object()
+    logging_obj: Final = RecordingLogging()
+
+    def execute(prepared: object) -> dict[str, object]:
+        assert prepared is prepared_token
+        assert logging_obj.pre_call_count == 1
+        return dict(FAKE_OCR_RESPONSE)
+
+    native_prepare: Final = Mock(return_value=prepared_token)
+    native_execute: Final = Mock(side_effect=execute)
+    native: Final = SimpleNamespace(
+        ocr_prepare=native_prepare,
+        ocr_execute=native_execute,
+        ocr_decline=Mock(return_value=None),
+        RustBridgeDeclined=RustBridgeDeclined,
+        RustUpstreamError=RustUpstreamError,
+    )
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
+    litellm.rust(True)
+
+    response: Final = ocr_main._run_rust_ocr(
+        prepared_request=build_prepared_request(logging_obj=logging_obj),
+        resolve_api_key=lambda _name: None,
+    )
+
+    assert isinstance(response, OCRResponse)
+    native_prepare.assert_called_once()
+    native_execute.assert_called_once_with(prepared_token)
+
+
+def test_ocr_native_prepare_decline_falls_back_before_logging(monkeypatch: pytest.MonkeyPatch):
+    native_prepare: Final = Mock(side_effect=RustBridgeDeclined("invalid request"))
+    native_execute: Final = Mock()
+    logging_obj: Final = RecordingLogging()
+    native: Final = SimpleNamespace(
+        ocr_prepare=native_prepare,
+        ocr_execute=native_execute,
+        ocr_decline=Mock(return_value=None),
+        RustBridgeDeclined=RustBridgeDeclined,
+        RustUpstreamError=RustUpstreamError,
+    )
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
+    litellm.rust(True)
+
+    response: Final = ocr_main._run_rust_ocr(
+        prepared_request=build_prepared_request(logging_obj=logging_obj),
+        resolve_api_key=lambda _name: None,
+    )
+
+    assert response is None
+    native_prepare.assert_called_once()
+    native_execute.assert_not_called()
+    assert logging_obj.pre_call_count == 0
 
 
 @pytest.mark.asyncio
@@ -1008,11 +1067,38 @@ async def test_aocr_decline_falls_back_without_native_preparation(monkeypatch: p
 
 
 @pytest.mark.asyncio
+async def test_aocr_native_prepare_decline_falls_back_before_logging(monkeypatch: pytest.MonkeyPatch):
+    native_prepare: Final = AsyncMock(side_effect=RustBridgeDeclined("invalid request"))
+    native_execute: Final = AsyncMock()
+    logging_obj: Final = RecordingLogging()
+    native: Final = SimpleNamespace(
+        aocr_prepare=native_prepare,
+        aocr_execute=native_execute,
+        ocr_decline=Mock(return_value=None),
+        RustBridgeDeclined=RustBridgeDeclined,
+        RustUpstreamError=RustUpstreamError,
+    )
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
+    litellm.rust(True)
+
+    response: Final = await ocr_main._run_rust_aocr(
+        prepared_request=build_prepared_request(logging_obj=logging_obj),
+        resolve_api_key=lambda _name: None,
+    )
+
+    assert response is None
+    native_prepare.assert_awaited_once()
+    native_execute.assert_not_awaited()
+    assert logging_obj.pre_call_count == 0
+
+
+@pytest.mark.asyncio
 async def test_aocr_failed_attempt_never_falls_back(monkeypatch: pytest.MonkeyPatch):
-    native_ocr: Final = AsyncMock(side_effect=RustUpstreamError(503, "unavailable"))
+    native_execute: Final = AsyncMock(side_effect=RustUpstreamError(503, "unavailable"))
     python_ocr: Final = Mock()
     native: Final = SimpleNamespace(
-        aocr=native_ocr,
+        aocr_prepare=AsyncMock(return_value=object()),
+        aocr_execute=native_execute,
         ocr_decline=Mock(return_value=None),
         RustBridgeDeclined=RustBridgeDeclined,
         RustUpstreamError=RustUpstreamError,
@@ -1025,7 +1111,7 @@ async def test_aocr_failed_attempt_never_falls_back(monkeypatch: pytest.MonkeyPa
         await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
 
     assert caught.value.status_code == 503
-    native_ocr.assert_awaited_once()
+    native_execute.assert_awaited_once()
     python_ocr.assert_not_called()
 
 

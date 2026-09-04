@@ -20,7 +20,20 @@ where
     T: Serialize + Send + 'static,
     F: Future<Output = Result<T, Error>> + Send + 'static,
 {
-    run_sync_on(
+    let result = run_sync_value(py, future, map_error)?;
+    Pythonized(result).into_pyobject(py).map(Bound::unbind)
+}
+
+pub(crate) fn run_sync_value<T, F>(
+    py: Python<'_>,
+    future: F,
+    map_error: fn(Error) -> PyErr,
+) -> PyResult<T>
+where
+    T: Send + 'static,
+    F: Future<Output = Result<T, Error>> + Send + 'static,
+{
+    run_sync_value_on(
         py,
         pyo3_async_runtimes::tokio::get_runtime(),
         future,
@@ -28,6 +41,7 @@ where
     )
 }
 
+#[cfg(test)]
 fn run_sync_on<T, F>(
     py: Python<'_>,
     runtime: &Runtime,
@@ -38,6 +52,20 @@ where
     T: Serialize + Send + 'static,
     F: Future<Output = Result<T, Error>> + Send + 'static,
 {
+    let result = run_sync_value_on(py, runtime, future, map_error)?;
+    Pythonized(result).into_pyobject(py).map(Bound::unbind)
+}
+
+fn run_sync_value_on<T, F>(
+    py: Python<'_>,
+    runtime: &Runtime,
+    future: F,
+    map_error: fn(Error) -> PyErr,
+) -> PyResult<T>
+where
+    T: Send + 'static,
+    F: Future<Output = Result<T, Error>> + Send + 'static,
+{
     if Handle::try_current().is_ok() {
         return Err(PyRuntimeError::new_err(
             "synchronous native routes cannot run from a Tokio context; use the async route",
@@ -45,8 +73,7 @@ where
     }
 
     let result = release_gil(py, move || runtime.block_on(wait_for_sync_result(future)))?;
-    let result = map_core_result(result, map_error)?;
-    Pythonized(result).into_pyobject(py).map(Bound::unbind)
+    map_core_result(result, map_error)
 }
 
 pub(crate) fn run_async<T, F>(
@@ -59,10 +86,17 @@ where
     F: Future<Output = Result<T, Error>> + Send + 'static,
 {
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let result = catch_future_panic(future).await?;
-        let result = map_core_result(result, map_error)?;
+        let result = await_value(future, map_error).await?;
         Ok(Pythonized(result))
     })
+}
+
+pub(crate) async fn await_value<T, F>(future: F, map_error: fn(Error) -> PyErr) -> PyResult<T>
+where
+    F: Future<Output = Result<T, Error>>,
+{
+    let result = catch_future_panic(future).await?;
+    map_core_result(result, map_error)
 }
 
 fn map_core_result<T>(result: Result<T, Error>, map_error: fn(Error) -> PyErr) -> PyResult<T> {
