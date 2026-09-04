@@ -179,13 +179,14 @@ def test_create_batch_async_returns_coroutine_and_uses_async_client():
 
 
 def test_create_batch_sync_does_not_resolve_publisher_models():
-    """Publisher-model jobs must not incur the endpoint-resolution GET."""
+    """Publisher-model jobs must not incur the endpoint-resolution GET, and the job model must
+    stay the publisher path untouched."""
     h = _make_handler()
     client = MagicMock()
     client.post.return_value = _http_response()
 
     with patch(f"{HMOD}._get_httpx_client", return_value=client):
-        h.create_batch(
+        out = h.create_batch(
             _is_async=False,
             create_batch_data=CREATE_DATA,
             api_base=None,
@@ -196,6 +197,9 @@ def test_create_batch_sync_does_not_resolve_publisher_models():
             max_retries=None,
         )
 
+    assert isinstance(out, LiteLLMBatch)
+    sent = json.loads(client.post.call_args.kwargs["data"])
+    assert sent["model"] == "publishers/google/models/gemini-1.5-flash-001"
     client.get.assert_not_called()
 
 
