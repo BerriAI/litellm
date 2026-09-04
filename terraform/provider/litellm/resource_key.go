@@ -148,12 +148,12 @@ func resourceKey() *schema.Resource {
 				Optional: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
-			"allowed_routes": {
+			"allowed_passthrough_routes": {
 				Type:     schema.TypeList,
 				Optional: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
-			"allowed_passthrough_routes": {
+			"allowed_routes": {
 				Type:     schema.TypeList,
 				Optional: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
@@ -241,9 +241,12 @@ func resourceKeyUpdate(ctx context.Context, d *schema.ResourceData, m interface{
 		// cascade-deletes its keys. If team_id is what changed and the update
 		// 404s because the key itself is already gone, there is nothing left
 		// to update - recreate it fresh under the new team instead of failing.
-		// Scoped to a team_id change specifically, so an unrelated update
-		// against a key that vanished for some other reason still fails
-		// loudly rather than being silently "fixed". See
+		// Gated on a team_id change so a plain update against a key gone for
+		// an unrelated reason still fails loudly. That gate can't fully tell
+		// "gone because of this team_id's own cascade" apart from "gone for
+		// an unrelated reason, coincidentally alongside a team_id edit in the
+		// same apply" - the latter also recovers here, same as the previous
+		// unconditional-ForceNew behavior did for every team_id change. See
 		// https://github.com/BerriAI/terraform-provider-litellm/issues/12.
 		if d.HasChange("team_id") && isKeyUpdateNotFoundError(err) {
 			log.Printf("[WARN] Key %q no longer exists (likely cascade-deleted along with its previous team); recreating under the new team_id.", d.Id())
@@ -256,9 +259,11 @@ func resourceKeyUpdate(ctx context.Context, d *schema.ResourceData, m interface{
 }
 
 // isKeyUpdateNotFoundError reports whether err is the specific error
-// /key/update returns when the key no longer exists. Client.UpdateKey wraps
-// Client.sendRequest's plain formatted error rather than a typed one, so
-// match on it the same way the credential helpers in utils.go match theirs.
+// /key/update returns when the key no longer exists. Unlike the credential
+// helpers in utils.go, which match against a parsed ErrorResponse because
+// handleCredentialAPIResponse unmarshals the body first, Client.sendRequest
+// (which UpdateKey uses) never parses its error body - it returns a plain
+// formatted string - so this matches on that string directly instead.
 func isKeyUpdateNotFoundError(err error) bool {
 	if err == nil {
 		return false
