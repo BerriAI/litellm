@@ -199,3 +199,57 @@ func TestRetryCredentialRead_ConnectionError(t *testing.T) {
 	// Connection error should not be retried (not a "credential_not_found")
 	fmt.Printf("connection error (expected): %v\n", err)
 }
+
+// A credential that already exists in LiteLLM (created out of band, or left
+// behind by a prior apply that dropped state) must be adopted on create
+// instead of failing on the credential_name unique-constraint conflict.
+func TestResourceLiteLLMCredentialCreate_AdoptsOnConflict(t *testing.T) {
+	var createCalls, updateCalls, readCalls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/credentials":
+			atomic.AddInt32(&createCalls, 1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":{"message":"Unique constraint failed on the fields: (` + "`credential_name`" + `)","type":"internal_server_error","code":"500"}}`))
+		case r.Method == http.MethodPatch:
+			atomic.AddInt32(&updateCalls, 1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`))
+		case r.Method == http.MethodGet:
+			atomic.AddInt32(&readCalls, 1)
+			resp := CredentialResponse{CredentialName: "conflict-test", CredentialInfo: map[string]interface{}{}}
+			body, _ := json.Marshal(resp)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(body)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMCredential().Schema, map[string]interface{}{
+		"credential_name":   "conflict-test",
+		"credential_info":   map[string]interface{}{},
+		"credential_values": map[string]interface{}{"key": "val"},
+	})
+
+	if err := resourceLiteLLMCredentialCreate(d, client); err != nil {
+		t.Fatalf("expected create to adopt the existing credential, got error: %v", err)
+	}
+	if d.Id() != "conflict-test" {
+		t.Fatalf("expected ID %q, got %q", "conflict-test", d.Id())
+	}
+	if atomic.LoadInt32(&createCalls) != 1 {
+		t.Fatalf("expected exactly 1 POST /credentials call, got %d", createCalls)
+	}
+	if atomic.LoadInt32(&updateCalls) != 1 {
+		t.Fatalf("expected the conflict to trigger exactly 1 PATCH (adopt-and-update), got %d", updateCalls)
+	}
+	if atomic.LoadInt32(&readCalls) < 1 {
+		t.Fatalf("expected the post-adopt retry read to run at least once, got %d", readCalls)
+	}
+}
