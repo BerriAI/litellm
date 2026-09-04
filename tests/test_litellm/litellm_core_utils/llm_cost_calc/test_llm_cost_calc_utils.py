@@ -4631,6 +4631,28 @@ def test_generic_cost_per_token_grok_46_long_context(_local_model_cost_map):
 
 
 @pytest.mark.parametrize(
+    ("model", "provider", "image_token_rate"),
+    [
+        ("gpt-realtime-2.1", "openai", 5e-06),
+        ("gpt-realtime-2.1-mini", "openai", 8e-07),
+        ("azure/gpt-realtime-2.1", "azure", 5e-06),
+        ("azure/gpt-realtime-2.1-mini", "azure", 8e-07),
+    ],
+)
+def test_realtime_image_tokens_priced_per_token(model, provider, image_token_rate, _local_model_cost_map):
+    """Realtime image input is billed per 1M image tokens, not per image."""
+    usage = Usage(
+        prompt_tokens=1_100,
+        completion_tokens=0,
+        total_tokens=1_100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=100, image_tokens=1_000),
+    )
+    prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider=provider)
+    text_rate = litellm.model_cost[model]["input_cost_per_token"]
+    assert prompt_cost == pytest.approx(100 * text_rate + 1_000 * image_token_rate)
+
+
+@pytest.mark.parametrize(
     ("response_quality", "requested_quality", "expected_cost"),
     [
         (None, "low", 0.04),
