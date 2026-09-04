@@ -21,6 +21,7 @@ import TeamDropdown from "../common_components/team_dropdown";
 import { type AddAutoRouterValues, handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { fetchAvailableModels, type ModelGroup } from "@/components/llm_calls/fetch_models";
 import { autoRouterListKey, fetchAllModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
+import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
   effectiveClassifierType,
@@ -64,6 +65,7 @@ import {
 } from "@/lib/autorouter_presets";
 import { useAutoRouterPresets } from "@/app/(dashboard)/hooks/autoRouter/useAutoRouterPresets";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { buildAutomaticRouterConfig } from "./auto_setup";
 
 interface AddAutoRouterTabProps {
   handleOk: () => void;
@@ -104,6 +106,7 @@ const presetDisabledHint = (availability: PresetAvailability): string | null => 
 const isPresetHintAlarming = (availability: PresetAvailability): boolean => availability.kind === "missing_models";
 
 const NO_PRESETS: AutoRouterPreset[] = [];
+const AUTO_SETUP_PRESET_PRIORITY = ["1m_context", "anthropic_family", "openai_family", "gemini_family", "lite"];
 
 // A one-line summary of what's configured, shown when the detailed section is collapsed so a
 // caller can see the shape of the config without opening it.
@@ -233,6 +236,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     queryFn: () => fetchAllModelDeployments(accessToken, userId ?? "", userRole),
     enabled: Boolean(accessToken),
   });
+  const { data: modelCostMap = {}, isLoading: costsLoading } = useModelCostMap();
   const modelsLoading = groupsLoading || deploymentsLoading;
   const modelInfo = React.useMemo(() => data ?? [], [data]);
   const {
@@ -242,6 +246,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     refetch: refetchPresets,
   } = useAutoRouterPresets();
   const presets = presetsData ?? NO_PRESETS;
+  const automaticSetupLoading = modelsLoading || costsLoading || presetsPending;
   const presetsUnavailable = presetsError && presetsData === undefined;
   // react-query keeps the last successful list around when a later refetch fails, so isError alone
   // can't tell "never loaded" apart from "loaded, then a background refetch errored" - only the
@@ -311,6 +316,30 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     setEmbeddingModel(prefill.embeddingModel);
     setMatchThreshold(prefill.matchThreshold);
     setEscalationKeywords(prefill.escalationKeywords);
+  };
+
+  const handleAutomaticSetup = () => {
+    const matchingPreset = AUTO_SETUP_PRESET_PRIORITY.map((key) => presets.find((preset) => preset.key === key)).find(
+      (preset) => preset && presetAvailability(preset).kind === "available",
+    );
+    if (matchingPreset) {
+      const presetState = presetAvailability(matchingPreset);
+      setSelectedPreset(matchingPreset.key);
+      applyPrefill(buildPresetPrefill(matchingPreset.complexity_router_config, availability));
+      setDetailsExpanded(presetState.kind === "available" && presetState.viaDeployments);
+      toast.success(`Configured with ${matchingPreset.label}`);
+      return;
+    }
+
+    const generatedConfig = buildAutomaticRouterConfig(modelInfo, deployments ?? [], modelCostMap);
+    if (generatedConfig === null) {
+      toast.fromError("Add at least one chat model before configuring an Auto Router");
+      return;
+    }
+    setSelectedPreset(undefined);
+    applyPrefill({ ...buildEmptyPrefill(), complexityRouterConfig: generatedConfig });
+    setDetailsExpanded(false);
+    toast.success("Automatic setup created", { description: tierConfigSummary(generatedConfig) });
   };
 
   const handlePresetChange = (presetKey: string | undefined) => {
@@ -507,6 +536,25 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               >
                 {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g., smart_router, auto_router_1" />}
               </FormField>
+
+              <div className="flex items-center justify-between gap-4 rounded-lg border border-border p-4">
+                <div>
+                  <div className="text-sm font-medium text-foreground">Start with a recommended setup</div>
+                  <div className="text-xs text-muted-foreground">
+                    Uses your available models and their listed prices. You can review and edit everything before
+                    saving.
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  data-testid="configure-automatically-button"
+                  disabled={automaticSetupLoading}
+                  onClick={handleAutomaticSetup}
+                >
+                  {automaticSetupLoading && <UiLoadingSpinner className="size-4" />}
+                  Configure automatically
+                </Button>
+              </div>
 
               <div>
                 <label className="block text-sm font-medium text-foreground mb-2">Template</label>
