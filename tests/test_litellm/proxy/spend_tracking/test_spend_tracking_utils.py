@@ -3399,6 +3399,19 @@ def test_get_spend_logs_id_prefers_the_response_id_over_the_standard_logging_id(
     )
 
 
+def test_get_spend_logs_id_falls_back_when_the_standard_logging_id_is_none():
+    ids = [
+        get_spend_logs_id(
+            "acompletion",
+            {"id": None},
+            {"litellm_call_id": call_id, "standard_logging_object": {"id": "None"}},
+        )
+        for call_id in ("call-id-1", "call-id-2")
+    ]
+
+    assert ids == ["call-id-1", "call-id-2"]
+
+
 @pytest.mark.asyncio
 async def test_spend_log_request_id_is_the_message_id_a_bridged_streaming_caller_was_streamed():
     """A streaming /v1/messages call against a non-Anthropic model is served a msg_ id the
