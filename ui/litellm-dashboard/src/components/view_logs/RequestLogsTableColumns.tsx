@@ -65,7 +65,7 @@ export const getRequestLogsTableColumns = ({
       const sessionMcpCount = log.mcp_tool_call_count ?? (isMcp ? sessionCount : 0);
 
       if (isBatchCallType(log.call_type)) {
-        return <BatchBadge count={sessionCount > 1 ? sessionCount : undefined} />;
+        return <BatchBadge />;
       }
       if (sessionCount <= 1) {
         if (isMcp) return <McpBadge />;

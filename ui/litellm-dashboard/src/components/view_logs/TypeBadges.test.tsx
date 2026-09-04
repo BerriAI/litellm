@@ -45,14 +45,9 @@ describe("TypeBadges", () => {
   });
 
   describe("BatchBadge", () => {
-    it("should render with default 'Batch' text when no count is provided", () => {
+    it("should render 'Batch'", () => {
       render(<BatchBadge />);
       expect(screen.getByText("Batch")).toBeInTheDocument();
-    });
-
-    it("should render the count when provided", () => {
-      render(<BatchBadge count={4} />);
-      expect(screen.getByText("4")).toBeInTheDocument();
     });
   });
 });

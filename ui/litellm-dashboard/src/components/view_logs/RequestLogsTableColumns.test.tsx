@@ -141,6 +141,19 @@ describe("Type column", () => {
     expect(screen.getByText("Batch")).toBeInTheDocument();
     expect(screen.queryByText("LLM")).not.toBeInTheDocument();
   });
+
+  it("keeps the Batch label on the grouped create-plus-cost session instead of a row count", () => {
+    const groupedCostRow: Partial<LogEntry> = {
+      request_id: "batch_1_batch_cost",
+      call_type: "aretrieve_batch",
+      session_id: "batch_1",
+      session_total_count: 2,
+    };
+    renderRows([logEntry(groupedCostRow)]);
+
+    expect(screen.getByText("Batch")).toBeInTheDocument();
+    expect(screen.queryByText("2")).not.toBeInTheDocument();
+  });
 });
 
 describe("batch rows", () => {

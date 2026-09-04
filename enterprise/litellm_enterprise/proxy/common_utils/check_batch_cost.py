@@ -158,7 +158,7 @@ class CheckBatchCost:
                         where={"token": api_key}
                     )
                 )
-                key_org_id = getattr(key_row, "org_id", None) if key_row is not None else None
+                key_org_id = getattr(key_row, "organization_id", None) if key_row is not None else None
                 if key_org_id:
                     return key_org_id
             except Exception as e:
