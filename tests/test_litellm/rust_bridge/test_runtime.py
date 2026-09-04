@@ -288,11 +288,14 @@ def test_accepts_only_eligible_supported_requests(
 
     bridge: Final = runtime.RustBridge(route="preflight", load=load, enabled=enabled)
 
-    assert bridge.accepts(
-        check=check,
-        request_override=False if state == "disabled" else None,
-        eligible=state != "ineligible",
-    ) is expected
+    assert (
+        bridge.accepts(
+            check=check,
+            request_override=False if state == "disabled" else None,
+            eligible=state != "ineligible",
+        )
+        is expected
+    )
     assert tuple(events) == expected_events
 
 
