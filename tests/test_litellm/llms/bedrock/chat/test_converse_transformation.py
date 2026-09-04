@@ -463,6 +463,40 @@ def test_reasoning_effort_none_omits_thinking_for_anthropic_converse(model):
 
 
 @pytest.mark.parametrize(
+    "max_tokens,expect_thinking,expect_budget_below_max_tokens",
+    [
+        (1024, False, None),  # at/below Bedrock's min thinking budget -> thinking dropped entirely
+        (2048, True, True),   # medium's default budget (2048) equals max_tokens -> must be clamped below it
+        (4096, True, False),  # budget already fits comfortably under max_tokens -> left unchanged
+    ],
+)
+def test_reasoning_effort_thinking_budget_clamped_to_max_tokens_converse(
+    max_tokens, expect_thinking, expect_budget_below_max_tokens
+):
+    """Regression #39627: a deployment-level reasoning_effort must not send a
+    thinking.budget_tokens that is >= max_tokens on Bedrock Converse. Bedrock
+    requires maxTokens strictly greater than thinking.budget_tokens, so the
+    mapped budget must be clamped the same way the adaptive-downgrade branch
+    already clamps it, or dropped when even the 1024 minimum can't fit."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"max_tokens": max_tokens, "reasoning_effort": "medium"},
+        optional_params={},
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        drop_params=False,
+    )
+
+    if not expect_thinking:
+        assert optional_params.get("thinking") is None
+        return
+
+    thinking = optional_params["thinking"]
+    budget = thinking["budget_tokens"]
+    assert budget < max_tokens if expect_budget_below_max_tokens else budget == 2048
+
+
+@pytest.mark.parametrize(
     "model,effort,expected_effort",
     [
         ("bedrock/converse/us.anthropic.claude-opus-4-7", "low", "low"),
