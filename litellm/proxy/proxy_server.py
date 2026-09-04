@@ -8917,11 +8917,20 @@ def select_data_generator(
 
 def get_litellm_model_info(model: dict = {}):
     model_info: Final = model.get("model_info", {})
-    model_to_lookup = model.get("litellm_params", {}).get("model", None)
+    litellm_params: Final = model.get("litellm_params") or _EMPTY_MAPPING
+    configured_model: Final = litellm_params.get("model", None)
+    use_base_model: Final = (isinstance(configured_model, str) and "azure" in configured_model) or bool(
+        model_info.get("base_model")
+    )
+    model_to_lookup: Final = model_info.get("base_model", None) if use_base_model else configured_model
     try:
-        if "azure" in model_to_lookup or model_info.get("base_model"):
-            model_to_lookup = model_info.get("base_model", None)
-        litellm_model_info: Final = litellm.get_model_info(model_to_lookup)
+        litellm_model_info: Final = litellm.get_model_info(
+            model_to_lookup,
+            custom_llm_provider=litellm_params.get("custom_llm_provider"),
+            api_base=litellm_params.get("api_base"),
+            api_key=litellm_params.get("api_key"),
+            discover_model_info=True,
+        )
         return litellm_model_info
     except Exception:
         # this should not block returning on /model/info

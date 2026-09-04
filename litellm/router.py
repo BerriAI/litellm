@@ -10321,7 +10321,12 @@ class Router:
         model_name: Final = model_info["model_name"]
         return self.get_model_list(model_name=model_name)
 
-    def get_deployment_model_info(self, model_id: str, model_name: str) -> ModelInfo | None:
+    def get_deployment_model_info(
+        self,
+        model_id: str,
+        model_name: str,
+        litellm_params: LiteLLM_Params | None = None,
+    ) -> ModelInfo | None:
         """
         For a given model id, return the model info
 
@@ -10340,8 +10345,25 @@ class Router:
         except Exception:
             pass
 
+        deployment: Final = self.get_deployment(model_id=model_id) if litellm_params is None else None
+        resolved_litellm_params: Final = (
+            litellm_params
+            if litellm_params is not None
+            else deployment.litellm_params
+            if deployment is not None
+            else None
+        )
+
         try:
-            litellm_model_name_model_info = litellm.get_model_info(model=model_name)
+            litellm_model_name_model_info = litellm.get_model_info(
+                model=model_name,
+                custom_llm_provider=(
+                    resolved_litellm_params.custom_llm_provider if resolved_litellm_params is not None else None
+                ),
+                api_base=resolved_litellm_params.api_base if resolved_litellm_params is not None else None,
+                api_key=resolved_litellm_params.api_key if resolved_litellm_params is not None else None,
+                discover_model_info=True,
+            )
         except Exception:
             pass
 
@@ -10457,7 +10479,11 @@ class Router:
             try:
                 model_id = model_info_dict.get("id", None)
                 if model_id is not None:
-                    model_info = self.get_deployment_model_info(model_id=model_id, model_name=litellm_params.model)
+                    model_info = self.get_deployment_model_info(
+                        model_id=model_id,
+                        model_name=litellm_params.model,
+                        litellm_params=litellm_params,
+                    )
                 else:
                     model_info = None
             except Exception:

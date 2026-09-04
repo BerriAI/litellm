@@ -1,12 +1,16 @@
 import json
+import logging
 from unittest.mock import MagicMock, patch
 
+import pytest
 
+import litellm
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
 )
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+from litellm.llms.vllm.common_utils import VLLMModelInfo
 
 
 def test_hosted_vllm_chat_transformation_file_url():
@@ -433,3 +437,240 @@ def test_hosted_vllm_custom_tools_use_top_level_input_schema():
     assert tools[0]["function"]["name"] == "search"
     assert tools[0]["function"]["description"] == "Search docs"
     assert tools[0]["function"]["parameters"] == input_schema
+
+
+def _model_list_response(*entries: dict[str, object]) -> MagicMock:
+    response = MagicMock()
+    response.json.return_value = {"data": list(entries)}
+    return response
+
+
+def test_vllm_model_info_maps_context_only_and_authenticates(monkeypatch) -> None:
+    request = MagicMock(return_value=_model_list_response({"id": "Qwen/Qwen3-8B", "max_model_len": 262_144}))
+    monkeypatch.setattr(litellm.module_level_client, "get", request)
+
+    info = VLLMModelInfo(provider="hosted_vllm").get_model_info(
+        model="hosted_vllm/Qwen/Qwen3-8B",
+        api_base="https://vllm.example/v1",
+        api_key="secret-key",
+    )
+
+    assert info is not None
+    assert info["max_input_tokens"] == 262_144
+    assert info["max_tokens"] is None
+    assert info["max_output_tokens"] is None
+    request.assert_called_once()
+    assert request.call_args.kwargs["url"] == "https://vllm.example/v1/models"
+    assert dict(request.call_args.kwargs["headers"]) == {"authorization": "Bearer secret-key"}
+
+
+def test_vllm_model_info_does_not_discover_without_opt_in(monkeypatch) -> None:
+    request = MagicMock()
+    monkeypatch.setattr(litellm.module_level_client, "get", request)
+
+    with pytest.raises(Exception, match="isn't mapped yet"):
+        litellm.get_model_info(
+            "hosted_vllm/not-in-static-map",
+            api_base="https://no-discovery.example/v1",
+        )
+
+    request.assert_not_called()
+
+
+@pytest.mark.parametrize("value", [None, 0, -1, True, "262144"])
+def test_vllm_model_info_ignores_non_positive_or_non_integer_context(
+    monkeypatch,
+    value: object,
+) -> None:
+    monkeypatch.setattr(
+        litellm.module_level_client,
+        "get",
+        MagicMock(return_value=_model_list_response({"id": "model", "max_model_len": value})),
+    )
+
+    assert (
+        VLLMModelInfo(provider="hosted_vllm").get_model_info(
+            model="hosted_vllm/model",
+            api_base="https://vllm.example/v1",
+        )
+        is None
+    )
+
+
+def test_vllm_explicit_base_never_receives_an_ambient_key(monkeypatch) -> None:
+    request = MagicMock(return_value=_model_list_response({"id": "model"}))
+    monkeypatch.setenv("HOSTED_VLLM_API_KEY", "ambient-secret")
+    monkeypatch.setattr(litellm.module_level_client, "get", request)
+
+    VLLMModelInfo(provider="hosted_vllm").get_model_info(
+        model="hosted_vllm/model",
+        api_base="https://operator-supplied.example/v1",
+    )
+
+    assert dict(request.call_args.kwargs["headers"]) == {}
+
+
+def test_hosted_vllm_model_info_uses_provider_environment(monkeypatch) -> None:
+    request = MagicMock(return_value=_model_list_response({"id": "env-model", "max_model_len": 32_768}))
+    monkeypatch.setenv("HOSTED_VLLM_API_BASE", "https://hosted.example/v1")
+    monkeypatch.setenv("HOSTED_VLLM_API_KEY", "hosted-secret")
+    monkeypatch.setattr(litellm.module_level_client, "get", request)
+
+    info = litellm.get_model_info("hosted_vllm/env-model", discover_model_info=True)
+
+    assert info["litellm_provider"] == "hosted_vllm"
+    assert info["max_input_tokens"] == 32_768
+    request.assert_called_once()
+    assert request.call_args.kwargs["url"] == "https://hosted.example/v1/models"
+    assert dict(request.call_args.kwargs["headers"]) == {"authorization": "Bearer hosted-secret"}
+
+
+def test_bare_vllm_model_keeps_explicit_provider_identity(monkeypatch) -> None:
+    monkeypatch.setattr(
+        litellm.module_level_client,
+        "get",
+        MagicMock(return_value=_model_list_response({"id": "shared", "max_model_len": 65_536})),
+    )
+
+    info = litellm.get_model_info(
+        "shared",
+        custom_llm_provider="vllm",
+        api_base="https://vllm.example/v1",
+        discover_model_info=True,
+    )
+
+    assert info["litellm_provider"] == "vllm"
+    assert info["max_input_tokens"] == 65_536
+
+
+def test_vllm_endpoint_scoped_lookup_refreshes_and_removes_without_global_registration(
+    monkeypatch,
+) -> None:
+    responses = [
+        _model_list_response({"id": "shared", "max_model_len": 32_768}),
+        _model_list_response({"id": "shared", "max_model_len": 65_536}),
+        _model_list_response(),
+    ]
+    request = MagicMock(side_effect=responses)
+    monkeypatch.setattr(litellm.module_level_client, "get", request)
+    key = "hosted_vllm/shared"
+    original_entry = litellm.model_cost.get(key)
+
+    first = litellm.get_model_info(
+        key,
+        api_base="https://vllm-a.example/v1",
+        api_key="key-a",
+        discover_model_info=True,
+    )
+    second = litellm.get_model_info(
+        key,
+        api_base="https://vllm-a.example/v1",
+        api_key="key-a",
+        discover_model_info=True,
+    )
+    with pytest.raises(Exception, match="isn't mapped yet"):
+        litellm.get_model_info(
+            key,
+            api_base="https://vllm-a.example/v1",
+            api_key="key-a",
+            discover_model_info=True,
+        )
+
+    assert first["max_input_tokens"] == 32_768
+    assert second["max_input_tokens"] == 65_536
+    assert litellm.model_cost.get(key) is original_entry
+
+
+def test_vllm_same_model_id_is_isolated_by_endpoint(monkeypatch) -> None:
+    def get(url: str, headers: dict[str, str]) -> MagicMock:
+        del headers
+        context = 32_768 if "vllm-a" in url else 131_072
+        return _model_list_response({"id": "shared", "max_model_len": context})
+
+    monkeypatch.setattr(litellm.module_level_client, "get", get)
+
+    info_a = litellm.get_model_info(
+        "hosted_vllm/shared",
+        api_base="https://vllm-a.example/v1",
+        api_key="key-a",
+        discover_model_info=True,
+    )
+    info_b = litellm.get_model_info(
+        "hosted_vllm/shared",
+        api_base="https://vllm-b.example/v1",
+        api_key="key-b",
+        discover_model_info=True,
+    )
+
+    assert info_a["max_input_tokens"] == 32_768
+    assert info_b["max_input_tokens"] == 131_072
+
+
+def test_vllm_discovery_failure_does_not_log_the_api_key(monkeypatch, caplog) -> None:
+    secret = "do-not-log-this-key"
+    monkeypatch.setattr(
+        litellm.module_level_client,
+        "get",
+        MagicMock(side_effect=RuntimeError("discovery failed")),
+    )
+
+    with caplog.at_level(logging.WARNING), pytest.raises(Exception, match="isn't mapped yet"):
+        litellm.get_model_info(
+            "hosted_vllm/unmapped",
+            api_base="https://vllm.example/v1",
+            api_key=secret,
+            discover_model_info=True,
+        )
+
+    assert secret not in caplog.text
+
+
+def test_vllm_endpoint_discovery_survives_price_map_replacement(monkeypatch) -> None:
+    monkeypatch.setattr(litellm, "model_cost", {})
+    monkeypatch.setattr(
+        litellm.module_level_client,
+        "get",
+        MagicMock(return_value=_model_list_response({"id": "model", "max_model_len": 98_304})),
+    )
+
+    monkeypatch.setattr(litellm, "model_cost", {"unrelated": {"litellm_provider": "openai"}})
+    info = litellm.get_model_info(
+        "hosted_vllm/model",
+        api_base="https://vllm.example/v1",
+        api_key="key",
+        discover_model_info=True,
+    )
+
+    assert info["max_input_tokens"] == 98_304
+    assert "hosted_vllm/model" not in litellm.model_cost
+
+
+def test_vllm_discovery_preserves_static_pricing(monkeypatch) -> None:
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    static_info = {
+        "litellm_provider": "hosted_vllm",
+        "mode": "chat",
+        "max_input_tokens": 4_096,
+        "input_cost_per_token": 0.25,
+        "output_cost_per_token": 0.5,
+    }
+    with monkeypatch.context() as scoped:
+        scoped.setattr(litellm, "model_cost", {"hosted_vllm/priced": static_info})
+        scoped.setattr(
+            litellm.module_level_client,
+            "get",
+            MagicMock(return_value=_model_list_response({"id": "priced", "max_model_len": 131_072})),
+        )
+        _invalidate_model_cost_lowercase_map()
+
+        info = litellm.get_model_info(
+            "hosted_vllm/priced",
+            api_base="https://vllm.example/v1",
+            discover_model_info=True,
+        )
+
+        assert info["max_input_tokens"] == 131_072
+        assert info["input_cost_per_token"] == 0.25
+        assert info["output_cost_per_token"] == 0.5
+    _invalidate_model_cost_lowercase_map()

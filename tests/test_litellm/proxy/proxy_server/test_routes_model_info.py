@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import litellm
 from litellm.proxy import proxy_server
 
 from .conftest import normalize  # type: ignore[import-not-found]
@@ -140,6 +141,76 @@ def test_get_proxy_model_info_surfaces_supports_parallel_function_calling(local_
         }
     )
     assert enriched["model_info"]["supports_parallel_function_calling"] is True
+
+
+def test_get_proxy_model_info_discovers_vllm_context_with_config_precedence(
+    monkeypatch,
+):
+    response = MagicMock()
+    response.json.return_value = {"data": [{"id": "shared", "max_model_len": 262_144}]}
+    request = MagicMock(return_value=response)
+    monkeypatch.setattr(proxy_server.litellm.module_level_client, "get", request)
+
+    enriched = proxy_server._get_proxy_model_info(
+        model={
+            "model_name": "vllm-model",
+            "litellm_params": {
+                "model": "hosted_vllm/shared",
+                "api_base": "https://vllm.example/v1",
+                "api_key": "endpoint-secret",
+            },
+            "model_info": {
+                "id": "vllm-deployment",
+                "max_input_tokens": 200_000,
+                "max_output_tokens": 32_768,
+            },
+        }
+    )
+
+    assert enriched["model_info"]["max_input_tokens"] == 200_000
+    assert enriched["model_info"]["max_output_tokens"] == 32_768
+    assert enriched["model_info"]["max_tokens"] is None
+    assert "api_key" not in enriched["litellm_params"]
+    assert dict(request.call_args.kwargs["headers"]) == {"authorization": "Bearer endpoint-secret"}
+
+
+def test_v1_model_info_route_surfaces_discovered_vllm_context(
+    client,
+    auth_as,
+    monkeypatch,
+):
+    response = MagicMock()
+    response.json.return_value = {"data": [{"id": "shared", "max_model_len": 262_144}]}
+    request = MagicMock(return_value=response)
+    monkeypatch.setattr(litellm.module_level_client, "get", request)
+    model_list = [
+        {
+            "model_name": "vllm-model",
+            "litellm_params": {
+                "model": "hosted_vllm/shared",
+                "api_base": "https://vllm.example/v1",
+                "api_key": "endpoint-secret",
+            },
+            "model_info": {"id": "vllm-route-deployment"},
+        }
+    ]
+    router = litellm.Router(model_list=model_list)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    with auth_as():
+        result = client.get(
+            "/v1/model/info",
+            params={"litellm_model_id": "vllm-route-deployment"},
+        )
+
+    assert result.status_code == 200
+    deployment = result.json()["data"][0]
+    assert deployment["model_info"]["max_input_tokens"] == 262_144
+    assert deployment["model_info"]["max_output_tokens"] is None
+    assert "api_key" not in deployment["litellm_params"]
 
 
 def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):
