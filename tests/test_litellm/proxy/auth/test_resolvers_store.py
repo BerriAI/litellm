@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from typing import Dict, Optional
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -30,6 +29,14 @@ class _FakeCache:
         return self._entries.get(key)
 
     async def async_set_cache(self, *args, **kwargs):
+        return None
+
+
+class _FakeEmptyKeyTable:
+    """Stands in for the PrismaClient the store reads the key row through. Returning
+    no row is what a submitted key that was never issued looks like."""
+
+    async def get_data(self, *args, **kwargs):
         return None
 
 
@@ -80,15 +87,11 @@ async def test_resolve_logs_the_hash_when_no_key_row_exists(caplog):
     once the 401 itself stopped carrying it. Killing the log leaves a JWT-mapped miss
     with nothing but a generic 401 in the operator's logs."""
     missing = hash_token("sk-live-not-a-key")
-    store = IdentityStore(object(), _FakeCache())
+    store = IdentityStore(_FakeEmptyKeyTable(), _FakeCache())
 
-    with patch(
-        "litellm.proxy.auth.resolvers.store._fetch_key_object_from_db_with_reconnect",
-        new=AsyncMock(return_value=None),
-    ):
-        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-            with pytest.raises(KeyNotFoundError) as exc_info:
-                await store.resolve(hashed_token=missing)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        with pytest.raises(KeyNotFoundError) as exc_info:
+            await store.resolve(hashed_token=missing)
 
     assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
     assert missing not in str(exc_info.value)
