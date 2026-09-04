@@ -19,7 +19,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import REDACTED_BY_LITELLM, REDACTED_BY_LITELM_STRING
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.datadog.datadog_handler import (
     get_datadog_base_url_from_env,
@@ -46,6 +46,8 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens, extract_cache_read_tokens
 from litellm.types.integrations.datadog_llm_obs import *
 from litellm.types.utils import (
+    AUDIT_GUARDRAIL_FIELDS,
+    PROMPT_CARRYING_GUARDRAIL_FIELDS,
     PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     CallTypes,
     StandardLoggingGuardrailInformation,
@@ -59,6 +61,8 @@ _MAX_PARSED_TOOL_ARGUMENT_CHARS: Final = 256 * 1024
 _SAFE_REDACTED_MESSAGE_ROLES: Final = frozenset(
     {"agent", "assistant", "developer", "function", "model", "system", "tool", "user"}
 )
+
+_CLASSIFIED_GUARDRAIL_FIELDS: Final = AUDIT_GUARDRAIL_FIELDS | PROMPT_CARRYING_GUARDRAIL_FIELDS
 
 _PROMPT_CARRYING_METADATA_FIELDS: Final = frozenset(
     {
@@ -105,6 +109,39 @@ def _router_span_fields(
             and value is not None
             and not (redact_prompt_text and record_field in PROMPT_QUOTING_ROUTING_DECISION_FIELDS)
         }
+    )
+
+
+def _guardrail_entry_without_prompt_carriers(entry: Mapping[str, object]) -> Mapping[str, object]:
+    """One guardrail record kept as its audit fields, with the prompt-quoting ones marked redacted.
+
+    Built as an allow-list rather than a deny-list: a key neither set classifies is dropped, so a
+    guardrail that records its own extra detail cannot put the caller's prompt on a redacted span.
+    """
+    return {  # mutable-ok: a fresh record built per entry, handed straight to the span serializer
+        field: REDACTED_BY_LITELM_STRING if field in PROMPT_CARRYING_GUARDRAIL_FIELDS else value
+        for field, value in entry.items()
+        if field in _CLASSIFIED_GUARDRAIL_FIELDS
+    }
+
+
+def _guardrail_information_without_prompt_carriers(
+    guardrail_information: object,
+) -> tuple[Mapping[str, object], ...] | None:
+    """The guardrail records reduced to what a redacted span may carry.
+
+    Redaction removes the prompt, not the record that a guardrail ran: the name, mode, status,
+    timings and masked-entity counts are what an operator reads to answer whether a guardrail
+    caught anything on a request, and none of them reproduce the prompt. Field-level rather than
+    dropping the list, which is what `_sanitize_guardrail_information_for_spend_logs` already does
+    for spend logs.
+    """
+    if guardrail_information is None:
+        return None
+    if not isinstance(guardrail_information, (list, tuple)):
+        return ()
+    return tuple(
+        _guardrail_entry_without_prompt_carriers(entry) for entry in guardrail_information if isinstance(entry, Mapping)
     )
 
 
@@ -872,7 +909,9 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             "cache_key": standard_logging_payload.get("cache_key", "unknown"),
             "saved_cache_cost": standard_logging_payload.get("saved_cache_cost", 0),
             "guardrail_information": (
-                None if redact_prompt_text else standard_logging_payload.get("guardrail_information", None)
+                _guardrail_information_without_prompt_carriers(standard_logging_payload.get("guardrail_information"))
+                if redact_prompt_text
+                else standard_logging_payload.get("guardrail_information", None)
             ),
             "is_streamed_request": self._get_stream_value_from_payload(standard_logging_payload),
             "latency_metrics": dict(self._get_latency_metrics(standard_logging_payload)),

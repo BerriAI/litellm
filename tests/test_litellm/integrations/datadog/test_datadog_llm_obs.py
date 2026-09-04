@@ -12,7 +12,7 @@ spelling of prompt-cache counts (`prompt_tokens_details.cached_tokens`).
 import json
 import os
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Final
 from unittest.mock import patch
 
 import pytest
@@ -631,8 +631,114 @@ def test_redaction_drops_every_prompt_carrying_metadata_record(logger: DataDogLL
     for record in sensitive_metadata:
         assert record not in redacted["meta"]["metadata"]
         assert record in unredacted["meta"]["metadata"]
-    assert redacted["meta"]["metadata"]["guardrail_information"] is None
+    assert redacted["meta"]["metadata"]["guardrail_information"] == [
+        {"guardrail_name": "g", "guardrail_request": "REDACTED_BY_LITELM"}
+    ]  # the record survives; only the field quoting the prompt is replaced
     assert unredacted["meta"]["metadata"]["guardrail_information"] is not None
+
+
+_AUDIT_RECORD: Final[dict[str, Any]] = {
+    "guardrail_name": "bedrock-pii",
+    "guardrail_provider": "bedrock",
+    "guardrail_mode": "pre_call",
+    "guardrail_status": "guardrail_intervened",
+    "guardrail_response": {"action": "MASK", "match": "alice@acme.com"},
+    "match_details": [{"pattern": "email", "match": "alice@acme.com"}],
+    "classification": "the user asked for alice@acme.com",
+    "masked_entity_count": {"EMAIL": 2},
+    "violation_categories": ["pii"],
+    "duration": 0.01,
+}
+
+
+def test_redaction_keeps_the_guardrail_audit_record(logger: DataDogLLMObsLogger) -> None:
+    """Redaction removes the prompt, not the operator's record that a guardrail intervened."""
+
+    def payload() -> dict[str, Any]:
+        built = build_payload()
+        built["standard_logging_object"]["guardrail_information"] = [dict(_AUDIT_RECORD)]
+        return built
+
+    redacted = _span_json(_redacting_logger(turn_off_message_logging=True), payload())
+    record = redacted["meta"]["metadata"]["guardrail_information"][0]
+
+    for field in ("guardrail_request", "guardrail_response", "match_details", "classification"):
+        assert record.get(field, "REDACTED_BY_LITELM") == "REDACTED_BY_LITELM"
+    assert record["guardrail_name"] == "bedrock-pii"
+    assert record["guardrail_provider"] == "bedrock"
+    assert record["guardrail_mode"] == "pre_call"
+    assert record["guardrail_status"] == "guardrail_intervened"
+    assert record["masked_entity_count"] == {"EMAIL": 2}
+    assert record["violation_categories"] == ["pii"]
+    assert record["duration"] == 0.01
+    assert "alice@acme.com" not in safe_dumps(redacted["meta"]["metadata"])
+
+
+def test_a_caller_supplied_redaction_header_cannot_blank_the_guardrail_record(
+    logger: DataDogLLMObsLogger,
+) -> None:
+    """Any key may redact its own prompts with the header; none may erase what a guardrail caught."""
+    payload = build_payload()
+    payload["standard_logging_object"]["guardrail_information"] = [dict(_AUDIT_RECORD)]
+    payload["litellm_params"] = {"metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}}
+
+    span = _span_json(logger, payload)
+    record = span["meta"]["metadata"]["guardrail_information"][0]
+
+    assert span["meta"]["input"]["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert record["guardrail_status"] == "guardrail_intervened"
+    assert record["masked_entity_count"] == {"EMAIL": 2}
+    assert "alice@acme.com" not in safe_dumps(span["meta"]["metadata"])
+
+
+def test_a_guardrails_own_extra_field_never_reaches_a_redacted_span(logger: DataDogLLMObsLogger) -> None:
+    """A guardrail may record whatever it likes; only classified fields survive redaction."""
+    payload = build_payload()
+    payload["standard_logging_object"]["guardrail_information"] = [
+        {**_AUDIT_RECORD, "matched_text": "the caller asked about alice@acme.com"}
+    ]
+
+    span = _span_json(_redacting_logger(turn_off_message_logging=True), payload)
+    record = span["meta"]["metadata"]["guardrail_information"][0]
+
+    assert "matched_text" not in record
+    assert record["guardrail_status"] == "guardrail_intervened"
+    assert "alice@acme.com" not in safe_dumps(span["meta"]["metadata"])
+
+
+def test_odd_guardrail_shapes_never_raise() -> None:
+    """The redacted branch replaced an expression that could not fail, so it must not start failing."""
+    from litellm.integrations.datadog.datadog_llm_obs import (
+        _guardrail_information_without_prompt_carriers,
+    )
+
+    assert _guardrail_information_without_prompt_carriers(None) is None
+    assert _guardrail_information_without_prompt_carriers([]) == ()
+    assert _guardrail_information_without_prompt_carriers(5) == ()
+    assert _guardrail_information_without_prompt_carriers("abc") == ()
+    assert (
+        _guardrail_information_without_prompt_carriers([None, "x", dict(_AUDIT_RECORD)])
+        == (_guardrail_information_without_prompt_carriers([dict(_AUDIT_RECORD)]) or ())[:1]
+    )
+
+
+def test_every_guardrail_field_is_classified() -> None:
+    """Redaction is derived from a declaration, not a list at the call site, so every field has to
+    be classified as quoting the prompt or reporting what the guardrail decided. A field added
+    without a decision fails here rather than silently shipping the prompt on a redacted span."""
+    from litellm.types.utils import (
+        AUDIT_GUARDRAIL_FIELDS,
+        PROMPT_CARRYING_GUARDRAIL_FIELDS,
+        StandardLoggingGuardrailInformation,
+    )
+
+    declared = set(StandardLoggingGuardrailInformation.__annotations__)
+    classified = PROMPT_CARRYING_GUARDRAIL_FIELDS | AUDIT_GUARDRAIL_FIELDS
+    assert declared == classified, (
+        "classify new guardrail-record fields in litellm/types/utils.py: "
+        f"unclassified={declared - classified}, stale={classified - declared}"
+    )
+    assert not (PROMPT_CARRYING_GUARDRAIL_FIELDS & AUDIT_GUARDRAIL_FIELDS)
 
 
 def test_tool_definitions_accept_the_bare_anthropic_shape(logger: DataDogLLMObsLogger) -> None:
