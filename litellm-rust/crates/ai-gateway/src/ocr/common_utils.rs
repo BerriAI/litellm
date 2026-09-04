@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use litellm_core::error::Error;
+use litellm_core::Error;
 use litellm_core::ocr::transformation::OcrProviderConfig;
 use reqwest::Url;
 use serde_json::{Map, Value};
@@ -19,19 +19,11 @@ use litellm_core::providers::vertex_ai::ocr::transformation::{
 };
 
 use crate::client::http_client;
+use crate::error::invalid_json_response;
 
-const ERROR_BODY_MAX_CHARS: usize = 256;
 const AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: f64 = 50.0;
 const MAX_SAFE_FETCH_REDIRECTS: usize = 10;
-
-pub(super) fn truncate_error_body(body: &str) -> String {
-    if body.chars().count() <= ERROR_BODY_MAX_CHARS {
-        return body.to_string();
-    }
-    let truncated: String = body.chars().take(ERROR_BODY_MAX_CHARS).collect();
-    format!("{truncated}... (truncated)")
-}
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) fn ocr_provider_config(
@@ -265,14 +257,13 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> Result<
         let body = response.text().await.unwrap_or_default();
         return Err(Error::Http {
             status: status.as_u16(),
-            body: truncate_error_body(&body),
+            body,
         });
     }
     let content_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("application/octet-stream")
@@ -380,12 +371,11 @@ pub(super) async fn poll_document_intelligence(
         if !status.is_success() {
             return Err(Error::Http {
                 status: status.as_u16(),
-                body: truncate_error_body(&text),
+                body: text,
             });
         }
-        let response_json: Value = serde_json::from_str(&text).map_err(|err| {
-            Error::InvalidResponse(format!("invalid Azure DI poll response JSON: {err}"))
-        })?;
+        let response_json: Value = serde_json::from_str(&text)
+            .map_err(|error| invalid_json_response("Azure DI poll", error))?;
         if operation_status(&response_json)? == "succeeded" {
             return Ok(response_json);
         }
@@ -442,33 +432,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(transformed, document);
-    }
-
-    #[test]
-    fn truncate_error_body_passes_short_strings_through() {
-        let body = "Unauthorized";
-        assert_eq!(truncate_error_body(body), "Unauthorized");
-    }
-
-    #[test]
-    fn truncate_error_body_caps_long_payloads() {
-        let body = "x".repeat(306);
-        let truncated = truncate_error_body(&body);
-
-        assert!(truncated.ends_with("... (truncated)"));
-        let prefix_chars = truncated
-            .strip_suffix("... (truncated)")
-            .expect("truncated marker present")
-            .chars()
-            .count();
-        assert_eq!(prefix_chars, 256);
-    }
-
-    #[test]
-    fn truncate_error_body_does_not_split_multibyte_chars() {
-        let body = "é".repeat(266);
-        let truncated = truncate_error_body(&body);
-        assert!(truncated.is_char_boundary(truncated.len()));
     }
 
     #[test]

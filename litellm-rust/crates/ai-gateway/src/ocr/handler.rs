@@ -1,12 +1,13 @@
-use litellm_core::error::Error;
+use litellm_core::Error;
 use litellm_core::http_utils::http_request;
 use litellm_core::ocr::transformation::OcrResponseHandling;
 use serde_json::Value;
 
-use super::common_utils::{poll_document_intelligence, truncate_error_body};
+use super::common_utils::poll_document_intelligence;
 use super::hooks::OcrLifecycleHooks;
 use super::types::PreparedOcrRequest;
 use crate::client::http_client;
+use crate::error::invalid_json_response;
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(crate) async fn execute_ocr_provider_call(
@@ -16,7 +17,9 @@ pub(crate) async fn execute_ocr_provider_call(
     let request = hooks.prepare_provider_request(request).await?;
     let mut request_builder = http_client().post(&request.url).json(&request.body);
     for (key, value) in &request.upstream_headers {
-        request_builder = request_builder.header(key, value);
+        if !key.eq_ignore_ascii_case("content-type") {
+            request_builder = request_builder.header(key, value);
+        }
     }
     if let Some(duration) = request.timeout {
         request_builder = request_builder.timeout(duration);
@@ -66,12 +69,12 @@ pub(crate) async fn execute_ocr_provider_call(
     if !status.is_success() {
         return Err(Error::Http {
             status: status.as_u16(),
-            body: truncate_error_body(&text),
+            body: text,
         });
     }
 
-    let response_json: Value = serde_json::from_str(&text)
-        .map_err(|err| Error::InvalidResponse(format!("invalid OCR response JSON: {err}")))?;
+    let response_json: Value =
+        serde_json::from_str(&text).map_err(|error| invalid_json_response("OCR", error))?;
 
     Ok(request
         .config

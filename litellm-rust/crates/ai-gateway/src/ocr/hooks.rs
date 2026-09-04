@@ -1,5 +1,5 @@
+use litellm_core::Error;
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
-use litellm_core::error::Error;
 use litellm_core::providers::reducto::ocr::transformation::{
     build_upload_request, extract_document_source, extract_upload_file_id,
 };
@@ -7,9 +7,10 @@ use serde_json::{Map, Value, json};
 use std::future::Future;
 use std::pin::Pin;
 
-use super::common_utils::{convert_document_url_to_data_uri, string_headers, truncate_error_body};
+use super::common_utils::{convert_document_url_to_data_uri, string_headers};
 use super::types::{PreparedOcrRequest, ProviderOcrRequest};
 use crate::client::http_client;
+use crate::error::invalid_json_response;
 use crate::integrations::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
 };
@@ -233,12 +234,11 @@ async fn upload_reducto_document(
     if !status.is_success() {
         return Err(Error::Http {
             status: status.as_u16(),
-            body: truncate_error_body(&body),
+            body,
         });
     }
-    let response_json: Value = serde_json::from_str(&body).map_err(|error| {
-        Error::InvalidResponse(format!("invalid Reducto upload response JSON: {error}"))
-    })?;
+    let response_json: Value = serde_json::from_str(&body)
+        .map_err(|error| invalid_json_response("Reducto upload", error))?;
     let file_id = extract_upload_file_id(&response_json)?;
     Ok(json!({"type": "document_url", "document_url": file_id}))
 }

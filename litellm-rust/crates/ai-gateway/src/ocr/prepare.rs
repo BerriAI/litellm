@@ -113,7 +113,7 @@ fn new_ocr_call_id() -> String {
 
 #[cfg(test)]
 mod tests {
-    use litellm_core::error::Error;
+    use litellm_core::Error;
     use serde_json::{Map, json};
 
     use super::{OcrRequest, prepare_ocr_call};

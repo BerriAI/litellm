@@ -15,6 +15,7 @@
 
 pub mod audio_transcription;
 mod client;
+mod error;
 pub mod io;
 pub mod ocr;
 
