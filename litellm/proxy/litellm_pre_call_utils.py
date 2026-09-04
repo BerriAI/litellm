@@ -994,9 +994,14 @@ def resolve_tenant_otel_destinations(
 
     Key settings win over team settings outright, the same precedence
     ``_get_dynamic_logging_metadata`` applies, so one caller never exports the same
-    backend to two accounts. Returns empty when OTEL V2 is off, when neither level
-    named a destination-capable backend, or when the config is incomplete, and the
-    request then keeps the operator's own exporters.
+    backend to two accounts. An empty key-level list counts as configured, since that
+    is what disabling a key's callbacks writes. Returns empty when OTEL V2 is off, when
+    neither level named a destination-capable backend, or when the config is
+    incomplete, and the request then keeps the operator's own exporters.
+
+    Two entries naming the same backend merge their ``callback_vars`` last-wins, the
+    way ``convert_key_logging_metadata_to_callback`` merges them, so the destination
+    and the per-request tracer routing cannot read one config two ways.
 
     A ``failure``-only entry is skipped: a destination is resolved during auth, before
     the request has an outcome, so honouring the filter would mean holding every span
@@ -1009,23 +1014,33 @@ def resolve_tenant_otel_destinations(
 
     if not is_otel_v2_enabled():
         return ()
-    entries: Final = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(
-        user_api_key_dict
-    ) or KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    key_entries: Final = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
+    entries: Final = (
+        key_entries
+        if key_entries is not None
+        else KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    )
     if not entries:
         return ()
-    resolved: Final = tuple(
-        destination
+    callbacks: Final = tuple(
+        callback
         for item in entries
         if (callback := _get_validated_callback_metadata(item=item, source="otel-destination")) is not None
         if callback.callback_type != "failure"
-        if (destination := destination_for(callback.callback_name, _tenant_otel_params(callback.callback_vars)))
-        is not None
     )
+    merged: Final = {
+        name: {
+            var: value
+            for callback in callbacks
+            if callback.callback_name == name
+            for var, value in callback.callback_vars.items()
+        }
+        for name in dict.fromkeys(callback.callback_name for callback in callbacks)
+    }
     return tuple(
         destination
-        for index, destination in enumerate(resolved)
-        if destination.callback_name not in tuple(earlier.callback_name for earlier in resolved[:index])
+        for name, callback_vars in merged.items()
+        if (destination := destination_for(name, _tenant_otel_params(callback_vars))) is not None
     )
 
 
