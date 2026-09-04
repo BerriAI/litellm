@@ -846,7 +846,14 @@ def image_edit(
         local_vars.update(kwargs)
         # Get ImageEditOptionalRequestParams with only valid parameters
         image_edit_optional_params: Final[ImageEditOptionalRequestParams] = (
-            _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(local_vars)
+            _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(
+                local_vars,
+                provider_supported_params=(
+                    image_edit_provider_config.get_supported_openai_params(model)
+                    if custom_llm_provider == litellm.LlmProviders.AZURE_AI.value
+                    else ()
+                ),
+            )
         )
         # Get optional parameters for the responses API
         image_edit_request_params: Final[dict] = _get_ImageEditRequestUtils().get_optional_params_image_edit(
