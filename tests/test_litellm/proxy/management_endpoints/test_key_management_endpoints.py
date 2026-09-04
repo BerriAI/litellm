@@ -841,56 +841,90 @@ async def test_update_key_personal_non_admin_denied_access_groups(
     assert exc.value.status_code == 403
     assert "Access groups" in str(exc.value.detail)
 
-
 # ---------------------------------------------------------------------------
 # Regression tests for GHSA-q775-qw9r-2r4g on the UPDATE path: /key/update must
-# not let a non-admin caller raise a key's max_budget / budget_limits /
+# not let a non-proxy-admin caller raise a key's max_budget / budget_limits /
 # temp_budget_increase above their own delegation ceiling.
-# _check_key_admin_access proves identity (proxy admin / key owner / team admin
-# / org admin) but never compares the requested values against the caller's
-# ceiling; the fix adds that value-vs-ceiling check to _validate_update_key_data.
-# prisma_client=None plus a personal key (team_id=None) skips the admin-identity
-# and team-member paths so these tests exercise only the ceiling gate.
+# Budget fields on /key/update route every non-proxy-admin caller through
+# _check_key_admin_access (proxy admin / team admin / org admin only), so the
+# surviving delegation scenario is an admin who is allowed to change a key's
+# budget but must not grant more than their own max_budget. These tests drive
+# _validate_update_key_data as a team admin on a team key with a mocked team
+# table and prisma; the delegation-ceiling gate in _validate_update_key_data is
+# the code under test, distinct from the generate-path guard in
+# _common_key_generation_helper.
 # ---------------------------------------------------------------------------
 
 
-def _update_key_ceiling_caller(max_budget):
+def _update_key_ceiling_ctx(monkeypatch, *, caller_max_budget, existing_max_budget):
+    """Return (caller, existing_row, mock_prisma) for a team-admin budget update.
+
+    The caller is a non-proxy-admin team admin (INTERNAL_USER carrying a
+    max_budget ceiling) updating a key that belongs to the team they admin. Both
+    the team-member gate and _check_key_admin_access authorize the caller via the
+    mocked team object, so only the delegation-ceiling gate decides the outcome.
+    """
     from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
-    return UserAPIKeyAuth(
+    caller = UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER,
-        api_key="sk-alice",
-        user_id="alice",
-        max_budget=max_budget,
+        api_key="sk-team-admin",
+        user_id="team-admin",
+        max_budget=caller_max_budget,
     )
-
-
-def _update_key_ceiling_existing_row(max_budget):
-    return MagicMock(
-        token="hashed_alice_personal_key",
-        user_id="alice",
-        team_id=None,
-        created_by="alice",
-        max_budget=max_budget,
+    existing_row = MagicMock(
+        token="hashed_team_key",
+        user_id="team-admin",
+        team_id="team-delegated",
+        created_by="team-admin",
+        max_budget=existing_max_budget,
         organization_id=None,
         project_id=None,
+        metadata={},
     )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data  # type: ignore
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing_row)
+    team_obj = LiteLLM_TeamTableCachedObj(
+        team_id="team-delegated",
+        members_with_roles=[Member(user_id="team-admin", role="admin")],
+    )
+
+    async def _fake_get_team_object(**kwargs):
+        return team_obj
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        _fake_get_team_object,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_helpers.team_member_permission_checks.get_team_object",
+        _fake_get_team_object,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    return caller, existing_row, mock_prisma_client
 
 
 @pytest.mark.asyncio
-async def test_update_key_non_admin_cannot_raise_max_budget_above_ceiling():
-    """Caller with max_budget=100 must not raise their key from 50 to 200."""
+async def test_update_key_team_admin_cannot_raise_max_budget_above_ceiling(monkeypatch):
+    """Team admin capped at 100 must not raise a team key from 50 to 200."""
     from litellm.proxy._types import UpdateKeyRequest
 
-    data = UpdateKeyRequest(key="sk-alice-personal", max_budget=200)
+    caller, existing_row, mock_prisma = _update_key_ceiling_ctx(
+        monkeypatch, caller_max_budget=100, existing_max_budget=50
+    )
+    data = UpdateKeyRequest(key="sk-team-key", max_budget=200)
     with pytest.raises(HTTPException) as exc:
         await _validate_update_key_data(
             data=data,
-            existing_key_row=_update_key_ceiling_existing_row(50),
-            user_api_key_dict=_update_key_ceiling_caller(100),
+            existing_key_row=existing_row,
+            user_api_key_dict=caller,
             llm_router=None,
             premium_user=True,
-            prisma_client=None,
+            prisma_client=mock_prisma,
             user_api_key_cache=MagicMock(),
         )
     assert exc.value.status_code == 400
@@ -898,41 +932,47 @@ async def test_update_key_non_admin_cannot_raise_max_budget_above_ceiling():
 
 
 @pytest.mark.asyncio
-async def test_update_key_non_admin_within_ceiling_max_budget_allowed():
-    """Caller with max_budget=100 may raise their key to 80 (within ceiling)."""
+async def test_update_key_team_admin_within_ceiling_max_budget_allowed(monkeypatch):
+    """Team admin capped at 100 may raise a team key to 80 (within ceiling)."""
     from litellm.proxy._types import UpdateKeyRequest
 
-    data = UpdateKeyRequest(key="sk-alice-personal", max_budget=80)
+    caller, existing_row, mock_prisma = _update_key_ceiling_ctx(
+        monkeypatch, caller_max_budget=100, existing_max_budget=50
+    )
+    data = UpdateKeyRequest(key="sk-team-key", max_budget=80)
     result = await _validate_update_key_data(
         data=data,
-        existing_key_row=_update_key_ceiling_existing_row(50),
-        user_api_key_dict=_update_key_ceiling_caller(100),
+        existing_key_row=existing_row,
+        user_api_key_dict=caller,
         llm_router=None,
         premium_user=True,
-        prisma_client=None,
+        prisma_client=mock_prisma,
         user_api_key_cache=MagicMock(),
     )
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_update_key_non_admin_cannot_raise_budget_limits_above_ceiling():
-    """budget_limits window of 150 must be rejected for a caller capped at 100."""
+async def test_update_key_team_admin_cannot_raise_budget_limits_above_ceiling(monkeypatch):
+    """budget_limits window of 150 must be rejected for a team admin capped at 100."""
     from litellm.models.team import BudgetLimitEntry
     from litellm.proxy._types import UpdateKeyRequest
 
+    caller, existing_row, mock_prisma = _update_key_ceiling_ctx(
+        monkeypatch, caller_max_budget=100, existing_max_budget=50
+    )
     data = UpdateKeyRequest(
-        key="sk-alice-personal",
+        key="sk-team-key",
         budget_limits=[BudgetLimitEntry(budget_duration="30d", max_budget=150)],
     )
     with pytest.raises(HTTPException) as exc:
         await _validate_update_key_data(
             data=data,
-            existing_key_row=_update_key_ceiling_existing_row(50),
-            user_api_key_dict=_update_key_ceiling_caller(100),
+            existing_key_row=existing_row,
+            user_api_key_dict=caller,
             llm_router=None,
             premium_user=True,
-            prisma_client=None,
+            prisma_client=mock_prisma,
             user_api_key_cache=MagicMock(),
         )
     assert exc.value.status_code == 400
@@ -940,15 +980,20 @@ async def test_update_key_non_admin_cannot_raise_budget_limits_above_ceiling():
 
 
 @pytest.mark.asyncio
-async def test_update_key_non_admin_cannot_raise_temp_budget_increase_above_ceiling():
+async def test_update_key_team_admin_cannot_raise_temp_budget_increase_above_ceiling(
+    monkeypatch,
+):
     """temp_budget_increase is applied on top of max_budget at request time, so
-    50 + 100 = 150 must be rejected for a caller capped at 100."""
+    50 + 100 = 150 must be rejected for a team admin capped at 100."""
     from datetime import datetime, timedelta, timezone
 
     from litellm.proxy._types import UpdateKeyRequest
 
+    caller, existing_row, mock_prisma = _update_key_ceiling_ctx(
+        monkeypatch, caller_max_budget=100, existing_max_budget=50
+    )
     data = UpdateKeyRequest(
-        key="sk-alice-personal",
+        key="sk-team-key",
         max_budget=50,
         temp_budget_increase=100,
         temp_budget_expiry=datetime.now(timezone.utc) + timedelta(days=1),
@@ -956,11 +1001,11 @@ async def test_update_key_non_admin_cannot_raise_temp_budget_increase_above_ceil
     with pytest.raises(HTTPException) as exc:
         await _validate_update_key_data(
             data=data,
-            existing_key_row=_update_key_ceiling_existing_row(50),
-            user_api_key_dict=_update_key_ceiling_caller(100),
+            existing_key_row=existing_row,
+            user_api_key_dict=caller,
             llm_router=None,
             premium_user=True,
-            prisma_client=None,
+            prisma_client=mock_prisma,
             user_api_key_cache=MagicMock(),
         )
     assert exc.value.status_code == 400
@@ -969,30 +1014,30 @@ async def test_update_key_non_admin_cannot_raise_temp_budget_increase_above_ceil
 
 
 @pytest.mark.asyncio
-async def test_update_key_persisted_temp_increase_blocks_max_budget_raise():
-    """A key with a persisted (non-expired) temp_budget_increase of 60 in its
-    metadata must not be raised from 30 to 80 by a caller capped at 100,
+async def test_update_key_persisted_temp_increase_blocks_max_budget_raise(monkeypatch):
+    """A team key with a persisted (non-expired) temp_budget_increase of 60 in its
+    metadata must not be raised from 30 to 80 by a team admin capped at 100,
     because the effective budget (80 + 60 = 140) exceeds the ceiling."""
     from datetime import datetime, timedelta, timezone
 
     from litellm.proxy._types import UpdateKeyRequest
 
-    row = _update_key_ceiling_existing_row(30)
-    row.metadata = {
+    caller, existing_row, mock_prisma = _update_key_ceiling_ctx(
+        monkeypatch, caller_max_budget=100, existing_max_budget=30
+    )
+    existing_row.metadata = {
         "temp_budget_increase": 60,
-        "temp_budget_expiry": (
-            datetime.now(timezone.utc) + timedelta(days=1)
-        ).isoformat(),
+        "temp_budget_expiry": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
     }
-    data = UpdateKeyRequest(key="sk-alice-personal", max_budget=80)
+    data = UpdateKeyRequest(key="sk-team-key", max_budget=80)
     with pytest.raises(HTTPException) as exc:
         await _validate_update_key_data(
             data=data,
-            existing_key_row=row,
-            user_api_key_dict=_update_key_ceiling_caller(100),
+            existing_key_row=existing_row,
+            user_api_key_dict=caller,
             llm_router=None,
             premium_user=True,
-            prisma_client=None,
+            prisma_client=mock_prisma,
             user_api_key_cache=MagicMock(),
         )
     assert exc.value.status_code == 400
@@ -1000,15 +1045,18 @@ async def test_update_key_persisted_temp_increase_blocks_max_budget_raise():
 
 
 @pytest.mark.asyncio
-async def test_update_key_nan_temp_budget_increase_rejected():
+async def test_update_key_nan_temp_budget_increase_rejected(monkeypatch):
     """NaN temp_budget_increase must be rejected: any comparison with NaN
     is False, so the ceiling check would silently pass."""
     from datetime import datetime, timedelta, timezone
 
     from litellm.proxy._types import UpdateKeyRequest
 
+    caller, existing_row, mock_prisma = _update_key_ceiling_ctx(
+        monkeypatch, caller_max_budget=100, existing_max_budget=50
+    )
     data = UpdateKeyRequest(
-        key="sk-alice-personal",
+        key="sk-team-key",
         max_budget=50,
         temp_budget_increase=float("nan"),
         temp_budget_expiry=datetime.now(timezone.utc) + timedelta(days=1),
@@ -1016,11 +1064,11 @@ async def test_update_key_nan_temp_budget_increase_rejected():
     with pytest.raises(HTTPException) as exc:
         await _validate_update_key_data(
             data=data,
-            existing_key_row=_update_key_ceiling_existing_row(50),
-            user_api_key_dict=_update_key_ceiling_caller(100),
+            existing_key_row=existing_row,
+            user_api_key_dict=caller,
             llm_router=None,
             premium_user=True,
-            prisma_client=None,
+            prisma_client=mock_prisma,
             user_api_key_cache=MagicMock(),
         )
     assert exc.value.status_code == 400
@@ -1028,15 +1076,30 @@ async def test_update_key_nan_temp_budget_increase_rejected():
 
 
 @pytest.mark.asyncio
-async def test_update_key_proxy_admin_can_raise_max_budget_above_ceiling():
+async def test_update_key_proxy_admin_can_raise_max_budget_above_ceiling(monkeypatch):
     """PROXY_ADMIN is not bound by the delegation ceiling."""
     from litellm.proxy._types import UpdateKeyRequest
     from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data  # type: ignore
+    mock_prisma_client.db = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+
     data = UpdateKeyRequest(key="sk-alice-personal", max_budget=200)
     result = await _validate_update_key_data(
         data=data,
-        existing_key_row=_update_key_ceiling_existing_row(50),
+        existing_key_row=MagicMock(
+            token="hashed_alice_personal_key",
+            user_id="admin",
+            team_id=None,
+            created_by="admin",
+            max_budget=50,
+            organization_id=None,
+            project_id=None,
+            metadata={},
+        ),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             api_key="sk-admin",
@@ -1045,7 +1108,7 @@ async def test_update_key_proxy_admin_can_raise_max_budget_above_ceiling():
         ),
         llm_router=None,
         premium_user=True,
-        prisma_client=None,
+        prisma_client=mock_prisma_client,
         user_api_key_cache=MagicMock(),
     )
     assert result is None
