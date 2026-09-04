@@ -99,7 +99,7 @@ def _collect_content(container: MutableRequest, slots: _SlotSink) -> None:
 def _collect_tool_arguments(message: MutableRequest, slots: _SlotSink) -> None:
     """Tool arguments carry the values a user asked the model to act on."""
     for tool_call in message.get("tool_calls") or ():
-        function: Final = tool_call.get("function") if isinstance(tool_call, dict) else None
+        function = tool_call.get("function") if isinstance(tool_call, dict) else None  # rebind-ok: loop variable.
         if isinstance(function, dict):
             _collect(function, "arguments", slots)
     legacy: Final = message.get("function_call")
