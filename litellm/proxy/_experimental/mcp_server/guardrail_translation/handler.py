@@ -66,17 +66,15 @@ def _argument_replacements(
 
     Only leaves the guardrail actually rewrote are returned, so a guardrail that
     detects nothing leaves the outbound tool call byte-identical. A guardrail that
-    returns the wrong number of texts is paired against nothing, because a
-    positional write-back would scramble the arguments rather than mask them.
+    returns the wrong number of texts fails closed, because a positional write-back
+    would scramble the arguments rather than mask them.
     """
-    usable: Final = masked_texts if masked_texts is not None and len(masked_texts) == len(argument_leaves) else ()
     if masked_texts is not None and len(masked_texts) != len(argument_leaves):
-        verbose_proxy_logger.warning(
-            "MCP Guardrail: guardrail returned %d texts for %d tool call argument strings; leaving arguments unmasked",
-            len(masked_texts),
-            len(argument_leaves),
+        raise _blocked(
+            f"guardrail returned {len(masked_texts)} texts for {len(argument_leaves)} MCP tool call argument strings, "
+            "so the redaction cannot be mapped back to the arguments"
         )
-    return {path: masked for (path, original), masked in zip(argument_leaves, usable) if masked != original}
+    return {path: masked for (path, original), masked in zip(argument_leaves, masked_texts or ()) if masked != original}
 
 
 def _conflicting_rewrite_paths(
@@ -96,10 +94,12 @@ def _conflicting_rewrite_paths(
     including a payload reshaped so the leaves no longer line up, because the
     write-back is positional and would land a redaction on the wrong value.
     """
+    if tuple(path for path, _ in scanned_leaves) != tuple(path for path, _ in current_leaves):
+        return tuple(replacements)
     return tuple(
         path
-        for (path, scanned), (current_path, current) in zip(scanned_leaves, current_leaves)
-        if path in replacements and (current_path != path or current not in (scanned, replacements[path]))
+        for (path, scanned), (_, current) in zip(scanned_leaves, current_leaves)
+        if path in replacements and current not in (scanned, replacements[path])
     )
 
 
@@ -242,12 +242,10 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         if masked_texts is None:
             return response
         if len(masked_texts) != len(originals):
-            verbose_proxy_logger.warning(
-                "MCP Guardrail: guardrail returned %d texts for %d tool result texts; leaving the result unmasked",
-                len(masked_texts),
-                len(originals),
+            raise _blocked(
+                f"guardrail returned {len(masked_texts)} texts for {len(originals)} MCP tool result texts, "
+                "so the redaction cannot be mapped back to the result"
             )
-            return response
 
         split: Final = len(text_blocks)
         if content is not None:

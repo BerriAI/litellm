@@ -221,18 +221,19 @@ async def test_clean_arguments_are_not_overridden():
 
 
 @pytest.mark.asyncio
-async def test_guardrail_returning_wrong_text_count_leaves_arguments_alone():
-    """Write-back is positional, so a length mismatch must not scramble arguments."""
+async def test_guardrail_returning_wrong_text_count_blocks_the_call():
+    """Write-back is positional, so a length mismatch must block the call."""
     handler = MCPGuardrailTranslationHandler()
     guardrail = ArgumentMaskingGuardrail(texts_override=["only", "two", "texts"])
 
     arguments = {"query": "contact jane.doe@example.com about the invoice"}
     data = {"mcp_tool_name": "search", "mcp_arguments": arguments}
 
-    result = await handler.process_input_messages(data, guardrail)
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.process_input_messages(data, guardrail)
 
-    assert "modified_arguments" not in result
-    assert result["mcp_arguments"] == arguments
+    assert exc_info.value.status_code == 400
+    assert "modified_arguments" not in data
 
 
 @pytest.mark.asyncio
@@ -323,6 +324,23 @@ async def test_arguments_reshaped_under_the_guardrail_fail_closed():
         await handler.process_input_messages(data, guardrail)
 
     assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_arguments_shortened_under_the_guardrail_fail_closed():
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = ReshapingGuardrail({"padding": "jane.doe@example.com"})
+
+    data = {
+        "mcp_tool_name": "search",
+        "mcp_arguments": {"padding": "x", "secret": "jane.doe@example.com"},
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.process_input_messages(data, guardrail)
+
+    assert exc_info.value.status_code == 400
+    assert "jane.doe@example.com" not in str(data.get("modified_arguments"))
 
 
 @pytest.mark.asyncio
@@ -586,8 +604,8 @@ async def test_process_output_response_handles_result_without_content():
 
 
 @pytest.mark.asyncio
-async def test_process_output_response_leaves_result_unmasked_on_text_count_mismatch():
-    """A guardrail returning the wrong number of texts must not shuffle content."""
+async def test_process_output_response_blocks_on_text_count_mismatch():
+    """A guardrail returning the wrong number of texts must block the result."""
     handler = MCPGuardrailTranslationHandler()
     guardrail = MaskingGuardrail(masked_texts=["<EMAIL_ADDRESS>"])
     result = CallToolResult(
@@ -598,9 +616,10 @@ async def test_process_output_response_leaves_result_unmasked_on_text_count_mism
         isError=False,
     )
 
-    returned = await handler.process_output_response(response=result, guardrail_to_apply=guardrail)
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.process_output_response(response=result, guardrail_to_apply=guardrail)
 
-    assert [item.text for item in returned.content] == ["jane@example.com", "415-555-0132"]
+    assert exc_info.value.status_code == 400
 
 
 class SubstitutingGuardrail(CustomGuardrail):
