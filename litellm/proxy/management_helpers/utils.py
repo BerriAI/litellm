@@ -458,7 +458,7 @@ async def add_new_member(
     if returned_user is None:
         raise Exception("Unable to update user table with membership information!")
 
-    if returned_user.user_id is not None:
+    if returned_user.user_id:
         membership_table: Final[_PrismaTeamMembershipTable] = _team_membership_table(prisma_client, tx)
         existing_membership: Final[_PrismaRecord | None] = await membership_table.find_unique(
             where={"user_id_team_id": {"user_id": returned_user.user_id, "team_id": team_id}},
@@ -478,7 +478,7 @@ async def add_new_member(
         tx=tx,
     )
 
-    if _budget_id and returned_user.user_id is not None:
+    if _budget_id:
         _returned_team_membership: Final = await _team_membership_table(prisma_client, tx).create(
             data={
                 "team_id": team_id,
