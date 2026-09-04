@@ -23,6 +23,7 @@ from litellm.types.llms.bedrock import (
     CohereEmbeddingRequest,
     CohereEmbeddingRequestWithModel,
 )
+from litellm.types.llms.cohere import CohereEmbeddingInputList
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import is_base64_encoded
@@ -91,68 +92,116 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         return api_base or "https://api.cohere.ai/v2/embed"
 
     def _transform_request(
-        self, model: str, input: list[str], inference_params: dict
+        self,
+        model: str,
+        input: list[str] | CohereEmbeddingInputList,
+        inference_params: dict,
     ) -> CohereEmbeddingRequestWithModel:
-        is_encoded = False
-        for input_str in input:
-            is_encoded = is_base64_encoded(input_str)
-
-        if is_encoded:  # check if string is b64 encoded image or not
-            transformed_request = CohereEmbeddingRequestWithModel(
+        is_structured_input: Final = bool(input) and isinstance(input[0], dict)
+        transformed_request: Final = (
+            CohereEmbeddingRequestWithModel(
                 model=model,
-                images=input,
-                input_type="image",
-            )
-        else:
-            transformed_request = CohereEmbeddingRequestWithModel(
-                model=model,
-                texts=input,
+                inputs=cast(  # cast-ok: the first-item check narrows this homogeneous input list
+                    CohereEmbeddingInputList, input
+                ),
                 input_type=COHERE_DEFAULT_EMBEDDING_INPUT_TYPE,
             )
+            if is_structured_input
+            else self._transform_string_request(
+                model=model,
+                input=cast(  # cast-ok: the structured-input branch was excluded above
+                    list[str], input
+                ),
+            )
+        )
 
         for k, v in inference_params.items():
             transformed_request[k] = v
 
         return transformed_request
 
+    def _transform_string_request(
+        self,
+        model: str,
+        input: list[str],  # mutable-ok: Cohere's JSON request schema requires an array
+    ) -> CohereEmbeddingRequestWithModel:
+        is_encoded: Final = bool(input) and is_base64_encoded(input[-1])
+        return (
+            CohereEmbeddingRequestWithModel(
+                model=model,
+                images=input,
+                input_type="image",
+            )
+            if is_encoded
+            else CohereEmbeddingRequestWithModel(
+                model=model,
+                texts=input,
+                input_type=COHERE_DEFAULT_EMBEDDING_INPUT_TYPE,
+            )
+        )
+
+    def _normalize_embedding_input(
+        self,
+        input: AllEmbeddingInputValues | CohereEmbeddingInputList,
+    ) -> list[str] | CohereEmbeddingInputList:  # mutable-ok: provider transformation consumes JSON arrays
+        if isinstance(input, str):
+            return [input]
+        if not input:
+            raise ValueError("Input must not be empty")
+        if isinstance(input[0], dict):
+            return cast(  # cast-ok: the first-item check narrows this homogeneous input list
+                CohereEmbeddingInputList, input
+            )
+        if isinstance(input[0], list) or isinstance(input[0], int):
+            raise ValueError("Input must be a list of strings")
+        return cast(list[str], input)
+
     def transform_embedding_request(
         self,
         model: str,
-        input: AllEmbeddingInputValues,
+        input: AllEmbeddingInputValues | CohereEmbeddingInputList,
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        if isinstance(input, list) and (isinstance(input[0], list) or isinstance(input[0], int)):
-            raise ValueError("Input must be a list of strings")
         return cast(
             dict,
             self._transform_request(
                 model=model,
-                input=cast(list[str], input) if isinstance(input, list) else [input],
+                input=self._normalize_embedding_input(input),
                 inference_params=optional_params,
             ),
         )
 
-    def _calculate_usage(self, input: list[str], encoding: Any, meta: dict) -> Usage:
-        input_tokens = 0
-
+    def _calculate_usage(
+        self,
+        input: list[str] | CohereEmbeddingInputList,
+        encoding: Any,
+        meta: dict,
+    ) -> Usage:
         text_tokens: Final[int | None] = meta.get("billed_units", {}).get("input_tokens")
-
         image_tokens: Final[int | None] = meta.get("billed_units", {}).get("images")
-
-        prompt_tokens_details: PromptTokensDetailsWrapper | None = None
-        if image_tokens is None and text_tokens is None:
-            for text in input:
-                input_tokens += len(encoding.encode(text))
-        else:
-            prompt_tokens_details = PromptTokensDetailsWrapper(
+        fallback_texts: Final = tuple(
+            text
+            for item in input
+            for text in (
+                (item,)
+                if isinstance(item, str)
+                else tuple(content["text"] for content in item["content"] if content["type"] == "text")
+            )
+        )
+        input_tokens: Final = (
+            sum(len(encoding.encode(text)) for text in fallback_texts)
+            if image_tokens is None and text_tokens is None
+            else (image_tokens or 0) + (text_tokens or 0)
+        )
+        prompt_tokens_details: Final = (
+            None
+            if image_tokens is None and text_tokens is None
+            else PromptTokensDetailsWrapper(
                 image_tokens=image_tokens,
                 text_tokens=text_tokens,
             )
-            if image_tokens:
-                input_tokens += image_tokens
-            if text_tokens:
-                input_tokens += text_tokens
+        )
 
         return Usage(
             prompt_tokens=input_tokens,
@@ -170,7 +219,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         model: str,
         encoding: Any,
-        input: list,
+        input: list[str] | CohereEmbeddingInputList,
     ) -> EmbeddingResponse:
         response_json: Final = response.json()
         ## LOGGING
@@ -199,9 +248,6 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         model_response.object = "list"
         model_response.data = output_data
         model_response.model = model
-        input_tokens = 0
-        for text in input:
-            input_tokens += len(encoding.encode(text))
 
         setattr(
             model_response,
@@ -230,7 +276,10 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
             model_response=model_response,
             model=model,
             encoding=litellm.encoding,
-            input=logging_obj.model_call_details["input"],
+            input=cast(  # cast-ok: logging preserves the original provider input without a precise static type
+                list[str] | CohereEmbeddingInputList,
+                logging_obj.model_call_details["input"],
+            ),
         )
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:

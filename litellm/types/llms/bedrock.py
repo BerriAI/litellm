@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 from typing_extensions import ReadOnly, Required, TypedDict, override
 
+from .cohere import CohereEmbeddingInputList
 from .openai import ChatCompletionToolCallChunk
 
 
@@ -497,6 +498,7 @@ COHERE_EMBEDDING_INPUT_TYPES = Literal["search_document", "search_query", "class
 class CohereEmbeddingRequest(TypedDict, total=False):
     texts: list[str]
     images: list[str]
+    inputs: ReadOnly[CohereEmbeddingInputList]
     input_type: Required[COHERE_EMBEDDING_INPUT_TYPES]
     truncate: Literal["NONE", "START", "END"]
     embedding_types: Literal["float", "int8", "uint8", "binary", "ubinary"]

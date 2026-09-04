@@ -1,6 +1,19 @@
-from typing import Literal
+from typing import Literal, TypeAlias
 
-from typing_extensions import Required, TypedDict
+from typing_extensions import ReadOnly, Required, TypedDict
+
+from .openai import ChatCompletionImageObject, ChatCompletionTextObject
+
+
+class CohereEmbeddingInput(TypedDict):
+    content: ReadOnly[  # mutable-ok: Cohere's JSON request schema requires an array
+        list[ChatCompletionTextObject | ChatCompletionImageObject]
+    ]
+
+
+CohereEmbeddingInputList: TypeAlias = (
+    list[CohereEmbeddingInput]  # mutable-ok: Cohere's JSON request schema requires an array
+)
 
 
 class CallObject(TypedDict):
