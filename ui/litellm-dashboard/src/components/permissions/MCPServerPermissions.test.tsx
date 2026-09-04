@@ -106,8 +106,7 @@ describe("MCPServerPermissions", () => {
     expect(screen.queryByText("ask_question")).not.toBeInTheDocument();
 
     // Click the server row to expand
-    const serverRow = screen.getByText(/DW_MCP/).closest("div");
-    await userEvent.click(serverRow!);
+    await userEvent.click(screen.getByText(/DW_MCP/));
 
     // Now tools should be visible
     await waitFor(() => {
@@ -117,7 +116,7 @@ describe("MCPServerPermissions", () => {
     });
 
     // Click the server row again to collapse
-    await userEvent.click(serverRow!);
+    await userEvent.click(screen.getByText(/DW_MCP/));
 
     // Tools should be hidden again
     await waitFor(() => {
@@ -297,11 +296,8 @@ describe("MCPServerPermissions", () => {
     expect(toolLabels.length).toBeGreaterThan(0);
 
     // Expand both servers by clicking their rows
-    const server1Row = screen.getByText(/DW_MCP/).closest("div");
-    const server2Row = screen.getByText(/Test Server/).closest("div");
-
-    await userEvent.click(server1Row!); // Expand server 1
-    await userEvent.click(server2Row!); // Expand server 2
+    await userEvent.click(screen.getByText(/DW_MCP/)); // Expand server 1
+    await userEvent.click(screen.getByText(/Test Server/)); // Expand server 2
 
     // Verify server 1 tools are now visible
     await waitFor(() => {
@@ -411,7 +407,7 @@ describe("MCPServerPermissions", () => {
     expect(screen.getByText("2")).toBeInTheDocument();
     expect(screen.getByText("tools")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByText(/GitHub/).closest("div")!);
+    await userEvent.click(screen.getByText(/GitHub/));
 
     await waitFor(() => {
       expect(screen.getByText("list_issues")).toBeInTheDocument();
@@ -468,5 +464,56 @@ describe("MCPServerPermissions", () => {
       />,
     );
     await waitFor(() => expect(screen.getByText("Blocked")).toHaveAttribute("data-variant", "destructive"));
+  });
+
+  it("lists servers inherited from access groups, counts them, and names the group on hover", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      { server_id: mockServerId1, server_name: mockServerName1, alias: mockServerName1 },
+    ]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        inheritedMcpServers={[{ id: mockServerId1, accessGroupNames: ["platform-tools"] }]}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    const row = await screen.findByText(/DW_MCP/);
+    expect(screen.getByText("1")).toBeInTheDocument();
+    expect(screen.queryByText("No MCP servers, access groups, or toolsets configured")).not.toBeInTheDocument();
+    expect(networking.fetchMCPServers).toHaveBeenCalledWith(mockAccessToken);
+
+    await user.hover(row);
+    expect(
+      await screen.findByText(`Granted via access group platform-tools. Full ID: ${mockServerId1}`),
+    ).toBeInTheDocument();
+  });
+
+  it("does not double-list a server that is both granted directly and inherited", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      { server_id: mockServerId2, server_name: mockServerName2, alias: mockServerName2 },
+    ]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[mockServerId2]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        inheritedMcpServers={[{ id: mockServerId2, accessGroupNames: ["platform-tools"] }]}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    const row = await screen.findByText(/Test Server/);
+    expect(screen.getAllByText(/Test Server/)).toHaveLength(1);
+    expect(screen.getByText("1")).toBeInTheDocument();
+
+    await user.hover(row);
+    expect(await screen.findByText(`Full ID: ${mockServerId2}`)).toBeInTheDocument();
   });
 });

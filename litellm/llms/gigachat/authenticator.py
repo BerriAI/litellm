@@ -8,6 +8,7 @@ Based on official GigaChat SDK authentication flow.
 import time
 import uuid
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -32,8 +33,8 @@ GIGACHAT_SCOPE: Final = "GIGACHAT_API_PERS"
 # Token expiry buffer in milliseconds (refresh token 60s before expiry)
 TOKEN_EXPIRY_BUFFER_MS: Final = 60000
 
-# Cache for access tokens
 _token_cache: Final = InMemoryCache()
+_NO_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class GigaChatAuthError(BaseLLMException):
@@ -80,10 +81,9 @@ def get_access_token(
     Raises:
         GigaChatAuthError: If authentication fails
     """
-    if not litellm_params:
-        litellm_params = {}  # mutable-ok: empty dict default; rebind-ok: provide default
+    params: Final = litellm_params or _NO_LITELLM_PARAMS
 
-    access_token: Final = litellm_params.get("gigachat_access_token") or get_secret_str("GIGACHAT_ACCESS_TOKEN")
+    access_token: Final = params.get("gigachat_access_token") or get_secret_str("GIGACHAT_ACCESS_TOKEN")
     if access_token:
         return access_token
 
@@ -94,24 +94,20 @@ def get_access_token(
             message="GigaChat credentials not provided. Set GIGACHAT_CREDENTIALS or GIGACHAT_API_KEY environment variable.",
         )
 
-    effective_scope: Final = scope or litellm_params.get("gigachat_scope") or _get_scope()
-    effective_auth_url: Final = auth_url or litellm_params.get("gigachat_auth_url") or _get_auth_url()
+    effective_scope: Final = scope or params.get("gigachat_scope") or _get_scope()
+    effective_auth_url: Final = auth_url or params.get("gigachat_auth_url") or _get_auth_url()
 
-    # Check cache
     cache_key: Final = f"gigachat_token:{effective_credentials[:16]}"
     cached: Final = _token_cache.get_cache(cache_key)
     if cached:
         _token, _expires_at = cached
-        # Check if token is still valid (with buffer)
         if time.time() * 1000 < _expires_at - TOKEN_EXPIRY_BUFFER_MS:
             verbose_logger.debug("Using cached GigaChat access token")
             return _token
 
-    # Request new token
     new_token, new_expires_at = _request_token_sync(effective_credentials, effective_scope, effective_auth_url)  # pyright: ignore[reportArgumentType]  # credential keys may be broader than str
 
     if new_expires_at:
-        # Cache token
         ttl_seconds: Final = max(0, (new_expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
         if ttl_seconds > 0:
             _token_cache.set_cache(cache_key, (new_token, new_expires_at), ttl=ttl_seconds)
@@ -126,10 +122,9 @@ async def get_access_token_async(
     litellm_params: Mapping[str, object] | None = None,
 ) -> str:
     """Async version of get_access_token."""
-    if not litellm_params:
-        litellm_params = {}  # mutable-ok: empty dict default; rebind-ok: provide default
+    params: Final = litellm_params or _NO_LITELLM_PARAMS
 
-    access_token: Final = litellm_params.get("gigachat_access_token") or get_secret_str("GIGACHAT_ACCESS_TOKEN")
+    access_token: Final = params.get("gigachat_access_token") or get_secret_str("GIGACHAT_ACCESS_TOKEN")
     if access_token:
         return access_token
 
@@ -140,10 +135,9 @@ async def get_access_token_async(
             message="GigaChat credentials not provided. Set GIGACHAT_CREDENTIALS or GIGACHAT_API_KEY environment variable.",
         )
 
-    effective_scope: Final = scope or litellm_params.get("gigachat_scope") or _get_scope()
-    effective_auth_url: Final = auth_url or litellm_params.get("gigachat_auth_url") or _get_auth_url()
+    effective_scope: Final = scope or params.get("gigachat_scope") or _get_scope()
+    effective_auth_url: Final = auth_url or params.get("gigachat_auth_url") or _get_auth_url()
 
-    # Check cache
     cache_key: Final = f"gigachat_token:{effective_credentials[:16]}"
     cached: Final = _token_cache.get_cache(cache_key)
     if cached:
@@ -152,11 +146,9 @@ async def get_access_token_async(
             verbose_logger.debug("Using cached GigaChat access token")
             return _token
 
-    # Request new token
     new_token, new_expires_at = await _request_token_async(effective_credentials, effective_scope, effective_auth_url)  # pyright: ignore[reportArgumentType]  # credential keys may be broader than str
 
     if new_expires_at:
-        # Cache token
         ttl_seconds: Final = max(0, (new_expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
         if ttl_seconds > 0:
             _token_cache.set_cache(cache_key, (new_token, new_expires_at), ttl=ttl_seconds)

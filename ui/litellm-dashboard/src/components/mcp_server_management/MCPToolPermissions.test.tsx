@@ -74,9 +74,10 @@ describe("MCPToolPermissions", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: "read_wiki_structure" }));
 
     // Verify onChange was called with read_wiki_structure removed
-    expect(mockOnChange).toHaveBeenCalledWith({
+    const expectedToolPermissions = {
       [mockServerId]: ["read_wiki_contents", "ask_question"],
-    });
+    };
+    expect(mockOnChange).toHaveBeenCalledWith(expectedToolPermissions);
 
     // Verify API calls
     // Note: useMCPServers uses useAuthorized() internally, which returns "123" from global mock

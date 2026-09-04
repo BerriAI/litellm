@@ -1928,6 +1928,19 @@ class TestToolTransformation:
         assert result_tool["function"]["parameters"]["type"] == "object"
         assert "properties" in result_tool["function"]["parameters"]
 
+    def test_transform_function_tools_parameters_keep_client_key_order(self):
+        tools = [
+            {"type": "function", "name": "a", "parameters": {"properties": {"arg": {"type": "string"}}, "required": ["arg"]}},
+            {"type": "function", "name": "b", "parameters": {"type": "object", "properties": {}}},
+        ]
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        assert list(result_tools[0]["function"]["parameters"]) == ["properties", "required", "type"]
+        assert list(result_tools[1]["function"]["parameters"]) == ["type", "properties"]
+
     def test_transform_function_tools_empty_parameters(self):
         """Test that empty parameters get 'type': 'object' added"""
         function_tool = {

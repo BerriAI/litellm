@@ -58,6 +58,7 @@ import {
   TeamModelBadge,
   TeamModelBadgeKind,
 } from "./teamModelAccess";
+import { computeInheritedGrants } from "../permissions/inheritedGrants";
 import MetadataKeyValueFields, {
   metadataObjectToPairs,
   metadataPairsSchema,
@@ -73,6 +74,15 @@ import GuardrailSettingsView from "../GuardrailSettingsView";
 import LoggingSettingsView from "../logging_settings_view";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
+import {
+  mcpServersForIdentifier,
+  resolveEffectiveMcpServers,
+  type EffectiveMcpServer,
+} from "../mcp_server_management/effectiveMcpServers";
+import type { MCPServer } from "../mcp_tools/types";
+import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
+import { useAccessGroups, type AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
 import { estimateChecks, estimateTooltips } from "../templates/estimatedOutputTokens";
 import ObjectPermissionsView from "../object_permissions_view";
@@ -92,15 +102,30 @@ import {
 } from "./tabVisibilityUtils";
 import TeamMembersComponent from "./TeamMemberTab";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
-import {
-  EffectiveMcpServer,
-  mcpServersForIdentifier,
-  resolveEffectiveMcpServers,
-} from "../mcp_server_management/effectiveMcpServers";
-import { MCPServer } from "../mcp_tools/types";
-import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
-import { useMCPToolsets } from "../../app/(dashboard)/hooks/mcpServers/useMCPToolsets";
-import { AccessGroupResponse, useAccessGroups } from "../../app/(dashboard)/hooks/accessGroups/useAccessGroups";
+
+const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
+  "logging",
+  "secret_manager_settings",
+  "soft_budget_alerting_emails",
+  "model_tpm_limit",
+  "model_rpm_limit",
+  "default_estimated_output_tokens",
+  "default_estimated_output_tokens_per_model",
+  "allowed_passthrough_routes",
+  "guardrails",
+  "opted_out_global_guardrails",
+  "disable_global_guardrails",
+]);
+
+const TEAM_MODEL_BADGE_TONES: Record<TeamModelBadgeKind, StatusTone> = {
+  "all-proxy": "error",
+  "no-default": "neutral",
+  direct: "info",
+  "access-group": "success",
+};
+
+const teamModelBadgeHref = (badge: TeamModelBadge): string | undefined =>
+  badge.kind === "direct" || badge.kind === "access-group" ? modelGroupHref(badge.label) : undefined;
 
 export type McpGrantResolution =
   | { readonly kind: "resolved"; readonly serverIds: ReadonlySet<string> }
@@ -123,10 +148,10 @@ export const grantedMcpServerIds = async (
   accessGroups: readonly Pick<AccessGroupResponse, "access_group_id" | "access_mcp_server_ids">[],
   loadTeamGroups: () => Promise<TeamAccessGroupGrants>,
 ): Promise<McpGrantResolution> => {
+  const selectedGroups = accessGroups.filter((group) => selectedAccessGroupIds.includes(group.access_group_id));
   const direct = effectiveServers
     .filter(({ source }) => source.kind !== "toolPermission")
     .map(({ server }) => server.server_id);
-  const selectedGroups = accessGroups.filter((group) => selectedAccessGroupIds.includes(group.access_group_id));
   if (selectedAccessGroupIds.every((id) => selectedGroups.some((group) => group.access_group_id === id))) {
     return {
       kind: "resolved",
@@ -157,30 +182,6 @@ export const retainedMcpToolPermissions = (
 
 export const mcpUnresolvableSaveError = (reason: string): string =>
   `Cannot save MCP tool permissions because ${reason}. Retry once the page has finished loading`;
-
-const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
-  "logging",
-  "secret_manager_settings",
-  "soft_budget_alerting_emails",
-  "model_tpm_limit",
-  "model_rpm_limit",
-  "default_estimated_output_tokens",
-  "default_estimated_output_tokens_per_model",
-  "allowed_passthrough_routes",
-  "guardrails",
-  "opted_out_global_guardrails",
-  "disable_global_guardrails",
-]);
-
-const TEAM_MODEL_BADGE_TONES: Record<TeamModelBadgeKind, StatusTone> = {
-  "all-proxy": "error",
-  "no-default": "neutral",
-  direct: "info",
-  "access-group": "success",
-};
-
-const teamModelBadgeHref = (badge: TeamModelBadge): string | undefined =>
-  badge.kind === "direct" || badge.kind === "access-group" ? modelGroupHref(badge.label) : undefined;
 
 export interface TeamMembership {
   user_id: string;
@@ -399,7 +400,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   default_team_member_models: info.default_team_member_models || [],
   team_member_budget: info.team_member_budget_table?.max_budget,
   team_member_budget_duration: info.team_member_budget_table?.budget_duration,
-  team_member_key_duration: info.team_member_key_duration,
+  team_member_key_duration: info.metadata?.team_member_key_duration,
   team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
   team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
   budget_duration: info.budget_duration,
@@ -493,18 +494,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
-  const { data: allMcpServers = [], isError: mcpServersFailed, isLoading: mcpServersLoading } = useMCPServers();
-  const { data: allMcpToolsets = [], isError: mcpToolsetsFailed, isLoading: mcpToolsetsLoading } = useMCPToolsets();
-  const { data: allAccessGroups = [], isError: accessGroupsFailed, isLoading: accessGroupsLoading } = useAccessGroups();
-  const mcpLookupFailure =
-    (
-      [
-        [mcpServersFailed, "the MCP server list could not be loaded"],
-        [mcpToolsetsFailed, "the MCP toolset list could not be loaded"],
-        [accessGroupsFailed, "the access group list could not be loaded"],
-        [mcpServersLoading || mcpToolsetsLoading || accessGroupsLoading, "the MCP server inventory is still loading"],
-      ] as const
-    ).find(([failed]) => failed)?.[1] ?? null;
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
   const canViewPolicies = useCan("viewPolicies");
   const [policiesList, setPoliciesList] = useState<string[]>([]);
@@ -518,6 +507,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole, userId } = useAuthorized();
+  const { data: allMcpServers = [], isError: mcpServersFailed, isLoading: mcpServersLoading } = useMCPServers();
+  const { data: allMcpToolsets = [], isError: mcpToolsetsFailed, isLoading: mcpToolsetsLoading } = useMCPToolsets();
+  const { data: allAccessGroups = [], isError: accessGroupsFailed, isLoading: accessGroupsLoading } = useAccessGroups();
   const canEditTeamEstimates = isProxyAdminRole(userRole);
   const teamEstimateTooltip = estimateTooltips(canEditTeamEstimates, "team");
   const { data: userOrganizations = [] } = useOrganizations();
@@ -538,6 +530,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const killSwitchOn = form.watch("disable_global_guardrails");
   const watchedMcpSelection = form.watch("mcp_servers_and_groups");
   const watchedToolPermissions = form.watch("mcp_tool_permissions");
+  const mcpLookupFailure =
+    (
+      [
+        [mcpServersFailed, "the MCP server list could not be loaded"],
+        [mcpToolsetsFailed, "the MCP toolset list could not be loaded"],
+        [accessGroupsFailed, "the access group list could not be loaded"],
+        [mcpServersLoading || mcpToolsetsLoading || accessGroupsLoading, "the MCP server inventory is still loading"],
+      ] as const
+    ).find(([failed]) => failed)?.[1] ?? null;
   const availableRateLimitModels = useMemo(() => {
     const selected = watchedModels ?? teamData?.team_info?.models ?? [];
     if (selected.includes("all-proxy-models") || selected.includes("all-team-models")) {
@@ -938,7 +939,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               },
             );
       if (mcpResolution.kind === "unresolvable" && Object.keys(submittedToolPermissions).length > 0) {
-        toast.error(mcpUnresolvableSaveError(mcpResolution.reason));
+        toast.fromError(mcpUnresolvableSaveError(mcpResolution.reason));
         return;
       }
       const mcpToolPermissions =
@@ -967,12 +968,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         agents: [],
         accessGroups: [],
       };
-      if (agents && agents.length > 0) {
-        updateData.object_permission.agents = agents;
-      }
-      if (agentAccessGroups && agentAccessGroups.length > 0) {
-        updateData.object_permission.agent_access_groups = agentAccessGroups;
-      }
+      updateData.object_permission.agents = agents;
+      updateData.object_permission.agent_access_groups = agentAccessGroups;
       delete values.agents_and_groups;
 
       // Handle vector stores permissions
@@ -1040,6 +1037,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   }
 
   const { team_info: info } = teamData;
+
+  const inheritedMcpServers = computeInheritedGrants(
+    info.access_group_mcp_server_ids,
+    info.access_group_details,
+    (grant) => grant.mcp_server_ids,
+  );
+  const inheritedAgents = computeInheritedGrants(
+    info.access_group_agent_ids,
+    info.access_group_details,
+    (grant) => grant.agent_ids,
+  );
 
   const initialKillSwitchOn = info.metadata?.disable_global_guardrails === true;
 
@@ -1138,7 +1146,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             </div>
           </Card>
 
-          <ObjectPermissionsView objectPermission={info.object_permission} variant="card" accessToken={accessToken} />
+          <ObjectPermissionsView
+            objectPermission={info.object_permission}
+            inheritedMcpServers={inheritedMcpServers}
+            inheritedAgents={inheritedAgents}
+            variant="card"
+            accessToken={accessToken}
+          />
 
           <Card className="block p-6">
             <GuardrailSettingsView
@@ -1990,6 +2004,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
               <ObjectPermissionsView
                 objectPermission={info.object_permission}
+                inheritedMcpServers={inheritedMcpServers}
+                inheritedAgents={inheritedAgents}
                 variant="inline"
                 className="pt-4 border-t border-border"
                 accessToken={accessToken}

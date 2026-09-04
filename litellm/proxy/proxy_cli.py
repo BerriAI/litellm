@@ -261,6 +261,7 @@ class ProxyInitializationHelpers:
             "app": "litellm.proxy.proxy_server:app",
             "host": host,
             "port": port,
+            "server_header": False,
         }
         if log_config is not None:
             print(f"Using log_config: {log_config}")
@@ -1227,6 +1228,7 @@ def run_server(
                 add_missing_query_params,
                 idle_lifetime_params,
                 reader_shareable_params,
+                translate_libpq_ssl_params,
                 unsupported_db_scheme,
                 unsupported_db_scheme_message,
             )
@@ -1274,11 +1276,15 @@ def run_server(
                         writer_url,
                         connection_url_params,
                     )
-                    os.environ["DATABASE_URL"] = add_missing_query_params(modified_url, lifetime_params)
+                    os.environ["DATABASE_URL"] = translate_libpq_ssl_params(
+                        add_missing_query_params(modified_url, lifetime_params)
+                    )
                 if os.getenv("DIRECT_URL", None) is not None:
                     database_url = os.getenv("DIRECT_URL")
                     modified_url = append_query_params(database_url, connection_url_params)
-                    os.environ["DIRECT_URL"] = add_missing_query_params(modified_url, lifetime_params)
+                    os.environ["DIRECT_URL"] = translate_libpq_ssl_params(
+                        add_missing_query_params(modified_url, lifetime_params)
+                    )
                 # The reader pool is a real pool against the same configured cap, so it
                 # gets the allowlisted pool params. Schema-affecting ones, including any
                 # the operator smuggled in through database_extra_connection_params, stay
@@ -1291,14 +1297,16 @@ def run_server(
                         db_statement_timeout,
                         db_lock_timeout,
                     )
-                    os.environ["DATABASE_URL_READ_REPLICA"] = add_missing_query_params(
+                    os.environ["DATABASE_URL_READ_REPLICA"] = translate_libpq_ssl_params(
                         add_missing_query_params(
-                            _with_query_value(read_replica_url, "options", reader_options)
-                            if reader_options
-                            else read_replica_url,
-                            reader_shareable_params(connection_url_params),
-                        ),
-                        lifetime_params,
+                            add_missing_query_params(
+                                _with_query_value(read_replica_url, "options", reader_options)
+                                if reader_options
+                                else read_replica_url,
+                                reader_shareable_params(connection_url_params),
+                            ),
+                            lifetime_params,
+                        )
                     )
                 subprocess.run(["prisma"], capture_output=True)
                 is_prisma_runnable = True

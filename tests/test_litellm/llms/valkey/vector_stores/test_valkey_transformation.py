@@ -67,18 +67,50 @@ class FakeAsyncEmbeddingFn(FakeEmbeddingFn):
         return SimpleNamespace(data=[{"embedding": self.embedding}])
 
 
+class FakeEmbeddingExecutor:
+    def __init__(self, embedding):
+        self.embedding = embedding
+        self.captured = None
+
+    def embed(self, model, query, configuration):
+        self.captured = (model, query, configuration)
+        return SimpleNamespace(data=[{"embedding": self.embedding}])
+
+    async def aembed(self, model, query, configuration):
+        self.captured = (model, query, configuration)
+        return SimpleNamespace(data=[{"embedding": self.embedding}])
+
+
 def _doc(doc_id, distance, **fields):
     return SimpleNamespace(id=doc_id, vector_distance=str(distance), **fields)
 
 
-def _search(config, client=None, query="what is litellm", optional_params=None, litellm_params=None):
+def _search(config, client=None, query="what is litellm", optional_params=None, litellm_params=None, executor=None):
     return config.execute_search_vector_store_request(
         vector_store_id="my_index",
         query=query,
         vector_store_search_optional_params=optional_params or {},
         litellm_logging_obj=MagicMock(),
         litellm_params={"litellm_embedding_model": "openai/text-embedding-3-small", **(litellm_params or {})},
+        embedding_executor=executor,
     )
+
+
+def test_sync_search_uses_request_embedding_executor_without_overwriting_explicit_config():
+    executor = FakeEmbeddingExecutor([0.1, 0.2])
+    config = ValkeyVectorStoreConfig(sync_client=FakeRedis())
+    embedding_config = {"api_key": "store-specific-key", "aws_region_name": "us-west-2"}
+
+    _search(
+        config,
+        litellm_params={
+            "litellm_embedding_model": "team-embedding-alias",
+            "litellm_embedding_config": embedding_config,
+        },
+        executor=executor,
+    )
+
+    assert executor.captured == ("team-embedding-alias", "what is litellm", embedding_config)
 
 
 def test_sync_search_builds_knn_query_with_packed_vector():
