@@ -493,7 +493,7 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
-  it("carries session affinity turned on through to the create payload", async () => {
+  it("carries session affinity turned on and its idle window through to the create payload", async () => {
     const user = userEvent.setup();
     vi.mocked(getMissingTiersError).mockReturnValue(null);
 
@@ -503,12 +503,17 @@ describe("AddAutoRouterTab", () => {
     expandDetailedConfiguration();
     await user.click(screen.getByText("Advanced: Classification Method"));
     await user.click(await screen.findByRole("radio", { name: /Once per session/ }));
+    await user.click(screen.getByText("Advanced: Affinity"));
+    const ttl = await screen.findByLabelText("How long a pin survives idle (seconds)");
+    fireEvent.change(ttl, { target: { value: "300" } });
+    fireEvent.blur(ttl);
 
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
       session_affinity: true,
+      session_affinity_ttl_seconds: 300,
     });
   });
 

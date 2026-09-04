@@ -9546,6 +9546,7 @@ class Router:
             public_model_name for _, public_model_name in self.team_model_to_deployment_indices
         )
 
+        self.pattern_router.remove_deployment(model_id)
         for team_id in list(self.team_pattern_routers.keys()):
             team_pattern_router = self.team_pattern_routers[team_id]
             team_pattern_router.remove_deployment(model_id)
