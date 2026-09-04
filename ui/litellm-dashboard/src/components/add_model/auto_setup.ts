@@ -1,4 +1,4 @@
-import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
+import { isAutoRouterDeployment, type AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 
@@ -47,17 +47,31 @@ const groupPrice = (
   return Math.max(...knownPrices);
 };
 
+const selectTierModels = (ranked: string[]): [string, string, string, string] => {
+  if (ranked.length === 1) return [ranked[0], ranked[0], ranked[0], ranked[0]];
+  if (ranked.length === 2) return [ranked[0], ranked[0], ranked[1], ranked[1]];
+  if (ranked.length === 3) return [ranked[0], ranked[1], ranked[2], ranked[2]];
+
+  const last = ranked.length - 1;
+  return [ranked[0], ranked[Math.floor(last / 3)], ranked[Math.floor((2 * last) / 3)], ranked[last]];
+};
+
 export const buildAutomaticRouterConfig = (
   models: ModelGroup[],
   deployments: AutoRouterDeployment[],
   costMap: ModelCostMap,
 ): ComplexityRouterConfigValue | null => {
+  const autoRouterNames: ReadonlySet<string> = new Set(
+    deployments
+      .filter(isAutoRouterDeployment)
+      .flatMap((deployment) => (deployment.model_name ? [deployment.model_name] : [])),
+  );
   const names = Array.from(
     new Set(
       models
         .filter((model) => model.mode === undefined || model.mode === "chat")
         .map((model) => model.model_group)
-        .filter((name) => name && !name.startsWith("auto_router/")),
+        .filter((name) => name && !name.startsWith("auto_router/") && !autoRouterNames.has(name)),
     ),
   );
   if (names.length === 0) return null;
@@ -74,14 +88,7 @@ export const buildAutomaticRouterConfig = (
     })
     .map(({ name }) => name);
 
-  let selected: [string, string, string, string];
-  if (ranked.length === 1) selected = [ranked[0], ranked[0], ranked[0], ranked[0]];
-  else if (ranked.length === 2) selected = [ranked[0], ranked[0], ranked[1], ranked[1]];
-  else if (ranked.length === 3) selected = [ranked[0], ranked[1], ranked[2], ranked[2]];
-  else {
-    const last = ranked.length - 1;
-    selected = [ranked[0], ranked[Math.floor(last / 3)], ranked[Math.floor((2 * last) / 3)], ranked[last]];
-  }
+  const selected = selectTierModels(ranked);
 
   return {
     tiers: {

@@ -35,6 +35,23 @@ describe("buildAutomaticRouterConfig", () => {
     expect(config?.classifier_type).toBe("heuristic_v2");
   });
 
+  it("selects one model per tier from a large inventory", () => {
+    const names = Array.from({ length: 100 }, (_, index) => `model-${index.toString().padStart(3, "0")}`);
+    const config = buildAutomaticRouterConfig(
+      models(...names),
+      names.map((name, index) => deployment(name, index + 1)),
+      {},
+    );
+    const expectedTiers = {
+      SIMPLE: ["model-000"],
+      MEDIUM: ["model-033"],
+      COMPLEX: ["model-066"],
+      REASONING: ["model-099"],
+    };
+
+    expect(config?.tiers).toEqual(expectedTiers);
+  });
+
   it("only repeats models when fewer than four are available", () => {
     expect(
       tierModels(
@@ -87,8 +104,12 @@ describe("buildAutomaticRouterConfig", () => {
         { model_group: "chat-model", mode: "chat" },
         { model_group: "image-model", mode: "image_generation" },
         { model_group: "auto_router/existing", mode: "chat" },
+        { model_group: "smart-router", mode: "chat" },
       ],
-      [deployment("chat-model", 1)],
+      [
+        deployment("chat-model", 1),
+        { model_name: "smart-router", litellm_params: { model: "auto_router/complexity_router" } },
+      ],
       {},
     );
 
