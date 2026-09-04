@@ -152,7 +152,7 @@ export const deploymentRefsFromModelInfo = (
     return row.model_name && underlyingModels.length > 0 ? [{ modelGroup: row.model_name, underlyingModels }] : [];
   });
 
-const resolveAvailableModel = (requiredModel: string, availability: ModelAvailability): string | undefined => {
+export const resolveAvailableModel = (requiredModel: string, availability: ModelAvailability): string | undefined => {
   const { modelGroups, underlyingIndex } = availability;
   if (modelGroups.has(requiredModel)) return requiredModel;
   const normalized = normalizeModelName(requiredModel);
