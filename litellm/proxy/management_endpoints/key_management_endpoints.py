@@ -90,6 +90,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_view,
     validate_budget_duration,
     validate_finite_spend,
+    validate_key_duration,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
@@ -967,6 +968,7 @@ async def _common_key_generation_helper(
     )
 
     validate_budget_duration(data.budget_duration)
+    validate_key_duration(data.duration)
     raise_on_invalid_key_logging_config(data.metadata)
 
     if data.throttle_on_budget_exceeded is True and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
@@ -2582,6 +2584,7 @@ async def _validate_update_key_data(
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(data.spend)
     validate_budget_duration(data.budget_duration)
+    validate_key_duration(data.duration)
 
     _is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
