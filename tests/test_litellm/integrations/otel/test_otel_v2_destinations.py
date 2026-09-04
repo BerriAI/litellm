@@ -853,6 +853,47 @@ class TestEvictionSafety:
 
         return len([t for t in threading.enumerate() if t.name.startswith("litellm-otel-destination-drain")])
 
+    def test_shutdown_does_not_close_a_processor_under_an_in_flight_export(self):
+        """``on_end`` runs on whichever thread ends a span, so it reaches the fan-out
+        while the SDK tears the provider down."""
+        import threading
+
+        fan_out, _ = self._fan_out()
+        held = fan_out._acquire(self._dest(0))
+        closed = threading.Thread(target=fan_out.shutdown)
+        closed.start()
+        try:
+            time.sleep(0.3)
+
+            assert held.shutdown_calls == 0, "closed a processor with a span still being forwarded"
+        finally:
+            fan_out._release(held)
+            closed.join(timeout=10)
+
+        assert held.shutdown_calls == 1
+
+    def test_a_closed_fan_out_builds_no_new_processor(self):
+        """A processor built after shutdown is one nothing will ever close, and it
+        exports to a tenant on a provider the SDK has already torn down."""
+        fan_out, built = self._fan_out()
+        fan_out.shutdown()
+
+        assert fan_out._acquire(self._dest(0)) is None
+        assert built == []
+
+    def test_shutdown_gives_up_on_an_export_that_never_finishes(self):
+        """The wait is bounded: an exporter stuck on a dead collector must not hold
+        the proxy open on the way down."""
+        import threading
+
+        fan_out = TenantFanOutSpanProcessor(processor_factory=lambda _d: self.Recording(), shutdown_drain_seconds=0.2)
+        fan_out._acquire(self._dest(0))
+        closed = threading.Thread(target=fan_out.shutdown)
+        closed.start()
+        closed.join(timeout=5)
+
+        assert not closed.is_alive(), "shutdown blocked on an export that never finished"
+
     def test_a_retired_processor_is_still_closed_on_shutdown(self):
         from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
 

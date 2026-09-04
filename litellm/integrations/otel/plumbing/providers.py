@@ -213,6 +213,11 @@ _MAX_CACHED_DESTINATION_PROCESSORS: Final = 32
 #: create by cycling its destination config.
 _DRAIN_WORKERS: Final = 2
 
+#: How long ``shutdown`` waits for spans already being forwarded, so teardown closes
+#: no processor under one. Bounded: an exporter that never returns must not hold the
+#: proxy open.
+_SHUTDOWN_DRAIN_SECONDS: Final = 5.0
+
 
 class _DrainPool:
     """Closes shed destination processors off the span-export path.
@@ -290,8 +295,11 @@ class TenantFanOutSpanProcessor(SpanProcessor):
     def __init__(
         self,
         processor_factory: 'Callable[["OtelDestination"], SpanProcessor | None] | None' = None,
+        shutdown_drain_seconds: float = _SHUTDOWN_DRAIN_SECONDS,
     ) -> None:
-        self._lock: Final = threading.Lock()
+        self._drain_seconds: Final = shutdown_drain_seconds
+        self._lock: Final = threading.Condition()
+        self._closed: Final = threading.Event()
         self._build: Final = processor_factory if processor_factory is not None else _destination_processor
         self._processors: OrderedDict[object, SpanProcessor] = OrderedDict()  # mutable-ok: bounded LRU
         self._retired: OrderedDict[int, SpanProcessor] = OrderedDict()  # mutable-ok: drains as exports finish
@@ -314,9 +322,20 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 self._release(processor)
 
     def shutdown(self) -> None:
-        # Snapshot first: ``on_end`` mutates the cache on whichever thread ends a span
-        # and can run concurrently with this SDK-driven shutdown, so iterating the live
-        # mapping risks a "mutated during iteration" the per-item except cannot catch.
+        """Close every destination processor, once the spans in flight have landed.
+
+        ``on_end`` runs on whichever thread ends a span and can reach this fan-out
+        while the SDK is tearing the provider down, so closing blind would drop a
+        trace mid-forward and would hand the next caller a fresh exporter nothing
+        will ever close. Refusing new work and then waiting out the in-flight ones
+        keeps both from happening.
+        """
+        self._closed.set()
+        with self._lock:
+            self._lock.wait_for(lambda: not self._exporting, timeout=self._drain_seconds)
+        # Snapshot: ``on_end`` mutates the cache on whichever thread ends a span, so
+        # iterating the live mapping risks a "mutated during iteration" the per-item
+        # except cannot catch.
         for processor in self._snapshot():
             try:
                 processor.shutdown()
@@ -344,6 +363,8 @@ class TenantFanOutSpanProcessor(SpanProcessor):
 
     def _acquire(self, destination: "OtelDestination") -> SpanProcessor | None:
         """The processor for ``destination``, marked busy until ``_release``."""
+        if self._closed.is_set():
+            return None
         key: Final = destination.cache_key()
         with self._lock:
             cached = self._processors.get(key)  # rebind-ok: reassigned after the build below
@@ -376,6 +397,8 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 self._exporting[id(processor)] = remaining
             else:
                 self._exporting.pop(id(processor), None)
+                if not self._exporting:
+                    self._lock.notify_all()
             drained: Final = self._drainable_locked()
         for retired in drained:
             self._drain.submit(retired)
