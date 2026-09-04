@@ -111,27 +111,27 @@ class FakeClient:
         return self.database
 
 
-class FakeEmbeddingFn:
+class FakeEmbeddingExecutor:
     def __init__(self, embedding):
         self.embedding = embedding
-        self.captured_kwargs = None
+        self.captured = None
 
-    def __call__(self, **kwargs):
-        self.captured_kwargs = kwargs
+    def _respond(self, model, query, configuration):
+        self.captured = SimpleNamespace(model=model, query=query, configuration=configuration)
         return SimpleNamespace(data=[{"embedding": self.embedding}] if self.embedding is not None else [])
 
+    def embed(self, model, query, configuration):
+        return self._respond(model, query, configuration)
 
-class FakeAsyncEmbeddingFn(FakeEmbeddingFn):
-    async def __call__(self, **kwargs):
-        self.captured_kwargs = kwargs
-        return SimpleNamespace(data=[{"embedding": self.embedding}] if self.embedding is not None else [])
+    async def aembed(self, model, query, configuration):
+        return self._respond(model, query, configuration)
 
 
 def _config(documents=(), embedding=(0.1, 0.2, 0.3), error=None, search_indexes=None):
     collection = FakeCollection(list(documents), error, search_indexes)
     client = FakeClient(collection)
     config = MongoDBVectorStoreConfig(
-        embedding_fn=FakeEmbeddingFn(list(embedding) if embedding is not None else None),
+        embedding_executor=FakeEmbeddingExecutor(list(embedding) if embedding is not None else None),
         sync_client_factory=lambda key: client,
     )
     return config, client, collection
@@ -141,7 +141,7 @@ def _async_config(documents=(), embedding=(0.1, 0.2, 0.3), error=None, search_in
     collection = FakeAsyncCollection(list(documents), error, search_indexes)
     client = FakeClient(collection)
     config = MongoDBVectorStoreConfig(
-        aembedding_fn=FakeAsyncEmbeddingFn(list(embedding) if embedding is not None else None),
+        embedding_executor=FakeEmbeddingExecutor(list(embedding) if embedding is not None else None),
         async_client_factory=lambda key: client,
     )
     return config, client, collection
@@ -252,22 +252,20 @@ def test_num_candidates_below_the_limit_or_above_the_ceiling_is_rejected(configu
 
 def test_list_query_is_joined_into_one_embedding_input():
     config, _, _ = _config()
-    embedding_fn = config.embedding_fn
 
     _search(config, query=["deep", "space", "rescue"])
 
-    assert embedding_fn.captured_kwargs["input"] == ["deep space rescue"]
+    assert config.embedding_executor.captured.query == "deep space rescue"
 
 
 def test_embedding_config_is_expanded_into_the_embedding_call():
     config, _, _ = _config()
-    embedding_fn = config.embedding_fn
 
     _search(config, litellm_params={"litellm_embedding_config": {"api_base": "https://example.test", "timeout": 7}})
 
-    assert embedding_fn.captured_kwargs["api_base"] == "https://example.test"
-    assert embedding_fn.captured_kwargs["timeout"] == 7
-    assert embedding_fn.captured_kwargs["model"] == "openai/text-embedding-ada-002"
+    captured = config.embedding_executor.captured
+    assert captured.configuration == {"api_base": "https://example.test", "timeout": 7}
+    assert captured.model == "openai/text-embedding-ada-002"
 
 
 def test_response_maps_documents_to_openai_shaped_results():
@@ -530,7 +528,7 @@ def test_search_fails_when_the_embedding_model_returns_nothing():
 def test_validation_runs_before_any_connection_is_opened():
     opened = []
     config = MongoDBVectorStoreConfig(
-        embedding_fn=FakeEmbeddingFn([0.1]),
+        embedding_executor=FakeEmbeddingExecutor([0.1]),
         sync_client_factory=lambda key: opened.append(key) or FakeClient(FakeCollection([])),
     )
 
@@ -973,7 +971,7 @@ class TestEmptyResultsAreDisambiguated:
 
         collection = ExplodingCollection([], None, [])
         config = MongoDBVectorStoreConfig(
-            embedding_fn=FakeEmbeddingFn([0.1]),
+            embedding_executor=FakeEmbeddingExecutor([0.1]),
             sync_client_factory=lambda key: FakeClient(collection),
         )
 
@@ -1157,7 +1155,7 @@ class TestClientConstructionFailures:
             raise error
 
         return MongoDBVectorStoreConfig(
-            embedding_fn=FakeEmbeddingFn([0.1, 0.2, 0.3]), sync_client_factory=factory
+            embedding_executor=FakeEmbeddingExecutor([0.1, 0.2, 0.3]), sync_client_factory=factory
         )
 
     def _async_config_that_fails_to_connect(self, error):
@@ -1165,7 +1163,7 @@ class TestClientConstructionFailures:
             raise error
 
         return MongoDBVectorStoreConfig(
-            aembedding_fn=FakeAsyncEmbeddingFn([0.1, 0.2, 0.3]), async_client_factory=factory
+            embedding_executor=FakeEmbeddingExecutor([0.1, 0.2, 0.3]), async_client_factory=factory
         )
 
     def test_a_malformed_uri_is_a_bad_request_not_a_500(self):
@@ -1215,7 +1213,7 @@ class TestSelfManagedDeploymentsAreFirstClass:
             raise error
 
         return MongoDBVectorStoreConfig(
-            embedding_fn=FakeEmbeddingFn([0.1, 0.2, 0.3]), sync_client_factory=factory
+            embedding_executor=FakeEmbeddingExecutor([0.1, 0.2, 0.3]), sync_client_factory=factory
         )
 
     def test_a_plain_mongodb_uri_without_srv_or_credentials_is_accepted(self):
@@ -1405,3 +1403,41 @@ class TestUnreadableTlsFilesAreDiagnosed:
         translated = translate_mongo_error(OSError("socket hung up"), index_name=INDEX, database="db", collection="c")
 
         assert not isinstance(translated, BadRequestError)
+
+
+class TestTheCallerSuppliedEmbeddingExecutorIsUsed:
+    """litellm.vector_stores.search always hands a direct provider an embedding_executor, so the
+    provider has to accept it and route the query through it rather than its own default."""
+
+    def test_the_supplied_executor_produces_the_query_vector(self):
+        config, _, collection = _config(embedding=(0.9, 0.9, 0.9), search_indexes=READY_INDEX)
+        caller = FakeEmbeddingExecutor([0.4, 0.5, 0.6])
+
+        config.execute_search_vector_store_request(
+            vector_store_id=INDEX,
+            query="a lone astronaut",
+            vector_store_search_optional_params={},
+            litellm_logging_obj=MagicMock(),
+            litellm_params=BASE_PARAMS,
+            embedding_executor=caller,
+        )
+
+        assert caller.captured.query == "a lone astronaut"
+        assert _stage(collection, "$vectorSearch")["queryVector"] == (0.4, 0.5, 0.6)
+
+    @pytest.mark.asyncio
+    async def test_the_supplied_executor_produces_the_query_vector_on_the_async_path(self):
+        config, _, collection = _async_config(embedding=(0.9, 0.9, 0.9), search_indexes=READY_INDEX)
+        caller = FakeEmbeddingExecutor([0.4, 0.5, 0.6])
+
+        await config.aexecute_search_vector_store_request(
+            vector_store_id=INDEX,
+            query="a lone astronaut",
+            vector_store_search_optional_params={},
+            litellm_logging_obj=MagicMock(),
+            litellm_params=BASE_PARAMS,
+            embedding_executor=caller,
+        )
+
+        assert caller.captured.query == "a lone astronaut"
+        assert _stage(collection, "$vectorSearch")["queryVector"] == (0.4, 0.5, 0.6)
