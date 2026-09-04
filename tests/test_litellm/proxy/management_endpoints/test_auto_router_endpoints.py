@@ -128,7 +128,7 @@ async def test_recommendation_uses_caller_groups_and_returns_an_editable_complex
         },
     ]
     monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=model_list))
-    available = AsyncMock(return_value=["small-group", "smart-group"])
+    available = AsyncMock(return_value=["small-group", "smart-group", "small-group"])
     monkeypatch.setattr(proxy_utils, "get_available_models_for_user", available)
     authorize = AsyncMock()
     monkeypatch.setattr(endpoint_module, "_authorize_router_dry_run", authorize)
@@ -141,6 +141,8 @@ async def test_recommendation_uses_caller_groups_and_returns_an_editable_complex
 
     authorize.assert_awaited_once_with(user_api_key_dict=ADMIN, team_id=None)
     assert set(response.matched_model_groups) <= {"small-group", "smart-group"}
+    assert response.available_model_group_count == 2
+    assert response.excluded_model_groups == ()
     assert "unavailable-group" not in response.matched_model_groups
     assert response.complexity_router_config.classifier_type == "heuristic_v2"
     assert response.complexity_router_config.auto_setup is not None
@@ -148,6 +150,92 @@ async def test_recommendation_uses_caller_groups_and_returns_an_editable_complex
     assert response.complexity_router_config.auto_setup.tier_policies["SIMPLE"].selection_mode == (
         "runtime_response_latency"
     )
+
+
+def test_auto_setup_pricing_honors_custom_token_rates_and_rejects_non_token_charges() -> None:
+    from litellm.proxy.management_endpoints.auto_router_endpoints import (
+        _deployment_pricing,  # pyright: ignore[reportPrivateUsage] -- direct contract test for fail-closed pricing
+    )
+
+    custom = _deployment_pricing(
+        {
+            "litellm_params": {
+                "model": "custom/provider-model",
+                "input_cost_per_token": 0.000001,
+                "output_cost_per_token": 0.000002,
+            }
+        }
+    )
+    unsupported = _deployment_pricing(
+        {
+            "litellm_params": {
+                "model": "gpt-5.4-nano",
+                "input_cost_per_query": 0.01,
+            }
+        }
+    )
+
+    assert custom is not None
+    assert custom.input_cost_per_token == pytest.approx(0.000001)
+    assert custom.output_cost_per_token == pytest.approx(0.000002)
+    assert unsupported is None
+
+
+def test_auto_setup_pricing_resolves_an_explicit_base_model_before_a_deployment_alias() -> None:
+    import litellm
+    from litellm.proxy.management_endpoints.auto_router_endpoints import (
+        _deployment_pricing,  # pyright: ignore[reportPrivateUsage] -- direct contract test for provider aliases
+    )
+
+    pricing = _deployment_pricing(
+        {"litellm_params": {"model": "azure/my-private-deployment", "base_model": "gpt-5.4-nano"}}
+    )
+    published = litellm.get_model_info(model="gpt-5.4-nano")
+
+    assert pricing is not None
+    assert pricing.input_cost_per_token == pytest.approx(published["input_cost_per_token"])
+    assert pricing.output_cost_per_token == pytest.approx(published["output_cost_per_token"])
+
+
+@pytest.mark.asyncio
+async def test_recommendation_excludes_mixed_unmatched_and_unpriced_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.management_endpoints.auto_router_endpoints as endpoint_module
+    import litellm.proxy.utils as proxy_utils
+    from litellm.proxy import proxy_server
+
+    model_list = [
+        {"model_name": "safe", "litellm_params": {"model": "gpt-5.6-sol", "api_key": "fake"}},
+        {"model_name": "mixed", "litellm_params": {"model": "gpt-5.6-sol", "api_key": "fake"}},
+        {"model_name": "mixed", "litellm_params": {"model": "gpt-5.4-nano", "api_key": "fake"}},
+        {"model_name": "unknown", "litellm_params": {"model": "openai/not-a-real-model", "api_key": "fake"}},
+        {
+            "model_name": "unpriced",
+            "litellm_params": {"model": "perplexity/anthropic/claude-opus-4-6", "api_key": "fake"},
+        },
+    ]
+    monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=model_list))
+    monkeypatch.setattr(
+        proxy_utils,
+        "get_available_models_for_user",
+        AsyncMock(return_value=["safe", "mixed", "unknown", "unpriced"]),
+    )
+    monkeypatch.setattr(endpoint_module, "_authorize_router_dry_run", AsyncMock())
+
+    response = await get_auto_router_recommendation(
+        user_api_key_dict=ADMIN,
+        quality_level="max",
+        optimize_for="cost",
+    )
+
+    assert response.available_model_group_count == 4
+    assert response.matched_model_groups == ("safe",)
+    assert {(item.model_group, item.reason) for item in response.excluded_model_groups} == {
+        ("mixed", "mixed_model_group"),
+        ("unknown", "no_benchmark_match"),
+        ("unpriced", "pricing_unavailable"),
+    }
 
 
 AGENTIC_MESSAGES = [

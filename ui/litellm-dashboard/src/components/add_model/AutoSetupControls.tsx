@@ -45,7 +45,8 @@ const recommendationErrorMessage = (error: unknown): string =>
 
 const readyMessage = (recommendation: AutoRouterRecommendationResponse): string => {
   const count = recommendation.matched_model_groups.length;
-  return `Uses ${count} available model${count === 1 ? "" : "s"} across four complexity levels`;
+  const total = recommendation.available_model_group_count;
+  return `Uses ${count} of ${total} available model${total === 1 ? "" : "s"} across four complexity levels`;
 };
 
 const recommendationDescription = (optimizeFor: AutoSetupObjective): string => {
@@ -75,6 +76,8 @@ export default function AutoSetupControls({
   onRegenerate,
   onBack,
 }: AutoSetupControlsProps) {
+  const excludedCount = recommendation?.excluded_model_groups.length ?? 0;
+
   return (
     <div className="space-y-4" data-testid="auto-setup-controls">
       <div className="flex items-start justify-between gap-4">
@@ -83,6 +86,12 @@ export default function AutoSetupControls({
           <div className="text-xs text-muted-foreground">
             Choose the outcome you want. LiteLLM will build the model tiers for you
           </div>
+          {hasAutoPolicy && excludedCount > 0 && (
+            <div className="text-xs text-muted-foreground">
+              {excludedCount} model{excludedCount === 1 ? " was" : "s were"} left out because Auto setup could not
+              compare {excludedCount === 1 ? "it" : "them"} safely
+            </div>
+          )}
         </div>
         <Button type="button" variant="ghost" className="h-auto shrink-0 px-0" onClick={onBack}>
           Back

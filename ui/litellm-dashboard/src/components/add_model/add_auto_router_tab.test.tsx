@@ -229,7 +229,9 @@ describe("AddAutoRouterTab", () => {
         optimize_for: "task_completion_speed",
         snapshot_id: "snapshot-test",
         snapshot_generated_at: "2026-09-03T00:00:00Z",
+        available_model_group_count: 2,
         matched_model_groups: ["smart-group"],
+        excluded_model_groups: [{ model_group: "unknown-group", reason: "no_benchmark_match" }],
         complexity_router_config: {
           tiers: {
             SIMPLE: ["smart-group"],
@@ -255,7 +257,8 @@ describe("AddAutoRouterTab", () => {
 
     renderWithProviders(<Harness />);
     await user.click(screen.getByTestId("configure-automatically-button"));
-    await screen.findByText(/Uses 1 available model/);
+    await screen.findByText(/Uses 1 of 2 available models/);
+    expect(screen.getByText(/1 model was left out because Auto setup could not compare it safely/)).toBeInTheDocument();
     await user.type(screen.getByPlaceholderText(/smart_router/i), "max-speed-router");
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 

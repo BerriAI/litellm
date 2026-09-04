@@ -2425,7 +2425,12 @@ export interface AutoRouterRecommendationResponse {
   optimize_for: AutoSetupObjective;
   snapshot_id: string;
   snapshot_generated_at: string;
+  available_model_group_count: number;
   matched_model_groups: string[];
+  excluded_model_groups: Array<{
+    model_group: string;
+    reason: "no_benchmark_match" | "mixed_model_group" | "pricing_unavailable";
+  }>;
   complexity_router_config: ComplexityRouterConfigPayload;
 }
 

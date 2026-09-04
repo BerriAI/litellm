@@ -23439,6 +23439,19 @@ export interface components {
             tier_definitions: components["schemas"]["TierDefinition"][];
         };
         /**
+         * AutoRouterExcludedModelGroup
+         * @description A caller-visible reason Auto setup did not use an available model group.
+         */
+        AutoRouterExcludedModelGroup: {
+            /** Model Group */
+            model_group: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "no_benchmark_match" | "mixed_model_group" | "pricing_unavailable";
+        };
+        /**
          * AutoRouterPresetConfig
          * @description The complexity_router_config a preset prefills.
          *
@@ -23486,7 +23499,14 @@ export interface components {
          * @description An editable complexity-router config generated from the caller's usable model groups.
          */
         AutoRouterRecommendationResponse: {
+            /** Available Model Group Count */
+            available_model_group_count: number;
             complexity_router_config: components["schemas"]["RequestComplexityRouterConfig"];
+            /**
+             * Excluded Model Groups
+             * @default []
+             */
+            excluded_model_groups: components["schemas"]["AutoRouterExcludedModelGroup"][];
             /** Matched Model Groups */
             matched_model_groups: string[];
             /**

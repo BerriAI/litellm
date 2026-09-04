@@ -48,6 +48,13 @@ class ComplexityRouterConfigValidationResponse(BaseModel):
     error: str | None = None
 
 
+class AutoRouterExcludedModelGroup(BaseModel):
+    """A caller-visible reason Auto setup did not use an available model group."""
+
+    model_group: str
+    reason: Literal["no_benchmark_match", "mixed_model_group", "pricing_unavailable"]
+
+
 class AutoRouterRecommendationResponse(BaseModel):
     """An editable complexity-router config generated from the caller's usable model groups."""
 
@@ -55,7 +62,9 @@ class AutoRouterRecommendationResponse(BaseModel):
     optimize_for: AutoSetupObjective
     snapshot_id: str
     snapshot_generated_at: str
+    available_model_group_count: int = Field(ge=0)
     matched_model_groups: tuple[str, ...]
+    excluded_model_groups: tuple[AutoRouterExcludedModelGroup, ...] = ()
     complexity_router_config: RequestComplexityRouterConfig
 
 
