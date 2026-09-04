@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import litellm
+import pytest
 
 BASE_URL = "https://api.aitokenking.com.tw/api/v1"
 
@@ -80,24 +81,6 @@ class TestAITokenKingProviderConfig:
         assert provider == "aitokenking"
         assert api_base == BASE_URL
 
-    def test_aitokenking_router_config(self):
-        from litellm import Router
-
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "atk-chat",
-                    "litellm_params": {
-                        "model": "aitokenking/qwen3.7-max",
-                        "api_key": "test-key",
-                    },
-                }
-            ]
-        )
-
-        assert len(router.model_list) == 1
-        assert router.model_list[0]["model_name"] == "atk-chat"
-
 
 class TestAITokenKingPricing:
     """Cost tracking is the point of shipping the price map with the provider."""
@@ -166,3 +149,57 @@ class TestAITokenKingPricing:
         cost = litellm.completion_cost(completion_response=response, model=model)
         assert abs(cost - expected) < 1e-9
         assert cost > 0
+
+class TestAITokenKingRouting:
+    """Exercises the dispatch path, not just the stored configuration."""
+
+    @staticmethod
+    def _router():
+        from litellm import Router
+
+        return Router(
+            model_list=[
+                {
+                    "model_name": "atk-chat",
+                    "litellm_params": {
+                        "model": "aitokenking/qwen3.7-max",
+                        "api_key": "sk-test",
+                    },
+                }
+            ]
+        )
+
+    @pytest.mark.asyncio
+    async def test_routed_request_targets_the_gateway_with_the_prefix_stripped(self):
+        """The prefix selects the provider; it must not reach the wire."""
+        response = await self._router().acompletion(
+            model="atk-chat",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="ok",
+        )
+
+        assert response._hidden_params["api_base"] == BASE_URL
+        assert response.model == "qwen3.7-max"
+
+    @pytest.mark.asyncio
+    async def test_routed_spend_is_costed_off_the_aitokenking_entry(self):
+        """Router registers every deployment, so an unmapped model silently costs 0.0.
+
+        This is the regression the price map exists to prevent: assert the routed
+        response is costed from the aitokenking entry rather than defaulting to zero.
+        """
+        entry = TestAITokenKingPricing._load_price_map()["aitokenking/qwen3.7-max"]
+
+        response = await self._router().acompletion(
+            model="atk-chat",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="ok",
+        )
+
+        usage = response.usage
+        expected = (
+            usage.prompt_tokens * entry["input_cost_per_token"]
+            + usage.completion_tokens * entry["output_cost_per_token"]
+        )
+        assert response._hidden_params["response_cost"] == pytest.approx(expected)
+        assert response._hidden_params["response_cost"] > 0
