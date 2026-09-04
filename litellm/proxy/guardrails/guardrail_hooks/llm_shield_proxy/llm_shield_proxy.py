@@ -71,6 +71,10 @@ JsonBody: TypeAlias = dict
 
 # One redactable span: the text as it stands, and the write that puts the
 # replacement back where it came from.
+# How far a tool_result chain is followed. Real payloads nest one or two deep; the
+# bound is what stops a crafted one from becoming an unbounded walk.
+_MAX_CONTENT_DEPTH: Final = 8
+
 _Slot: TypeAlias = tuple[str, Callable[[str], None]]  # mutable-ok: Callable's param list.
 
 # The accumulator the collectors below append into. It never escapes
@@ -113,19 +117,32 @@ def _collect_prompt(data: MutableRequest, slots: _SlotSink) -> None:
 
 
 def _collect_content(container: MutableRequest, slots: _SlotSink) -> None:
-    """`content` is either a string or the multimodal list of typed parts."""
-    content: Final = container.get("content")
-    if isinstance(content, str):
-        _collect(container, "content", slots)
-        return
-    for part in content if isinstance(content, list) else ():
-        if not isinstance(part, dict):
+    """Collects `content`, a string or a list of typed parts.
+
+    An Anthropic tool_result nests its own content, so this has to descend. It walks
+    with an explicit stack and a depth bound rather than by recursion: the nesting is
+    caller controlled, and an unbounded descent is a JSON bomb.
+    """
+    # Walked in document order: the shield maps its replies back by position, so the
+    # order spans are collected in is part of the contract.
+    pending: Final[list] = [(container, 0)]  # mutable-ok: local queue, never escapes.
+    cursor = 0  # rebind-ok: advances through the queue.
+    while cursor < len(pending):
+        node, depth = pending[cursor]
+        cursor += 1
+        content = node.get("content")
+        if isinstance(content, str):
+            _collect(node, "content", slots)
             continue
-        _collect(part, "text", slots)
-        # An Anthropic tool_result carries its own content, as a string or as more
-        # blocks. Image and audio parts have no text and fall through untouched.
-        if "content" in part:
-            _collect_content(part, slots)
+        if depth >= _MAX_CONTENT_DEPTH:
+            continue
+        for part in content if isinstance(content, list) else ():
+            if not isinstance(part, dict):
+                continue
+            # Image and audio parts have no text and fall through untouched.
+            _collect(part, "text", slots)
+            if "content" in part:
+                pending.append((part, depth + 1))
 
 
 def _collect_participant_name(message: MutableRequest, slots: _SlotSink) -> None:

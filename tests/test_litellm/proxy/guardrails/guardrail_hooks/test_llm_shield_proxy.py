@@ -385,6 +385,23 @@ class TestRequestCoverage:
         assert data["messages"][0]["content"][1]["content"][0]["text"] == "[EMAIL_2]"
 
     @pytest.mark.asyncio
+    async def test_deeply_nested_tool_results_are_bounded(self):
+        """Nesting is caller controlled, so the descent has to stop somewhere.
+
+        The walk must terminate on a payload built to be pathological, rather than
+        following it as far as it goes.
+        """
+        guardrail = _guardrail()
+        _mock_post(guardrail, {"texts": ["ok"] * 64})
+
+        deep: dict = {"type": "tool_result", "content": "jane.doe@example.com"}
+        for _ in range(200):
+            deep = {"type": "tool_result", "content": [deep]}
+        data = {"messages": [{"role": "user", "content": [deep]}]}
+
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
+
+    @pytest.mark.asyncio
     async def test_completions_suffix_is_redacted(self):
         """LiteLLM forwards the legacy `suffix` to providers that support it."""
         guardrail = _guardrail()
