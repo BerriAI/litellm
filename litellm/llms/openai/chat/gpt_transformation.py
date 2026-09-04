@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import httpx
 
 import litellm
+from litellm import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _extract_reasoning_content,
@@ -51,7 +52,6 @@ from litellm.types.utils import (
     ModelResponseStream,
     chat_completion_tool_call_from_dict,
 )
-from litellm import verbose_logger
 from litellm.utils import convert_to_model_response_object
 
 from ..common_utils import OpenAIError
