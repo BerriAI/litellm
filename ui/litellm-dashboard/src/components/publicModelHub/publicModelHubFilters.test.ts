@@ -1,13 +1,43 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { ColumnFiltersState } from "@tanstack/react-table";
 import { describe, expect, it } from "vitest";
 
 import {
   MODE_FILTER_ID,
+  MODE_FILTER_OPTIONS,
   PROVIDER_FILTER_ID,
   readModeFilter,
   serializePublicModelHubFilters,
   withFilterValue,
 } from "./publicModelHubFilters";
+
+const COST_MAP_PATH = fileURLToPath(new URL("../../../../../model_prices_and_context_window.json", import.meta.url));
+
+const modesInUse = (): Set<string> => {
+  const costMap: Record<string, { mode?: unknown }> = JSON.parse(readFileSync(COST_MAP_PATH, "utf8"));
+  return new Set(
+    Object.values(costMap)
+      .map((entry) => entry?.mode)
+      .filter((mode): mode is string => typeof mode === "string"),
+  );
+};
+
+describe("MODE_FILTER_OPTIONS", () => {
+  it("offers only modes a published model group can actually have", () => {
+    const real = modesInUse();
+    const dead = MODE_FILTER_OPTIONS.filter((option) => !real.has(option.value)).map((option) => option.value);
+
+    expect(dead).toEqual([]);
+  });
+
+  it("offers every mode litellm prices models in", () => {
+    const offered = new Set(MODE_FILTER_OPTIONS.map((option) => option.value));
+    const missing = [...modesInUse()].filter((mode) => !mode.includes(" ") && !offered.has(mode)).sort();
+
+    expect(missing).toEqual([]);
+  });
+});
 
 describe("serializePublicModelHubFilters", () => {
   it("sends selected modes as the route's comma separated in filter", () => {

@@ -36,10 +36,17 @@ export interface PublicModelHubListResult extends ResourceListResult<ModelGroupI
   hasActiveQuery: boolean;
 }
 
-const fetchPage = (query: ResourceListQuery, signal: AbortSignal): Promise<ResourceListPage<ModelGroupInfo>> =>
-  apiClient.get<ResourceListPage<ModelGroupInfo>>(PUBLIC_MODEL_HUB_PATH, { query, signal });
+const fetchPage = async (query: ResourceListQuery, signal: AbortSignal): Promise<ResourceListPage<ModelGroupInfo>> => {
+  try {
+    return await apiClient.get<ResourceListPage<ModelGroupInfo>>(PUBLIC_MODEL_HUB_PATH, { query, signal });
+  } catch (error) {
+    if (!signal.aborted) {
+      console.error("There was an error fetching the public model data", error);
+    }
+    throw error;
+  }
+};
 
-/** One page of the proxy's public model groups: paging, sorting, search and filters all run on the route. */
 export const usePublicModelHubList = (enabled: boolean): PublicModelHubListResult => {
   const listOptions = {
     queryKey: QUERY_KEY,
