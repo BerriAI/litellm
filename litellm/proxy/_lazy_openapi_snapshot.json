@@ -3151,6 +3151,17 @@
                 }
               ],
               "title": "Team Id"
+            },
+            "user_email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Email"
             }
           },
           "title": "KeyMetadata",
