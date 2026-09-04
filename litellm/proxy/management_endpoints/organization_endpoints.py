@@ -41,6 +41,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import get_daily_a
 from litellm.proxy.management_endpoints.common_utils import (
     _set_object_metadata_field,
     _user_has_admin_view,
+    validate_budget_duration,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
@@ -806,6 +807,17 @@ async def update_organization_v2(
             status_code=422,
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
         )
+    for limit_name, limit_value in (
+        ("tpm_limit", data.tpm_limit),
+        ("rpm_limit", data.rpm_limit),
+        ("max_parallel_requests", data.max_parallel_requests),
+    ):
+        if limit_value is not None and limit_value < 0:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": f"{limit_name} must be non-negative. Received: {limit_value}"},
+            )
+    validate_budget_duration(data.budget_duration, status_code=422)
     if data.model_max_budget:
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             validate_model_max_budget,
