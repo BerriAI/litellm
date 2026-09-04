@@ -1659,16 +1659,17 @@ async def azure_proxy_route(
 
 from abc import ABC, abstractmethod
 
+_VERTEX_LOCATION_REQUIRED_DETAIL: Final = (
+    "No Vertex AI location for this request. Include /projects/<project>/locations/<location>/ in the "
+    "route, set vertex_location in default_vertex_config (or DEFAULT_VERTEXAI_LOCATION), or add the "
+    "model to model_list with use_in_pass_through: true."
+)
+
 
 class BaseVertexAIPassThroughHandler(ABC):
     @staticmethod
     @abstractmethod
     def get_default_base_target_url(vertex_location: str | None) -> str:
-        pass
-
-    @staticmethod
-    @abstractmethod
-    def update_base_target_url_with_credential_location(base_target_url: str, vertex_location: str | None) -> str:
         pass
 
 
@@ -1677,18 +1678,12 @@ class VertexAIDiscoveryPassThroughHandler(BaseVertexAIPassThroughHandler):
     def get_default_base_target_url(vertex_location: str | None) -> str:
         return "https://discoveryengine.googleapis.com/"
 
-    @staticmethod
-    def update_base_target_url_with_credential_location(base_target_url: str, vertex_location: str | None) -> str:
-        return base_target_url
-
 
 class VertexAIPassThroughHandler(BaseVertexAIPassThroughHandler):
     @staticmethod
     def get_default_base_target_url(vertex_location: str | None) -> str:
-        return get_vertex_base_url(vertex_location)
-
-    @staticmethod
-    def update_base_target_url_with_credential_location(base_target_url: str, vertex_location: str | None) -> str:
+        if vertex_location is None:
+            raise HTTPException(status_code=400, detail=_VERTEX_LOCATION_REQUIRED_DETAIL)
         return get_vertex_base_url(vertex_location)
 
 
@@ -1728,6 +1723,16 @@ def get_vertex_ai_allowed_incoming_headers(request: Request) -> dict:
         if header_name in incoming_headers:
             headers[header_name] = incoming_headers[header_name]
     return headers
+
+
+def _is_vertex_anthropic_count_tokens_route(endpoint: str) -> bool:
+    return endpoint.rsplit("/", 1)[-1].split(":", 1)[0] == "count-tokens"
+
+
+def _upstream_headers_for_vertex_route(endpoint: str, headers: Mapping[str, str]) -> Mapping[str, str]:
+    if not _is_vertex_anthropic_count_tokens_route(endpoint):
+        return headers
+    return MappingProxyType({name: value for name, value in headers.items() if name.lower() != "anthropic-beta"})
 
 
 def get_vertex_pass_through_handler(
@@ -1901,10 +1906,8 @@ async def _prepare_vertex_auth_headers(
     router_credentials: LiteLLM_ManagedVectorStore | None,
     vertex_project: str | None,
     vertex_location: str | None,
-    base_target_url: str | None,
-    get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
     user_api_key_dict: UserAPIKeyAuth,
-) -> tuple[Mapping[str, str], str | None, bool, str | None, str | None]:
+) -> tuple[Mapping[str, str], bool, str | None, str | None]:
     """
     Prepare authentication headers for Vertex AI pass-through requests.
 
@@ -1914,15 +1917,12 @@ async def _prepare_vertex_auth_headers(
         router_credentials: Optional vector store credentials from registry
         vertex_project: Vertex project ID
         vertex_location: Vertex location
-        base_target_url: Base URL for the Vertex AI service
-        get_vertex_pass_through_handler: Handler for the specific Vertex AI service
         user_api_key_dict: The caller's resolved authentication, so only the secret that
             authenticated them is stripped on the credential-less branch
 
     Returns:
         tuple containing:
             - headers: dict - Authentication headers to use
-            - base_target_url: str | None - Updated base target URL
             - headers_passed_through: bool - Whether headers were passed through from request
             - vertex_project: str | None - Updated vertex project ID
             - vertex_location: str | None - Updated vertex location
@@ -1975,14 +1975,8 @@ async def _prepare_vertex_auth_headers(
         # Add the Authorization header with vendor credentials
         headers["Authorization"] = f"Bearer {auth_header}"
 
-        if base_target_url is not None:
-            base_target_url = get_vertex_pass_through_handler.update_base_target_url_with_credential_location(
-                base_target_url, vertex_location
-            )
-
     return (
         headers,
-        base_target_url,
         headers_passed_through,
         vertex_project,
         vertex_location,
@@ -2075,12 +2069,9 @@ async def _base_vertex_proxy_route(
         location=vertex_location,
     )
 
-    base_target_url = get_vertex_pass_through_handler.get_default_base_target_url(vertex_location)
-
     # Prepare authentication headers
     (
         headers,
-        base_target_url,
         headers_passed_through,
         vertex_project,
         vertex_location,
@@ -2090,13 +2081,10 @@ async def _base_vertex_proxy_route(
         router_credentials=router_credentials,
         vertex_project=vertex_project,
         vertex_location=vertex_location,
-        base_target_url=base_target_url,
-        get_vertex_pass_through_handler=get_vertex_pass_through_handler,
         user_api_key_dict=user_api_key_dict,
     )
 
-    if base_target_url is None:
-        base_target_url = get_vertex_base_url(vertex_location)
+    base_target_url: Final = get_vertex_pass_through_handler.get_default_base_target_url(vertex_location)
 
     request_route: Final = encoded_endpoint
     verbose_proxy_logger.debug("request_route %s", request_route)
@@ -2128,7 +2116,7 @@ async def _base_vertex_proxy_route(
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=target,
-        custom_headers=headers,
+        custom_headers=_upstream_headers_for_vertex_route(endpoint, headers),
         is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
 
