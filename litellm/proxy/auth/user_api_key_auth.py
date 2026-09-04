@@ -2595,6 +2595,18 @@ async def _run_centralized_common_checks(
     end_user_object: Final[LiteLLM_EndUserTable | None] = (
         None if isinstance(end_user_result, BaseException) else end_user_result
     )
+    if user_api_key_auth_obj.end_user_id is not None and end_user_object is not None:
+        end_user_params: Final = {"end_user_id": user_api_key_auth_obj.end_user_id}
+        if end_user_object.litellm_budget_table is not None:
+            _apply_budget_limits_to_end_user_params(
+                end_user_params=end_user_params,
+                budget_info=end_user_object.litellm_budget_table,
+                end_user_id=user_api_key_auth_obj.end_user_id,
+            )
+        update_valid_token_with_end_user_params(
+            valid_token=user_api_key_auth_obj,
+            end_user_params=end_user_params,
+        )
     global_proxy_spend: float | None = None if isinstance(global_spend_result, BaseException) else global_spend_result
 
     if user_api_key_auth_obj.org_id is None and team_object is not None and team_object.organization_id is not None:
