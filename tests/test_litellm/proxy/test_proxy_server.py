@@ -9,8 +9,9 @@ import subprocess
 import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Final
 from unittest import mock
-from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, mock_open, patch
 
 import click
 import httpx
@@ -808,6 +809,18 @@ def test_restructure_always_happens(monkeypatch):
     assert ui_path == packaged_ui_path
 
 
+def _mock_scheduled_proxy_config() -> MagicMock:
+    config: Final = proxy_server_module.ProxyConfig()
+    return MagicMock(
+        spec=proxy_server_module.ProxyConfig,
+        check_periodic_reloads=create_autospec(config.check_periodic_reloads),
+        get_credentials=create_autospec(config.get_credentials),
+        add_deployment=create_autospec(config.add_deployment),
+        reload_search_tools_from_db=create_autospec(config.reload_search_tools_from_db),
+        reload_mcp_servers_from_db=create_autospec(config.reload_mcp_servers_from_db),
+    )
+
+
 @pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     """
@@ -823,7 +836,7 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
@@ -883,7 +896,7 @@ async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypat
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
     scheduler = AsyncIOScheduler()
 
     try:
@@ -924,7 +937,7 @@ async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
     mock_scheduler = MagicMock()
 
     configured_interval = 47
@@ -973,7 +986,7 @@ async def test_initialize_scheduled_jobs_rejects_non_positive_config_reload_inte
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
     mock_scheduler = MagicMock()
 
     with (
@@ -1020,7 +1033,7 @@ async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_fal
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
@@ -7370,7 +7383,7 @@ async def test_batch_cost_poller_is_confirmed_before_serving(monkeypatch):
     mock_proxy_logging.db_spend_update_writer = MagicMock()
 
     with (
-        patch("litellm.proxy.proxy_server.proxy_config", AsyncMock()),
+        patch("litellm.proxy.proxy_server.proxy_config", _mock_scheduled_proxy_config()),
         patch("litellm.proxy.proxy_server.store_model_in_db", False),
         patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
         patch("litellm.proxy.proxy_server.PROXY_BATCH_POLLING_ENABLED", True),
@@ -7412,7 +7425,7 @@ async def test_store_model_in_db_db_override_when_config_false():
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
@@ -7455,7 +7468,7 @@ async def test_store_model_in_db_db_check_skipped_when_already_true(monkeypatch)
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
@@ -7498,7 +7511,7 @@ async def test_store_model_in_db_db_failure_graceful(monkeypatch):
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
@@ -11864,7 +11877,7 @@ async def _run_scheduled_background_jobs():
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_logging.db_spend_update_writer = MagicMock()
-    mock_proxy_config = AsyncMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
 
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),

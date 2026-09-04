@@ -18,7 +18,7 @@
     "limit": 40
   },
   "reportDeprecated": {
-    "limit": 211
+    "limit": 209
   },
   "reportDuplicateImport": {
     "limit": 19
@@ -45,7 +45,7 @@
     "limit": 24
   },
   "reportInvalidTypeForm": {
-    "limit": 34
+    "limit": 30
   },
   "reportInvalidTypeVarUse": {
     "limit": 2
@@ -105,13 +105,13 @@
     "limit": 109
   },
   "reportUnknownMemberType": {
-    "limit": 38311
+    "limit": 38309
   },
   "reportUnknownParameterType": {
-    "limit": 19624
+    "limit": 19622
   },
   "reportUnknownVariableType": {
-    "limit": 29847
+    "limit": 29846
   },
   "reportUnnecessaryCast": {
     "limit": 111
