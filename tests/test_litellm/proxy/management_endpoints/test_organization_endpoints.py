@@ -729,13 +729,9 @@ async def _run_update_organization_v2(
 def test_v2_update_route_is_public_in_openapi():
     """PATCH /v2/organization/{organization_id} is a public route: hiding it again (include_in_schema=False)
     would drop it from openapi.json, /docs, and the generated UI API types."""
-    from fastapi import FastAPI
+    from litellm.proxy.proxy_server import get_openapi_schema
 
-    from litellm.proxy.management_endpoints.organization_endpoints import router
-
-    app = FastAPI()
-    app.include_router(router)
-    v2_path = app.openapi()["paths"].get("/v2/organization/{organization_id}")
+    v2_path = get_openapi_schema()["paths"].get("/v2/organization/{organization_id}")
     assert v2_path is not None
     assert "patch" in v2_path
 
