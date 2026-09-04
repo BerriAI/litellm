@@ -2678,8 +2678,6 @@ class TestConfigBaseForHealthCheck:
         assert base["api_key"] == "sk-configured"
 
     def test_request_naming_another_credential_does_not_inherit_config_credentials(self):
-        """The model string matched a configuration the request never asked for;
-        naming a credential of its own says where its credentials come from."""
         base = self._base(self.CONFIG, {"model": "openai/gpt-4o", "litellm_credential_name": "Another-cred"})
         assert "api_key" not in base
         assert "api_base" not in base
@@ -2687,8 +2685,6 @@ class TestConfigBaseForHealthCheck:
         assert base["rpm"] == 100
 
     def test_blank_credential_name_names_no_credential(self):
-        """It resolves to nothing downstream, so it must not cost the request the
-        configured credentials it would otherwise be probed with."""
         base = self._base(self.CONFIG, {"model": "openai/gpt-4o", "litellm_credential_name": ""})
         assert base["api_key"] == "sk-configured"
 
@@ -2702,10 +2698,6 @@ class TestConfigBaseForHealthCheck:
 
 
 class TestTestConnectionUsesTheNamedCredential:
-    """A connection test that names a stored credential is probed with that
-    credential, not with the credentials of an unrelated deployment that
-    happens to match the model string it is testing."""
-
     CREDENTIAL_KEY = "sk-credential-key"
     OTHER_DEPLOYMENT_KEY = "sk-other-deployment-key"
     REQUEST = {
@@ -2765,8 +2757,6 @@ class TestTestConnectionUsesTheNamedCredential:
 
     @pytest.mark.asyncio
     async def test_named_credentials_key_is_sent_not_the_matched_deployments_key(self, monkeypatch):
-        """The Add Model page sends a credential name and no key of its own; a
-        wildcard route covering the new model must not supply the key instead."""
         monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
 
         probed = await self._probe_params(
@@ -2794,8 +2784,6 @@ class TestTestConnectionUsesTheNamedCredential:
 
     @pytest.mark.asyncio
     async def test_named_credential_without_an_api_base_leaves_the_provider_default(self, monkeypatch):
-        """A credential that carries only a key must not pick up an endpoint
-        from the matched deployment; the provider's own default applies."""
         monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
 
         probed = await self._probe_params(
@@ -2807,8 +2795,6 @@ class TestTestConnectionUsesTheNamedCredential:
 
     @pytest.mark.asyncio
     async def test_configured_model_named_without_a_credential_still_inherits_its_config(self):
-        """Documented behavior: probing a configured model by name and nothing
-        else keeps using that model's configured credentials."""
         probed = await self._probe_params(
             {
                 "model_name": "grok-4",
@@ -2827,8 +2813,7 @@ class TestTestConnectionUsesTheNamedCredential:
 
     @pytest.mark.asyncio
     async def test_deployment_probed_by_id_keeps_the_endpoint_it_is_configured_with(self, monkeypatch):
-        """The model detail page names the deployment by id and echoes back the
-        credential that deployment already uses; its endpoint still applies."""
+        """The model detail page always echoes back the credential the deployment already uses."""
         from litellm.types.router import Deployment, LiteLLM_Params
 
         monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
