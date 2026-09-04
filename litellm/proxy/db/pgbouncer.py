@@ -99,25 +99,19 @@ def _userlist_quote(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
 
 
-def _split_option(tokens: Sequence[str]) -> tuple[str, Sequence[str]] | None:
-    """Split the first ``-c name=value`` / ``-cname=value`` / ``--name=value`` off ``tokens``."""
-    head: Final = tokens[0]
-    if head == "-c":
-        return (tokens[1], tokens[2:]) if len(tokens) > 1 else None
-    if head.startswith(("-c", "--")):
-        return head[2:], tokens[1:]
-    return None
-
-
 def _option_settings(tokens: Sequence[str]) -> tuple[str, ...] | None:
-    """The ``name=value`` settings in a libpq ``options`` string, or None if it holds anything else."""
-    if not tokens:
-        return ()
-    split: Final = _split_option(tokens)
-    if split is None or "=" not in split[0]:
-        return None
-    tail: Final = _option_settings(split[1])
-    return None if tail is None else (split[0], *tail)
+    """The ``name=value`` settings in a libpq ``options`` string, or None if it holds anything else.
+
+    Accepts ``-c name=value``, ``-cname=value`` and ``--name=value``; a
+    detached ``-c`` is folded into the token that follows it first.
+    """
+    folded: Final = tuple(
+        f"-c{tokens[index + 1]}" if token == "-c" and index + 1 < len(tokens) else token
+        for index, token in enumerate(tokens)
+        if index == 0 or tokens[index - 1] != "-c"
+    )
+    settings: Final = tuple(token[2:] for token in folded if token.startswith(("-c", "--")) and "=" in token[2:])
+    return settings if len(settings) == len(folded) else None
 
 
 def _connect_query(options: str) -> str | PgBouncerError:
