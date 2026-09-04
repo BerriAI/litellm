@@ -1127,6 +1127,16 @@ async def health_endpoint(
             if allowed_models is None
             or _caller_may_probe_deployment(m, allowed_models, llm_router, user_api_key_dict.team_id)
         ]
+        targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id)
+        if restrict_to_allowed_models and targeted_ids is not None and not targeted_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": f"key not allowed to health-check model_id {model_id}"
+                    if model_id
+                    else f"key not allowed to health-check model {model}"
+                },
+            )
         if use_background_health_checks:
             # The cached background result covers every model. When the
             # caller targets a specific model/model_id we have to narrow the
@@ -1134,7 +1144,6 @@ async def health_endpoint(
             # healthy_count, otherwise an unhealthy "foo" combined with any
             # other healthy model would still report healthy_count > 0 and
             # the targeted-503 path would never fire.
-            targeted_ids: Final = _resolve_targeted_model_ids(_llm_model_list, model, model_id)
             if restrict_to_allowed_models:
                 allowed_model_ids: Final = {
                     (m.get("model_info") or {}).get("id")
