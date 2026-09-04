@@ -120,12 +120,12 @@ def _router(
     return router
 
 
-def _reasoning_judge_router(reasoning_tokens, verdict='{"preference": "A", "confidence": 0.9}'):
+def _reasoning_judge_router(
+    reasoning_tokens: int, verdict: str = '{"preference": "A", "confidence": 0.9}'
+) -> MagicMock:
     """A router whose judge arm reasons before it answers, the way a deployment carrying an
-    elevated reasoning_effort does. Reasoning is billed against the caller's own max_tokens
-    and the reply is cut off at that cap, so a cap that does not clear the reasoning budget
-    yields a truncated verdict or no verdict at all. One character stands in for one token,
-    which is what makes the cap the thing under test."""
+    elevated reasoning_effort does: reasoning bills against the caller's own max_tokens and
+    the reply is cut off at that cap. One character stands in for one token."""
     router = MagicMock()
     router.model_group_alias = {}
     router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
