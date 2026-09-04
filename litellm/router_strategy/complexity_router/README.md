@@ -71,43 +71,31 @@ still resolve to a deployment in `model_list`; this configuration does not creat
 ### Zero-setup Auto configuration
 
 The dashboard's Add Router flow can generate the four tiers from the model groups the
-current admin or team can actually use. Auto setup asks for two product choices:
-
-- Quality level: Economy, Balanced, High, or Max
-- Optimize for: Cost, Task completion speed, or Balanced
+current admin or team can actually use. Auto setup asks for one product choice: Quality
+level (Economy, Balanced, High, or Max).
 
 The quality level is a gate, not an optimization weight. For every complexity tier,
 LiteLLM finds the best available model's conservative LiveBench quality score and admits
 only models within the selected maximum regret: 15 percentage points for Economy, 7 for
-Balanced, 3 for High, and 1 for Max. The objective then ranks only those admitted models.
+Balanced, 3 for High, and 1 for Max. Auto then chooses the lowest estimated cost per
+completed task among the admitted models. If none of those models has comparable token
+pricing, Auto chooses the highest conservative quality score instead of failing setup.
 This means Max still sends trivial work to a smaller model when that model is within one
 point of the best available quality for trivial work.
 
-Cost is benchmark cost per completed task, not input or output token price. It is observed
-request dollars divided by quality-adjusted completed questions in the same complexity
-bucket, with partial benchmark credit counted as a fractional completion.
+Cost is estimated dollars per completed task, not input or output token price. LiteLLM
+combines the benchmark request's token mix and completion probability with the configured
+deployment's input, cache-read, and output rates. When a model group has multiple
+deployments, Auto uses the most conservative estimate.
 
-Task completion speed uses two forms of evidence:
+Auto selects one model group for each tier and returns a normal, editable `heuristic_v2`
+configuration. It does not add a request-time policy, collect live latency observations,
+or change how the complexity router runs after creation. Existing routers, manual
+configurations, and LiteLLM's deployment-level routing are therefore unchanged.
 
-- SIMPLE and MEDIUM tiers learn equal-output response time from this proxy's successful
-  requests: time to first token plus the time to generate the expected number of visible
-  output tokens. Reasoning tokens are excluded. The policy explores every quality-admitted
-  model twice before using a rolling seven-day sample
-- COMPLEX and REASONING tiers use retry-adjusted Terminal-Bench wall-clock time to a
-  successful task. Results are compared only inside the same agent and benchmark cohort
-  and fall back to cost when comparable speed evidence is unavailable
-
-Balanced minimizes the combined log-normalized cost and completion-time scores after the
-same quality gate. The recommendation stores its snapshot ID, objective, admitted models,
-and rank order directly in the router configuration, so the generated result is visible
-and editable. Changing a generated tier's model pool in the dashboard removes that Auto
-selection policy and returns the tier to normal manual pool selection.
-
-These rules apply only when a router is created through Auto setup. Existing routers,
-manual configurations, and LiteLLM's deployment-level latency routing are unchanged. The
-bundled benchmark data is a versioned snapshot: creating or regenerating a router uses the
-snapshot shipped with that LiteLLM version, while an already saved router keeps its stored
-policy.
+The bundled benchmark data is a versioned snapshot. Creating or regenerating a router uses
+the snapshot shipped with that LiteLLM version; the saved router contains only the four
+selected tiers and ordinary complexity-router settings.
 
 ### Heuristic v2
 

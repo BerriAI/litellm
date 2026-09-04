@@ -294,7 +294,6 @@ export const buildPresetPrefill = (
       return_raw_model_name: config.return_raw_model_name,
       enable_context_window_escalation: config.enable_context_window_escalation,
       context_window_escalation_buffer: config.context_window_escalation_buffer,
-      auto_setup: config.auto_setup,
     },
     customTechnicalKeywords: config.custom_technical_keywords ?? [],
     keywordTierRules: hydrateKeywordTierRules(config.keyword_tier_rules ?? []),

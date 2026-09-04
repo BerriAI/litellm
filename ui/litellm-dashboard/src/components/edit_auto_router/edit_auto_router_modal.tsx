@@ -38,7 +38,6 @@ import {
   hydratePlanModeMinTier,
   hydrateTierLabels,
   dryRunRejection,
-  type AutoSetupConfigPayload,
 } from "../add_model/build_complexity_router_config";
 import { KeywordTierRule } from "../add_model/KeywordTierRules";
 import { DEFAULT_MATCH_THRESHOLD } from "../add_model/SemanticKeywordMatching";
@@ -61,7 +60,6 @@ import ComplexityRouterConfig, {
   DEFAULT_DEPLOYMENT_AFFINITY,
   DEFAULT_TIER_DISTANCE_PENALTY,
 } from "../add_model/ComplexityRouterConfig";
-import { detachAutoSetupAfterPoolEdit } from "../add_model/auto_setup_policy";
 import {
   Dialog,
   DialogContent,
@@ -116,7 +114,6 @@ export interface StoredComplexityRouterConfig {
   return_raw_model_name?: boolean;
   enable_context_window_escalation?: unknown;
   context_window_escalation_buffer?: unknown;
-  auto_setup?: AutoSetupConfigPayload;
 }
 
 /**
@@ -205,7 +202,6 @@ export const hydrateComplexityRouterConfig = (
       typeof parsedConfig.context_window_escalation_buffer === "number"
         ? parsedConfig.context_window_escalation_buffer
         : undefined,
-    auto_setup: parsedConfig.auto_setup,
   };
 };
 
@@ -242,7 +238,6 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "reasoning_override_min_score",
   "enable_context_window_escalation",
   "context_window_escalation_buffer",
-  "auto_setup",
 ]);
 
 // Managed only when the caller passes the corresponding state. A caller that does not render
@@ -348,7 +343,6 @@ export const buildUpdatedComplexityRouterConfig = (
     tierModelParams: value.tier_model_params,
     enableContextWindowEscalation: value.enable_context_window_escalation,
     contextWindowEscalationBuffer: value.context_window_escalation_buffer,
-    autoSetup: value.auto_setup,
   };
   const built = buildComplexityRouterConfig(builderParams);
 
@@ -729,7 +723,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                     modelInfo={modelInfo}
                     value={complexityRouterConfig}
                     onChange={(config) => {
-                      setComplexityRouterConfig((previous) => detachAutoSetupAfterPoolEdit(previous, config));
+                      setComplexityRouterConfig(config);
                     }}
                     customTechnicalKeywords={customTechnicalKeywords}
                     onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}

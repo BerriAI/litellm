@@ -1,12 +1,8 @@
 {
   "activation_scope": {
-    "latency_objectives": [
-      "task_completion_speed",
-      "balanced"
-    ],
     "setup_mode": "auto"
   },
-  "artifact_sha256": "bab7488212d40d96c5e43f80893c5ca2961d0e25160cb1aebbef36a2422b8a2b",
+  "artifact_sha256": "e191b5f7225e4da7a178eb5fe8780bcea24fb0166be23e2069338c6fe5522cd5",
   "complexity_policy": {
     "cumulative_shares": {
       "complex": 1.0,
@@ -14,36 +10,21 @@
       "standard": 0.75,
       "trivial": 0.25
     },
-    "method": "relative_quantiles",
-    "online_response_latency_formula": "time_to_first_token_ms + expected_visible_output_tokens / output_tokens_per_ms",
-    "speed_metric_by_complexity": {
-      "complex": "offline_task_completion_latency",
-      "simple": "online_response_latency",
-      "standard": "offline_task_completion_latency",
-      "trivial": "online_response_latency"
-    }
+    "method": "relative_quantiles"
   },
   "definitions": {
     "cost": "Provider-adjustable estimate of dollars per completed task using the benchmark trajectory's observed token mix and completion rate.",
-    "online_response_latency": "Time to first token plus expected visible output generation time from LiteLLM's live observations.",
     "quality": "Mean LiveBench subtask score within the inferred complexity bucket.",
-    "quality_lower_bound": "Mean subtask score minus 1.96 standard errors, floored at zero.",
-    "task_completion_speed": "Terminal-Bench expected wall-clock time to a successful task, including failed attempts."
+    "quality_lower_bound": "Mean subtask score minus 1.96 standard errors, floored at zero."
   },
   "generated_at": "2026-09-03T20:00:00Z",
   "limitations": [
-    "The snapshot is an offline prior; it does not replace live endpoint health or deployment latency routing.",
-    "Terminal-Bench duration is full agent-task wall time and is only compared inside the same agent/version cohort.",
-    "Trivial and simple requests require online response-latency evidence; long-horizon benchmark time is never used to rank them.",
-    "A reference speed route anchors on the cohort containing the highest-quality measured candidate; it never compares raw seconds across cohorts.",
-    "When no quality-admitted model has comparable speed evidence, speed and balanced routes explicitly fall back to cost.",
+    "The snapshot is an offline setup prior; it does not change runtime routing, endpoint health checks, or deployment selection.",
     "LiveBench cost per completion treats partial benchmark credit as a fractional completion.",
     "LiveBench input-token means are model-level, not complexity-bucket-specific; output-token means are weighted inside each bucket.",
-    "Provider-adjusted LiveBench cost scales the observed request cost by the benchmark token mix and source prices; cache discounts and non-token charges can make it approximate.",
-    "Provider-adjusted Terminal-Bench cost uses uncached input, cache-read input, and output token means; non-token tool charges are not represented.",
-    "Terminal-Bench token totals span many calls, so per-call long-context thresholds cannot be reconstructed and are not applied to trajectory totals.",
-    "Reference routes use the full benchmark catalog; LiteLLM must recompute them after intersecting with the user's configured and capability-compatible models.",
-    "Benchmark variants include their measured reasoning effort; runtime mapping must not silently claim the score for a different effort setting."
+    "Provider-adjusted completion cost scales the observed request cost by the benchmark token mix and source prices; cache discounts and non-token charges can make it approximate.",
+    "LiteLLM recomputes every quality gate after intersecting the snapshot with the user's configured, routable models.",
+    "Benchmark variants include their measured reasoning effort; setup preserves required effort parameters when the provider supports them."
   ],
   "models": {
     "claude-fable-5-1-max-effort": {
@@ -131,96 +112,6 @@
           "source_output_cost_per_token": 5e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "claude-fable-5-1-max-effort",
-            "cohort_id": "claude-code@2.1.257",
-            "complexity": "complex",
-            "cost_per_completed_task_usd": 170.09694079545451,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 22.012545279411764,
-            "mean_cache_read_input_tokens": 5441945.505882353,
-            "mean_output_tokens": 161621.48235294118,
-            "mean_uncached_input_tokens": 1034091.7176470588,
-            "observed_duration_p50_ms": 2313576.159,
-            "observed_duration_p95_ms": 19944972.068,
-            "quality_lower_bound": 0.07382276936875576,
-            "retry_adjusted_completion_ms": 36630585.75418182,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.12941176470588237,
-            "task_count": 17,
-            "terminal_bench_model_id": "anthropic/claude-fable-5-1"
-          }
-        ],
-        "simple": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "claude-fable-5-1-max-effort",
-            "cohort_id": "claude-code@2.1.257",
-            "complexity": "simple",
-            "cost_per_completed_task_usd": 25.25749088095238,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 18.720257947058823,
-            "mean_cache_read_input_tokens": 7568509.458823529,
-            "mean_output_tokens": 220892.04705882352,
-            "mean_uncached_input_tokens": 538071.4941176471,
-            "observed_duration_p50_ms": 2841125.8109999998,
-            "observed_duration_p95_ms": 9005283.476,
-            "quality_lower_bound": 0.6390752485008677,
-            "retry_adjusted_completion_ms": 5309329.376857143,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.7411764705882353,
-            "task_count": 17,
-            "terminal_bench_model_id": "anthropic/claude-fable-5-1"
-          }
-        ],
-        "standard": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "claude-fable-5-1-max-effort",
-            "cohort_id": "claude-code@2.1.257",
-            "complexity": "standard",
-            "cost_per_completed_task_usd": 27.663567212962963,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 18.672907868750002,
-            "mean_cache_read_input_tokens": 8005376.575,
-            "mean_output_tokens": 218323.6875,
-            "mean_uncached_input_tokens": 483923.825,
-            "observed_duration_p50_ms": 2673098.842,
-            "observed_duration_p95_ms": 7985724.741,
-            "quality_lower_bound": 0.5664032172496735,
-            "retry_adjusted_completion_ms": 4729345.715351852,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.675,
-            "task_count": 16,
-            "terminal_bench_model_id": "anthropic/claude-fable-5-1"
-          }
-        ],
-        "trivial": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "claude-fable-5-1-max-effort",
-            "cohort_id": "claude-code@2.1.257",
-            "complexity": "trivial",
-            "cost_per_completed_task_usd": 20.434632119047624,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 16.092272793750002,
-            "mean_cache_read_input_tokens": 9009226.35,
-            "mean_output_tokens": 164275.2875,
-            "mean_uncached_input_tokens": 546191.3375,
-            "observed_duration_p50_ms": 2008713.561,
-            "observed_duration_p95_ms": 11603729.906000001,
-            "quality_lower_bound": 0.6857763938182242,
-            "retry_adjusted_completion_ms": 4635716.655238096,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.7875,
-            "task_count": 16,
-            "terminal_bench_model_id": "anthropic/claude-fable-5-1"
-          }
-        ]
       }
     },
     "claude-fable-5-max-effort": {
@@ -309,96 +200,6 @@
           "source_output_cost_per_token": 5e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "claude-fable-5-max-effort",
-            "cohort_id": "claude-code@2.1.231",
-            "complexity": "complex",
-            "cost_per_completed_task_usd": 392.82553275,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 23.107384279411765,
-            "mean_cache_read_input_tokens": 8784759.376470588,
-            "mean_output_tokens": 149270.90588235293,
-            "mean_uncached_input_tokens": 777170.2588235295,
-            "observed_duration_p50_ms": 2042428.4970000002,
-            "observed_duration_p95_ms": 17828109.054,
-            "quality_lower_bound": 0.025384785707111474,
-            "retry_adjusted_completion_ms": 83197786.8262,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.058823529411764705,
-            "task_count": 17,
-            "terminal_bench_model_id": "anthropic/claude-fable-5"
-          }
-        ],
-        "simple": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "claude-fable-5-max-effort",
-            "cohort_id": "claude-code@2.1.231",
-            "complexity": "simple",
-            "cost_per_completed_task_usd": 33.590369561320756,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 20.94458337352941,
-            "mean_cache_read_input_tokens": 11229777.952941176,
-            "mean_output_tokens": 204881.6,
-            "mean_uncached_input_tokens": 336043.8823529412,
-            "observed_duration_p50_ms": 3535340.2729999996,
-            "observed_duration_p95_ms": 9474656.393,
-            "quality_lower_bound": 0.5172971118468915,
-            "retry_adjusted_completion_ms": 6346110.95354717,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.6235294117647059,
-            "task_count": 17,
-            "terminal_bench_model_id": "anthropic/claude-fable-5"
-          }
-        ],
-        "standard": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "claude-fable-5-max-effort",
-            "cohort_id": "claude-code@2.1.231",
-            "complexity": "standard",
-            "cost_per_completed_task_usd": 58.93160589516129,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 22.835997284375,
-            "mean_cache_read_input_tokens": 11889124.975,
-            "mean_output_tokens": 173329.6125,
-            "mean_uncached_input_tokens": 402044.525,
-            "observed_duration_p50_ms": 2997084.142,
-            "observed_duration_p95_ms": 10159133.293000001,
-            "quality_lower_bound": 0.2882439968827771,
-            "retry_adjusted_completion_ms": 9369974.166258065,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.3875,
-            "task_count": 16,
-            "terminal_bench_model_id": "anthropic/claude-fable-5"
-          }
-        ],
-        "trivial": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "claude-fable-5-max-effort",
-            "cohort_id": "claude-code@2.1.231",
-            "complexity": "trivial",
-            "cost_per_completed_task_usd": 29.201946306034483,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 21.171411071875,
-            "mean_cache_read_input_tokens": 11396242.775,
-            "mean_output_tokens": 183132.1625,
-            "mean_uncached_input_tokens": 446857.5875,
-            "observed_duration_p50_ms": 3460185.4905000003,
-            "observed_duration_p95_ms": 10187401.28,
-            "quality_lower_bound": 0.618557347158301,
-            "retry_adjusted_completion_ms": 5933162.700517242,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.725,
-            "task_count": 16,
-            "terminal_bench_model_id": "anthropic/claude-fable-5"
-          }
-        ]
       }
     },
     "claude-opus-4-5-20251101-thinking-64k-high-effort": {
@@ -480,12 +281,6 @@
           "source_output_cost_per_token": 2.5e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "claude-opus-4-6-thinking-auto-high-effort": {
@@ -570,12 +365,6 @@
           "source_output_cost_per_token": 2.5e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "claude-opus-4-7-xhigh-effort": {
@@ -667,12 +456,6 @@
           "source_output_cost_per_token": 2.5e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "claude-opus-4-8-max-effort": {
@@ -766,96 +549,6 @@
           "source_output_cost_per_token": 2.5e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "claude-opus-4-8-max-effort",
-            "cohort_id": "claude-code@2.1.231",
-            "complexity": "complex",
-            "cost_per_completed_task_usd": 658.821080875,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 15.501672491176471,
-            "mean_cache_read_input_tokens": 14129125.54117647,
-            "mean_output_tokens": 198919.23529411765,
-            "mean_uncached_input_tokens": 554347.0235294118,
-            "observed_duration_p50_ms": 2628999.225,
-            "observed_duration_p95_ms": 17801145.046,
-            "quality_lower_bound": 0.006476375454219535,
-            "retry_adjusted_completion_ms": 210516238.57050002,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.023529411764705882,
-            "task_count": 17,
-            "terminal_bench_model_id": "anthropic/claude-opus-4-8"
-          }
-        ],
-        "simple": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "claude-opus-4-8-max-effort",
-            "cohort_id": "claude-code@2.1.231",
-            "complexity": "simple",
-            "cost_per_completed_task_usd": 80.75515165909091,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 20.901333370588237,
-            "mean_cache_read_input_tokens": 20194287.02352941,
-            "mean_output_tokens": 302960.2117647059,
-            "mean_uncached_input_tokens": 516850.5411764706,
-            "observed_duration_p50_ms": 4935654.733,
-            "observed_duration_p95_ms": 10689830.749,
-            "quality_lower_bound": 0.1775797328865609,
-            "retry_adjusted_completion_ms": 20200870.892045453,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.25882352941176473,
-            "task_count": 17,
-            "terminal_bench_model_id": "anthropic/claude-opus-4-8"
-          }
-        ],
-        "standard": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "claude-opus-4-8-max-effort",
-            "cohort_id": "claude-code@2.1.231",
-            "complexity": "standard",
-            "cost_per_completed_task_usd": 193.26893900000002,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 16.9110321625,
-            "mean_cache_read_input_tokens": 14685576.6375,
-            "mean_output_tokens": 236491.775,
-            "mean_uncached_input_tokens": 585015.2125,
-            "observed_duration_p50_ms": 3971969.2490000003,
-            "observed_duration_p95_ms": 8566031.918000001,
-            "quality_lower_bound": 0.043031454647439876,
-            "retry_adjusted_completion_ms": 48481955.61957143,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.0875,
-            "task_count": 16,
-            "terminal_bench_model_id": "anthropic/claude-opus-4-8"
-          }
-        ],
-        "trivial": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "claude-opus-4-8-max-effort",
-            "cohort_id": "claude-code@2.1.231",
-            "complexity": "trivial",
-            "cost_per_completed_task_usd": 43.279292521276595,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 25.42658435625,
-            "mean_cache_read_input_tokens": 25549236.875,
-            "mean_output_tokens": 340427.675,
-            "mean_uncached_input_tokens": 661020.725,
-            "observed_duration_p50_ms": 6080651.175,
-            "observed_duration_p95_ms": 12414037.945,
-            "quality_lower_bound": 0.47803841126883023,
-            "retry_adjusted_completion_ms": 10616437.123489361,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.5875,
-            "task_count": 16,
-            "terminal_bench_model_id": "anthropic/claude-opus-4-8"
-          }
-        ]
       }
     },
     "claude-opus-5-max-effort": {
@@ -947,96 +640,6 @@
           "source_output_cost_per_token": 2.5e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "claude-opus-5-max-effort",
-            "cohort_id": "claude-code@2.1.231",
-            "complexity": "complex",
-            "cost_per_completed_task_usd": 281.3378472,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 16.549285129411764,
-            "mean_cache_read_input_tokens": 15744333.729411764,
-            "mean_output_tokens": 173575.88235294117,
-            "mean_uncached_input_tokens": 694124.9764705882,
-            "observed_duration_p50_ms": 2207406.744,
-            "observed_duration_p95_ms": 17664645.654,
-            "quality_lower_bound": 0.025384785707111474,
-            "retry_adjusted_completion_ms": 94611233.12079999,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.058823529411764705,
-            "task_count": 17,
-            "terminal_bench_model_id": "anthropic/claude-opus-5"
-          }
-        ],
-        "simple": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "claude-opus-5-max-effort",
-            "cohort_id": "claude-code@2.1.231",
-            "complexity": "simple",
-            "cost_per_completed_task_usd": 30.785845800847458,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 21.36899885,
-            "mean_cache_read_input_tokens": 22501503.37647059,
-            "mean_output_tokens": 253603.1294117647,
-            "mean_uncached_input_tokens": 604559.9529411765,
-            "observed_duration_p50_ms": 3380587.579,
-            "observed_duration_p95_ms": 15045314.204,
-            "quality_lower_bound": 0.5895400497870746,
-            "retry_adjusted_completion_ms": 7657584.832338983,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.6941176470588235,
-            "task_count": 17,
-            "terminal_bench_model_id": "anthropic/claude-opus-5"
-          }
-        ],
-        "standard": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "claude-opus-5-max-effort",
-            "cohort_id": "claude-code@2.1.231",
-            "complexity": "standard",
-            "cost_per_completed_task_usd": 35.05708062195122,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 17.96675381875,
-            "mean_cache_read_input_tokens": 20685562.3125,
-            "mean_output_tokens": 191914.2625,
-            "mean_uncached_input_tokens": 451568.2,
-            "observed_duration_p50_ms": 3494617.0105,
-            "observed_duration_p95_ms": 7178773.611,
-            "quality_lower_bound": 0.4049314460370689,
-            "retry_adjusted_completion_ms": 7639667.404512195,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.5125,
-            "task_count": 16,
-            "terminal_bench_model_id": "anthropic/claude-opus-5"
-          }
-        ],
-        "trivial": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "claude-opus-5-max-effort",
-            "cohort_id": "claude-code@2.1.231",
-            "complexity": "trivial",
-            "cost_per_completed_task_usd": 20.582428286764706,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 17.49506404375,
-            "mean_cache_read_input_tokens": 17807508.9,
-            "mean_output_tokens": 185969.275,
-            "mean_uncached_input_tokens": 630809.3875,
-            "observed_duration_p50_ms": 2546369.6345,
-            "observed_duration_p95_ms": 10659490.976,
-            "quality_lower_bound": 0.7558657249889396,
-            "retry_adjusted_completion_ms": 5383495.158191176,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.85,
-            "task_count": 16,
-            "terminal_bench_model_id": "anthropic/claude-opus-5"
-          }
-        ]
       }
     },
     "claude-sonnet-4-6-thinking-auto-medium-effort": {
@@ -1128,12 +731,6 @@
           "source_output_cost_per_token": 1.5e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "claude-sonnet-5-xhigh-effort": {
@@ -1227,12 +824,6 @@
           "source_output_cost_per_token": 1.5e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "deepseek-v4-flash": {
@@ -1326,12 +917,6 @@
           "source_output_cost_per_token": 2.8e-07,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "deepseek-v4-flash-0731": {
@@ -1422,12 +1007,6 @@
           "source_output_cost_per_token": 2.8e-07,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "deepseek-v4-flash-vision-exp": {
@@ -1509,12 +1088,6 @@
           "source_output_cost_per_token": 6.6e-07,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "deepseek-v4-pro": {
@@ -1607,12 +1180,6 @@
           "source_output_cost_per_token": 8.7e-07,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "deepseek-v4-pro-0813": {
@@ -1696,12 +1263,6 @@
           "source_output_cost_per_token": 8.7e-07,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "gemini-3.1-pro-preview-high": {
@@ -1786,12 +1347,6 @@
           "source_output_cost_per_token": 1.2e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "gemini-3.5-flash-high": {
@@ -1876,12 +1431,6 @@
           "source_output_cost_per_token": 9e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "gemini-3.5-flash-lite-high": {
@@ -1965,12 +1514,6 @@
           "source_output_cost_per_token": 2.5e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "gemini-3.6-flash-high": {
@@ -2054,12 +1597,6 @@
           "source_output_cost_per_token": 7.5e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "gemini-3.7-flash-high": {
@@ -2144,96 +1681,6 @@
           "source_output_cost_per_token": 3.75e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "gemini-3.7-flash-high",
-            "cohort_id": "mini-swe-agent@2.4.6",
-            "complexity": "complex",
-            "cost_per_completed_task_usd": 295.9275225750001,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 3.4815002655882368,
-            "mean_cache_read_input_tokens": 28612753.65882353,
-            "mean_output_tokens": 116238.91764705883,
-            "mean_uncached_input_tokens": 1199530.4,
-            "observed_duration_p50_ms": 648803.339,
-            "observed_duration_p95_ms": 6388953.142,
-            "quality_lower_bound": 0.0020797335877093272,
-            "retry_adjusted_completion_ms": 167815171.641,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.011764705882352941,
-            "task_count": 17,
-            "terminal_bench_model_id": "gemini/gemini-3.7-flash"
-          }
-        ],
-        "simple": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "gemini-3.7-flash-high",
-            "cohort_id": "mini-swe-agent@2.4.6",
-            "complexity": "simple",
-            "cost_per_completed_task_usd": 51.97473815625,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 2.445870030882353,
-            "mean_cache_read_input_tokens": 17370307.94117647,
-            "mean_output_tokens": 154050.90588235293,
-            "mean_uncached_input_tokens": 753874.7176470588,
-            "observed_duration_p50_ms": 1034465.7279999999,
-            "observed_duration_p95_ms": 2791459.0560000003,
-            "quality_lower_bound": 0.018449962264952782,
-            "retry_adjusted_completion_ms": 25638198.509499997,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.047058823529411764,
-            "task_count": 17,
-            "terminal_bench_model_id": "gemini/gemini-3.7-flash"
-          }
-        ],
-        "standard": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "gemini-3.7-flash-high",
-            "cohort_id": "mini-swe-agent@2.4.6",
-            "complexity": "standard",
-            "cost_per_completed_task_usd": 87.11567227500001,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 4.355783613750001,
-            "mean_cache_read_input_tokens": 39359057.1,
-            "mean_output_tokens": 159510.375,
-            "mean_uncached_input_tokens": 1074253.9,
-            "observed_duration_p50_ms": 1048099.63,
-            "observed_duration_p95_ms": 6347074.634,
-            "quality_lower_bound": 0.019613237127295572,
-            "retry_adjusted_completion_ms": 33926894.975499995,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.05,
-            "task_count": 16,
-            "terminal_bench_model_id": "gemini/gemini-3.7-flash"
-          }
-        ],
-        "trivial": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "gemini-3.7-flash-high",
-            "cohort_id": "mini-swe-agent@2.4.6",
-            "complexity": "trivial",
-            "cost_per_completed_task_usd": 14.627877795535715,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 5.1197572284375,
-            "mean_cache_read_input_tokens": 45995506.8375,
-            "mean_output_tokens": 204981.7,
-            "mean_uncached_input_tokens": 1201883.7875,
-            "observed_duration_p50_ms": 1198424.5915,
-            "observed_duration_p95_ms": 6527013.723,
-            "quality_lower_bound": 0.2545439440982969,
-            "retry_adjusted_completion_ms": 5402727.119178573,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.35,
-            "task_count": 16,
-            "terminal_bench_model_id": "gemini/gemini-3.7-flash"
-          }
-        ]
       }
     },
     "gemini-3.8-flash-high": {
@@ -2317,96 +1764,6 @@
           "source_output_cost_per_token": 3.75e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "gemini-3.8-flash-high",
-            "cohort_id": "mini-swe-agent@2.4.6",
-            "complexity": "complex",
-            "cost_per_completed_task_usd": 0.0,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 0.0,
-            "mean_cache_read_input_tokens": 47160828.941176474,
-            "mean_output_tokens": 178142.89411764705,
-            "mean_uncached_input_tokens": 1274647.8823529412,
-            "observed_duration_p50_ms": 989905.341,
-            "observed_duration_p95_ms": 14753648.89,
-            "quality_lower_bound": 0.025384785707111474,
-            "retry_adjusted_completion_ms": 41792359.309,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.058823529411764705,
-            "task_count": 17,
-            "terminal_bench_model_id": "gemini/gemini-3.8-flash"
-          }
-        ],
-        "simple": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "gemini-3.8-flash-high",
-            "cohort_id": "mini-swe-agent@2.4.6",
-            "complexity": "simple",
-            "cost_per_completed_task_usd": 0.0,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 0.0,
-            "mean_cache_read_input_tokens": 28410489.37647059,
-            "mean_output_tokens": 182701.0823529412,
-            "mean_uncached_input_tokens": 972770.9411764706,
-            "observed_duration_p50_ms": 1238644.2179999999,
-            "observed_duration_p95_ms": 2836649.066,
-            "quality_lower_bound": 0.1193204211030341,
-            "retry_adjusted_completion_ms": 7225142.85575,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.18823529411764706,
-            "task_count": 17,
-            "terminal_bench_model_id": "gemini/gemini-3.8-flash"
-          }
-        ],
-        "standard": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "gemini-3.8-flash-high",
-            "cohort_id": "mini-swe-agent@2.4.6",
-            "complexity": "standard",
-            "cost_per_completed_task_usd": 0.0,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 0.0,
-            "mean_cache_read_input_tokens": 46424741.4,
-            "mean_output_tokens": 203380.9375,
-            "mean_uncached_input_tokens": 1252358.625,
-            "observed_duration_p50_ms": 1398407.2505,
-            "observed_duration_p95_ms": 5482899.748,
-            "quality_lower_bound": 0.02698897769798554,
-            "retry_adjusted_completion_ms": 28856834.1502,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.0625,
-            "task_count": 16,
-            "terminal_bench_model_id": "gemini/gemini-3.8-flash"
-          }
-        ],
-        "trivial": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "gemini-3.8-flash-high",
-            "cohort_id": "mini-swe-agent@2.4.6",
-            "complexity": "trivial",
-            "cost_per_completed_task_usd": 0.0,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 0.0,
-            "mean_cache_read_input_tokens": 81941825.4875,
-            "mean_output_tokens": 263928.3875,
-            "mean_uncached_input_tokens": 1719578.9125,
-            "observed_duration_p50_ms": 1614114.02,
-            "observed_duration_p95_ms": 5601424.65,
-            "quality_lower_bound": 0.3574781238878701,
-            "retry_adjusted_completion_ms": 5122828.089918919,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.4625,
-            "task_count": 16,
-            "terminal_bench_model_id": "gemini/gemini-3.8-flash"
-          }
-        ]
       }
     },
     "glm-5.2": {
@@ -2497,12 +1854,6 @@
           "source_output_cost_per_token": 4.4e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "glm-5.3": {
@@ -2585,12 +1936,6 @@
           "source_output_cost_per_token": 4.4e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "glm-5.3-flash": {
@@ -2672,12 +2017,6 @@
           "source_output_cost_per_token": 5e-07,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "gpt-5.2-2025-12-11-high": {
@@ -2760,12 +2099,6 @@
           "source_output_cost_per_token": 1.4e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "gpt-5.2-codex": {
@@ -2848,12 +2181,6 @@
           "source_output_cost_per_token": 1.4e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "gpt-5.4-mini-xhigh": {
@@ -2937,12 +2264,6 @@
           "source_output_cost_per_token": 4.5e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "gpt-5.4-nano-xhigh": {
@@ -3026,12 +2347,6 @@
           "source_output_cost_per_token": 1.25e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "gpt-5.4-xhigh": {
@@ -3121,12 +2436,6 @@
           "source_output_cost_per_token": 1.5e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "gpt-5.5-xhigh": {
@@ -3213,12 +2522,6 @@
           "source_output_cost_per_token": 3e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "gpt-5.6-luna-max": {
@@ -3307,96 +2610,6 @@
           "source_output_cost_per_token": 6e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "gpt-5.6-luna-max",
-            "cohort_id": "codex@0.149.1",
-            "complexity": "complex",
-            "cost_per_completed_task_usd": null,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 0.6297226068235294,
-            "mean_cache_read_input_tokens": 21967651.752941176,
-            "mean_output_tokens": 95748.37647058823,
-            "mean_uncached_input_tokens": 309517.24705882353,
-            "observed_duration_p50_ms": 812183.1919999999,
-            "observed_duration_p95_ms": 30386749.601,
-            "quality_lower_bound": 0.0,
-            "retry_adjusted_completion_ms": null,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.0,
-            "task_count": 17,
-            "terminal_bench_model_id": "openai/gpt-5.6-luna"
-          }
-        ],
-        "simple": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "gpt-5.6-luna-max",
-            "cohort_id": "codex@0.149.1",
-            "complexity": "simple",
-            "cost_per_completed_task_usd": 3.6673198505882363,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 0.7334639701176473,
-            "mean_cache_read_input_tokens": 21637394.447058823,
-            "mean_output_tokens": 168592.02352941176,
-            "mean_uncached_input_tokens": 397313.6705882353,
-            "observed_duration_p50_ms": 1451894.867,
-            "observed_duration_p95_ms": 9231407.450000001,
-            "quality_lower_bound": 0.12878892241565565,
-            "retry_adjusted_completion_ms": 14908957.570411764,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.2,
-            "task_count": 17,
-            "terminal_bench_model_id": "openai/gpt-5.6-luna"
-          }
-        ],
-        "standard": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "gpt-5.6-luna-max",
-            "cohort_id": "codex@0.149.1",
-            "complexity": "standard",
-            "cost_per_completed_task_usd": 16.9274472,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 0.63477927,
-            "mean_cache_read_input_tokens": 18678964.6875,
-            "mean_output_tokens": 130148.925,
-            "mean_uncached_input_tokens": 422307.325,
-            "observed_duration_p50_ms": 1577440.2845,
-            "observed_duration_p95_ms": 5629013.643,
-            "quality_lower_bound": 0.012834336300788755,
-            "retry_adjusted_completion_ms": 54544322.523,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.0375,
-            "task_count": 16,
-            "terminal_bench_model_id": "openai/gpt-5.6-luna"
-          }
-        ],
-        "trivial": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "gpt-5.6-luna-max",
-            "cohort_id": "codex@0.149.1",
-            "complexity": "trivial",
-            "cost_per_completed_task_usd": 4.926968522203215,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 2.2787229415189874,
-            "mean_cache_read_input_tokens": null,
-            "mean_output_tokens": null,
-            "mean_uncached_input_tokens": null,
-            "observed_duration_p50_ms": 3137410.6835000003,
-            "observed_duration_p95_ms": 28950832.13,
-            "quality_lower_bound": 0.3574781238878701,
-            "retry_adjusted_completion_ms": 16030999.12881081,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.4625,
-            "task_count": 16,
-            "terminal_bench_model_id": "openai/gpt-5.6-luna"
-          }
-        ]
       }
     },
     "gpt-5.6-sol-max": {
@@ -3484,96 +2697,6 @@
           "source_output_cost_per_token": 3e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "gpt-5.6-sol-max",
-            "cohort_id": "codex@0.149.1",
-            "complexity": "complex",
-            "cost_per_completed_task_usd": 254.19713079999997,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 8.971663439999999,
-            "mean_cache_read_input_tokens": 16735234.835294118,
-            "mean_output_tokens": 62267.282352941176,
-            "mean_uncached_input_tokens": 209666.14117647058,
-            "observed_duration_p50_ms": 1013924.23,
-            "observed_duration_p95_ms": 18501705.555,
-            "quality_lower_bound": 0.012074823021218326,
-            "retry_adjusted_completion_ms": 105534731.96500002,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.03529411764705882,
-            "task_count": 17,
-            "terminal_bench_model_id": "openai/gpt-5.6-sol"
-          }
-        ],
-        "simple": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "gpt-5.6-sol-max",
-            "cohort_id": "codex@0.149.1",
-            "complexity": "simple",
-            "cost_per_completed_task_usd": 14.184279841379311,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 4.839342534117647,
-            "mean_cache_read_input_tokens": 7048592.423529412,
-            "mean_output_tokens": 66036.84705882354,
-            "mean_uncached_input_tokens": 140110.48235294118,
-            "observed_duration_p50_ms": 1373627.158,
-            "observed_duration_p95_ms": 3545131.2939999998,
-            "quality_lower_bound": 0.2492177176176207,
-            "retry_adjusted_completion_ms": 4732196.68475862,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.3411764705882353,
-            "task_count": 17,
-            "terminal_bench_model_id": "openai/gpt-5.6-sol"
-          }
-        ],
-        "standard": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "gpt-5.6-sol-max",
-            "cohort_id": "codex@0.149.1",
-            "complexity": "standard",
-            "cost_per_completed_task_usd": 21.92680297777778,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 7.400296005000001,
-            "mean_cache_read_input_tokens": 12077936.6375,
-            "mean_output_tokens": 69831.1875,
-            "mean_uncached_input_tokens": 236228.9,
-            "observed_duration_p50_ms": 1280606.867,
-            "observed_duration_p95_ms": 7725407.675000001,
-            "quality_lower_bound": 0.24345459812221978,
-            "retry_adjusted_completion_ms": 5344111.560555556,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.3375,
-            "task_count": 16,
-            "terminal_bench_model_id": "openai/gpt-5.6-sol"
-          }
-        ],
-        "trivial": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "gpt-5.6-sol-max",
-            "cohort_id": "codex@0.149.1",
-            "complexity": "trivial",
-            "cost_per_completed_task_usd": 13.002322996874996,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 10.401858397499998,
-            "mean_cache_read_input_tokens": 18088253.65,
-            "mean_output_tokens": 89979.0625,
-            "mean_uncached_input_tokens": 278267.675,
-            "observed_duration_p50_ms": 1556719.1935,
-            "observed_duration_p95_ms": 8823486.585,
-            "quality_lower_bound": 0.6995355220341885,
-            "retry_adjusted_completion_ms": 3411662.1276875,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.8,
-            "task_count": 16,
-            "terminal_bench_model_id": "openai/gpt-5.6-sol"
-          }
-        ]
       }
     },
     "gpt-5.6-terra-max": {
@@ -3662,96 +2785,6 @@
           "source_output_cost_per_token": 1.5e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "gpt-5.6-terra-max",
-            "cohort_id": "codex@0.149.1",
-            "complexity": "complex",
-            "cost_per_completed_task_usd": 207.23259980000006,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 4.876061171764707,
-            "mean_cache_read_input_tokens": 16777721.388235293,
-            "mean_output_tokens": 79003.21176470588,
-            "mean_uncached_input_tokens": 231868.31764705884,
-            "observed_duration_p50_ms": 760895.202,
-            "observed_duration_p95_ms": 17511504.763,
-            "quality_lower_bound": 0.006476375454219535,
-            "retry_adjusted_completion_ms": 143084489.17000002,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.023529411764705882,
-            "task_count": 17,
-            "terminal_bench_model_id": "openai/gpt-5.6-terra"
-          }
-        ],
-        "simple": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "gpt-5.6-terra-max",
-            "cohort_id": "codex@0.149.1",
-            "complexity": "simple",
-            "cost_per_completed_task_usd": 17.41710915542328,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 3.6883289976190476,
-            "mean_cache_read_input_tokens": null,
-            "mean_output_tokens": null,
-            "mean_uncached_input_tokens": null,
-            "observed_duration_p50_ms": 1243788.852,
-            "observed_duration_p95_ms": 3643298.026,
-            "quality_lower_bound": 0.13836125681504122,
-            "retry_adjusted_completion_ms": 7933672.004000001,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.21176470588235294,
-            "task_count": 17,
-            "terminal_bench_model_id": "openai/gpt-5.6-terra"
-          }
-        ],
-        "standard": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "gpt-5.6-terra-max",
-            "cohort_id": "codex@0.149.1",
-            "complexity": "standard",
-            "cost_per_completed_task_usd": 56.02047092,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 3.5012794325,
-            "mean_cache_read_input_tokens": 10359244.35,
-            "mean_output_tokens": 73774.925,
-            "mean_uncached_input_tokens": 218093.775,
-            "observed_duration_p50_ms": 1329513.8054999998,
-            "observed_duration_p95_ms": 3397796.914,
-            "quality_lower_bound": 0.02698897769798554,
-            "retry_adjusted_completion_ms": 23351506.7788,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.0625,
-            "task_count": 16,
-            "terminal_bench_model_id": "openai/gpt-5.6-terra"
-          }
-        ],
-        "trivial": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "gpt-5.6-terra-max",
-            "cohort_id": "codex@0.149.1",
-            "complexity": "trivial",
-            "cost_per_completed_task_usd": 15.850715830434785,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 9.114161602500001,
-            "mean_cache_read_input_tokens": 30301997.95,
-            "mean_output_tokens": 159034.0875,
-            "mean_uncached_input_tokens": 460952.0875,
-            "observed_duration_p50_ms": 1951635.4270000001,
-            "observed_duration_p95_ms": 14613717.367999999,
-            "quality_lower_bound": 0.465690919708387,
-            "retry_adjusted_completion_ms": 6175673.676978262,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.575,
-            "task_count": 16,
-            "terminal_bench_model_id": "openai/gpt-5.6-terra"
-          }
-        ]
       }
     },
     "grok-4.3": {
@@ -3834,12 +2867,6 @@
           "source_output_cost_per_token": 2.5e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "grok-4.5": {
@@ -3919,96 +2946,6 @@
           "source_output_cost_per_token": 6e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "grok-4.5",
-            "cohort_id": "grok-build@1.0.5",
-            "complexity": "complex",
-            "cost_per_completed_task_usd": null,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 2.71251968,
-            "mean_cache_read_input_tokens": 3847177.035294118,
-            "mean_output_tokens": 52782.964705882354,
-            "mean_uncached_input_tokens": 355004.8941176471,
-            "observed_duration_p50_ms": 809437.804,
-            "observed_duration_p95_ms": 17566938.117999997,
-            "quality_lower_bound": 0.0,
-            "retry_adjusted_completion_ms": null,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.0,
-            "task_count": 17,
-            "terminal_bench_model_id": "xai/grok-4.5"
-          }
-        ],
-        "simple": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "grok-4.5",
-            "cohort_id": "grok-build@1.0.5",
-            "complexity": "simple",
-            "cost_per_completed_task_usd": 46.48075626666667,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 5.4683242666666665,
-            "mean_cache_read_input_tokens": null,
-            "mean_output_tokens": null,
-            "mean_uncached_input_tokens": null,
-            "observed_duration_p50_ms": 1772457.824,
-            "observed_duration_p95_ms": 5691062.943,
-            "quality_lower_bound": 0.06517287423683975,
-            "retry_adjusted_completion_ms": 22212528.7113,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.11764705882352941,
-            "task_count": 17,
-            "terminal_bench_model_id": "xai/grok-4.5"
-          }
-        ],
-        "standard": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "grok-4.5",
-            "cohort_id": "grok-build@1.0.5",
-            "complexity": "standard",
-            "cost_per_completed_task_usd": 130.93046981818182,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 3.2732617454545454,
-            "mean_cache_read_input_tokens": 5532003.2,
-            "mean_output_tokens": 68074.2875,
-            "mean_uncached_input_tokens": 224299.1,
-            "observed_duration_p50_ms": 1359035.736,
-            "observed_duration_p95_ms": 3994916.012,
-            "quality_lower_bound": 0.0068827488981252315,
-            "retry_adjusted_completion_ms": 62711641.6255,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.025,
-            "task_count": 16,
-            "terminal_bench_model_id": "xai/grok-4.5"
-          }
-        ],
-        "trivial": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "grok-4.5",
-            "cohort_id": "grok-build@1.0.5",
-            "complexity": "trivial",
-            "cost_per_completed_task_usd": 43.48064595862069,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 15.76173416,
-            "mean_cache_read_input_tokens": null,
-            "mean_output_tokens": null,
-            "mean_uncached_input_tokens": null,
-            "observed_duration_p50_ms": 2102327.9115000004,
-            "observed_duration_p95_ms": 28832497.533,
-            "quality_lower_bound": 0.26570633724259446,
-            "retry_adjusted_completion_ms": 14499273.850896552,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.3625,
-            "task_count": 16,
-            "terminal_bench_model_id": "xai/grok-4.5"
-          }
-        ]
       }
     },
     "grok-4.6": {
@@ -4091,96 +3028,6 @@
           "source_output_cost_per_token": 6e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "grok-4.6",
-            "cohort_id": "grok-build@1.0.5",
-            "complexity": "complex",
-            "cost_per_completed_task_usd": 80.149236,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 3.7717287529411765,
-            "mean_cache_read_input_tokens": 4618074.352941177,
-            "mean_output_tokens": 71291.23529411765,
-            "mean_uncached_input_tokens": 195723.57647058825,
-            "observed_duration_p50_ms": 1115803.779,
-            "observed_duration_p95_ms": 15627159.765,
-            "quality_lower_bound": 0.018449962264952782,
-            "retry_adjusted_completion_ms": 58126086.48225,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.047058823529411764,
-            "task_count": 17,
-            "terminal_bench_model_id": "xai/grok-4.6"
-          }
-        ],
-        "simple": [
-          {
-            "attempt_count": 85,
-            "benchmark_model_id": "grok-4.6",
-            "cohort_id": "grok-build@1.0.5",
-            "complexity": "simple",
-            "cost_per_completed_task_usd": 39.875287432228916,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 7.505936457831325,
-            "mean_cache_read_input_tokens": 8020312.847058823,
-            "mean_output_tokens": 109234.10588235295,
-            "mean_uncached_input_tokens": 243557.15294117646,
-            "observed_duration_p50_ms": 1821589.598,
-            "observed_duration_p95_ms": 4264177.431,
-            "quality_lower_bound": 0.1193204211030341,
-            "retry_adjusted_completion_ms": 10645207.7405625,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.18823529411764706,
-            "task_count": 17,
-            "terminal_bench_model_id": "xai/grok-4.6"
-          }
-        ],
-        "standard": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "grok-4.6",
-            "cohort_id": "grok-build@1.0.5",
-            "complexity": "standard",
-            "cost_per_completed_task_usd": 472.3057235443037,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 11.807643088607593,
-            "mean_cache_read_input_tokens": 12985204.8,
-            "mean_output_tokens": 93418.95,
-            "mean_uncached_input_tokens": 287172.2375,
-            "observed_duration_p50_ms": 1404832.459,
-            "observed_duration_p95_ms": 7392303.36,
-            "quality_lower_bound": 0.0068827488981252315,
-            "retry_adjusted_completion_ms": 74351417.9385,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.025,
-            "task_count": 16,
-            "terminal_bench_model_id": "xai/grok-4.6"
-          }
-        ],
-        "trivial": [
-          {
-            "attempt_count": 80,
-            "benchmark_model_id": "grok-4.6",
-            "cohort_id": "grok-build@1.0.5",
-            "complexity": "trivial",
-            "cost_per_completed_task_usd": 38.115191288888894,
-            "excluded_infrastructure_trials": 0,
-            "mean_attempt_cost_usd": 21.4397951,
-            "mean_cache_read_input_tokens": 22056990.4,
-            "mean_output_tokens": 122500.6375,
-            "mean_uncached_input_tokens": 391925.475,
-            "observed_duration_p50_ms": 1962060.6230000001,
-            "observed_duration_p95_ms": 9825563.117,
-            "quality_lower_bound": 0.45340937868656955,
-            "retry_adjusted_completion_ms": 4988289.024244444,
-            "source_id": "terminal-bench-4.0.0",
-            "success_probability": 0.5625,
-            "task_count": 16,
-            "terminal_bench_model_id": "xai/grok-4.6"
-          }
-        ]
       }
     },
     "grok-build-0.1": {
@@ -4260,12 +3107,6 @@
           "source_output_cost_per_token": 2e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "inkling-xhigh": {
@@ -4349,12 +3190,6 @@
           "source_output_cost_per_token": 4.68e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "kimi-k2.6-thinking": {
@@ -4432,12 +3267,6 @@
           "source_output_cost_per_token": 4e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "kimi-k2.7-code": {
@@ -4527,12 +3356,6 @@
           "source_output_cost_per_token": 4e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "kimi-k3": {
@@ -4618,12 +3441,6 @@
           "source_output_cost_per_token": 1.5e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "minimax-m3": {
@@ -4710,12 +3527,6 @@
           "source_output_cost_per_token": 1.2e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "muse-spark-1.1-xhigh": {
@@ -4797,12 +3608,6 @@
           "source_output_cost_per_token": 4.25e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "muse-spark-1.2-xhigh": {
@@ -4884,12 +3689,6 @@
           "source_output_cost_per_token": 4.25e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "muse-spark-1.3-xhigh": {
@@ -4971,12 +3770,6 @@
           "source_output_cost_per_token": 4.25e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "nemotron-3-ultra-550b-a55b": {
@@ -5056,12 +3849,6 @@
           "source_output_cost_per_token": 2.4e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "ox-alpha-max": {
@@ -5139,12 +3926,6 @@
           "source_output_cost_per_token": 0.0,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "qwen3.6-27b": {
@@ -5228,12 +4009,6 @@
           "source_output_cost_per_token": 3.6000000000000003e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "qwen3.6-plus": {
@@ -5314,12 +4089,6 @@
           "source_output_cost_per_token": 3e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "qwen3.7-max": {
@@ -5404,12 +4173,6 @@
           "source_output_cost_per_token": 7.5e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "qwen3.8-27b": {
@@ -5491,12 +4254,6 @@
           "source_output_cost_per_token": 6.5e-07,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "qwen3.8-flash-next": {
@@ -5574,12 +4331,6 @@
           "source_output_cost_per_token": 4.6999999999999995e-07,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "qwen3.8-max": {
@@ -5664,12 +4415,6 @@
           "source_output_cost_per_token": 6e-06,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     },
     "smaug-agentic": {
@@ -5747,12 +4492,6 @@
           "source_output_cost_per_token": 1.5e-05,
           "subtask_count": 5
         }
-      },
-      "task_completion_speed_by_complexity": {
-        "complex": [],
-        "simple": [],
-        "standard": [],
-        "trivial": []
       }
     }
   },
@@ -5781,145 +4520,12 @@
         "path": "livebench/table_2026_06_25.csv",
         "sha256": "b8e6339f7fafe6df8f6ecc8b0abe3dc529b5737a6c7edd3e24ffcb36e02fd118",
         "source_id": "livebench-2026-06-25"
-      },
-      {
-        "bytes": 15970,
-        "path": "terminal-bench/submissions/2026-08-26-anthropic-claude-fable-5-max-claude-code.json",
-        "sha256": "487f60477db9c36bd5cdb3d50c80634233bfa53de3368cf33337a771f17aa07e",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 15964,
-        "path": "terminal-bench/submissions/2026-08-26-anthropic-claude-opus-4-8-max-claude-code.json",
-        "sha256": "25aea019c65af71083bb684cd26c30c4c6eb3f0c91d4d7473c7090c1b5e1d289",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 15958,
-        "path": "terminal-bench/submissions/2026-08-26-anthropic-claude-opus-5-max-claude-code.json",
-        "sha256": "06fbebf9bf42c430c49b020f86b9365f5ae772c6063bab4fce98f54e349ed80c",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 15932,
-        "path": "terminal-bench/submissions/2026-08-26-openai-gpt-5-6-luna-max-codex.json",
-        "sha256": "59ae3614eca2b0c1f087b7a50d65e3fc40dd2ef0188c2fab40d32c5a50f823a7",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 15924,
-        "path": "terminal-bench/submissions/2026-08-26-openai-gpt-5-6-sol-max-codex.json",
-        "sha256": "b41e5f5f15aeb7657f9d32b33a868aecab6dd6db2d48b7480638455664102c5b",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 15932,
-        "path": "terminal-bench/submissions/2026-08-26-openai-gpt-5-6-terra-max-codex.json",
-        "sha256": "1c7ca98885e40ed4dc31d23391982848b2c1dd87b0595743fa242ad848f1b670",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 15887,
-        "path": "terminal-bench/submissions/2026-08-26-xai-grok-4-5-none-grok-build.json",
-        "sha256": "fa618ecb274776479019af6d62c538197cbb563a44d8b8a45752dde51d603b93",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 15886,
-        "path": "terminal-bench/submissions/2026-08-26-xai-grok-4-6-none-grok-build.json",
-        "sha256": "31526e5dff0e06680085bb5029700b0fddc607962e7c6aea9a911600c6b2df1a",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 15943,
-        "path": "terminal-bench/submissions/2026-09-01-gemini-gemini-3-8-flash-high-mini-swe-agent.json",
-        "sha256": "835f2090e7d40d9e5c6c5483da49c5f3147a0304e615df49c71aafa859a62c50",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 15943,
-        "path": "terminal-bench/submissions/2026-09-02-anthropic-claude-fable-5-1-max-claude-code.json",
-        "sha256": "cccdb936c1266db66ce922db48144ed0716c1294eec3dcc1bdcf976711c92813",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 15953,
-        "path": "terminal-bench/submissions/2026-09-02-gemini-gemini-3-7-flash-high-mini-swe-agent.json",
-        "sha256": "013ace9d0c06b97aed4227b624aff0724257b2ca44a113553a03707545efc0cc",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 405512,
-        "path": "terminal-bench/trials/claude-fable-5-1-max-claude-code.json",
-        "sha256": "eace284d655bb870eeb113298b921d1ffde2e53f3c43ecbccf619cc6b2a50dd5",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 405541,
-        "path": "terminal-bench/trials/claude-fable-5-max-claude-code.json",
-        "sha256": "f6866893713a1feafe23a2136ae6334ff5cadf6887572e94ca8e33a3cfedc4da",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 406419,
-        "path": "terminal-bench/trials/claude-opus-4-8-max-claude-code.json",
-        "sha256": "feddf6a0222d4140696f0e25d72a6186282d20eb9170908692ada19e49a3a9ec",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 404974,
-        "path": "terminal-bench/trials/claude-opus-5-max-claude-code.json",
-        "sha256": "7a1bea779168226edfd73b547528a042a26d9fd573a6af7a174f90516ede2494",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 409532,
-        "path": "terminal-bench/trials/gemini-3-7-flash-high-mini-swe-agent.json",
-        "sha256": "b674fd778f9148d19cd3e38f441c4ecf168eb0f1056f5d9e75843ed80e66f6d2",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 406835,
-        "path": "terminal-bench/trials/gemini-3-8-flash-high-mini-swe-agent.json",
-        "sha256": "791ee2577ac9b9c9100616f53af6df0945d86b835bd39d7318bb7ee15ccf1f73",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 401789,
-        "path": "terminal-bench/trials/gpt-5-6-luna-max-codex.json",
-        "sha256": "9e223e1f7b86990d4260b96ccc76044a86b08df7c90b96c9e00f8a2a150134af",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 400386,
-        "path": "terminal-bench/trials/gpt-5-6-sol-max-codex.json",
-        "sha256": "68729d3d8bfe09362752a8ac802cbf7fc3bea6768494d9cab14439dbdac1bb54",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 401701,
-        "path": "terminal-bench/trials/gpt-5-6-terra-max-codex.json",
-        "sha256": "646b7879615f7ae5a9861bbbd7271416db4734e30a646fa84993e0692a714d6d",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 399870,
-        "path": "terminal-bench/trials/grok-4-5-grok-build.json",
-        "sha256": "0745d3a91ec75cd544f8c79ca6b162e74b2a19416d9ce428315604549ff65093",
-        "source_id": "terminal-bench-4.0.0"
-      },
-      {
-        "bytes": 399597,
-        "path": "terminal-bench/trials/grok-4-6-grok-build.json",
-        "sha256": "6323e4142ebb1c3a054b42340e8cffa7143ff6ddf480dfdcc89cb5a710660178",
-        "source_id": "terminal-bench-4.0.0"
       }
     ],
-    "manifest_sha256": "128c50d897e1d3f5749c5dd9aa4ec8fa5efb9d00dea983af8194a4981c25b557",
+    "manifest_sha256": "32def689d0fcb59afc8ca06fbc0d2f015c1268cb34dd4aaba991e1150ca437e8",
     "source_revisions": {
       "litellm-model-registry-2026-09-03": "828d561fcc2704eaf90617be8cdc058fccbd8508",
-      "livebench-2026-06-25": "62240f848c977d4202c1029191ac663498745f2f",
-      "terminal-bench-4.0.0": "83c7a6172d629c6575b785ab12c8db787bb2e323"
+      "livebench-2026-06-25": "62240f848c977d4202c1029191ac663498745f2f"
     }
   },
   "quality_tiers": {
@@ -5940,2205 +4546,7 @@
       "maximum_quality_regret": 0.01
     }
   },
-  "reference_routes": {
-    "balanced": {
-      "balanced": {
-        "complex": {
-          "cold_start_model_id": null,
-          "evidence_status": "cohort_scoped",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "claude-fable-5-1-max-effort"
-          ],
-          "objective_value": 0.0,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "deepseek-v4-flash-vision-exp",
-            "kimi-k3",
-            "muse-spark-1.3-xhigh",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.5392130921684612,
-          "selected_model_id": "claude-fable-5-1-max-effort",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": "claude-code@2.1.257",
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "simple": {
-          "cold_start_model_id": "deepseek-v4-pro-0813",
-          "evidence_status": "fallback_runtime_response_speed_required",
-          "fallback_reason": "The offline snapshot intentionally has no provider-neutral response-latency value. LiteLLM must rerank these quality-admitted models using live TTFT and output throughput.",
-          "objective_eligible_model_ids": [
-            "deepseek-v4-pro-0813",
-            "gemini-3.7-flash-high",
-            "grok-4.6",
-            "gemini-3.6-flash-high",
-            "muse-spark-1.3-xhigh",
-            "claude-opus-5-max-effort",
-            "kimi-k3",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "gpt-5.5-xhigh",
-            "gpt-5.4-xhigh",
-            "claude-sonnet-5-xhigh-effort",
-            "glm-5.3",
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": null,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-pro-0813",
-            "gemini-3.6-flash-high",
-            "gemini-3.7-flash-high",
-            "glm-5.3",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.6",
-            "kimi-k3",
-            "muse-spark-1.3-xhigh"
-          ],
-          "quality_floor": 0.7797278750259673,
-          "selected_model_id": null,
-          "selection_mode": "runtime_response_latency",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        },
-        "standard": {
-          "cold_start_model_id": null,
-          "evidence_status": "cohort_scoped",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": 0.0,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "gemini-3.1-pro-preview-high",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max",
-            "grok-4.5",
-            "grok-4.6",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.70251553515036,
-          "selected_model_id": "claude-fable-5-max-effort",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": "claude-code@2.1.231",
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "trivial": {
-          "cold_start_model_id": "deepseek-v4-flash-0731",
-          "evidence_status": "fallback_runtime_response_speed_required",
-          "fallback_reason": "The offline snapshot intentionally has no provider-neutral response-latency value. LiteLLM must rerank these quality-admitted models using live TTFT and output throughput.",
-          "objective_eligible_model_ids": [
-            "deepseek-v4-flash-0731",
-            "glm-5.3-flash",
-            "deepseek-v4-flash",
-            "qwen3.8-27b",
-            "deepseek-v4-pro-0813",
-            "deepseek-v4-pro",
-            "deepseek-v4-flash-vision-exp",
-            "gemini-3.5-flash-lite-high",
-            "kimi-k2.7-code",
-            "grok-4.3",
-            "gemini-3.7-flash-high",
-            "gpt-5.6-luna-max",
-            "grok-4.6",
-            "muse-spark-1.2-xhigh",
-            "gpt-5.2-2025-12-11-high",
-            "grok-4.5",
-            "gpt-5.6-sol-max",
-            "gemini-3.6-flash-high",
-            "gpt-5.6-terra-max",
-            "glm-5.2",
-            "gpt-5.2-codex",
-            "claude-opus-5-max-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "nemotron-3-ultra-550b-a55b",
-            "gpt-5.4-mini-xhigh",
-            "qwen3.7-max",
-            "qwen3.6-plus",
-            "inkling-xhigh",
-            "muse-spark-1.3-xhigh",
-            "gemini-3.5-flash-high",
-            "kimi-k3",
-            "gemini-3.8-flash-high",
-            "gpt-5.5-xhigh",
-            "gpt-5.4-xhigh",
-            "qwen3.8-max",
-            "glm-5.3",
-            "gemini-3.1-pro-preview-high",
-            "claude-sonnet-5-xhigh-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort"
-          ],
-          "objective_value": null,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash-0731",
-            "deepseek-v4-flash-vision-exp",
-            "deepseek-v4-pro",
-            "deepseek-v4-pro-0813",
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.5-flash-high",
-            "gemini-3.5-flash-lite-high",
-            "gemini-3.6-flash-high",
-            "gemini-3.7-flash-high",
-            "gemini-3.8-flash-high",
-            "glm-5.2",
-            "glm-5.3",
-            "glm-5.3-flash",
-            "gpt-5.2-2025-12-11-high",
-            "gpt-5.2-codex",
-            "gpt-5.4-mini-xhigh",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-luna-max",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.3",
-            "grok-4.5",
-            "grok-4.6",
-            "inkling-xhigh",
-            "kimi-k2.7-code",
-            "kimi-k3",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "nemotron-3-ultra-550b-a55b",
-            "qwen3.6-plus",
-            "qwen3.7-max",
-            "qwen3.8-27b",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.9068668617803175,
-          "selected_model_id": null,
-          "selection_mode": "runtime_response_latency",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        }
-      },
-      "cost": {
-        "complex": {
-          "cold_start_model_id": null,
-          "evidence_status": "direct",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "deepseek-v4-flash-vision-exp",
-            "muse-spark-1.3-xhigh",
-            "qwen3.8-max",
-            "kimi-k3",
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": 0.1042448619785062,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "deepseek-v4-flash-vision-exp",
-            "kimi-k3",
-            "muse-spark-1.3-xhigh",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.5392130921684612,
-          "selected_model_id": "deepseek-v4-flash-vision-exp",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "simple": {
-          "cold_start_model_id": null,
-          "evidence_status": "direct",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "deepseek-v4-pro-0813",
-            "gemini-3.7-flash-high",
-            "grok-4.6",
-            "gemini-3.6-flash-high",
-            "muse-spark-1.3-xhigh",
-            "claude-opus-5-max-effort",
-            "kimi-k3",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "gpt-5.5-xhigh",
-            "gpt-5.4-xhigh",
-            "claude-sonnet-5-xhigh-effort",
-            "glm-5.3",
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": 0.03819422168482955,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-pro-0813",
-            "gemini-3.6-flash-high",
-            "gemini-3.7-flash-high",
-            "glm-5.3",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.6",
-            "kimi-k3",
-            "muse-spark-1.3-xhigh"
-          ],
-          "quality_floor": 0.7797278750259673,
-          "selected_model_id": "deepseek-v4-pro-0813",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        },
-        "standard": {
-          "cold_start_model_id": null,
-          "evidence_status": "direct",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "grok-4.6",
-            "grok-4.5",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "qwen3.8-max",
-            "gemini-3.1-pro-preview-high",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max",
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": 0.14293474305698176,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "gemini-3.1-pro-preview-high",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max",
-            "grok-4.5",
-            "grok-4.6",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.70251553515036,
-          "selected_model_id": "grok-4.6",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "trivial": {
-          "cold_start_model_id": null,
-          "evidence_status": "direct",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "deepseek-v4-flash-0731",
-            "glm-5.3-flash",
-            "deepseek-v4-flash",
-            "qwen3.8-27b",
-            "deepseek-v4-pro-0813",
-            "deepseek-v4-pro",
-            "deepseek-v4-flash-vision-exp",
-            "gemini-3.5-flash-lite-high",
-            "kimi-k2.7-code",
-            "grok-4.3",
-            "gemini-3.7-flash-high",
-            "gpt-5.6-luna-max",
-            "grok-4.6",
-            "muse-spark-1.2-xhigh",
-            "gpt-5.2-2025-12-11-high",
-            "grok-4.5",
-            "gpt-5.6-sol-max",
-            "gemini-3.6-flash-high",
-            "gpt-5.6-terra-max",
-            "glm-5.2",
-            "gpt-5.2-codex",
-            "claude-opus-5-max-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "nemotron-3-ultra-550b-a55b",
-            "gpt-5.4-mini-xhigh",
-            "qwen3.7-max",
-            "qwen3.6-plus",
-            "inkling-xhigh",
-            "muse-spark-1.3-xhigh",
-            "gemini-3.5-flash-high",
-            "kimi-k3",
-            "gemini-3.8-flash-high",
-            "gpt-5.5-xhigh",
-            "gpt-5.4-xhigh",
-            "qwen3.8-max",
-            "glm-5.3",
-            "gemini-3.1-pro-preview-high",
-            "claude-sonnet-5-xhigh-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort"
-          ],
-          "objective_value": 0.001468206744000269,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash-0731",
-            "deepseek-v4-flash-vision-exp",
-            "deepseek-v4-pro",
-            "deepseek-v4-pro-0813",
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.5-flash-high",
-            "gemini-3.5-flash-lite-high",
-            "gemini-3.6-flash-high",
-            "gemini-3.7-flash-high",
-            "gemini-3.8-flash-high",
-            "glm-5.2",
-            "glm-5.3",
-            "glm-5.3-flash",
-            "gpt-5.2-2025-12-11-high",
-            "gpt-5.2-codex",
-            "gpt-5.4-mini-xhigh",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-luna-max",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.3",
-            "grok-4.5",
-            "grok-4.6",
-            "inkling-xhigh",
-            "kimi-k2.7-code",
-            "kimi-k3",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "nemotron-3-ultra-550b-a55b",
-            "qwen3.6-plus",
-            "qwen3.7-max",
-            "qwen3.8-27b",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.9068668617803175,
-          "selected_model_id": "deepseek-v4-flash-0731",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        }
-      },
-      "task_completion_speed": {
-        "complex": {
-          "cold_start_model_id": null,
-          "evidence_status": "cohort_scoped",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "claude-fable-5-1-max-effort"
-          ],
-          "objective_value": 36630585.75418182,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "deepseek-v4-flash-vision-exp",
-            "kimi-k3",
-            "muse-spark-1.3-xhigh",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.5392130921684612,
-          "selected_model_id": "claude-fable-5-1-max-effort",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": "claude-code@2.1.257",
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "simple": {
-          "cold_start_model_id": "deepseek-v4-pro-0813",
-          "evidence_status": "fallback_runtime_response_speed_required",
-          "fallback_reason": "The offline snapshot intentionally has no provider-neutral response-latency value. LiteLLM must rerank these quality-admitted models using live TTFT and output throughput.",
-          "objective_eligible_model_ids": [
-            "deepseek-v4-pro-0813",
-            "gemini-3.7-flash-high",
-            "grok-4.6",
-            "gemini-3.6-flash-high",
-            "muse-spark-1.3-xhigh",
-            "claude-opus-5-max-effort",
-            "kimi-k3",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "gpt-5.5-xhigh",
-            "gpt-5.4-xhigh",
-            "claude-sonnet-5-xhigh-effort",
-            "glm-5.3",
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": null,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-pro-0813",
-            "gemini-3.6-flash-high",
-            "gemini-3.7-flash-high",
-            "glm-5.3",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.6",
-            "kimi-k3",
-            "muse-spark-1.3-xhigh"
-          ],
-          "quality_floor": 0.7797278750259673,
-          "selected_model_id": null,
-          "selection_mode": "runtime_response_latency",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        },
-        "standard": {
-          "cold_start_model_id": null,
-          "evidence_status": "cohort_scoped",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": 9369974.166258065,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "gemini-3.1-pro-preview-high",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max",
-            "grok-4.5",
-            "grok-4.6",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.70251553515036,
-          "selected_model_id": "claude-fable-5-max-effort",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": "claude-code@2.1.231",
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "trivial": {
-          "cold_start_model_id": "deepseek-v4-flash-0731",
-          "evidence_status": "fallback_runtime_response_speed_required",
-          "fallback_reason": "The offline snapshot intentionally has no provider-neutral response-latency value. LiteLLM must rerank these quality-admitted models using live TTFT and output throughput.",
-          "objective_eligible_model_ids": [
-            "deepseek-v4-flash-0731",
-            "glm-5.3-flash",
-            "deepseek-v4-flash",
-            "qwen3.8-27b",
-            "deepseek-v4-pro-0813",
-            "deepseek-v4-pro",
-            "deepseek-v4-flash-vision-exp",
-            "gemini-3.5-flash-lite-high",
-            "kimi-k2.7-code",
-            "grok-4.3",
-            "gemini-3.7-flash-high",
-            "gpt-5.6-luna-max",
-            "grok-4.6",
-            "muse-spark-1.2-xhigh",
-            "gpt-5.2-2025-12-11-high",
-            "grok-4.5",
-            "gpt-5.6-sol-max",
-            "gemini-3.6-flash-high",
-            "gpt-5.6-terra-max",
-            "glm-5.2",
-            "gpt-5.2-codex",
-            "claude-opus-5-max-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "nemotron-3-ultra-550b-a55b",
-            "gpt-5.4-mini-xhigh",
-            "qwen3.7-max",
-            "qwen3.6-plus",
-            "inkling-xhigh",
-            "muse-spark-1.3-xhigh",
-            "gemini-3.5-flash-high",
-            "kimi-k3",
-            "gemini-3.8-flash-high",
-            "gpt-5.5-xhigh",
-            "gpt-5.4-xhigh",
-            "qwen3.8-max",
-            "glm-5.3",
-            "gemini-3.1-pro-preview-high",
-            "claude-sonnet-5-xhigh-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort"
-          ],
-          "objective_value": null,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash-0731",
-            "deepseek-v4-flash-vision-exp",
-            "deepseek-v4-pro",
-            "deepseek-v4-pro-0813",
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.5-flash-high",
-            "gemini-3.5-flash-lite-high",
-            "gemini-3.6-flash-high",
-            "gemini-3.7-flash-high",
-            "gemini-3.8-flash-high",
-            "glm-5.2",
-            "glm-5.3",
-            "glm-5.3-flash",
-            "gpt-5.2-2025-12-11-high",
-            "gpt-5.2-codex",
-            "gpt-5.4-mini-xhigh",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-luna-max",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.3",
-            "grok-4.5",
-            "grok-4.6",
-            "inkling-xhigh",
-            "kimi-k2.7-code",
-            "kimi-k3",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "nemotron-3-ultra-550b-a55b",
-            "qwen3.6-plus",
-            "qwen3.7-max",
-            "qwen3.8-27b",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.9068668617803175,
-          "selected_model_id": null,
-          "selection_mode": "runtime_response_latency",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        }
-      }
-    },
-    "economy": {
-      "balanced": {
-        "complex": {
-          "cold_start_model_id": null,
-          "evidence_status": "cohort_scoped",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "claude-fable-5-1-max-effort"
-          ],
-          "objective_value": 0.0,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-flash-vision-exp",
-            "deepseek-v4-pro-0813",
-            "gemini-3.7-flash-high",
-            "gemini-3.8-flash-high",
-            "glm-5.3",
-            "glm-5.3-flash",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.5",
-            "grok-4.6",
-            "kimi-k3",
-            "muse-spark-1.1-xhigh",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "qwen3.8-27b",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.4592130921684613,
-          "selected_model_id": "claude-fable-5-1-max-effort",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": "claude-code@2.1.257",
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "simple": {
-          "cold_start_model_id": "deepseek-v4-flash-0731",
-          "evidence_status": "fallback_runtime_response_speed_required",
-          "fallback_reason": "The offline snapshot intentionally has no provider-neutral response-latency value. LiteLLM must rerank these quality-admitted models using live TTFT and output throughput.",
-          "objective_eligible_model_ids": [
-            "deepseek-v4-flash-0731",
-            "glm-5.3-flash",
-            "deepseek-v4-pro",
-            "deepseek-v4-pro-0813",
-            "deepseek-v4-flash-vision-exp",
-            "kimi-k2.7-code",
-            "gemini-3.7-flash-high",
-            "muse-spark-1.1-xhigh",
-            "qwen3.7-max",
-            "grok-4.6",
-            "grok-4.5",
-            "qwen3.6-plus",
-            "muse-spark-1.2-xhigh",
-            "gemini-3.6-flash-high",
-            "glm-5.2",
-            "gpt-5.2-2025-12-11-high",
-            "muse-spark-1.3-xhigh",
-            "gpt-5.6-luna-max",
-            "claude-opus-5-max-effort",
-            "gemini-3.5-flash-high",
-            "gemini-3.1-pro-preview-high",
-            "qwen3.8-max",
-            "gpt-5.2-codex",
-            "kimi-k3",
-            "gemini-3.8-flash-high",
-            "claude-sonnet-4-6-thinking-auto-medium-effort",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "gpt-5.5-xhigh",
-            "gpt-5.4-xhigh",
-            "claude-sonnet-5-xhigh-effort",
-            "glm-5.3",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": null,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-4-6-thinking-auto-medium-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-flash-0731",
-            "deepseek-v4-flash-vision-exp",
-            "deepseek-v4-pro",
-            "deepseek-v4-pro-0813",
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.5-flash-high",
-            "gemini-3.6-flash-high",
-            "gemini-3.7-flash-high",
-            "gemini-3.8-flash-high",
-            "glm-5.2",
-            "glm-5.3",
-            "glm-5.3-flash",
-            "gpt-5.2-2025-12-11-high",
-            "gpt-5.2-codex",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-luna-max",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.5",
-            "grok-4.6",
-            "kimi-k2.7-code",
-            "kimi-k3",
-            "muse-spark-1.1-xhigh",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "qwen3.6-plus",
-            "qwen3.7-max",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.6997278750259673,
-          "selected_model_id": null,
-          "selection_mode": "runtime_response_latency",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        },
-        "standard": {
-          "cold_start_model_id": null,
-          "evidence_status": "cohort_scoped",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "claude-opus-5-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-8-max-effort"
-          ],
-          "objective_value": 0.0,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-4-6-thinking-auto-medium-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-flash-0731",
-            "deepseek-v4-flash-vision-exp",
-            "deepseek-v4-pro-0813",
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.7-flash-high",
-            "glm-5.2",
-            "glm-5.3",
-            "gpt-5.2-2025-12-11-high",
-            "gpt-5.2-codex",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.5",
-            "grok-4.6",
-            "grok-build-0.1",
-            "inkling-xhigh",
-            "kimi-k3",
-            "muse-spark-1.1-xhigh",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "qwen3.7-max",
-            "qwen3.8-27b",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.6225155351503601,
-          "selected_model_id": "claude-opus-5-max-effort",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": "claude-code@2.1.231",
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "trivial": {
-          "cold_start_model_id": "deepseek-v4-flash-0731",
-          "evidence_status": "fallback_runtime_response_speed_required",
-          "fallback_reason": "The offline snapshot intentionally has no provider-neutral response-latency value. LiteLLM must rerank these quality-admitted models using live TTFT and output throughput.",
-          "objective_eligible_model_ids": [
-            "deepseek-v4-flash-0731",
-            "glm-5.3-flash",
-            "deepseek-v4-flash",
-            "minimax-m3",
-            "qwen3.8-27b",
-            "deepseek-v4-pro-0813",
-            "deepseek-v4-pro",
-            "gpt-5.4-nano-xhigh",
-            "deepseek-v4-flash-vision-exp",
-            "gemini-3.5-flash-lite-high",
-            "kimi-k2.7-code",
-            "grok-4.3",
-            "gemini-3.7-flash-high",
-            "gpt-5.6-luna-max",
-            "grok-4.6",
-            "muse-spark-1.1-xhigh",
-            "muse-spark-1.2-xhigh",
-            "gpt-5.2-2025-12-11-high",
-            "grok-4.5",
-            "gpt-5.6-sol-max",
-            "gemini-3.6-flash-high",
-            "gpt-5.6-terra-max",
-            "glm-5.2",
-            "gpt-5.2-codex",
-            "claude-opus-5-max-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "nemotron-3-ultra-550b-a55b",
-            "gpt-5.4-mini-xhigh",
-            "qwen3.7-max",
-            "qwen3.6-plus",
-            "inkling-xhigh",
-            "muse-spark-1.3-xhigh",
-            "gemini-3.5-flash-high",
-            "kimi-k3",
-            "gemini-3.8-flash-high",
-            "claude-sonnet-4-6-thinking-auto-medium-effort",
-            "gpt-5.5-xhigh",
-            "gpt-5.4-xhigh",
-            "qwen3.8-max",
-            "glm-5.3",
-            "gemini-3.1-pro-preview-high",
-            "claude-sonnet-5-xhigh-effort",
-            "qwen3.6-27b",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort"
-          ],
-          "objective_value": null,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-4-6-thinking-auto-medium-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash-0731",
-            "deepseek-v4-flash-vision-exp",
-            "deepseek-v4-pro",
-            "deepseek-v4-pro-0813",
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.5-flash-high",
-            "gemini-3.5-flash-lite-high",
-            "gemini-3.6-flash-high",
-            "gemini-3.7-flash-high",
-            "gemini-3.8-flash-high",
-            "glm-5.2",
-            "glm-5.3",
-            "glm-5.3-flash",
-            "gpt-5.2-2025-12-11-high",
-            "gpt-5.2-codex",
-            "gpt-5.4-mini-xhigh",
-            "gpt-5.4-nano-xhigh",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-luna-max",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.3",
-            "grok-4.5",
-            "grok-4.6",
-            "inkling-xhigh",
-            "kimi-k2.7-code",
-            "kimi-k3",
-            "minimax-m3",
-            "muse-spark-1.1-xhigh",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "nemotron-3-ultra-550b-a55b",
-            "qwen3.6-27b",
-            "qwen3.6-plus",
-            "qwen3.7-max",
-            "qwen3.8-27b",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.8268668617803175,
-          "selected_model_id": null,
-          "selection_mode": "runtime_response_latency",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        }
-      },
-      "cost": {
-        "complex": {
-          "cold_start_model_id": null,
-          "evidence_status": "direct",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "glm-5.3-flash",
-            "deepseek-v4-pro-0813",
-            "deepseek-v4-flash-vision-exp",
-            "grok-4.5",
-            "gemini-3.7-flash-high",
-            "qwen3.8-27b",
-            "muse-spark-1.3-xhigh",
-            "muse-spark-1.1-xhigh",
-            "gemini-3.8-flash-high",
-            "grok-4.6",
-            "qwen3.8-max",
-            "gpt-5.6-terra-max",
-            "kimi-k3",
-            "gpt-5.4-xhigh",
-            "glm-5.3",
-            "gpt-5.5-xhigh",
-            "claude-sonnet-5-xhigh-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "gpt-5.6-sol-max",
-            "muse-spark-1.2-xhigh",
-            "claude-opus-5-max-effort",
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": 0.08444897731421191,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-flash-vision-exp",
-            "deepseek-v4-pro-0813",
-            "gemini-3.7-flash-high",
-            "gemini-3.8-flash-high",
-            "glm-5.3",
-            "glm-5.3-flash",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.5",
-            "grok-4.6",
-            "kimi-k3",
-            "muse-spark-1.1-xhigh",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "qwen3.8-27b",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.4592130921684613,
-          "selected_model_id": "glm-5.3-flash",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "simple": {
-          "cold_start_model_id": null,
-          "evidence_status": "direct",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "deepseek-v4-flash-0731",
-            "glm-5.3-flash",
-            "deepseek-v4-pro",
-            "deepseek-v4-pro-0813",
-            "deepseek-v4-flash-vision-exp",
-            "kimi-k2.7-code",
-            "gemini-3.7-flash-high",
-            "muse-spark-1.1-xhigh",
-            "qwen3.7-max",
-            "grok-4.6",
-            "grok-4.5",
-            "qwen3.6-plus",
-            "muse-spark-1.2-xhigh",
-            "gemini-3.6-flash-high",
-            "glm-5.2",
-            "gpt-5.2-2025-12-11-high",
-            "muse-spark-1.3-xhigh",
-            "gpt-5.6-luna-max",
-            "claude-opus-5-max-effort",
-            "gemini-3.5-flash-high",
-            "gemini-3.1-pro-preview-high",
-            "qwen3.8-max",
-            "gpt-5.2-codex",
-            "kimi-k3",
-            "gemini-3.8-flash-high",
-            "claude-sonnet-4-6-thinking-auto-medium-effort",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "gpt-5.5-xhigh",
-            "gpt-5.4-xhigh",
-            "claude-sonnet-5-xhigh-effort",
-            "glm-5.3",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": 0.0060579263531826775,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-4-6-thinking-auto-medium-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-flash-0731",
-            "deepseek-v4-flash-vision-exp",
-            "deepseek-v4-pro",
-            "deepseek-v4-pro-0813",
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.5-flash-high",
-            "gemini-3.6-flash-high",
-            "gemini-3.7-flash-high",
-            "gemini-3.8-flash-high",
-            "glm-5.2",
-            "glm-5.3",
-            "glm-5.3-flash",
-            "gpt-5.2-2025-12-11-high",
-            "gpt-5.2-codex",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-luna-max",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.5",
-            "grok-4.6",
-            "kimi-k2.7-code",
-            "kimi-k3",
-            "muse-spark-1.1-xhigh",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "qwen3.6-plus",
-            "qwen3.7-max",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.6997278750259673,
-          "selected_model_id": "deepseek-v4-flash-0731",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        },
-        "standard": {
-          "cold_start_model_id": null,
-          "evidence_status": "direct",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "grok-build-0.1",
-            "deepseek-v4-flash-0731",
-            "qwen3.8-27b",
-            "deepseek-v4-pro-0813",
-            "deepseek-v4-flash-vision-exp",
-            "muse-spark-1.1-xhigh",
-            "grok-4.6",
-            "grok-4.5",
-            "muse-spark-1.2-xhigh",
-            "glm-5.2",
-            "gemini-3.7-flash-high",
-            "muse-spark-1.3-xhigh",
-            "inkling-xhigh",
-            "gpt-5.2-codex",
-            "qwen3.8-max",
-            "gpt-5.2-2025-12-11-high",
-            "qwen3.7-max",
-            "gemini-3.1-pro-preview-high",
-            "gpt-5.4-xhigh",
-            "gpt-5.6-terra-max",
-            "gpt-5.5-xhigh",
-            "kimi-k3",
-            "gpt-5.6-sol-max",
-            "claude-sonnet-4-6-thinking-auto-medium-effort",
-            "glm-5.3",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": 0.0034918518733508376,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-4-6-thinking-auto-medium-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-flash-0731",
-            "deepseek-v4-flash-vision-exp",
-            "deepseek-v4-pro-0813",
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.7-flash-high",
-            "glm-5.2",
-            "glm-5.3",
-            "gpt-5.2-2025-12-11-high",
-            "gpt-5.2-codex",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.5",
-            "grok-4.6",
-            "grok-build-0.1",
-            "inkling-xhigh",
-            "kimi-k3",
-            "muse-spark-1.1-xhigh",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "qwen3.7-max",
-            "qwen3.8-27b",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.6225155351503601,
-          "selected_model_id": "grok-build-0.1",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "trivial": {
-          "cold_start_model_id": null,
-          "evidence_status": "direct",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "deepseek-v4-flash-0731",
-            "glm-5.3-flash",
-            "deepseek-v4-flash",
-            "minimax-m3",
-            "qwen3.8-27b",
-            "deepseek-v4-pro-0813",
-            "deepseek-v4-pro",
-            "gpt-5.4-nano-xhigh",
-            "deepseek-v4-flash-vision-exp",
-            "gemini-3.5-flash-lite-high",
-            "kimi-k2.7-code",
-            "grok-4.3",
-            "gemini-3.7-flash-high",
-            "gpt-5.6-luna-max",
-            "grok-4.6",
-            "muse-spark-1.1-xhigh",
-            "muse-spark-1.2-xhigh",
-            "gpt-5.2-2025-12-11-high",
-            "grok-4.5",
-            "gpt-5.6-sol-max",
-            "gemini-3.6-flash-high",
-            "gpt-5.6-terra-max",
-            "glm-5.2",
-            "gpt-5.2-codex",
-            "claude-opus-5-max-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "nemotron-3-ultra-550b-a55b",
-            "gpt-5.4-mini-xhigh",
-            "qwen3.7-max",
-            "qwen3.6-plus",
-            "inkling-xhigh",
-            "muse-spark-1.3-xhigh",
-            "gemini-3.5-flash-high",
-            "kimi-k3",
-            "gemini-3.8-flash-high",
-            "claude-sonnet-4-6-thinking-auto-medium-effort",
-            "gpt-5.5-xhigh",
-            "gpt-5.4-xhigh",
-            "qwen3.8-max",
-            "glm-5.3",
-            "gemini-3.1-pro-preview-high",
-            "claude-sonnet-5-xhigh-effort",
-            "qwen3.6-27b",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort"
-          ],
-          "objective_value": 0.001468206744000269,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-4-6-thinking-auto-medium-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash-0731",
-            "deepseek-v4-flash-vision-exp",
-            "deepseek-v4-pro",
-            "deepseek-v4-pro-0813",
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.5-flash-high",
-            "gemini-3.5-flash-lite-high",
-            "gemini-3.6-flash-high",
-            "gemini-3.7-flash-high",
-            "gemini-3.8-flash-high",
-            "glm-5.2",
-            "glm-5.3",
-            "glm-5.3-flash",
-            "gpt-5.2-2025-12-11-high",
-            "gpt-5.2-codex",
-            "gpt-5.4-mini-xhigh",
-            "gpt-5.4-nano-xhigh",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-luna-max",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.3",
-            "grok-4.5",
-            "grok-4.6",
-            "inkling-xhigh",
-            "kimi-k2.7-code",
-            "kimi-k3",
-            "minimax-m3",
-            "muse-spark-1.1-xhigh",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "nemotron-3-ultra-550b-a55b",
-            "qwen3.6-27b",
-            "qwen3.6-plus",
-            "qwen3.7-max",
-            "qwen3.8-27b",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.8268668617803175,
-          "selected_model_id": "deepseek-v4-flash-0731",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        }
-      },
-      "task_completion_speed": {
-        "complex": {
-          "cold_start_model_id": null,
-          "evidence_status": "cohort_scoped",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "claude-fable-5-1-max-effort"
-          ],
-          "objective_value": 36630585.75418182,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-flash-vision-exp",
-            "deepseek-v4-pro-0813",
-            "gemini-3.7-flash-high",
-            "gemini-3.8-flash-high",
-            "glm-5.3",
-            "glm-5.3-flash",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.5",
-            "grok-4.6",
-            "kimi-k3",
-            "muse-spark-1.1-xhigh",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "qwen3.8-27b",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.4592130921684613,
-          "selected_model_id": "claude-fable-5-1-max-effort",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": "claude-code@2.1.257",
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "simple": {
-          "cold_start_model_id": "deepseek-v4-flash-0731",
-          "evidence_status": "fallback_runtime_response_speed_required",
-          "fallback_reason": "The offline snapshot intentionally has no provider-neutral response-latency value. LiteLLM must rerank these quality-admitted models using live TTFT and output throughput.",
-          "objective_eligible_model_ids": [
-            "deepseek-v4-flash-0731",
-            "glm-5.3-flash",
-            "deepseek-v4-pro",
-            "deepseek-v4-pro-0813",
-            "deepseek-v4-flash-vision-exp",
-            "kimi-k2.7-code",
-            "gemini-3.7-flash-high",
-            "muse-spark-1.1-xhigh",
-            "qwen3.7-max",
-            "grok-4.6",
-            "grok-4.5",
-            "qwen3.6-plus",
-            "muse-spark-1.2-xhigh",
-            "gemini-3.6-flash-high",
-            "glm-5.2",
-            "gpt-5.2-2025-12-11-high",
-            "muse-spark-1.3-xhigh",
-            "gpt-5.6-luna-max",
-            "claude-opus-5-max-effort",
-            "gemini-3.5-flash-high",
-            "gemini-3.1-pro-preview-high",
-            "qwen3.8-max",
-            "gpt-5.2-codex",
-            "kimi-k3",
-            "gemini-3.8-flash-high",
-            "claude-sonnet-4-6-thinking-auto-medium-effort",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "gpt-5.5-xhigh",
-            "gpt-5.4-xhigh",
-            "claude-sonnet-5-xhigh-effort",
-            "glm-5.3",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": null,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-4-6-thinking-auto-medium-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-flash-0731",
-            "deepseek-v4-flash-vision-exp",
-            "deepseek-v4-pro",
-            "deepseek-v4-pro-0813",
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.5-flash-high",
-            "gemini-3.6-flash-high",
-            "gemini-3.7-flash-high",
-            "gemini-3.8-flash-high",
-            "glm-5.2",
-            "glm-5.3",
-            "glm-5.3-flash",
-            "gpt-5.2-2025-12-11-high",
-            "gpt-5.2-codex",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-luna-max",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.5",
-            "grok-4.6",
-            "kimi-k2.7-code",
-            "kimi-k3",
-            "muse-spark-1.1-xhigh",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "qwen3.6-plus",
-            "qwen3.7-max",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.6997278750259673,
-          "selected_model_id": null,
-          "selection_mode": "runtime_response_latency",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        },
-        "standard": {
-          "cold_start_model_id": null,
-          "evidence_status": "cohort_scoped",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "claude-opus-5-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-8-max-effort"
-          ],
-          "objective_value": 7639667.404512195,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-4-6-thinking-auto-medium-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-flash-0731",
-            "deepseek-v4-flash-vision-exp",
-            "deepseek-v4-pro-0813",
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.7-flash-high",
-            "glm-5.2",
-            "glm-5.3",
-            "gpt-5.2-2025-12-11-high",
-            "gpt-5.2-codex",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.5",
-            "grok-4.6",
-            "grok-build-0.1",
-            "inkling-xhigh",
-            "kimi-k3",
-            "muse-spark-1.1-xhigh",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "qwen3.7-max",
-            "qwen3.8-27b",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.6225155351503601,
-          "selected_model_id": "claude-opus-5-max-effort",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": "claude-code@2.1.231",
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "trivial": {
-          "cold_start_model_id": "deepseek-v4-flash-0731",
-          "evidence_status": "fallback_runtime_response_speed_required",
-          "fallback_reason": "The offline snapshot intentionally has no provider-neutral response-latency value. LiteLLM must rerank these quality-admitted models using live TTFT and output throughput.",
-          "objective_eligible_model_ids": [
-            "deepseek-v4-flash-0731",
-            "glm-5.3-flash",
-            "deepseek-v4-flash",
-            "minimax-m3",
-            "qwen3.8-27b",
-            "deepseek-v4-pro-0813",
-            "deepseek-v4-pro",
-            "gpt-5.4-nano-xhigh",
-            "deepseek-v4-flash-vision-exp",
-            "gemini-3.5-flash-lite-high",
-            "kimi-k2.7-code",
-            "grok-4.3",
-            "gemini-3.7-flash-high",
-            "gpt-5.6-luna-max",
-            "grok-4.6",
-            "muse-spark-1.1-xhigh",
-            "muse-spark-1.2-xhigh",
-            "gpt-5.2-2025-12-11-high",
-            "grok-4.5",
-            "gpt-5.6-sol-max",
-            "gemini-3.6-flash-high",
-            "gpt-5.6-terra-max",
-            "glm-5.2",
-            "gpt-5.2-codex",
-            "claude-opus-5-max-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "nemotron-3-ultra-550b-a55b",
-            "gpt-5.4-mini-xhigh",
-            "qwen3.7-max",
-            "qwen3.6-plus",
-            "inkling-xhigh",
-            "muse-spark-1.3-xhigh",
-            "gemini-3.5-flash-high",
-            "kimi-k3",
-            "gemini-3.8-flash-high",
-            "claude-sonnet-4-6-thinking-auto-medium-effort",
-            "gpt-5.5-xhigh",
-            "gpt-5.4-xhigh",
-            "qwen3.8-max",
-            "glm-5.3",
-            "gemini-3.1-pro-preview-high",
-            "claude-sonnet-5-xhigh-effort",
-            "qwen3.6-27b",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort"
-          ],
-          "objective_value": null,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-4-6-thinking-auto-medium-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash-0731",
-            "deepseek-v4-flash-vision-exp",
-            "deepseek-v4-pro",
-            "deepseek-v4-pro-0813",
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.5-flash-high",
-            "gemini-3.5-flash-lite-high",
-            "gemini-3.6-flash-high",
-            "gemini-3.7-flash-high",
-            "gemini-3.8-flash-high",
-            "glm-5.2",
-            "glm-5.3",
-            "glm-5.3-flash",
-            "gpt-5.2-2025-12-11-high",
-            "gpt-5.2-codex",
-            "gpt-5.4-mini-xhigh",
-            "gpt-5.4-nano-xhigh",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-luna-max",
-            "gpt-5.6-sol-max",
-            "gpt-5.6-terra-max",
-            "grok-4.3",
-            "grok-4.5",
-            "grok-4.6",
-            "inkling-xhigh",
-            "kimi-k2.7-code",
-            "kimi-k3",
-            "minimax-m3",
-            "muse-spark-1.1-xhigh",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "nemotron-3-ultra-550b-a55b",
-            "qwen3.6-27b",
-            "qwen3.6-plus",
-            "qwen3.7-max",
-            "qwen3.8-27b",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.8268668617803175,
-          "selected_model_id": null,
-          "selection_mode": "runtime_response_latency",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        }
-      }
-    },
-    "high": {
-      "balanced": {
-        "complex": {
-          "cold_start_model_id": null,
-          "evidence_status": "cohort_scoped",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "claude-fable-5-1-max-effort"
-          ],
-          "objective_value": 0.0,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort"
-          ],
-          "quality_floor": 0.5792130921684613,
-          "selected_model_id": "claude-fable-5-1-max-effort",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": "claude-code@2.1.257",
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "simple": {
-          "cold_start_model_id": "gpt-5.6-sol-max",
-          "evidence_status": "fallback_runtime_response_speed_required",
-          "fallback_reason": "The offline snapshot intentionally has no provider-neutral response-latency value. LiteLLM must rerank these quality-admitted models using live TTFT and output throughput.",
-          "objective_eligible_model_ids": [
-            "gpt-5.6-sol-max",
-            "gpt-5.5-xhigh",
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": null,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max"
-          ],
-          "quality_floor": 0.8197278750259673,
-          "selected_model_id": null,
-          "selection_mode": "runtime_response_latency",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        },
-        "standard": {
-          "cold_start_model_id": null,
-          "evidence_status": "cohort_scoped",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": 0.0,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-max-effort",
-            "gemini-3.1-pro-preview-high",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.7425155351503601,
-          "selected_model_id": "claude-fable-5-max-effort",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": "claude-code@2.1.231",
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "trivial": {
-          "cold_start_model_id": "deepseek-v4-pro-0813",
-          "evidence_status": "fallback_runtime_response_speed_required",
-          "fallback_reason": "The offline snapshot intentionally has no provider-neutral response-latency value. LiteLLM must rerank these quality-admitted models using live TTFT and output throughput.",
-          "objective_eligible_model_ids": [
-            "deepseek-v4-pro-0813",
-            "deepseek-v4-pro",
-            "grok-4.3",
-            "gemini-3.7-flash-high",
-            "grok-4.6",
-            "gpt-5.2-2025-12-11-high",
-            "grok-4.5",
-            "gpt-5.6-sol-max",
-            "gemini-3.6-flash-high",
-            "claude-opus-5-max-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "qwen3.7-max",
-            "muse-spark-1.3-xhigh",
-            "gemini-3.5-flash-high",
-            "kimi-k3",
-            "gemini-3.8-flash-high",
-            "gpt-5.5-xhigh",
-            "gpt-5.4-xhigh",
-            "qwen3.8-max",
-            "glm-5.3",
-            "gemini-3.1-pro-preview-high",
-            "claude-sonnet-5-xhigh-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort"
-          ],
-          "objective_value": null,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-pro",
-            "deepseek-v4-pro-0813",
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.5-flash-high",
-            "gemini-3.6-flash-high",
-            "gemini-3.7-flash-high",
-            "gemini-3.8-flash-high",
-            "glm-5.3",
-            "gpt-5.2-2025-12-11-high",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max",
-            "grok-4.3",
-            "grok-4.5",
-            "grok-4.6",
-            "kimi-k3",
-            "muse-spark-1.3-xhigh",
-            "qwen3.7-max",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.9468668617803175,
-          "selected_model_id": null,
-          "selection_mode": "runtime_response_latency",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        }
-      },
-      "cost": {
-        "complex": {
-          "cold_start_model_id": null,
-          "evidence_status": "direct",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "claude-fable-5-1-max-effort"
-          ],
-          "objective_value": 4.002891945931923,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort"
-          ],
-          "quality_floor": 0.5792130921684613,
-          "selected_model_id": "claude-fable-5-1-max-effort",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "simple": {
-          "cold_start_model_id": null,
-          "evidence_status": "direct",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "gpt-5.6-sol-max",
-            "gpt-5.5-xhigh",
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": 0.18762597508606915,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max"
-          ],
-          "quality_floor": 0.8197278750259673,
-          "selected_model_id": "gpt-5.6-sol-max",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        },
-        "standard": {
-          "cold_start_model_id": null,
-          "evidence_status": "direct",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "qwen3.8-max",
-            "gemini-3.1-pro-preview-high",
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": 0.14910282543392475,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-max-effort",
-            "gemini-3.1-pro-preview-high",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.7425155351503601,
-          "selected_model_id": "muse-spark-1.2-xhigh",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "trivial": {
-          "cold_start_model_id": null,
-          "evidence_status": "direct",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "deepseek-v4-pro-0813",
-            "deepseek-v4-pro",
-            "grok-4.3",
-            "gemini-3.7-flash-high",
-            "grok-4.6",
-            "gpt-5.2-2025-12-11-high",
-            "grok-4.5",
-            "gpt-5.6-sol-max",
-            "gemini-3.6-flash-high",
-            "claude-opus-5-max-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "qwen3.7-max",
-            "muse-spark-1.3-xhigh",
-            "gemini-3.5-flash-high",
-            "kimi-k3",
-            "gemini-3.8-flash-high",
-            "gpt-5.5-xhigh",
-            "gpt-5.4-xhigh",
-            "qwen3.8-max",
-            "glm-5.3",
-            "gemini-3.1-pro-preview-high",
-            "claude-sonnet-5-xhigh-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort"
-          ],
-          "objective_value": 0.012087533779340973,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-pro",
-            "deepseek-v4-pro-0813",
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.5-flash-high",
-            "gemini-3.6-flash-high",
-            "gemini-3.7-flash-high",
-            "gemini-3.8-flash-high",
-            "glm-5.3",
-            "gpt-5.2-2025-12-11-high",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max",
-            "grok-4.3",
-            "grok-4.5",
-            "grok-4.6",
-            "kimi-k3",
-            "muse-spark-1.3-xhigh",
-            "qwen3.7-max",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.9468668617803175,
-          "selected_model_id": "deepseek-v4-pro-0813",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        }
-      },
-      "task_completion_speed": {
-        "complex": {
-          "cold_start_model_id": null,
-          "evidence_status": "cohort_scoped",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "claude-fable-5-1-max-effort"
-          ],
-          "objective_value": 36630585.75418182,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort"
-          ],
-          "quality_floor": 0.5792130921684613,
-          "selected_model_id": "claude-fable-5-1-max-effort",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": "claude-code@2.1.257",
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "simple": {
-          "cold_start_model_id": "gpt-5.6-sol-max",
-          "evidence_status": "fallback_runtime_response_speed_required",
-          "fallback_reason": "The offline snapshot intentionally has no provider-neutral response-latency value. LiteLLM must rerank these quality-admitted models using live TTFT and output throughput.",
-          "objective_eligible_model_ids": [
-            "gpt-5.6-sol-max",
-            "gpt-5.5-xhigh",
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": null,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max"
-          ],
-          "quality_floor": 0.8197278750259673,
-          "selected_model_id": null,
-          "selection_mode": "runtime_response_latency",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        },
-        "standard": {
-          "cold_start_model_id": null,
-          "evidence_status": "cohort_scoped",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": 9369974.166258065,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-max-effort",
-            "gemini-3.1-pro-preview-high",
-            "muse-spark-1.2-xhigh",
-            "muse-spark-1.3-xhigh",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.7425155351503601,
-          "selected_model_id": "claude-fable-5-max-effort",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": "claude-code@2.1.231",
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "trivial": {
-          "cold_start_model_id": "deepseek-v4-pro-0813",
-          "evidence_status": "fallback_runtime_response_speed_required",
-          "fallback_reason": "The offline snapshot intentionally has no provider-neutral response-latency value. LiteLLM must rerank these quality-admitted models using live TTFT and output throughput.",
-          "objective_eligible_model_ids": [
-            "deepseek-v4-pro-0813",
-            "deepseek-v4-pro",
-            "grok-4.3",
-            "gemini-3.7-flash-high",
-            "grok-4.6",
-            "gpt-5.2-2025-12-11-high",
-            "grok-4.5",
-            "gpt-5.6-sol-max",
-            "gemini-3.6-flash-high",
-            "claude-opus-5-max-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "qwen3.7-max",
-            "muse-spark-1.3-xhigh",
-            "gemini-3.5-flash-high",
-            "kimi-k3",
-            "gemini-3.8-flash-high",
-            "gpt-5.5-xhigh",
-            "gpt-5.4-xhigh",
-            "qwen3.8-max",
-            "glm-5.3",
-            "gemini-3.1-pro-preview-high",
-            "claude-sonnet-5-xhigh-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort"
-          ],
-          "objective_value": null,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-opus-4-5-20251101-thinking-64k-high-effort",
-            "claude-opus-4-6-thinking-auto-high-effort",
-            "claude-opus-4-7-xhigh-effort",
-            "claude-opus-4-8-max-effort",
-            "claude-opus-5-max-effort",
-            "claude-sonnet-5-xhigh-effort",
-            "deepseek-v4-pro",
-            "deepseek-v4-pro-0813",
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.5-flash-high",
-            "gemini-3.6-flash-high",
-            "gemini-3.7-flash-high",
-            "gemini-3.8-flash-high",
-            "glm-5.3",
-            "gpt-5.2-2025-12-11-high",
-            "gpt-5.4-xhigh",
-            "gpt-5.5-xhigh",
-            "gpt-5.6-sol-max",
-            "grok-4.3",
-            "grok-4.5",
-            "grok-4.6",
-            "kimi-k3",
-            "muse-spark-1.3-xhigh",
-            "qwen3.7-max",
-            "qwen3.8-max"
-          ],
-          "quality_floor": 0.9468668617803175,
-          "selected_model_id": null,
-          "selection_mode": "runtime_response_latency",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        }
-      }
-    },
-    "max": {
-      "balanced": {
-        "complex": {
-          "cold_start_model_id": null,
-          "evidence_status": "cohort_scoped",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "claude-fable-5-1-max-effort"
-          ],
-          "objective_value": 0.0,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort"
-          ],
-          "quality_floor": 0.5992130921684613,
-          "selected_model_id": "claude-fable-5-1-max-effort",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": "claude-code@2.1.257",
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "simple": {
-          "cold_start_model_id": "claude-fable-5-1-max-effort",
-          "evidence_status": "fallback_runtime_response_speed_required",
-          "fallback_reason": "The offline snapshot intentionally has no provider-neutral response-latency value. LiteLLM must rerank these quality-admitted models using live TTFT and output throughput.",
-          "objective_eligible_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": null,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "quality_floor": 0.8397278750259674,
-          "selected_model_id": null,
-          "selection_mode": "runtime_response_latency",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        },
-        "standard": {
-          "cold_start_model_id": null,
-          "evidence_status": "fallback_no_speed_evidence",
-          "fallback_reason": "No quality-admitted model has Terminal-Bench completion-time evidence.",
-          "objective_eligible_model_ids": [
-            "muse-spark-1.3-xhigh"
-          ],
-          "objective_value": 0.236816088515293,
-          "quality_admitted_model_ids": [
-            "muse-spark-1.3-xhigh"
-          ],
-          "quality_floor": 0.7625155351503601,
-          "selected_model_id": "muse-spark-1.3-xhigh",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "trivial": {
-          "cold_start_model_id": "gemini-3.7-flash-high",
-          "evidence_status": "fallback_runtime_response_speed_required",
-          "fallback_reason": "The offline snapshot intentionally has no provider-neutral response-latency value. LiteLLM must rerank these quality-admitted models using live TTFT and output throughput.",
-          "objective_eligible_model_ids": [
-            "gemini-3.7-flash-high",
-            "grok-4.6",
-            "grok-4.5",
-            "gpt-5.6-sol-max",
-            "gemini-3.1-pro-preview-high"
-          ],
-          "objective_value": null,
-          "quality_admitted_model_ids": [
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.7-flash-high",
-            "gpt-5.6-sol-max",
-            "grok-4.5",
-            "grok-4.6"
-          ],
-          "quality_floor": 0.9668668617803176,
-          "selected_model_id": null,
-          "selection_mode": "runtime_response_latency",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        }
-      },
-      "cost": {
-        "complex": {
-          "cold_start_model_id": null,
-          "evidence_status": "direct",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "claude-fable-5-1-max-effort"
-          ],
-          "objective_value": 4.002891945931923,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort"
-          ],
-          "quality_floor": 0.5992130921684613,
-          "selected_model_id": "claude-fable-5-1-max-effort",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "simple": {
-          "cold_start_model_id": null,
-          "evidence_status": "direct",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": 0.38505754057873887,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "quality_floor": 0.8397278750259674,
-          "selected_model_id": "claude-fable-5-1-max-effort",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        },
-        "standard": {
-          "cold_start_model_id": null,
-          "evidence_status": "direct",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "muse-spark-1.3-xhigh"
-          ],
-          "objective_value": 0.236816088515293,
-          "quality_admitted_model_ids": [
-            "muse-spark-1.3-xhigh"
-          ],
-          "quality_floor": 0.7625155351503601,
-          "selected_model_id": "muse-spark-1.3-xhigh",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "trivial": {
-          "cold_start_model_id": null,
-          "evidence_status": "direct",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "gemini-3.7-flash-high",
-            "grok-4.6",
-            "grok-4.5",
-            "gpt-5.6-sol-max",
-            "gemini-3.1-pro-preview-high"
-          ],
-          "objective_value": 0.024636455346966592,
-          "quality_admitted_model_ids": [
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.7-flash-high",
-            "gpt-5.6-sol-max",
-            "grok-4.5",
-            "grok-4.6"
-          ],
-          "quality_floor": 0.9668668617803176,
-          "selected_model_id": "gemini-3.7-flash-high",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        }
-      },
-      "task_completion_speed": {
-        "complex": {
-          "cold_start_model_id": null,
-          "evidence_status": "cohort_scoped",
-          "fallback_reason": null,
-          "objective_eligible_model_ids": [
-            "claude-fable-5-1-max-effort"
-          ],
-          "objective_value": 36630585.75418182,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort"
-          ],
-          "quality_floor": 0.5992130921684613,
-          "selected_model_id": "claude-fable-5-1-max-effort",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": "claude-code@2.1.257",
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "simple": {
-          "cold_start_model_id": "claude-fable-5-1-max-effort",
-          "evidence_status": "fallback_runtime_response_speed_required",
-          "fallback_reason": "The offline snapshot intentionally has no provider-neutral response-latency value. LiteLLM must rerank these quality-admitted models using live TTFT and output throughput.",
-          "objective_eligible_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "objective_value": null,
-          "quality_admitted_model_ids": [
-            "claude-fable-5-1-max-effort",
-            "claude-fable-5-max-effort"
-          ],
-          "quality_floor": 0.8397278750259674,
-          "selected_model_id": null,
-          "selection_mode": "runtime_response_latency",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        },
-        "standard": {
-          "cold_start_model_id": null,
-          "evidence_status": "fallback_no_speed_evidence",
-          "fallback_reason": "No quality-admitted model has Terminal-Bench completion-time evidence.",
-          "objective_eligible_model_ids": [
-            "muse-spark-1.3-xhigh"
-          ],
-          "objective_value": 0.236816088515293,
-          "quality_admitted_model_ids": [
-            "muse-spark-1.3-xhigh"
-          ],
-          "quality_floor": 0.7625155351503601,
-          "selected_model_id": "muse-spark-1.3-xhigh",
-          "selection_mode": "snapshot_ranked",
-          "speed_cohort_id": null,
-          "speed_metric": "offline_task_completion_latency"
-        },
-        "trivial": {
-          "cold_start_model_id": "gemini-3.7-flash-high",
-          "evidence_status": "fallback_runtime_response_speed_required",
-          "fallback_reason": "The offline snapshot intentionally has no provider-neutral response-latency value. LiteLLM must rerank these quality-admitted models using live TTFT and output throughput.",
-          "objective_eligible_model_ids": [
-            "gemini-3.7-flash-high",
-            "grok-4.6",
-            "grok-4.5",
-            "gpt-5.6-sol-max",
-            "gemini-3.1-pro-preview-high"
-          ],
-          "objective_value": null,
-          "quality_admitted_model_ids": [
-            "gemini-3.1-pro-preview-high",
-            "gemini-3.7-flash-high",
-            "gpt-5.6-sol-max",
-            "grok-4.5",
-            "grok-4.6"
-          ],
-          "quality_floor": 0.9668668617803176,
-          "selected_model_id": null,
-          "selection_mode": "runtime_response_latency",
-          "speed_cohort_id": null,
-          "speed_metric": "online_response_latency"
-        }
-      }
-    }
-  },
-  "schema_version": "2.1",
+  "schema_version": "3.0",
   "snapshot_id": "2026-09-03-v0",
   "task_complexities": {
     "livebench-2026-06-25": {
@@ -8165,74 +4573,6 @@
       "typescript": "complex",
       "typos": "simple",
       "zebra_puzzle": "simple"
-    },
-    "terminal-bench-4.0.0": {
-      "terminal-bench/atrx-vep-crispr": "trivial",
-      "terminal-bench/batched-eval-parity": "simple",
-      "terminal-bench/biped-contact-dynamics": "simple",
-      "terminal-bench/bun-sourcemap-leak": "complex",
-      "terminal-bench/cad-model": "simple",
-      "terminal-bench/cargo-flight-dispatch": "complex",
-      "terminal-bench/coq-block-bound": "trivial",
-      "terminal-bench/ctr-optimization": "complex",
-      "terminal-bench/cumulative-layout-shift": "trivial",
-      "terminal-bench/data-anonymization": "complex",
-      "terminal-bench/distributed-dedup": "simple",
-      "terminal-bench/embedding-drift-monitor": "simple",
-      "terminal-bench/fin-saccr-rwa": "trivial",
-      "terminal-bench/foodstuff-beta-activity": "complex",
-      "terminal-bench/formal-crypto": "standard",
-      "terminal-bench/fp8-rmsnorm-gemm": "trivial",
-      "terminal-bench/freecad-impeller": "complex",
-      "terminal-bench/freecad-platform-drawing": "standard",
-      "terminal-bench/freecad-spring-clip": "simple",
-      "terminal-bench/freight-dispatch-shift": "complex",
-      "terminal-bench/glycan-ms2-elucidation": "complex",
-      "terminal-bench/gsea-proteomics": "standard",
-      "terminal-bench/heat-pump-warranty": "standard",
-      "terminal-bench/hof-topology-interpenetration": "simple",
-      "terminal-bench/html-js-filter": "standard",
-      "terminal-bench/interleaved-vigenere": "simple",
-      "terminal-bench/intrastat-meldung": "trivial",
-      "terminal-bench/jax-speedrun-gpu": "complex",
-      "terminal-bench/ks-solver-cpp": "standard",
-      "terminal-bench/kv-live-surgery": "simple",
-      "terminal-bench/lake-temp-glm": "complex",
-      "terminal-bench/layout-config-recreation": "complex",
-      "terminal-bench/layout-config-recreation2": "trivial",
-      "terminal-bench/legacy-utility-triage": "standard",
-      "terminal-bench/live-database-cutover": "standard",
-      "terminal-bench/math-eval-grader": "standard",
-      "terminal-bench/medical-claims-processing": "complex",
-      "terminal-bench/mp-checkpoint-consolidation": "trivial",
-      "terminal-bench/music-harmony": "complex",
-      "terminal-bench/mvcc-lsm-compaction": "simple",
-      "terminal-bench/nextjs-performance": "standard",
-      "terminal-bench/ontology-kg-querying": "complex",
-      "terminal-bench/payments-pipeline-fix": "simple",
-      "terminal-bench/photonic-waveguide-routing": "simple",
-      "terminal-bench/pretrain-shard-corruption": "standard",
-      "terminal-bench/production-planning": "standard",
-      "terminal-bench/protein-autointerp-disulfide": "complex",
-      "terminal-bench/react-lead-form": "trivial",
-      "terminal-bench/retro-console-soc": "trivial",
-      "terminal-bench/risk-scorer-replay": "trivial",
-      "terminal-bench/roy-polymorph-cn": "complex",
-      "terminal-bench/rs-archive-clone": "simple",
-      "terminal-bench/satb-audio-transcription": "standard",
-      "terminal-bench/session-window-debug": "complex",
-      "terminal-bench/sglang-qwen-burst": "standard",
-      "terminal-bench/shadow-relay": "trivial",
-      "terminal-bench/sound-change-cascade": "simple",
-      "terminal-bench/takens-embedding-lean": "standard",
-      "terminal-bench/telecom-entity-resolution": "trivial",
-      "terminal-bench/uefi-bootkit": "trivial",
-      "terminal-bench/vba-userform-port": "simple",
-      "terminal-bench/vf2-speedup-networkx": "simple",
-      "terminal-bench/vllm-deepseek-streaming": "standard",
-      "terminal-bench/vpp-loss-divergence": "trivial",
-      "terminal-bench/wal-recovery-ordering": "simple",
-      "terminal-bench/wdm-design": "trivial"
     }
   }
 }

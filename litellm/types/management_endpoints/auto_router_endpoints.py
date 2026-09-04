@@ -9,11 +9,8 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
-from litellm.router_strategy.complexity_router.config import (
-    AutoSetupObjective,
-    AutoSetupQualityLevel,
-    ComplexityRouterConfig,
-)
+from litellm.router_strategy.complexity_router.auto_setup import AutoSetupQualityLevel
+from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 from litellm.types.utils import StandardLoggingRoutingDecision
 
 DEFAULT_ROUTING_TEST_ROUTER_NAME: Final[str] = "auto_router_routing_test"
@@ -52,14 +49,13 @@ class AutoRouterExcludedModelGroup(BaseModel):
     """A caller-visible reason Auto setup did not use an available model group."""
 
     model_group: str
-    reason: Literal["no_benchmark_match", "mixed_model_group", "pricing_unavailable"]
+    reason: Literal["no_benchmark_match", "mixed_model_group"]
 
 
 class AutoRouterRecommendationResponse(BaseModel):
     """An editable complexity-router config generated from the caller's usable model groups."""
 
     quality_level: AutoSetupQualityLevel
-    optimize_for: AutoSetupObjective
     snapshot_id: str
     snapshot_generated_at: str
     available_model_group_count: int = Field(ge=0)

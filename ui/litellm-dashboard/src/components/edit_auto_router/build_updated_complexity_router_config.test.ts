@@ -553,7 +553,6 @@ describe("managed keys survive an untouched open-and-save", () => {
     "fallback_tier",
     "classification_prompt",
     "hybrid_boundary_margin",
-    "auto_setup",
   ]);
 
   it("carries every managed key a built-in router can hold through hydrate then save", () => {
@@ -564,21 +563,6 @@ describe("managed keys survive an untouched open-and-save", () => {
       .filter((key) => !KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS.has(key))
       .filter((key) => saved[key] === undefined);
     expect(dropped).toEqual([]);
-  });
-
-  it("round-trips the stored Auto policy while its model pools stay unchanged", () => {
-    const autoSetup = {
-      schema_version: "1" as const,
-      snapshot_id: "snapshot-test",
-      snapshot_sha256: "a".repeat(64),
-      quality_level: "max" as const,
-      optimize_for: "cost" as const,
-      tier_policies: {},
-    };
-    const stored = { ...STORED, classifier_type: "heuristic" as const, auto_setup: autoSetup };
-    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
-
-    expect(buildUpdatedComplexityRouterConfig(stored, hydrated).auto_setup).toEqual(autoSetup);
   });
 
   it("drops a stored local-scorer threshold when the operator converts the router to custom tiers", () => {

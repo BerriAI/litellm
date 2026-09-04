@@ -1,32 +1,21 @@
 import math
 import random
-from itertools import product
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
 
-from litellm import Router
 from litellm.router_strategy.complexity_router.auto_setup import (
     AutoRouterSnapshot,
     AutoSetupDeployment,
     AutoSetupDeploymentPricing,
-    _speed_completion_cost,  # pyright: ignore[reportPrivateUsage] -- regression test for multi-call trajectory pricing
+    _quality_completion_cost,  # pyright: ignore[reportPrivateUsage] -- regression test for deployment-aware setup ranking
     analyze_auto_setup_inventory,
     build_auto_setup_config,
     load_auto_router_snapshot,
 )
 from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
-from litellm.router_strategy.complexity_router.config import (
-    AutoSetupCandidate,
-    ComplexityRouterConfig,
-    ComplexityTier,
-)
-from litellm.router_strategy.complexity_router.response_latency import (
-    record_runtime_response_latency,
-    response_latency_sample,
-    select_runtime_response_model,
-)
+from litellm.router_strategy.complexity_router.config import ComplexityTier
 
 
 def _available_refs(*model_names: str) -> dict[str, tuple[AutoSetupDeployment, ...]]:
@@ -62,44 +51,38 @@ def test_snapshot_is_verified_and_quality_gate_is_recomputed_for_available_model
         snapshot=snapshot,
         available_model_deployments=available,
         quality_level="economy",
-        optimize_for="cost",
     )
     maximum = build_auto_setup_config(
         snapshot=snapshot,
         available_model_deployments=available,
         quality_level="max",
-        optimize_for="cost",
     )
     nano_only = build_auto_setup_config(
         snapshot=snapshot,
         available_model_deployments=_available_refs("gpt-5.4-nano"),
         quality_level="max",
-        optimize_for="cost",
     )
 
-    assert snapshot.artifact_sha256 == "bab7488212d40d96c5e43f80893c5ca2961d0e25160cb1aebbef36a2422b8a2b"
-    assert economy.tiers["SIMPLE"] == ["gpt-5.4-nano", "gpt-5.6-sol"]
+    assert snapshot.artifact_sha256 == "e191b5f7225e4da7a178eb5fe8780bcea24fb0166be23e2069338c6fe5522cd5"
+    assert economy.tiers["SIMPLE"] == ["gpt-5.4-nano"]
     assert maximum.tiers["SIMPLE"] == ["gpt-5.6-sol"]
     assert nano_only.tiers["SIMPLE"] == ["gpt-5.4-nano"]
 
 
-def test_speed_only_changes_auto_generated_selection_policy() -> None:
+def test_auto_setup_emits_a_plain_static_complexity_router_config() -> None:
     config = build_auto_setup_config(
         snapshot=load_auto_router_snapshot(),
         available_model_deployments=_available_refs("gpt-5.6-sol", "gpt-5.4-nano"),
         quality_level="economy",
-        optimize_for="task_completion_speed",
     )
 
-    assert config.auto_setup is not None
-    assert config.auto_setup.tier_policies["SIMPLE"].selection_mode == "runtime_response_latency"
-    assert config.auto_setup.tier_policies["MEDIUM"].selection_mode == "runtime_response_latency"
-    assert config.auto_setup.tier_policies["COMPLEX"].selection_mode == "snapshot_ranked"
-    assert config.auto_setup.tier_policies["REASONING"].selection_mode == "snapshot_ranked"
-    assert ComplexityRouterConfig(tiers=config.tiers).auto_setup is None
+    payload = config.model_dump(mode="json", exclude_none=True)
+    assert payload["classifier_type"] == "heuristic_v2"
+    assert "auto_setup" not in payload
+    assert all(len(models) == 1 for models in config.tiers.values())
 
 
-def test_every_priced_snapshot_alias_builds_all_twelve_auto_setups() -> None:
+def test_every_snapshot_alias_builds_all_four_quality_setups_even_without_price() -> None:
     snapshot = load_auto_router_snapshot()
     aliases = tuple(
         alias
@@ -118,25 +101,17 @@ def test_every_priced_snapshot_alias_builds_all_twelve_auto_setups() -> None:
     )
 
     for alias, deployment in priced.items():
-        if deployment.pricing is None:
-            eligible, excluded = analyze_auto_setup_inventory(snapshot, {alias: (deployment,)})
-            assert not eligible
-            assert [(item.model_group, item.reason) for item in excluded] == [(alias, "pricing_unavailable")]
-            continue
-        for quality_level, objective in product(
-            ("economy", "balanced", "high", "max"),
-            ("cost", "task_completion_speed", "balanced"),
-        ):
+        eligible, excluded = analyze_auto_setup_inventory(snapshot, {alias: (deployment,)})
+        assert eligible == (alias,)
+        assert excluded == ()
+        for quality_level in ("economy", "balanced", "high", "max"):
             config = build_auto_setup_config(
                 snapshot=snapshot,
                 available_model_deployments={alias: (deployment,)},
                 quality_level=quality_level,
-                optimize_for=objective,
             )
             assert set(config.tiers) == {"SIMPLE", "MEDIUM", "COMPLEX", "REASONING"}
             assert all(models == [alias] for models in config.tiers.values())
-            assert config.auto_setup is not None
-            assert all(policy.candidates[0].model_name == alias for policy in config.auto_setup.tier_policies.values())
 
 
 def test_full_priced_inventory_builds_deterministically_for_every_choice() -> None:
@@ -155,33 +130,24 @@ def test_full_priced_inventory_builds_deterministically_for_every_choice() -> No
     }
     assert len(deployments) == 279
 
-    cost_tiers: dict[str, dict[str, set[str]]] = {}
-    for quality_level, objective in product(
-        ("economy", "balanced", "high", "max"),
-        ("cost", "task_completion_speed", "balanced"),
-    ):
+    selected_tiers: dict[str, dict[str, set[str]]] = {}
+    for quality_level in ("economy", "balanced", "high", "max"):
         config = build_auto_setup_config(
             snapshot=snapshot,
             available_model_deployments=deployments,
             quality_level=quality_level,
-            optimize_for=objective,
         )
         repeated = build_auto_setup_config(
             snapshot=snapshot,
             available_model_deployments=dict(reversed(tuple(deployments.items()))),
             quality_level=quality_level,
-            optimize_for=objective,
         )
         assert config.model_dump(mode="json") == repeated.model_dump(mode="json")
-        assert all(models and len(models) == len(set(models)) for models in config.tiers.values())
+        assert all(len(models) == 1 for models in config.tiers.values())
         assert all(set(models).issubset(deployments) for models in config.tiers.values())
-        if objective == "cost":
-            cost_tiers[quality_level] = {tier: set(models) for tier, models in config.tiers.items()}
+        selected_tiers[quality_level] = {tier: set(models) for tier, models in config.tiers.items()}
 
-    for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING"):
-        assert cost_tiers["max"][tier] <= cost_tiers["high"][tier]
-        assert cost_tiers["high"][tier] <= cost_tiers["balanced"][tier]
-        assert cost_tiers["balanced"][tier] <= cost_tiers["economy"][tier]
+    assert set(selected_tiers) == {"economy", "balanced", "high", "max"}
 
 
 def test_seeded_mixed_inventories_never_select_unknown_or_unsafe_groups() -> None:
@@ -213,15 +179,11 @@ def test_seeded_mixed_inventories_never_select_unknown_or_unsafe_groups() -> Non
                 for index in range(rng.randint(0, 10))
             }
         )
-        for quality_level, objective in product(
-            ("economy", "balanced", "high", "max"),
-            ("cost", "task_completion_speed", "balanced"),
-        ):
+        for quality_level in ("economy", "balanced", "high", "max"):
             config = build_auto_setup_config(
                 snapshot=snapshot,
                 available_model_deployments=inventory,
                 quality_level=quality_level,
-                optimize_for=objective,
             )
             selected = {model_name for models in config.tiers.values() for model_name in models}
             assert selected
@@ -258,12 +220,11 @@ def test_mixed_or_partially_unmatched_model_groups_fail_closed() -> None:
         snapshot=snapshot,
         available_model_deployments=inventory,
         quality_level="economy",
-        optimize_for="cost",
     )
     assert all(models == ["safe"] for models in config.tiers.values())
 
 
-def test_schema_valid_missing_cost_and_zero_completion_evidence_fail_closed() -> None:
+def test_missing_cost_falls_back_to_quality_instead_of_blocking_setup() -> None:
     raw = load_auto_router_snapshot().model_dump(mode="json")
     quality_profiles = raw["models"]["gpt-5.4-nano-xhigh"]["quality_by_complexity"].values()
     for profile in quality_profiles:
@@ -274,8 +235,29 @@ def test_schema_valid_missing_cost_and_zero_completion_evidence_fail_closed() ->
     snapshot = AutoRouterSnapshot.model_validate(raw)
     eligible, excluded = analyze_auto_setup_inventory(snapshot, _available_refs("gpt-5.4-nano"))
 
-    assert eligible == ()
-    assert [(item.model_group, item.reason) for item in excluded] == [("gpt-5.4-nano", "pricing_unavailable")]
+    assert eligible == ("gpt-5.4-nano",)
+    assert excluded == ()
+    generated = build_auto_setup_config(
+        snapshot=snapshot,
+        available_model_deployments=_available_refs("gpt-5.4-nano"),
+        quality_level="max",
+    )
+    assert all(models == ["gpt-5.4-nano"] for models in generated.tiers.values())
+
+
+def test_multiple_unpriced_models_choose_the_highest_quality_inside_the_gate() -> None:
+    inventory = {
+        model_name: (AutoSetupDeployment(model_refs=(model_name,), pricing=None),)
+        for model_name in ("gpt-5.6-sol", "gpt-5.4-nano")
+    }
+
+    generated = build_auto_setup_config(
+        snapshot=load_auto_router_snapshot(),
+        available_model_deployments=inventory,
+        quality_level="max",
+    )
+
+    assert generated.tiers["SIMPLE"] == ["gpt-5.6-sol"]
 
 
 def test_provider_repricing_and_multi_deployment_groups_are_conservative() -> None:
@@ -288,42 +270,23 @@ def test_provider_repricing_and_multi_deployment_groups_are_conservative() -> No
         model_refs=("gpt-5.6-sol",),
         pricing=AutoSetupDeploymentPricing(input_cost_per_token=0.00001, output_cost_per_token=0.00002),
     )
+    profile = snapshot.models["gpt-5.6-sol-max"].quality_by_complexity["trivial"]
+    cheap_cost = _quality_completion_cost(profile, (cheap,))
+    expensive_cost = _quality_completion_cost(profile, (expensive,))
+    mixed_cost = _quality_completion_cost(profile, (cheap, expensive))
+
+    assert cheap_cost is not None
+    assert expensive_cost is not None
+    assert mixed_cost is not None
+    assert math.isclose(expensive_cost, cheap_cost * 10)
+    assert math.isclose(mixed_cost, expensive_cost)
+
     config = build_auto_setup_config(
         snapshot=snapshot,
         available_model_deployments={"cheap": (cheap,), "expensive": (expensive,), "mixed-price": (cheap, expensive)},
         quality_level="economy",
-        optimize_for="cost",
     )
-    assert config.auto_setup is not None
-    candidates = config.auto_setup.tier_policies["SIMPLE"].candidates
-    by_name = {candidate.model_name: candidate.cost_per_completed_task_usd for candidate in candidates}
-    assert tuple(candidate.model_name for candidate in candidates) == ("cheap", "expensive", "mixed-price")
-    assert math.isclose(by_name["expensive"], by_name["cheap"] * 10)
-    assert math.isclose(by_name["mixed-price"], by_name["expensive"])
-
-
-def test_multi_call_trajectory_cost_does_not_apply_single_request_context_thresholds() -> None:
-    snapshot = load_auto_router_snapshot()
-    speed = snapshot.models["gpt-5.6-sol-max"].task_completion_speed_by_complexity["complex"][0]
-    pricing = AutoSetupDeploymentPricing(
-        input_cost_per_token=0.000001,
-        output_cost_per_token=0.000002,
-        cache_read_input_token_cost=0.0000001,
-        input_cost_per_token_above_200k_tokens=0.001,
-        output_cost_per_token_above_200k_tokens=0.002,
-        cache_read_input_token_cost_above_200k_tokens=0.0001,
-    )
-    deployment = AutoSetupDeployment(model_refs=("gpt-5.6-sol",), pricing=pricing)
-
-    actual = _speed_completion_cost(speed, (deployment,))
-    expected_attempt_cost = (
-        (speed.mean_uncached_input_tokens or 0) * pricing.input_cost_per_token
-        + (speed.mean_cache_read_input_tokens or 0) * (pricing.cache_read_input_token_cost or 0)
-        + (speed.mean_output_tokens or 0) * pricing.output_cost_per_token
-    )
-
-    assert actual is not None
-    assert math.isclose(actual, expected_attempt_cost / speed.success_probability)
+    assert config.tiers["SIMPLE"] == ["cheap"]
 
 
 @pytest.mark.parametrize(
@@ -352,164 +315,27 @@ def test_snapshot_semantic_validation_rejects_inconsistent_artifacts(mutation: s
         AutoRouterSnapshot.model_validate(raw)
 
 
-def test_auto_setup_cannot_change_adaptive_or_custom_tier_routers() -> None:
+def test_auto_setup_result_has_no_runtime_only_configuration() -> None:
     generated = build_auto_setup_config(
         snapshot=load_auto_router_snapshot(),
         available_model_deployments=_available_refs("gpt-5.6-sol"),
         quality_level="max",
-        optimize_for="cost",
     )
-    payload = generated.model_dump(mode="json")
+    payload = generated.model_dump(mode="json", exclude_none=True)
 
-    with pytest.raises(ValidationError, match="auto_setup and adaptive"):
-        ComplexityRouterConfig.model_validate({**payload, "adaptive": True})
-    with pytest.raises(ValidationError, match="built-in four-tier"):
-        ComplexityRouterConfig.model_validate(
-            {
-                **payload,
-                "tier_definitions": [
-                    {"name": "fast", "description": "Fast"},
-                    {"name": "strong", "description": "Strong"},
-                ],
-                "tiers": {"fast": ["gpt-5.6-sol"], "strong": ["gpt-5.6-sol"]},
-                "fallback_tier": "fast",
-                "classifier_type": "llm",
-                "classifier_llm_config": {"model": "gpt-5.6-sol"},
-            }
-        )
-
-
-class _Cache:
-    def __init__(self) -> None:
-        self.values: dict[str, object] = {}
-
-    async def async_get_cache(
-        self,
-        key: str,
-        parent_otel_span: object | None = None,
-        local_only: bool = False,
-        **kwargs: object,
-    ) -> object:
-        return self.values.get(key)
-
-    async def async_set_cache(
-        self,
-        key: str,
-        value: object,
-        local_only: bool = False,
-        **kwargs: object,
-    ) -> None:
-        self.values[key] = value
-
-
-def _candidate(model_name: str, cost: float) -> AutoSetupCandidate:
-    return AutoSetupCandidate(
-        model_name=model_name,
-        benchmark_model_id=f"benchmark-{model_name}",
-        quality_lower_bound=0.95,
-        cost_per_completed_task_usd=cost,
-    )
+    assert "auto_setup" not in payload
+    assert payload["adaptive"] is False
+    assert payload["classifier_type"] == "heuristic_v2"
 
 
 @pytest.mark.asyncio
-async def test_easy_task_speed_learns_equal_output_response_time() -> None:
-    cache = _Cache()
-    candidates = (_candidate("cheap-slow", 0.01), _candidate("fast", 0.04))
-
-    assert (
-        await select_runtime_response_model(
-            router_cache=cache,
-            router_model_name="auto",
-            tier="SIMPLE",
-            candidates=candidates,
-            available_models=("cheap-slow", "fast"),
-            cold_start_model="cheap-slow",
-            objective="task_completion_speed",
-        )
-        == "cheap-slow"
-    )
-
-    for model, end in (("cheap-slow", 0.30), ("cheap-slow", 0.30), ("fast", 0.15), ("fast", 0.15)):
-        await record_runtime_response_latency(
-            router_cache=cache,
-            router_model_name="auto",
-            tier="SIMPLE",
-            routed_model=model,
-            kwargs={"completion_start_time": 0.10},
-            response_obj={
-                "usage": {
-                    "completion_tokens": 20,
-                    "completion_tokens_details": {"reasoning_tokens": 10},
-                }
-            },
-            start_time=0.0,
-            end_time=end,
-        )
-
-    measured = response_latency_sample(
-        {"completion_start_time": 0.10},
-        {"usage": {"completion_tokens": 20, "completion_tokens_details": {"reasoning_tokens": 10}}},
-        0.0,
-        0.30,
-    )
-    assert measured is not None and measured[1] == 10
-    assert (
-        await select_runtime_response_model(
-            router_cache=cache,
-            router_model_name="auto",
-            tier="SIMPLE",
-            candidates=candidates,
-            available_models=("cheap-slow", "fast"),
-            cold_start_model="cheap-slow",
-            objective="task_completion_speed",
-        )
-        == "fast"
-    )
-
-
-@pytest.mark.asyncio
-async def test_easy_task_balanced_uses_both_live_response_time_and_expected_cost() -> None:
-    cache = _Cache()
-    candidates = (
-        _candidate("fast-expensive", 1.0),
-        _candidate("middle", 0.02),
-        _candidate("cheap-slow", 0.01),
-    )
-    for model, end in (("fast-expensive", 0.10), ("middle", 0.12), ("cheap-slow", 0.30)):
-        for _ in range(2):
-            await record_runtime_response_latency(
-                router_cache=cache,
-                router_model_name="auto",
-                tier="SIMPLE",
-                routed_model=model,
-                kwargs={},
-                response_obj={"usage": {"completion_tokens": 10}},
-                start_time=0.0,
-                end_time=end,
-            )
-
-    common = {
-        "router_cache": cache,
-        "router_model_name": "auto",
-        "tier": "SIMPLE",
-        "candidates": candidates,
-        "available_models": tuple(candidate.model_name for candidate in candidates),
-        "cold_start_model": "cheap-slow",
-    }
-    assert await select_runtime_response_model(**common, objective="task_completion_speed") == "fast-expensive"
-    assert await select_runtime_response_model(**common, objective="balanced") == "middle"
-
-
-@pytest.mark.asyncio
-async def test_snapshot_policy_is_deterministic_but_manual_pool_keeps_random_selection() -> None:
+async def test_generated_single_model_tiers_use_the_existing_router_selection_path() -> None:
     generated = build_auto_setup_config(
         snapshot=load_auto_router_snapshot(),
         available_model_deployments=_available_refs("gpt-5.6-sol", "gpt-5.4-nano"),
         quality_level="economy",
-        optimize_for="cost",
     )
     router_instance = MagicMock()
-    router_instance.cache = AsyncMock()
     automatic = ComplexityRouter(
         model_name="auto",
         litellm_router_instance=router_instance,
@@ -522,71 +348,8 @@ async def test_snapshot_policy_is_deterministic_but_manual_pool_keeps_random_sel
     )
 
     assert await automatic._pick_model_for_tier(ComplexityTier.SIMPLE, None, None, {}) == "gpt-5.4-nano"
-    assert (
-        await automatic._pick_model_for_tier(
-            ComplexityTier.SIMPLE,
-            None,
-            None,
-            {},
-            allowed_models=("gpt-5.6-sol",),
-        )
-        == "gpt-5.6-sol"
-    )
     with patch(  # test-quality-ok: pinning random choice is required to prove manual routers retain their existing selection path
         "litellm.router_strategy.complexity_router.complexity_router.random.choice", return_value="second"
     ) as pick:
         assert await manual._pick_model_for_tier(ComplexityTier.SIMPLE, None, None, {}) == "second"
-    pick.assert_called_once_with(("first", "second"))
-
-
-@pytest.mark.asyncio
-async def test_live_latency_telemetry_is_recorded_only_for_an_auto_runtime_policy() -> None:
-    # test-quality-ok: this callback's observable contract is whether telemetry is emitted
-    generated = build_auto_setup_config(
-        snapshot=load_auto_router_snapshot(),
-        available_model_deployments=_available_refs("gpt-5.6-sol", "gpt-5.4-nano"),
-        quality_level="economy",
-        optimize_for="task_completion_speed",
-    )
-    router = Router(
-        model_list=[
-            {
-                "model_name": "smart",
-                "litellm_params": {
-                    "model": "auto_router/complexity_router",
-                    "complexity_router_config": generated.model_dump(mode="json"),
-                    "complexity_router_default_model": "gpt-5.6-sol",
-                },
-            },
-            {"model_name": "gpt-5.6-sol", "litellm_params": {"model": "gpt-5.6-sol"}},
-            {"model_name": "gpt-5.4-nano", "litellm_params": {"model": "gpt-5.4-nano"}},
-        ]
-    )
-    metadata = {
-        "routing_decision": {
-            "router_model_name": "smart",
-            "tier": "SIMPLE",
-            "routed_model": "gpt-5.4-nano",
-            "auto_setup_selection_mode": "runtime_response_latency",
-        }
-    }
-
-    with patch(  # test-quality-ok: patching the telemetry boundary avoids mutating the shared runtime latency cache
-        "litellm.router_strategy.complexity_router.response_latency.record_runtime_response_latency",
-        new_callable=AsyncMock,
-    ) as recorder:
-        await router._record_auto_setup_response_latency(
-            kwargs={"litellm_params": {"metadata": metadata}},
-            completion_response={"usage": {"completion_tokens": 1}},
-            start_time=0.0,
-            end_time=0.1,
-        )
-        metadata["routing_decision"]["auto_setup_selection_mode"] = "snapshot_ranked"
-        await router._record_auto_setup_response_latency(
-            kwargs={"litellm_params": {"metadata": metadata}},
-            completion_response={"usage": {"completion_tokens": 1}},
-            start_time=0.0,
-            end_time=0.1,
-        )
-
-    recorder.assert_awaited_once()
+    pick.assert_called_once_with(["first", "second"])

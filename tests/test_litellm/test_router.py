@@ -12703,7 +12703,7 @@ async def test_prompt_management_factory_marks_injection_for_every_deployment(mo
     assert bucket["litellm_gateway_injected_cache"] == ""
 
 
-def test_get_configured_mode_reads_audio_speech_deployment_model_info():
+def test_get_configured_mode_reads_deployment_model_info():
     router = Router(
         model_list=[
             {

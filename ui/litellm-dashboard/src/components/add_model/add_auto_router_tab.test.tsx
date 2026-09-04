@@ -4,7 +4,7 @@ import { vi } from "vitest";
 import AddAutoRouterTab from "./add_auto_router_tab";
 import { toast } from "@/lib/toast";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
-import { getMissingTiersError, type AutoSetupConfigPayload } from "./build_complexity_router_config";
+import { getMissingTiersError } from "./build_complexity_router_config";
 import { getSubmitBlockedReason } from "./add_auto_router_tab";
 import { buildModelAvailability } from "@/lib/autorouter_presets";
 import { testAutoRouterRouting } from "../networking";
@@ -169,17 +169,17 @@ describe("AddAutoRouterTab", () => {
     expect(useAutoRouterRecommendation).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
   });
 
-  it("shows the two outcome choices after Configure automatically is selected", async () => {
+  it("shows the quality choice after Configure automatically is selected", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Harness />);
 
     await user.click(screen.getByTestId("configure-automatically-button"));
 
     expect(screen.getByTestId("auto-quality-selector")).toBeInTheDocument();
-    expect(screen.getByTestId("auto-objective-selector")).toBeInTheDocument();
+    expect(screen.queryByTestId("auto-objective-selector")).not.toBeInTheDocument();
     expect(screen.queryByTestId("template-selector")).not.toBeInTheDocument();
     expect(useAutoRouterRecommendation).toHaveBeenCalledWith(
-      expect.objectContaining({ qualityLevel: "balanced", optimizeFor: "balanced", enabled: true }),
+      expect.objectContaining({ qualityLevel: "balanced", enabled: true }),
     );
   });
 
@@ -195,38 +195,12 @@ describe("AddAutoRouterTab", () => {
     expect(screen.queryByTestId("auto-quality-selector")).not.toBeInTheDocument();
   });
 
-  it("submits the editable policy generated for the caller's available model groups", async () => {
+  it("submits the editable static config generated for the caller's available model groups", async () => {
     const user = userEvent.setup();
-    const autoSetup: AutoSetupConfigPayload = {
-      schema_version: "1" as const,
-      snapshot_id: "snapshot-test",
-      snapshot_sha256: "a".repeat(64),
-      quality_level: "max" as const,
-      optimize_for: "task_completion_speed" as const,
-      tier_policies: Object.fromEntries(
-        ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"].map((tier) => [
-          tier,
-          {
-            selection_mode: tier === "SIMPLE" || tier === "MEDIUM" ? "runtime_response_latency" : "snapshot_ranked",
-            candidates: [
-              {
-                model_name: "smart-group",
-                benchmark_model_id: "benchmark-smart",
-                quality_lower_bound: 0.98,
-                cost_per_completed_task_usd: 0.04,
-              },
-            ],
-            ...(tier === "SIMPLE" || tier === "MEDIUM" ? { cold_start_model: "smart-group" } : {}),
-            evidence_status: "test",
-          },
-        ]),
-      ),
-    };
     mockFetchAvailableModels.mockResolvedValue([{ model_group: "smart-group", mode: "chat" }]);
     const recommendationQuery = {
       data: {
         quality_level: "max",
-        optimize_for: "task_completion_speed",
         snapshot_id: "snapshot-test",
         snapshot_generated_at: "2026-09-03T00:00:00Z",
         available_model_group_count: 2,
@@ -245,7 +219,6 @@ describe("AddAutoRouterTab", () => {
           deployment_affinity: false,
           modality_routing: false,
           modality_pin_override: false,
-          auto_setup: autoSetup,
         },
       },
       isPending: false,
@@ -263,9 +236,17 @@ describe("AddAutoRouterTab", () => {
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
-    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
-      auto_setup: autoSetup,
+    const submitted = vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config;
+    expect(submitted).toMatchObject({
+      tiers: {
+        SIMPLE: ["smart-group"],
+        MEDIUM: ["smart-group"],
+        COMPLEX: ["smart-group"],
+        REASONING: ["smart-group"],
+      },
+      classifier_type: "heuristic_v2",
     });
+    expect(submitted).not.toHaveProperty("auto_setup");
   });
 
   // Detailed Configuration starts collapsed after manual setup is selected; a caller opts into the

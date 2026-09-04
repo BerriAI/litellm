@@ -48,7 +48,6 @@ import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
 import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
-import type { AutoSetupConfigPayload } from "./build_complexity_router_config";
 
 export type { DimensionWeights, TierBoundaries, TokenThresholds };
 export type { CustomTierSet, TierRow } from "./tier_rows";
@@ -447,8 +446,6 @@ export interface ComplexityRouterConfigValue {
    * edit round-trip.
    */
   tier_model_params?: TierModelParamsByTier;
-  /** Present only when the zero-setup Auto flow generated this editable config. */
-  auto_setup?: AutoSetupConfigPayload;
 }
 
 /** Session affinity wins where a hand-authored config sets both, matching the backend's own `or`. */

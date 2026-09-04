@@ -2,7 +2,6 @@ import { fireEvent, renderWithProviders, screen, within } from "../../../tests/t
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
-import { detachAutoSetupAfterPoolEdit } from "./auto_setup_policy";
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
@@ -45,30 +44,6 @@ const baseProps = {
 };
 
 describe("ComplexityRouterConfig", () => {
-  it("keeps Auto policy for classifier edits and detaches it for model-pool edits", () => {
-    const automatic: ComplexityRouterConfigValue = {
-      ...defaultValue,
-      auto_setup: {
-        schema_version: "1",
-        snapshot_id: "snapshot-test",
-        snapshot_sha256: "a".repeat(64),
-        quality_level: "max",
-        optimize_for: "cost",
-        tier_policies: {},
-      },
-    };
-
-    expect(detachAutoSetupAfterPoolEdit(automatic, { ...automatic, classifier_type: "heuristic_v2" }).auto_setup).toBe(
-      automatic.auto_setup,
-    );
-    expect(
-      detachAutoSetupAfterPoolEdit(automatic, {
-        ...automatic,
-        tiers: { ...automatic.tiers, SIMPLE: ["gpt-4"] },
-      }).auto_setup,
-    ).toBeUndefined();
-  });
-
   it("should render", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
