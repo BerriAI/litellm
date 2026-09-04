@@ -119,6 +119,8 @@ describe("useModelsInfo", () => {
       // every other consumer of this hook keeps seeing auto-routers.
       false,
       undefined,
+      undefined,
+      false,
     );
     expect(modelInfoCall).toHaveBeenCalledTimes(1);
   });
@@ -147,6 +149,8 @@ describe("useModelsInfo", () => {
       // every other consumer of this hook keeps seeing auto-routers.
       false,
       undefined,
+      undefined,
+      false,
     );
   });
 
