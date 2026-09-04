@@ -383,23 +383,26 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         while the SDK is tearing the provider down, so closing blind would drop a
         trace mid-forward and would hand the next caller a fresh exporter nothing
         will ever close. Refusing new work and then waiting out the in-flight ones
-        keeps both from happening.
+        keeps both from happening. The wait has to be bounded, or one destination
+        whose collector stopped answering would hold the proxy open on the way down,
+        so a straggler past the bound is retired instead of closed: the thread still
+        exporting it closes it through the drain as soon as its export returns, and
+        no span is ever dropped mid-forward.
         """
         with self._lock:
             self._closed = True
             self._lock.wait_for(lambda: not self._exporting, timeout=self._drain_seconds)
-        # Snapshot: ``on_end`` mutates the cache on whichever thread ends a span, so
-        # iterating the live mapping risks a "mutated during iteration" the per-item
-        # except cannot catch.
-        for processor in self._snapshot():
+            live: Final = tuple((id(p), p) for p in (*self._processors.values(), *self._retired.values()))
+            closing: Final = tuple(p for ident, p in live if ident not in self._exporting)
+            self._processors.clear()
+            self._retired = OrderedDict(  # mutable-ok: the same bounded map, keeping only what is still exporting
+                (ident, p) for ident, p in live if ident in self._exporting
+            )
+        for processor in closing:
             try:
                 processor.shutdown()
             except Exception as exc:  # noqa: BLE001  # one processor's shutdown must not abort the rest
                 verbose_logger.debug("OTel V2 fan-out: processor shutdown failed: %s", exc)
-        with self._lock:
-            self._processors.clear()
-            self._retired.clear()
-            self._exporting.clear()
         self._drain.close()
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
