@@ -170,7 +170,7 @@ describe("RequestLogsPanel", () => {
     });
 
     it("counts the rendered rows in the footer instead of the server's session total", async () => {
-      vi.mocked(uiSpendLogsCall).mockResolvedValue({
+      const lastPage = {
         data: [logEntry({ request_id: "req-a" }), logEntry({ request_id: "req-b" }), logEntry({ request_id: "req-c" })],
         total: 40,
         page: 1,
@@ -178,7 +178,8 @@ describe("RequestLogsPanel", () => {
         total_pages: 2,
         next_session_cursor: null,
         has_more: false,
-      });
+      };
+      vi.mocked(uiSpendLogsCall).mockResolvedValue(lastPage);
       renderPanel();
 
       await waitFor(() => expect(row("req-a")).not.toBeNull());
@@ -187,16 +188,16 @@ describe("RequestLogsPanel", () => {
     });
 
     it("keeps Next enabled from the server total while more session pages remain", async () => {
-      const firstPage = Array.from({ length: 25 }, (_, index) => logEntry({ request_id: `req-${index}` }));
-      vi.mocked(uiSpendLogsCall).mockResolvedValue({
-        data: firstPage,
+      const firstPage = {
+        data: Array.from({ length: 25 }, (_, index) => logEntry({ request_id: `req-${index}` })),
         total: 80,
         page: 1,
         page_size: 25,
         total_pages: 4,
         next_session_cursor: "2026-07-07 09:50:13|key-1|sess-1",
         has_more: true,
-      });
+      };
+      vi.mocked(uiSpendLogsCall).mockResolvedValue(firstPage);
       renderPanel();
 
       await waitFor(() => expect(row("req-0")).not.toBeNull());

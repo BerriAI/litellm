@@ -80,7 +80,8 @@ describe("PerUserUsage", () => {
 
   it("shows every fetched row with a footer that matches the server total and page size", async () => {
     const results = Array.from({ length: 25 }, (_, index) => userRow(`user-${index}`, "curl/8.0", index));
-    mockPerUserAnalyticsCall.mockResolvedValue({ ...mockResponse, results, total_count: 60, total_pages: 3 });
+    const firstPage = { ...mockResponse, results, total_count: 60, total_pages: 3 };
+    mockPerUserAnalyticsCall.mockResolvedValue(firstPage);
     render(<PerUserUsage {...defaultProps} />);
 
     await waitFor(() => {
