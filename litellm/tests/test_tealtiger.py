@@ -30,40 +30,40 @@ def make_engine(mode=PolicyMode.ENFORCE):
     return TealEngine(policies=policies, mode=mode)
 
 
-def test_engine_allows_clean_text():
+def test_engine_allows_clean_text() -> None:
     engine = make_engine()
     decision = engine.evaluate_text("What's the weather like today?")
     assert decision.action == Action.ALLOW.value
 
 
-def test_engine_redacts_ssn():
+def test_engine_redacts_ssn() -> None:
     engine = make_engine()
     decision = engine.evaluate_text("My SSN is 123-45-6789")
     assert decision.action == Action.REDACT.value
     assert "123-45-6789" not in decision.redacted_text
 
 
-def test_engine_monitor_mode_never_redacts():
+def test_engine_monitor_mode_never_redacts() -> None:
     engine = make_engine(mode=PolicyMode.MONITOR)
     decision = engine.evaluate_text("My SSN is 123-45-6789")
     assert decision.action == Action.ALLOW.value
 
 
-def test_engine_tool_allowlist():
+def test_engine_tool_allowlist() -> None:
     engine = make_engine()
     assert engine.check_tool("calculator") is True
     assert engine.check_tool("shell_exec") is False
 
 
-def test_engine_budget_enforcement():
+def test_engine_budget_enforcement() -> None:
     engine = make_engine()
     engine.track_cost(tokens=1_000_000)  # pushes spend over $1 limit
-    over_budget, spent, limit = engine.check_budget()
+    over_budget, _spent, _limit = engine.check_budget()
     assert over_budget is True
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_redacts_request_text():
+async def test_apply_guardrail_redacts_request_text() -> None:
     guardrail = TealTigerGuardrail(policies=DEFAULT_POLICIES, policy_mode="ENFORCE")
     inputs = {"texts": ["Contact me at jane@example.com"], "images": [], "tool_calls": []}
 
@@ -76,7 +76,7 @@ async def test_apply_guardrail_redacts_request_text():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_blocks_disallowed_tool():
+async def test_apply_guardrail_blocks_disallowed_tool() -> None:
     policies = [
         {"type": "pii", "action": "REDACT", "patterns": "all"},
         {"type": "tool_auth", "action": "ENFORCE", "allowlist": ["search"]},
@@ -96,7 +96,7 @@ async def test_apply_guardrail_blocks_disallowed_tool():
         )
 
 
-def test_engine_malformed_blocklist_fails_safe():
+def test_engine_malformed_blocklist_fails_safe() -> None:
     """A non-list/tuple blocklist value shouldn't crash — treated as empty."""
     policies = [
         {"type": "tool_auth", "action": "ENFORCE", "blocklist": "not-a-list"},
@@ -106,7 +106,7 @@ def test_engine_malformed_blocklist_fails_safe():
     assert engine.check_tool("anything") is True
 
 
-def test_engine_malformed_allowlist_denies_by_default():
+def test_engine_malformed_allowlist_denies_by_default() -> None:
     """A non-list/tuple allowlist value shouldn't crash — fails closed (deny)."""
     policies = [
         {"type": "tool_auth", "action": "ENFORCE", "allowlist": "not-a-list"},
@@ -116,19 +116,19 @@ def test_engine_malformed_allowlist_denies_by_default():
     assert engine.check_tool("anything") is False
 
 
-def test_engine_malformed_budget_limit_treated_as_no_limit():
+def test_engine_malformed_budget_limit_treated_as_no_limit() -> None:
     """A non-numeric daily_limit_usd shouldn't crash — treated as no budget cap."""
     policies = [
         {"type": "cost", "action": "ENFORCE", "daily_limit_usd": "fifty dollars"},
     ]
     engine = TealEngine(policies=policies, mode=PolicyMode.ENFORCE)
     engine.track_cost(tokens=999_999_999)  # would blow any real limit
-    over_budget, spent, limit = engine.check_budget()
+    over_budget, _spent, _limit = engine.check_budget()
     assert over_budget is False
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_session_id_falls_back_when_user_not_a_string():
+async def test_apply_guardrail_session_id_falls_back_when_user_not_a_string() -> None:
     """A non-string 'user' in request_data shouldn't crash session_id handling."""
     policies = [
         {"type": "cost", "action": "ENFORCE", "daily_limit_usd": 1.0},
@@ -153,61 +153,61 @@ from litellm.proxy.guardrails.guardrail_hooks.tealtiger.tealtiger import (
 from litellm.types.guardrails import GuardrailEventHooks
 
 
-def test_to_event_hook_passes_through_none():
+def test_to_event_hook_passes_through_none() -> None:
     assert _to_event_hook(None) is None
 
 
-def test_to_event_hook_passes_through_real_enum():
+def test_to_event_hook_passes_through_real_enum() -> None:
     result = _to_event_hook(GuardrailEventHooks.pre_call)
     assert result == GuardrailEventHooks.pre_call
 
 
-def test_to_event_hook_converts_bare_string():
+def test_to_event_hook_converts_bare_string() -> None:
     result = _to_event_hook("pre_call")
     assert result == GuardrailEventHooks.pre_call
 
 
-def test_to_event_hook_converts_list_of_strings():
+def test_to_event_hook_converts_list_of_strings() -> None:
     result = _to_event_hook(["pre_call", "post_call"])
     assert result == [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]
 
 
-def test_to_event_hook_converts_mixed_list():
+def test_to_event_hook_converts_mixed_list() -> None:
     result = _to_event_hook([GuardrailEventHooks.pre_call, "post_call"])
     assert result == [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]
 
 
-def test_tool_call_name_from_dict_shape():
+def test_tool_call_name_from_dict_shape() -> None:
     """ChatCompletionToolCallChunk-style: a plain dict."""
     tool_call = {"id": "1", "type": "function", "function": {"name": "shell_exec"}, "index": 0}
     assert _tool_call_name(tool_call) == "shell_exec"
 
 
-def test_tool_call_name_from_dict_shape_missing_function():
+def test_tool_call_name_from_dict_shape_missing_function() -> None:
     tool_call = {"id": "1", "type": "function", "index": 0}
     assert _tool_call_name(tool_call) is None
 
 
 class _FakeFunction:
-    def __init__(self, name):
+    def __init__(self, name) -> None:
         self.name = name
 
 
 class _FakeToolCallObject:
     """Mimics ChatCompletionMessageToolCall's real shape: attribute access."""
 
-    def __init__(self, name):
+    def __init__(self, name) -> None:
         self.function = _FakeFunction(name)
         self.id = "1"
         self.type = "function"
 
 
-def test_tool_call_name_from_object_shape():
+def test_tool_call_name_from_object_shape() -> None:
     """ChatCompletionMessageToolCall-style: a pydantic-like object."""
     assert _tool_call_name(_FakeToolCallObject("calculator")) == "calculator"
 
 
-def test_tool_call_name_from_object_shape_missing_function():
+def test_tool_call_name_from_object_shape_missing_function() -> None:
     class _Empty:
         pass
 
@@ -215,7 +215,7 @@ def test_tool_call_name_from_object_shape_missing_function():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_blocks_object_shaped_tool_call():
+async def test_apply_guardrail_blocks_object_shaped_tool_call() -> None:
     """The object-shaped (pydantic) tool_call variant should be checked too,
     not just the dict-shaped one."""
     policies = [
@@ -239,7 +239,7 @@ async def test_apply_guardrail_blocks_object_shaped_tool_call():
 # ---------- Additional Edge Cases & Error Handling Coverage ----------
 
 
-def test_engine_pii_types_and_no_match():
+def test_engine_pii_types_and_no_match() -> None:
     """Verify engine handles clean text and custom regex rules cleanly."""
     engine = make_engine()
     # PII scanner with no matching patterns
@@ -249,7 +249,7 @@ def test_engine_pii_types_and_no_match():
     assert decision.redacted_text is None
 
 
-def test_engine_tool_auth_blocklist():
+def test_engine_tool_auth_blocklist() -> None:
     """Test explicit tool blocklist evaluation."""
     policies = [
         {"type": "tool_auth", "action": "ENFORCE", "blocklist": ["dangerous_exec", "terminal"]},
@@ -259,7 +259,7 @@ def test_engine_tool_auth_blocklist():
     assert engine.check_tool("dangerous_exec") is False
 
 
-def test_engine_tool_auth_disabled():
+def test_engine_tool_auth_disabled() -> None:
     """Test tool auth behavior when no allowlist or blocklist is specified."""
     policies = [
         {"type": "tool_auth", "action": "ENFORCE"},
@@ -268,7 +268,7 @@ def test_engine_tool_auth_disabled():
     assert engine.check_tool("any_tool") is True
 
 
-def test_engine_budget_tracking_under_limit():
+def test_engine_budget_tracking_under_limit() -> None:
     """Test cost tracking within allowed limits."""
     policies = [
         {"type": "cost", "action": "ENFORCE", "daily_limit_usd": 10.0},
@@ -282,7 +282,7 @@ def test_engine_budget_tracking_under_limit():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_budget_exceeded_raises_error():
+async def test_apply_guardrail_budget_exceeded_raises_error() -> None:
     """Verify that apply_guardrail raises a ValueError when the budget cap is reached."""
     policies = [
         {"type": "cost", "action": "ENFORCE", "daily_limit_usd": 0.00001},
@@ -302,7 +302,7 @@ async def test_apply_guardrail_budget_exceeded_raises_error():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_response_input_type():
+async def test_apply_guardrail_response_input_type() -> None:
     """Test apply_guardrail for 'response' or 'post_call' inputs."""
     guardrail = TealTigerGuardrail(policies=DEFAULT_POLICIES, policy_mode="ENFORCE")
     inputs = {"texts": ["Found secret token: 123-45-6789"], "images": [], "tool_calls": []}
@@ -316,7 +316,7 @@ async def test_apply_guardrail_response_input_type():
 
 
 @pytest.mark.asyncio
-async def test_async_pre_call_hook():
+async def test_async_pre_call_hook() -> None:
     """Directly test async_pre_call_hook method if exposed by TealTigerGuardrail."""
     guardrail = TealTigerGuardrail(policies=DEFAULT_POLICIES, policy_mode="ENFORCE")
     data = {"messages": [{"role": "user", "content": "Contact me at test@example.com"}]}
@@ -333,7 +333,7 @@ async def test_async_pre_call_hook():
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_success_hook():
+async def test_async_post_call_success_hook() -> None:
     """Directly test async_post_call_success_hook method if exposed by TealTigerGuardrail."""
     guardrail = TealTigerGuardrail(policies=DEFAULT_POLICIES, policy_mode="ENFORCE")
     response_obj = {"choices": [{"message": {"content": "SSN: 123-45-6789"}}]}
@@ -348,7 +348,7 @@ async def test_async_post_call_success_hook():
         assert res is None or isinstance(res, dict)
 
 
-def test_tool_call_name_invalid_types():
+def test_tool_call_name_invalid_types() -> None:
     """Verify _tool_call_name gracefully handles primitives or None."""
     assert _tool_call_name(None) is None
     assert _tool_call_name("invalid_str") is None
