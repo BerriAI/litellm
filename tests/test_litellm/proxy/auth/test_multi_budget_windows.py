@@ -175,14 +175,14 @@ async def test_user_budget_limits_under_budget_passes():  # test-quality-ok: cou
 
 
 @pytest.mark.asyncio
-async def test_user_budget_window_key_encodes_namespace_delimiters():
+async def test_user_budget_window_key_encodes_namespace_delimiters():  # test-quality-ok: key namespace is the observable boundary
     user_id = "user:window:1h"
     user = LiteLLM_UserTable(
         user_id=user_id,
         budget_limits=[{"budget_duration": "1d", "max_budget": 10.0}],
     )
 
-    with patch(
+    with patch(  # test-quality-ok: no injected spend reader exists at this auth boundary
         "litellm.proxy.proxy_server.get_current_spend",
         new_callable=AsyncMock,
         return_value=1.0,
