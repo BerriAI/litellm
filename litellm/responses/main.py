@@ -2,6 +2,7 @@ import asyncio
 import contextvars
 from collections.abc import Coroutine, Generator, Iterable, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
@@ -407,7 +408,17 @@ def _deployment_passes_through_responses(model_info: object) -> bool:
     return isinstance(supported_endpoints, (list, tuple)) and "/v1/responses" in supported_endpoints
 
 
-_PROMPT_SWAPPED_PROVIDER_KW: Final = "_prompt_swapped_provider"
+def _deployment_model_info_after_prompt_swap(
+    requested_provider: str | None, resolved_provider: str | None, model_info: object
+) -> object:
+    """Deployment metadata only describes the upstream while the prompt manager keeps its provider."""
+    return model_info if resolved_provider == requested_provider else None
+
+
+@dataclass(frozen=True, slots=True)
+class _AsyncPromptManagementOutcome:
+    merged_optional_params: Mapping[str, object]
+    deployment_model_info: object
 
 
 def _resolve_responses_api_provider_config(
@@ -571,8 +582,8 @@ async def aresponses(
                     merged_input=merged_input,
                 ),
             )
+            requested_provider: Final = custom_llm_provider
             if model != original_model:
-                requested_provider: Final = custom_llm_provider
                 custom_llm_provider = _resolve_prompt_swapped_provider(
                     original_model=original_model,
                     swapped_model=model,
@@ -580,10 +591,13 @@ async def aresponses(
                     kwargs=kwargs,
                     prompt_id=prompt_id,
                 )
-                if custom_llm_provider != requested_provider:
-                    kwargs[_PROMPT_SWAPPED_PROVIDER_KW] = True
             kwargs.pop("prompt_id", None)
-            kwargs["_async_prompt_merged_params"] = merged_optional_params
+            kwargs["_async_prompt_merged_params"] = _AsyncPromptManagementOutcome(
+                merged_optional_params=merged_optional_params,
+                deployment_model_info=_deployment_model_info_after_prompt_swap(
+                    requested_provider, custom_llm_provider, kwargs.get("model_info")
+                ),
+            )
 
         func: Final = partial(
             responses,
@@ -688,12 +702,14 @@ def _apply_prompt_management_to_responses_call(
     kwargs: dict[str, Any],
     local_vars: dict[str, object],
     use_chat_completions_api: bool,
-) -> tuple[str | ResponseInputParam, str, str | None]:
-    async_merged: Final[Mapping[str, object] | None] = kwargs.pop("_async_prompt_merged_params", None)
-    if async_merged is not None:
-        for key, value in async_merged.items():
+) -> tuple[str | ResponseInputParam, str, str | None, object]:
+    """Returns the prompt-managed input, model and provider, plus the deployment metadata that still
+    describes the upstream (``None`` once the prompt manager moved the request to another provider)."""
+    async_outcome: Final[_AsyncPromptManagementOutcome | None] = kwargs.pop("_async_prompt_merged_params", None)
+    if async_outcome is not None:
+        for key, value in async_outcome.merged_optional_params.items():
             local_vars[key] = value
-        return input, model, custom_llm_provider
+        return input, model, custom_llm_provider, async_outcome.deployment_model_info
 
     prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))
     prompt_variables: Final = cast(dict | None, kwargs.get("prompt_variables", None))
@@ -734,22 +750,28 @@ def _apply_prompt_management_to_responses_call(
         )
         local_vars["input"] = input
         local_vars["model"] = model
-        if model != original_model:
-            requested_provider: Final = custom_llm_provider
-            custom_llm_provider = _resolve_prompt_swapped_provider(
+        resolved_provider: Final = (
+            custom_llm_provider
+            if model == original_model
+            else _resolve_prompt_swapped_provider(
                 original_model=original_model,
                 swapped_model=model,
                 custom_llm_provider=custom_llm_provider,
                 kwargs=kwargs,
                 prompt_id=prompt_id,
             )
-            if custom_llm_provider != requested_provider:
-                kwargs[_PROMPT_SWAPPED_PROVIDER_KW] = True
-            local_vars["custom_llm_provider"] = custom_llm_provider
+        )
+        local_vars["custom_llm_provider"] = resolved_provider
         for key, value in merged_optional_params.items():
             local_vars[key] = value
+        return (
+            input,
+            model,
+            resolved_provider,
+            _deployment_model_info_after_prompt_swap(custom_llm_provider, resolved_provider, kwargs.get("model_info")),
+        )
 
-    return input, model, custom_llm_provider
+    return input, model, custom_llm_provider, kwargs.get("model_info")
 
 
 # Opt-in via model id (mirrors the `responses/` prefix pattern on chat completions).
@@ -1079,7 +1101,7 @@ def responses(
             )
             local_vars["custom_llm_provider"] = custom_llm_provider
 
-        input, model, custom_llm_provider = _apply_prompt_management_to_responses_call(
+        input, model, custom_llm_provider, deployment_model_info = _apply_prompt_management_to_responses_call(
             input=input,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -1087,9 +1109,6 @@ def responses(
             kwargs=kwargs,
             local_vars=local_vars,
             use_chat_completions_api=use_chat_completions_api,
-        )
-        deployment_model_info: Final = (
-            None if kwargs.pop(_PROMPT_SWAPPED_PROVIDER_KW, False) is True else kwargs.get("model_info")
         )
 
         # get llm provider logic
