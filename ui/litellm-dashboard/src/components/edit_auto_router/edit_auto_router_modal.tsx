@@ -104,6 +104,7 @@ export interface StoredComplexityRouterConfig {
   dimension_weights?: unknown;
   reasoning_override_min_score?: unknown;
   session_affinity?: unknown;
+  session_affinity_ttl_seconds?: unknown;
   modality_routing?: unknown;
   modality_pin_override?: unknown;
   deployment_affinity?: unknown;
@@ -182,6 +183,11 @@ export const hydrateComplexityRouterConfig = (
     reasoning_override_min_score: hydrateReasoningOverrideMinScore(parsedConfig.reasoning_override_min_score),
     session_affinity:
       typeof parsedConfig.session_affinity === "boolean" ? parsedConfig.session_affinity : DEFAULT_SESSION_AFFINITY,
+    session_affinity_ttl_seconds:
+      typeof parsedConfig.session_affinity_ttl_seconds === "number" &&
+      Number.isFinite(parsedConfig.session_affinity_ttl_seconds)
+        ? parsedConfig.session_affinity_ttl_seconds
+        : undefined,
     modality_routing: typeof parsedConfig.modality_routing === "boolean" ? parsedConfig.modality_routing : false,
     modality_pin_override:
       typeof parsedConfig.modality_pin_override === "boolean" ? parsedConfig.modality_pin_override : false,
@@ -224,6 +230,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "hybrid_boundary_margin",
   "classification_mode",
   "session_affinity",
+  "session_affinity_ttl_seconds",
   "modality_routing",
   "modality_pin_override",
   "deployment_affinity",
@@ -322,6 +329,7 @@ export const buildUpdatedComplexityRouterConfig = (
     classifierContextIncludeAssistantTurns: value.classifier_context_include_assistant_turns,
     classifierFallback: value.classifier_fallback,
     sessionAffinity: value.session_affinity ?? DEFAULT_SESSION_AFFINITY,
+    sessionAffinityTtlSeconds: value.session_affinity_ttl_seconds,
     modalityRouting: value.modality_routing ?? false,
     modalityPinOverride: value.modality_pin_override ?? false,
     deploymentAffinity: value.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,

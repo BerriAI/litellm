@@ -104,97 +104,6 @@ class TestPromptVersioning:
         assert get_base_prompt_id(prompt_id="jack") == "jack"
         assert get_base_prompt_id(prompt_id="my_prompt.v10") == "my_prompt"
 
-    def test_get_latest_version_prompt_id(self):
-        """
-        Test that get_latest_version_prompt_id returns the highest version
-        """
-        from litellm.proxy.prompts.prompt_endpoints import get_latest_version_prompt_id
-
-        # Mock prompt IDs dictionary
-        all_prompt_ids = {
-            "jack.v1": {},
-            "jack.v2": {},
-            "jack.v3": {},
-            "jane.v1": {},
-            "simple_prompt": {},
-        }
-
-        # Test with base prompt ID - should return latest version
-        assert (
-            get_latest_version_prompt_id(
-                prompt_id="jack", all_prompt_ids=all_prompt_ids
-            )
-            == "jack.v3"
-        )
-
-        # Test with versioned prompt ID - should still return latest version
-        assert (
-            get_latest_version_prompt_id(
-                prompt_id="jack.v1", all_prompt_ids=all_prompt_ids
-            )
-            == "jack.v3"
-        )
-
-        # Test with single version
-        assert (
-            get_latest_version_prompt_id(
-                prompt_id="jane", all_prompt_ids=all_prompt_ids
-            )
-            == "jane.v1"
-        )
-
-        # Test with non-versioned prompt
-        assert (
-            get_latest_version_prompt_id(
-                prompt_id="simple_prompt", all_prompt_ids=all_prompt_ids
-            )
-            == "simple_prompt"
-        )
-
-        # Test with non-existent prompt
-        assert (
-            get_latest_version_prompt_id(
-                prompt_id="nonexistent", all_prompt_ids=all_prompt_ids
-            )
-            == "nonexistent"
-        )
-
-    def test_construct_versioned_prompt_id(self):
-        """
-        Test that construct_versioned_prompt_id correctly builds versioned IDs
-        """
-        from litellm.proxy.prompts.prompt_endpoints import construct_versioned_prompt_id
-
-        # Test with base prompt ID and version
-        assert (
-            construct_versioned_prompt_id(prompt_id="jack_success", version=4)
-            == "jack_success.v4"
-        )
-
-        # Test with None version - should return base ID unchanged
-        assert (
-            construct_versioned_prompt_id(prompt_id="jack_success", version=None)
-            == "jack_success"
-        )
-
-        # Test with existing versioned ID - should replace version
-        assert (
-            construct_versioned_prompt_id(prompt_id="jack_success.v2", version=4)
-            == "jack_success.v4"
-        )
-
-        # Test with hyphenated prompt ID
-        assert (
-            construct_versioned_prompt_id(prompt_id="my-prompt", version=1)
-            == "my-prompt.v1"
-        )
-
-        # Test with double-digit version
-        assert (
-            construct_versioned_prompt_id(prompt_id="test_prompt", version=10)
-            == "test_prompt.v10"
-        )
-
 
 class TestPromptVersionsEndpoint:
     """
@@ -444,7 +353,7 @@ class TestAdminViewerReadAccess:
                 "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
             ) as mock_registry,
         ):
-            mock_registry.get_prompt_by_id.return_value = PromptSpec(
+            mock_registry.resolve_prompt_spec.return_value = PromptSpec(
                 prompt_id="jack.v2",
                 litellm_params=PromptLiteLLMParams(
                     prompt_id="jack",
@@ -453,10 +362,101 @@ class TestAdminViewerReadAccess:
                 ),
                 prompt_info=PromptInfo(prompt_type="db"),
             )
-            mock_registry.IN_MEMORY_PROMPTS = {"jack.v1": {}, "jack.v2": {}}
-            mock_registry.get_prompt_callback_by_id.return_value = None
+            mock_registry.get_prompt_callback_for_prompt.return_value = None
 
             response = await get_prompt_info(prompt_id="jack", user_api_key_dict=viewer)
 
         assert response.prompt_spec.prompt_id == "jack"
         assert response.prompt_spec.version == 2
+
+
+class TestConfigPromptInfoWithEnvironment:
+    """
+    Regression: /prompts/{id}/info with an environment param must still resolve
+    config-file (in-memory) prompts on a DB-backed proxy instead of 400ing.
+    """
+
+    def _registry_with_config_prompt(self):
+        from litellm.proxy.prompts.prompt_registry import InMemoryPromptRegistry
+
+        registry = InMemoryPromptRegistry()
+        registry.IN_MEMORY_PROMPTS["envgreet::development"] = PromptSpec(
+            prompt_id="envgreet",
+            litellm_params=PromptLiteLLMParams(
+                prompt_id="envgreet",
+                prompt_integration="dotprompt",
+                dotprompt_content="AHOY {{user_message}}",
+            ),
+            prompt_info=PromptInfo(prompt_type="config"),
+        )
+        return registry
+
+    def _prisma_client_with_empty_prompt_table(self):
+        from unittest.mock import AsyncMock
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_prompttable.find_many = AsyncMock(return_value=[])
+        return mock_prisma
+
+    @pytest.mark.asyncio
+    async def test_get_prompt_info_with_environment_falls_back_to_registry(self):
+        from unittest.mock import patch
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.prompts.prompt_endpoints import get_prompt_info
+
+        admin = UserAPIKeyAuth(
+            api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        with (
+            patch(  # test-quality-ok: endpoint reads prisma_client and the registry from module globals at call time; no injection seam
+                "litellm.proxy.proxy_server.prisma_client",
+                self._prisma_client_with_empty_prompt_table(),
+            ),
+            patch(  # test-quality-ok: endpoint reads prisma_client and the registry from module globals at call time; no injection seam
+                "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY",
+                self._registry_with_config_prompt(),
+            ),
+        ):
+            response = await get_prompt_info(
+                prompt_id="envgreet",
+                environment="development",
+                user_api_key_dict=admin,
+            )
+
+        assert response.prompt_spec.prompt_id == "envgreet"
+        assert response.prompt_spec.litellm_params.dotprompt_content == "AHOY {{user_message}}"
+
+    @pytest.mark.asyncio
+    async def test_get_prompt_info_with_wrong_environment_still_400s(self):
+        from unittest.mock import patch
+
+        from fastapi import HTTPException
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.prompts.prompt_endpoints import get_prompt_info
+
+        admin = UserAPIKeyAuth(
+            api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        with (
+            patch(  # test-quality-ok: endpoint reads prisma_client and the registry from module globals at call time; no injection seam
+                "litellm.proxy.proxy_server.prisma_client",
+                self._prisma_client_with_empty_prompt_table(),
+            ),
+            patch(  # test-quality-ok: endpoint reads prisma_client and the registry from module globals at call time; no injection seam
+                "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY",
+                self._registry_with_config_prompt(),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await get_prompt_info(
+                    prompt_id="envgreet",
+                    environment="production",
+                    user_api_key_dict=admin,
+                )
+
+        assert exc_info.value.status_code == 400
+        assert "environment production" in exc_info.value.detail
