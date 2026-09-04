@@ -188,8 +188,17 @@ def _rust_ocr_enabled(prepared_request: _PreparedOCRRequest) -> bool:
     return rust_ocr_bridge.rust_ocr_enabled(request_override=request_override)
 
 
+def _rust_ocr_supported(prepared_request: _PreparedOCRRequest) -> bool:
+    if prepared_request.custom_llm_provider != "azure_ai":
+        return True
+    return not any(
+        prepared_request.litellm_params.get(name) is not None
+        for name in ("azure_ad_token_provider", "azure_username", "azure_password")
+    )
+
+
 def _should_attempt_rust_ocr(prepared_request: _PreparedOCRRequest) -> bool:
-    return _rust_ocr_enabled(prepared_request)
+    return _rust_ocr_enabled(prepared_request) and _rust_ocr_supported(prepared_request)
 
 
 def _rust_bridge_optional_params(
@@ -312,6 +321,7 @@ def _prepare_rust_ocr_call(
 def _log_rust_ocr_call(
     request: rust_ocr_bridge.RustOCRRequest,
     logging_obj: LiteLLMLoggingObj,
+    optional_params: Mapping[str, object],
 ) -> None:
     logging_obj.pre_call(
         input="OCR document processing",
@@ -319,8 +329,7 @@ def _log_rust_ocr_call(
         additional_args={
             "complete_input_dict": {
                 "model": request.model,
-                "document": request.document,
-                **request.optional_params,
+                **optional_params,
             },
             "api_base": request.logging_api_base,
             "headers": request.extra_headers,
@@ -371,6 +380,7 @@ def _run_rust_ocr(
         on_accepted=lambda request: _log_rust_ocr_call(
             request=request,
             logging_obj=prepared_request.litellm_logging_obj,
+            optional_params=prepared_request.optional_params,
         ),
     )
     return _rust_ocr_response(attempt_result, context)
@@ -394,6 +404,7 @@ async def _run_rust_aocr(
         on_accepted=lambda request: _log_rust_ocr_call(
             request=request,
             logging_obj=prepared_request.litellm_logging_obj,
+            optional_params=prepared_request.optional_params,
         ),
     )
     return _rust_ocr_response(attempt_result, context)

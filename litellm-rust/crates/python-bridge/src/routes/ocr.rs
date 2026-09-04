@@ -1,11 +1,10 @@
 use std::future::Future;
 
-use litellm_ai_gateway::io::ocr::{
-    OcrRequest as GatewayOcrRequest, PreparedOcrDispatch, execute_ocr_dispatch,
-    prepare_ocr_dispatch,
-};
 use litellm_core::Error;
-use litellm_core::ocr::{OcrRequest, ocr as run_ocr};
+use litellm_core::ocr::{
+    OcrRequest, PreparedOcrRequest, execute as execute_ocr, ocr as run_ocr,
+    prepare as prepare_core_ocr,
+};
 use litellm_core::routing_utils::provider::get_custom_llm_provider;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -20,13 +19,14 @@ use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
 
 #[pyclass]
 struct PreparedOcr {
-    dispatch: Option<PreparedOcrDispatch>,
+    request: Option<PreparedOcrRequest>,
 }
 
 struct OwnedOcrRequest {
     document: Value,
     options: RouteOptions,
     optional_params: serde_json::Map<String, Value>,
+    max_document_download_bytes: u64,
 }
 
 #[pyfunction]
@@ -76,6 +76,7 @@ fn owned_ocr_request(inputs: OcrInputs) -> PyResult<OwnedOcrRequest> {
         document,
         options,
         optional_params,
+        max_document_download_bytes: inputs.max_document_download_bytes,
     })
 }
 
@@ -88,6 +89,7 @@ fn prepare_ocr(
             document,
             options,
             optional_params,
+            max_document_download_bytes,
         } = request;
         let client = shared_http_client().map_err(Error::Network)?;
         let RouteOptions {
@@ -109,7 +111,7 @@ fn prepare_ocr(
                 extra_headers,
                 optional_params,
                 timeout,
-                max_document_download_bytes: inputs.max_document_download_bytes,
+                max_document_download_bytes,
             },
         )
         .await
@@ -125,6 +127,7 @@ fn prepare_dispatch(
             document,
             options,
             optional_params,
+            max_document_download_bytes,
         } = request;
         let RouteOptions {
             model,
@@ -139,7 +142,7 @@ fn prepare_dispatch(
         {
             return Err(Error::InvalidRequest(reason));
         }
-        let dispatch = prepare_ocr_dispatch(GatewayOcrRequest {
+        let request = prepare_core_ocr(OcrRequest {
             model: &model,
             document,
             api_key: api_key.as_deref(),
@@ -148,25 +151,23 @@ fn prepare_dispatch(
             extra_headers,
             optional_params,
             timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
-            litellm_call_id: None,
+            max_document_download_bytes,
         })
         .await?;
         Ok(PreparedOcr {
-            dispatch: Some(dispatch),
+            request: Some(request),
         })
     })
 }
 
 #[pyfunction(name = "ocr_prepare")]
-#[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
+#[pyo3(signature = (model, document, max_document_download_bytes, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
 #[allow(clippy::too_many_arguments)]
 fn ocr_prepare(
     py: Python<'_>,
     model: String,
     #[pyo3(from_py_with = litellm_python_interop::from_py)] document: Value,
+    max_document_download_bytes: u64,
     api_key: Option<String>,
     api_base: Option<String>,
     custom_llm_provider: Option<String>,
@@ -183,18 +184,20 @@ fn ocr_prepare(
         extra_headers,
         optional_params,
         timeout_seconds,
+        max_document_download_bytes,
     })?;
     let prepared = execution::run_sync_value(py, future, ocr_prepare_error_to_pyerr)?;
     Py::new(py, prepared).map(Py::into_any)
 }
 
 #[pyfunction(name = "aocr_prepare")]
-#[pyo3(signature = (model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
+#[pyo3(signature = (model, document, max_document_download_bytes, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
 #[allow(clippy::too_many_arguments)]
 fn aocr_prepare<'py>(
     py: Python<'py>,
     model: String,
     #[pyo3(from_py_with = litellm_python_interop::from_py)] document: Value,
+    max_document_download_bytes: u64,
     api_key: Option<String>,
     api_base: Option<String>,
     custom_llm_provider: Option<String>,
@@ -211,6 +214,7 @@ fn aocr_prepare<'py>(
         extra_headers,
         optional_params,
         timeout_seconds,
+        max_document_download_bytes,
     })?;
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let prepared = execution::await_value(future, ocr_prepare_error_to_pyerr).await?;
@@ -218,24 +222,29 @@ fn aocr_prepare<'py>(
     })
 }
 
-fn take_dispatch(py: Python<'_>, prepared: Py<PreparedOcr>) -> PyResult<PreparedOcrDispatch> {
+fn take_request(py: Python<'_>, prepared: Py<PreparedOcr>) -> PyResult<PreparedOcrRequest> {
     prepared
         .borrow_mut(py)
-        .dispatch
+        .request
         .take()
         .ok_or_else(|| PyRuntimeError::new_err("prepared OCR request was already executed"))
 }
 
+async fn execute_prepared_ocr(request: PreparedOcrRequest) -> Result<Value, Error> {
+    let client = shared_http_client().map_err(Error::Network)?;
+    execute_ocr(&client, request).await
+}
+
 #[pyfunction]
 fn ocr_execute(py: Python<'_>, prepared: Py<PreparedOcr>) -> PyResult<Py<PyAny>> {
-    let dispatch = take_dispatch(py, prepared)?;
-    execution::run_sync(py, execute_ocr_dispatch(dispatch), ocr_error_to_pyerr)
+    let request = take_request(py, prepared)?;
+    execution::run_sync(py, execute_prepared_ocr(request), ocr_error_to_pyerr)
 }
 
 #[pyfunction]
 fn aocr_execute<'py>(py: Python<'py>, prepared: Py<PreparedOcr>) -> PyResult<Bound<'py, PyAny>> {
-    let dispatch = take_dispatch(py, prepared)?;
-    execution::run_async(py, execute_ocr_dispatch(dispatch), ocr_error_to_pyerr)
+    let request = take_request(py, prepared)?;
+    execution::run_async(py, execute_prepared_ocr(request), ocr_error_to_pyerr)
 }
 
 bridge_route! {
@@ -306,6 +315,7 @@ mod tests {
             extra_headers: None,
             optional_params: Some(json!({})),
             timeout_seconds: None,
+            max_document_download_bytes: 50 * 1024 * 1024,
         })
         .expect("request should marshal");
 

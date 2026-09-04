@@ -17,7 +17,7 @@ pub struct OcrRequest<'a> {
     pub max_document_download_bytes: u64,
 }
 
-pub(super) struct PreparedOcrRequest {
+pub struct PreparedOcrRequest {
     pub(super) model: String,
     pub(super) config: &'static dyn OcrProviderConfig,
     pub(super) document: Value,

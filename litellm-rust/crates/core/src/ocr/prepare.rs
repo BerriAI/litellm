@@ -2,12 +2,18 @@ use serde_json::{Map, Value};
 
 use super::common_utils::ocr_provider_config;
 use super::types::{OcrRequest, PreparedOcrRequest};
-use crate::error::Error;
+use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) async fn prepare_ocr_call(request: OcrRequest<'_>) -> Result<PreparedOcrRequest, Error> {
+    if !request.document.is_object() {
+        return Err(Error::InvalidType {
+            expected: "object",
+            actual: json_type_name(&request.document),
+        });
+    }
     let provider_info = get_custom_llm_provider(request.model, request.custom_llm_provider)
         .or_else(|| {
             request
