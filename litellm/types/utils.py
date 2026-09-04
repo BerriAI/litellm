@@ -222,7 +222,9 @@ class OffPeakPricing(TypedDict, total=False):
     weekday_timezone: ReadOnly[str]
     input_cost_per_token: ReadOnly[float]
     output_cost_per_token: ReadOnly[float]
+    output_cost_per_reasoning_token: ReadOnly[float]
     cache_read_input_token_cost: ReadOnly[float]
+    cache_creation_input_token_cost: ReadOnly[float]
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
@@ -2543,6 +2545,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         )
         super().__init__(created=created, data=_data, usage=_usage)
 
+        self.background = kwargs.get("background", None)
         self.quality = kwargs.get("quality", None)
         self.output_format = kwargs.get("output_format", None)
         self.size = kwargs.get("size", None)
@@ -2879,6 +2882,10 @@ RoutingDecisionCause = Literal[
     # routed model does not accept image input, so the nearest higher capable tier or
     # default_model served instead. The displaced placement rides in signals.
     "modality_escalation",
+    # modality_pin_override replaced a KEPT session-affinity pin for this request only: the turn
+    # carries an image the pinned model cannot accept. The stored pin is untouched, so the next
+    # text turn replays it. Distinct from "modality_escalation", which never displaces a pin.
+    "modality_pin_override",
     "session_affinity_pin",
     "session_affinity_escalation",
     # classification_mode 'user_turn': the request is an agent loop's continuation turn (no new
@@ -3607,6 +3614,7 @@ all_litellm_params = (
         "litellm_system_prompt",
         "provider_specific_header",
         "prompt_version",
+        "prompt_environment",
         "api_base",
         "force_timeout",
         "logger_fn",

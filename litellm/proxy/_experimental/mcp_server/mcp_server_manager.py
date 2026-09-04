@@ -47,7 +47,7 @@ from litellm.constants import (
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth, strip_auth_scheme
+from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth, strip_auth_scheme, to_basic_credentials
 from litellm.integrations.custom_guardrail import (
     _sync_guardrail_info_to_logging_obj,  # pyright: ignore[reportPrivateUsage] - the same bridge @log_guardrail_information uses; reimplementing it here would fork the metadata-key logic
 )
@@ -55,6 +55,7 @@ from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
+    MCPServerAccess,
     _is_mcp_admitted_user_subject,
 )
 from litellm.proxy._experimental.mcp_server.elicitation_handler import (
@@ -820,17 +821,43 @@ def _should_strip_caller_authorization(
     if not (mcp_server.is_oauth_passthrough or mcp_server.is_oauth_delegate):
         return False
 
-    normalized_raw_headers: Final = {str(k).lower(): v for k, v in (raw_headers or {}).items() if isinstance(k, str)}
-    has_explicit_litellm_admission_header: Final = normalized_raw_headers.get("x-litellm-api-key") is not None
+    has_explicit_litellm_admission_header: Final = _has_explicit_litellm_admission_header(raw_headers)
     if mcp_server.is_oauth_delegate:
         return not has_explicit_litellm_admission_header
-    admission_consumed_authorization_as_litellm_key: Final = (
-        user_api_key_auth is not None
-        and bool(getattr(user_api_key_auth, "api_key", None))
-        and not has_explicit_litellm_admission_header
-    )
-    return admission_consumed_authorization_as_litellm_key or (
+    return _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth) or (
         user_api_key_auth is None and not has_explicit_litellm_admission_header
+    )
+
+
+LITELLM_VIRTUAL_KEY_PREFIX: Final = "sk-"
+
+
+def _raw_header_value(raw_headers: Mapping[str, str] | None, name: str) -> str | None:
+    return next((v for k, v in (raw_headers or {}).items() if isinstance(k, str) and k.lower() == name), None)
+
+
+def _has_explicit_litellm_admission_header(raw_headers: Mapping[str, str] | None) -> bool:
+    """Admission only consumes a non-empty ``x-litellm-api-key``; an empty one falls back to ``Authorization``."""
+    return bool(_raw_header_value(raw_headers, "x-litellm-api-key"))
+
+
+def _authorization_is_litellm_admission_credential(
+    raw_headers: Mapping[str, str] | None,
+    user_api_key_auth: UserAPIKeyAuth | None,
+) -> bool:
+    """True when ``Authorization`` carries the LiteLLM key admission validated.
+
+    That is the case when no usable ``x-litellm-api-key`` was sent, or when the client repeated the
+    same key in both headers.
+    """
+    if user_api_key_auth is None or not user_api_key_auth.api_key:
+        return False
+    admission_header: Final = _raw_header_value(raw_headers, "x-litellm-api-key")
+    if not admission_header:
+        return True
+    authorization: Final = _raw_header_value(raw_headers, "authorization")
+    return authorization is not None and strip_auth_scheme(authorization, "Bearer") == strip_auth_scheme(
+        admission_header, "Bearer"
     )
 
 
@@ -2272,13 +2299,13 @@ class MCPServerManager:
                 from litellm.types.mcp import MCPAuth
 
                 if server.auth_type == MCPAuth.bearer_token:
-                    headers["Authorization"] = f"Bearer {server.authentication_token}"
+                    headers["Authorization"] = f"Bearer {strip_auth_scheme(server.authentication_token, 'Bearer')}"
                 elif server.auth_type == MCPAuth.api_key:
-                    headers["Authorization"] = f"ApiKey {server.authentication_token}"
+                    headers["Authorization"] = f"ApiKey {strip_auth_scheme(server.authentication_token, 'ApiKey')}"
                 elif server.auth_type == MCPAuth.basic:
-                    headers["Authorization"] = f"Basic {server.authentication_token}"
+                    headers["Authorization"] = f"Basic {to_basic_credentials(server.authentication_token)}"
                 elif server.auth_type == MCPAuth.token:
-                    headers["Authorization"] = f"token {server.authentication_token}"
+                    headers["Authorization"] = f"token {strip_auth_scheme(server.authentication_token, 'token')}"
 
             # Add any static headers from server config.
             #
@@ -2932,7 +2959,13 @@ class MCPServerManager:
             return None
         return user_api_key_auth.mcp_session_resource_server_id
 
-    async def get_allowed_mcp_servers(self, user_api_key_auth: UserAPIKeyAuth | None = None) -> list[str]:
+    async def get_allowed_mcp_servers(
+        self,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+        *,
+        access: MCPServerAccess | None = None,
+        general_settings: Mapping[str, object] | None = None,
+    ) -> list[str]:
         """
         Get the allowed MCP Servers for the user.
 
@@ -2941,6 +2974,9 @@ class MCPServerManager:
         2. If admin and no object_permission, return all servers
         3. Otherwise, use standard permission checks
         """
+        from litellm.proxy.proxy_server import general_settings as proxy_general_settings
+
+        resolved_general_settings: Final = proxy_general_settings if general_settings is None else general_settings
         allow_all_server_ids: Final = self.get_allow_all_keys_server_ids()
 
         # A keyless admitted subject is resolved per grant source, and channel decisions that are
@@ -2981,11 +3017,16 @@ class MCPServerManager:
             # whole registry, for keys AND admitted session subjects alike (one predicate owns the
             # question). Seeded into the union rather than returned early so the session resource
             # scope below still bounds a per-server envelope held by an admin.
-            combined_servers: Final = (
-                set(self.get_registry().keys())
-                if await MCPRequestHandler.admin_view_unscoped(user_api_key_auth)
-                else set(await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth))
+            admin_unscoped: Final = await MCPRequestHandler.admin_view_unscoped(user_api_key_auth)
+            resolved_access: Final = (
+                MCPServerAccess(server_ids=())
+                if admin_unscoped
+                else access or await MCPRequestHandler.get_mcp_server_access(user_api_key_auth)
             )
+            resolved_server_ids: Final = (
+                set(self.get_registry().keys()) if admin_unscoped else set(resolved_access.server_ids)
+            )
+            combined_servers: Final = set(resolved_server_ids)
             verbose_logger.debug("Allowed MCP Servers for user api key auth: %s", combined_servers)
             combined_servers.update(
                 await self.operator_open_server_ids(
@@ -3026,6 +3067,18 @@ class MCPServerManager:
                 ]
                 combined_servers.update(delegate_server_ids)
 
+            restrict_allow_all: Final = (
+                resolved_general_settings.get("mcp_allow_all_keys_respects_mcp_scope", False)
+                and user_api_key_auth is not None
+                and user_api_key_auth.via_virtual_key
+                and resolved_access.scope != "unscoped"
+            )
+            if restrict_allow_all:
+                combined_servers.difference_update(
+                    set(allow_all_server_ids)
+                    - resolved_server_ids
+                    - (set(submitted_server_ids) if resolved_access.scope != "unresolved" else set())
+                )
             if len(combined_servers) == 0:
                 verbose_logger.debug("No allowed MCP Servers found for user api key auth.")
             scope = MCPServerManager._admitted_session_resource_scope(user_api_key_auth)
@@ -3277,8 +3330,8 @@ class MCPServerManager:
     #########################################################
     @staticmethod
     def _extract_bearer_token(
-        oauth2_headers: dict[str, str] | None,
-        raw_headers: dict[str, str] | None,
+        oauth2_headers: Mapping[str, str] | None,
+        raw_headers: Mapping[str, str] | None,
     ) -> str | None:
         """Extract the bare Bearer token from oauth2_headers or raw_headers.
 
@@ -3293,15 +3346,32 @@ class MCPServerManager:
             normalized: Final = {k.lower(): v for k, v in raw_headers.items()}
             auth_value = normalized.get("authorization")
         if auth_value:
-            if auth_value.startswith("Bearer "):
-                return auth_value[len("Bearer ") :]
-            return auth_value
+            return strip_auth_scheme(auth_value, "Bearer")
         return None
+
+    @staticmethod
+    def _extract_subject_token(
+        oauth2_headers: Mapping[str, str] | None,
+        raw_headers: Mapping[str, str] | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> str | None:
+        """The caller's upstream identity token, or ``None`` when the bearer is a LiteLLM key.
+
+        Rejects the key admission validated and, because virtual keys always carry the ``sk-`` prefix,
+        any other LiteLLM key a client puts in ``Authorization`` next to ``x-litellm-api-key``.
+        """
+        if _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth):
+            return None
+        bearer: Final = MCPServerManager._extract_bearer_token(oauth2_headers, raw_headers)
+        if bearer is not None and bearer.startswith(LITELLM_VIRTUAL_KEY_PREFIX):
+            return None
+        return bearer
 
     def _obo_subject_token(
         self,
         server: MCPServer,
-        raw_headers: dict[str, str] | None,
+        raw_headers: Mapping[str, str] | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
     ) -> str | None:
         """The caller's bearer as the token_exchange (OBO) subject token, for that mode only.
 
@@ -3311,7 +3381,7 @@ class MCPServerManager:
         """
         if server.auth_type != MCPAuth.oauth2_token_exchange:
             return None
-        return self._extract_bearer_token(None, raw_headers)
+        return self._extract_subject_token(None, raw_headers, user_api_key_auth)
 
     def _build_stdio_env(
         self,
@@ -3566,29 +3636,50 @@ class MCPServerManager:
         server: MCPServer,
         oauth2_headers: dict[str, str] | None,
         user_api_key_auth: UserAPIKeyAuth | None,
+        raw_headers: Mapping[str, str] | None = None,
     ) -> None:
-        """Run the OBO exchange for a caller-supplied subject at the transport edge.
+        """Mint an exchange-backed server's upstream credential at the transport edge.
 
         Single-server routes call this before the MCP session opens, where an HTTP status and
         ``WWW-Authenticate`` still reach the client. A rejected subject raises the RFC 9728
         challenge and any other ``CredError`` maps onto its public HTTP status, so an exchange
         failure surfaces as a failure instead of the session continuing into an empty tool list.
         A successful exchange is cached by the exchanger, so the session's list/call reuses it.
+
+        Each mode pre-flights only where it would resolve the subject the session goes on to use,
+        which is what keeps the pre-flight from reaching a verdict the session would contradict.
+        ``oauth2_token_exchange`` mints from the caller's inbound bearer, so without one there is
+        nothing to exchange and the missing-subject case stays the preemptive challenge's job.
+        ``oauth2_id_jag`` is the mirror image: tool listing resolves it from the identity assertion
+        captured for this user at SSO login and never from the inbound bearer, so the pre-flight is
+        faithful exactly when no identity bearer was sent (a LiteLLM key in ``Authorization`` is not one),
+        and a caller that did send one is passed through
+        untouched rather than judged against a subject the listing will not use. That store-sourced
+        case is the one whose missing-assertion 412 and store-outage 503 the session cannot report.
+        Only OBO has a discovery challenge to raise; ID-JAG's failures are plain statuses whose body
+        already names what the user has to do, so they map through ``raise_public`` as at egress.
         """
-        if server.auth_type != MCPAuth.oauth2_token_exchange:
-            return
-        subject_token: Final = self._extract_bearer_token(oauth2_headers, None)
-        if not subject_token:
-            return
+        subject_token: Final = self._extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
+        match server.auth_type:
+            case MCPAuth.oauth2_token_exchange:
+                if not self._extract_bearer_token(oauth2_headers, None):
+                    return
+            case MCPAuth.oauth2_id_jag:
+                if subject_token is not None:
+                    return
+            case _:
+                return
         resolved_server: Final = await self.ensure_oauth_metadata_discovered(server)
-        spec: Final = to_server_spec(resolved_server)
-        if spec is None or not isinstance(spec.config, TokenExchangeConfig):
+        spec: Final = _to_server_spec_fail_closed(resolved_server)
+        if spec is None or not isinstance(spec.config, (TokenExchangeConfig, IdJagConfig)):
             return
+        if subject_token is None and isinstance(spec.config, TokenExchangeConfig):
+            raise_token_exchange_challenge(resolved_server, root_path=get_server_root_path())
         match await self._cred_provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
             case Ok(_):
                 return
             case Error(err):
-                if err.tag == "unauthorized":
+                if err.tag == "unauthorized" and isinstance(spec.config, TokenExchangeConfig):
                     raise_token_exchange_challenge(
                         resolved_server,
                         root_path=get_server_root_path(),
@@ -3851,7 +3942,7 @@ class MCPServerManager:
             # token (mirrors the call path), not v1's deleted client_credentials fallback. Other modes
             # never read the inbound bearer, so leave subject_token None to avoid forwarding it.
             subject_token: Final = (
-                self._extract_bearer_token(oauth2_headers, raw_headers)
+                self._extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
                 if server.auth_type == MCPAuth.oauth2_token_exchange
                 else None
             )
@@ -3931,6 +4022,7 @@ class MCPServerManager:
     async def get_prompts_from_server(
         self,
         server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
         mcp_auth_header: str | dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
         add_prefix: bool = True,
@@ -3959,7 +4051,7 @@ class MCPServerManager:
                 extra_headers.update(server.static_headers)
 
             stdio_env: Final = self._build_stdio_env(server, raw_headers)
-            subject_token: Final = self._obo_subject_token(server, raw_headers)
+            subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
 
             client = await self._create_mcp_client(
                 server=server,
@@ -3982,6 +4074,7 @@ class MCPServerManager:
     async def get_resources_from_server(
         self,
         server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
         mcp_auth_header: str | dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
         add_prefix: bool = True,
@@ -4001,7 +4094,7 @@ class MCPServerManager:
                 extra_headers.update(server.static_headers)
 
             stdio_env: Final = self._build_stdio_env(server, raw_headers)
-            subject_token: Final = self._obo_subject_token(server, raw_headers)
+            subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
 
             client = await self._create_mcp_client(
                 server=server,
@@ -4024,6 +4117,7 @@ class MCPServerManager:
     async def get_resource_templates_from_server(
         self,
         server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
         mcp_auth_header: str | dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
         add_prefix: bool = True,
@@ -4043,7 +4137,7 @@ class MCPServerManager:
                 extra_headers.update(server.static_headers)
 
             stdio_env: Final = self._build_stdio_env(server, raw_headers)
-            subject_token: Final = self._obo_subject_token(server, raw_headers)
+            subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
 
             client = await self._create_mcp_client(
                 server=server,
@@ -4068,6 +4162,7 @@ class MCPServerManager:
     async def read_resource_from_server(
         self,
         server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
         url: AnyUrl,
         mcp_auth_header: str | dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
@@ -4084,7 +4179,7 @@ class MCPServerManager:
             extra_headers.update(server.static_headers)
 
         stdio_env: Final = self._build_stdio_env(server, raw_headers)
-        subject_token: Final = self._obo_subject_token(server, raw_headers)
+        subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
 
         client: Final = await self._create_mcp_client(
             server=server,
@@ -4099,6 +4194,7 @@ class MCPServerManager:
     async def get_prompt_from_server(
         self,
         server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
         prompt_name: str,
         arguments: dict[str, str] | None = None,
         mcp_auth_header: str | dict[str, str] | None = None,
@@ -4116,7 +4212,7 @@ class MCPServerManager:
             extra_headers.update(server.static_headers)
 
         stdio_env: Final = self._build_stdio_env(server, raw_headers)
-        subject_token: Final = self._obo_subject_token(server, raw_headers)
+        subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
 
         client: Final = await self._create_mcp_client(
             server=server,
@@ -5290,7 +5386,7 @@ class MCPServerManager:
             MCPAuth.oauth2_token_exchange,
             MCPAuth.oauth2_id_jag,
         ):
-            subject_token = self._extract_bearer_token(oauth2_headers, raw_headers)
+            subject_token = self._extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
         elif mcp_server.auth_type == MCPAuth.oauth2:
             if mcp_server.has_client_credentials:
                 # For M2M OAuth servers, Authorization must come from token fetch.
@@ -5638,7 +5734,7 @@ class MCPServerManager:
 
         subject_token: str | None = None
         if isinstance(spec.config, (TokenExchangeConfig, IdJagConfig)):
-            subject_token = self._extract_bearer_token(oauth2_headers, raw_headers)
+            subject_token = self._extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
         elif isinstance(spec.config, PassthroughConfig):
             inbound_token, forwarded_headers = _take_forwarded_authorization(forwarded_headers)
             per_server_token: Final = _passthrough_token_from_mcp_auth_header(mcp_auth_header)
@@ -6067,13 +6163,13 @@ class MCPServerManager:
         internal_networks = IPAddressUtils.parse_internal_networks(general_settings.get("mcp_internal_ip_ranges"))
         return IPAddressUtils.is_internal_ip(client_ip, internal_networks)
 
-    def get_mcp_server_by_id(self, server_id: str) -> MCPServer | None:
-        """
-        Get the MCP Server from the server id
-        """
+    def get_mcp_server_by_id(self, server_id: str, client_ip: str | None = None) -> MCPServer | None:
+        """Get the MCP Server from the server id."""
         registry: Final = self.get_registry()
         for server in registry.values():
             if server.server_id == server_id:
+                if not self._is_server_accessible_from_ip(server, client_ip):
+                    return None
                 return server
         return None
 

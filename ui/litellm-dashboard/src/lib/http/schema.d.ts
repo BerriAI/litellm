@@ -12129,6 +12129,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/autorouter_presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Public Autorouter Presets
+         * @description Return the auto-router preset catalog the dashboard's template picker renders.
+         *
+         *     Resolved once per process, like the model cost map: fetched from ``litellm.autorouter_presets_url``
+         *     (override with ``LITELLM_AUTOROUTER_PRESETS_URL``) on the first request, falling back to the
+         *     catalog bundled with the package on any failure. Set ``LITELLM_LOCAL_AUTOROUTER_PRESETS=True``
+         *     to serve the bundled catalog only. A restart picks up a newly published catalog.
+         */
+        get: operations["get_public_autorouter_presets_public_autorouter_presets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/public/complexity_router/scorer_defaults": {
         parameters: {
             query?: never;
@@ -12349,6 +12374,36 @@ export interface paths {
          *     ```
          */
         get: operations["public_model_hub_list_public_v1_model_hub_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/public/v1/model_hub/{facet}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Model Hub Facet
+         * @description The distinct providers, modes or features across the published model groups, for the
+         *     Model Hub's filter dropdowns. No authentication.
+         *
+         *     Carries the same filters and search as the list route, so a dropdown offers exactly
+         *     the values the table can show: asking for providers under `filter[mode][in]=chat`
+         *     lists only the providers that serve a chat model.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff         'http://0.0.0.0:4000/public/v1/model_hub/providers?filter[mode][in]=chat&page_size=50'
+         *     ```
+         */
+        get: operations["public_model_hub_facet_public_v1_model_hub__facet__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -16581,6 +16636,8 @@ export interface paths {
          *             Get list of users by sso_ids. Comma separated list of sso_ids.
          *         user_email: Optional[str]
          *             Filter users by partial email match
+         *         search: Optional[str]
+         *             Combined search: matches users whose user_id or user_email contains the value (case-insensitive)
          *         team: Optional[str]
          *             Filter users by team id. Will match if user has this team in their teams array.
          *         page: int
@@ -23392,6 +23449,49 @@ export interface components {
             tier_definitions: components["schemas"]["TierDefinition"][];
         };
         /**
+         * AutoRouterPresetConfig
+         * @description The complexity_router_config a preset prefills.
+         *
+         *     Only tiers is validated, because every dashboard consumer dereferences it; everything else
+         *     passes through verbatim with unknown fields kept (extra="allow"), so a catalog published after
+         *     this proxy shipped still serves its new fields intact.
+         */
+        AutoRouterPresetConfig: {
+            tiers: components["schemas"]["AutoRouterPresetTiers"];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * AutoRouterPresetRecord
+         * @description One auto-router preset as served to the dashboard's template picker.
+         */
+        AutoRouterPresetRecord: {
+            complexity_router_config: components["schemas"]["AutoRouterPresetConfig"];
+            /** Description */
+            description: string;
+            /** Label */
+            label: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * AutoRouterPresetTiers
+         * @description Exactly the four built-in tiers the dashboard's preset prefill can apply.
+         *
+         *     extra="forbid" on purpose: a tier name this dashboard cannot apply would grey out or crash the
+         *     picker, so such a catalog is rejected wholesale and the bundled one serves instead.
+         */
+        AutoRouterPresetTiers: {
+            /** Complex */
+            COMPLEX: string[];
+            /** Medium */
+            MEDIUM: string[];
+            /** Reasoning */
+            REASONING: string[];
+            /** Simple */
+            SIMPLE: string[];
+        };
+        /**
          * AutoRouterRoutingTestRequest
          * @description A single request to classify against a complexity-router config that need not be saved yet.
          *
@@ -25144,6 +25244,11 @@ export interface components {
              */
             model: string;
             /**
+             * Reasoning Effort
+             * @description Reasoning effort override for classifier calls. Leave unset to use the classifier deployment or provider default.
+             */
+            reasoning_effort?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") | null;
+            /**
              * System Prompt
              * @description Replaces the built-in complexity rubric as the classifier's entire system role. When set, neither the default rubric nor the context-window closing line is appended, so the prompt owns the whole taxonomy and the tier names SIMPLE/MEDIUM/COMPLEX/REASONING become whatever buckets it defines: a prompt that classifies data sensitivity routes on that instead of on difficulty. Two consequences of full replacement. The default rubric's closing paragraph is the classifier's prompt-injection defense, telling it that the caller's quoted system prompt and prior turns are material to judge and never instructions; a replacement that omits it lets a caller ask for a tier and get it. And the heuristic fallback still scores complexity, so a router on some other taxonomy wants classifier_fallback='default_model'. Leave unset for the built-in rubric. Only applies when classifier_type is 'llm'.
              */
@@ -25427,6 +25532,12 @@ export interface components {
          */
         ConfigGeneralSettings: {
             /**
+             * Admission Queue Timeout Seconds
+             * @description maximum time a request waits for a worker slot
+             * @default 1
+             */
+            admission_queue_timeout_seconds: number;
+            /**
              * Alert To Webhook Url
              * @description Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://nothooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`
              */
@@ -25635,10 +25746,20 @@ export interface components {
              */
             max_file_size_mb?: number | null;
             /**
+             * Max In Flight Requests Per Worker
+             * @description maximum concurrent requests handled by each worker
+             */
+            max_in_flight_requests_per_worker?: number | null;
+            /**
              * Max Parallel Requests
              * @description maximum parallel requests for each api key
              */
             max_parallel_requests?: number | null;
+            /**
+             * Max Queued Requests Per Worker
+             * @description maximum requests waiting for a worker slot
+             */
+            max_queued_requests_per_worker?: number | null;
             /**
              * Max Request Size Mb
              * @description max request size in MB, if a request is larger than this size it will be rejected
@@ -25704,6 +25825,11 @@ export interface components {
              * @description Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.
              */
             mcp_xff_num_trusted_hops?: number | null;
+            /**
+             * Missing Session Id
+             * @description What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400; 'omit' leaves SpendLogs.session_id null, matching callbacks such as Langfuse that only record a client-established metadata.session_id. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.
+             */
+            missing_session_id?: ("generate" | "reject" | "omit") | null;
             /**
              * Model List Healthy Only
              * @description When true, `/models`, `/v1/models/{id}` and `/model/info` hide models whose backing deployments are all unhealthy, for every caller, without needing `healthy_only=true` per request. Requires `background_health_checks: true`, and keeps deployment health state cached without turning on `enable_health_check_routing`, so routing is unaffected. With no health state nothing is hidden. Hiding is presentation-only, a hidden model can still be called.
@@ -34668,8 +34794,14 @@ export interface components {
              */
             match_threshold: number;
             /**
+             * Modality Pin Override
+             * @description Let modality_routing replace a kept session-affinity pin on the turns that carry an image. Without this, a session pinned to a text-only model fails every image turn with a provider 400, since the pin is exempt from the modality gate. When enabled, such a turn routes to a capable model for that request only and the stored pin is left untouched, so the next text turn replays the session's own model; the override is reported as cause modality_pin_override and is never itself pinned. Inert unless modality_routing is also enabled.
+             * @default false
+             */
+            modality_pin_override: boolean;
+            /**
              * Modality Routing
-             * @description Route image-bearing requests only to models that can accept image input. The classifier reads text alone, so an image request whose text classifies cheap otherwise lands on a text-only model and fails with a provider 400. When enabled, a routed model explicitly declared supports_vision false (deployment model_info or the model cost map; unmapped names stay routable) is replaced by the nearest HIGHER tier holding a capable model, then default_model, else a clear 400. A kept session-affinity pin still wins even when an image arrives.
+             * @description Route image-bearing requests only to models that can accept image input. The classifier reads text alone, so an image request whose text classifies cheap otherwise lands on a text-only model and fails with a provider 400. When enabled, a routed model explicitly declared supports_vision false (deployment model_info or the model cost map; unmapped names stay routable) is replaced by the nearest HIGHER tier holding a capable model, then default_model, else a clear 400. A kept session-affinity pin still wins even when an image arrives, unless modality_pin_override is also enabled.
              * @default false
              */
             modality_routing: boolean;
@@ -35872,7 +36004,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -40818,6 +40950,8 @@ export interface operations {
                 object_team_id?: string | null;
                 /** @description Filter by token (key hash) present in before_value or updated_values JSON (PostgreSQL only) */
                 object_key_hash?: string | null;
+                /** @description Match a row whose id, object_id, changed_by, or changed_by_api_key equals this value */
+                search?: string | null;
                 /** @description Column to sort by (e.g. 'updated_at', 'action', 'table_name') */
                 sort_by?: string | null;
                 /** @description Sort order ('asc' or 'desc') */
@@ -43984,7 +44118,11 @@ export interface operations {
     };
     list_containers_containers_get: {
         parameters: {
-            query?: never;
+            query?: {
+                after?: string | null;
+                limit?: number | null;
+                order?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -43998,6 +44136,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -49523,6 +49670,8 @@ export interface operations {
                 key_hash?: string | null;
                 /** @description Filter keys by key alias. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching. */
                 key_alias?: string | null;
+                /** @description Combined search: matches keys whose token (key hash) equals the value OR whose key_alias contains it (case-insensitive). */
+                search?: string | null;
                 /** @description Return full key object */
                 return_full_object?: boolean;
                 /** @description Include all keys for teams that user is an admin of. */
@@ -54679,6 +54828,28 @@ export interface operations {
             };
         };
     };
+    get_public_autorouter_presets_public_autorouter_presets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: components["schemas"]["AutoRouterPresetRecord"];
+                    };
+                };
+            };
+        };
+    };
     get_complexity_scorer_defaults_public_complexity_router_scorer_defaults_get: {
         parameters: {
             query?: never;
@@ -54895,6 +55066,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListResponse_ModelGroupInfoProxy_"];
+                };
+            };
+        };
+    };
+    public_model_hub_facet_public_v1_model_hub__facet__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                facet: "providers" | "modes" | "features";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -56755,6 +56957,12 @@ export interface operations {
                 sort_order?: string | null;
                 /** @description Exclude LiteLLM internal health check requests from results */
                 exclude_internal_health_checks?: boolean;
+                /** @description Paginate over sessions instead of raw logs: one representative row per session, total counts sessions */
+                group_by_session?: boolean;
+                /** @description Keyset cursor '<last_activity>|<api_key>|<session_key>' from a previous group_by_session page. UI route only, honored when sorting by startTime */
+                session_cursor?: string | null;
+                /** @description Match a log whose request_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
+                search?: string | null;
             };
             header?: never;
             path?: never;
@@ -56867,6 +57075,12 @@ export interface operations {
                 sort_order?: string | null;
                 /** @description Exclude LiteLLM internal health check requests from results */
                 exclude_internal_health_checks?: boolean;
+                /** @description Paginate over sessions instead of raw logs: one representative row per session, total counts sessions */
+                group_by_session?: boolean;
+                /** @description Keyset cursor '<last_activity>|<api_key>|<session_key>' from a previous group_by_session page. UI route only, honored when sorting by startTime */
+                session_cursor?: string | null;
+                /** @description Match a log whose request_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
+                search?: string | null;
             };
             header?: never;
             path?: never;
@@ -59721,6 +59935,8 @@ export interface operations {
                 sso_user_ids?: string | null;
                 /** @description Filter users by partial email match */
                 user_email?: string | null;
+                /** @description Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive). */
+                search?: string | null;
                 /** @description Filter users by team id */
                 team?: string | null;
                 /** @description Page number */
@@ -60996,7 +61212,11 @@ export interface operations {
     };
     list_containers_v1_containers_get: {
         parameters: {
-            query?: never;
+            query?: {
+                after?: string | null;
+                limit?: number | null;
+                order?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -61010,6 +61230,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -63164,6 +63393,8 @@ export interface operations {
                 key?: string | null;
                 /** @description Filter by key prefix (Redis-style namespace scan). Mutually exclusive with `key`; if both are provided, `key_prefix` wins. */
                 key_prefix?: string | null;
+                /** @description Match entries whose key starts with this value or whose memory_id equals it. Takes precedence over `key_prefix` and `key` when provided. */
+                search?: string | null;
                 page?: number;
                 page_size?: number;
             };
