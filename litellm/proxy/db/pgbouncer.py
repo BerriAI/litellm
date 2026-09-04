@@ -275,9 +275,9 @@ class PgBouncerProcess:
     Prisma reconnects by itself after a failed query, so a PgBouncer crash
     costs the requests in flight plus one failed query per idle pooled
     connection the crash severed, and nothing else once the replacement is
-    listening again. A replacement that cannot be spawned, exits again or
-    never starts listening is retried every ``restart_delay_seconds`` until
-    ``stop`` is called.
+    listening again. A replacement that cannot be spawned, finds its port
+    taken, exits again or never starts listening is retried every
+    ``restart_delay_seconds`` until ``stop`` is called.
     """
 
     def __init__(
@@ -300,12 +300,21 @@ class PgBouncerProcess:
         with self._lock:
             return None if self._process is None else self._process.pid
 
-    def _spawn(self) -> subprocess.Popen[bytes] | None:
-        """Start a child, or None once ``stop`` ran; both take the lock so no child can slip in after a stop."""
+    def _spawn(self) -> subprocess.Popen[bytes] | PgBouncerError | None:
+        """Start a child, or None once ``stop`` ran; both take the lock so no child can slip in after a stop.
+
+        The port has to be free first: a listener that is already there would
+        pass the readiness check while the child fails to bind.
+        """
         with self._lock:
             if self._stopping.is_set():
                 return None
-            process: Final = subprocess.Popen(self.argv)
+            if _port_open(self.port):
+                return PgBouncerError(f"{PGBOUNCER_LISTEN_ADDR}:{self.port} is already in use by another process")
+            try:
+                process: Final = subprocess.Popen(self.argv)
+            except OSError as spawn_error:
+                return PgBouncerError(f"could not start {self.argv[0]!r}: {spawn_error}")
             self._process = process
             return process
 
@@ -324,12 +333,11 @@ class PgBouncerProcess:
 
     def start(self) -> PgBouncerError | None:
         """Spawn PgBouncer, wait until it accepts connections, then supervise it from a daemon thread."""
-        try:
-            process: Final = self._spawn()
-        except OSError as spawn_error:
-            return PgBouncerError(f"could not start {self.argv[0]!r}: {spawn_error}")
+        process: Final = self._spawn()
         if process is None:
             return PgBouncerError("pgbouncer was stopped before it started")
+        if isinstance(process, PgBouncerError):
+            return process
         not_ready: Final = self._wait_ready(process)
         if not_ready is not None:
             self.stop()
@@ -356,12 +364,11 @@ class PgBouncerProcess:
 
     def _restart_after_delay(self) -> None:
         time.sleep(self.restart_delay_seconds)
-        try:
-            process: Final = self._spawn()
-        except OSError as spawn_error:
-            self._retry_restart(str(spawn_error))
-            return
+        process: Final = self._spawn()
         if process is None:
+            return
+        if isinstance(process, PgBouncerError):
+            self._retry_restart(process.reason)
             return
         not_ready: Final = self._wait_ready(process)
         if not_ready is None:

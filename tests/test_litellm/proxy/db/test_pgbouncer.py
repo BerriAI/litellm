@@ -310,6 +310,39 @@ class TestPgBouncerProcess:
         assert isinstance(outcome, PgBouncerError)
         assert "/nonexistent/pgbouncer" in outcome.reason
 
+    def test_a_port_owned_by_someone_else_is_refused_before_spawning(self, tmp_path: Path):
+        with socket.socket() as squatter:
+            squatter.bind(("127.0.0.1", 0))
+            squatter.listen()
+            port: Final = squatter.getsockname()[1]
+            pooler: Final = PgBouncerProcess(argv=(str(_fake_pooler(tmp_path, port)),), port=port)
+            outcome: Final = pooler.start()
+        assert isinstance(outcome, PgBouncerError)
+        assert f"127.0.0.1:{port} is already in use" in outcome.reason
+        assert pooler.pid is None
+
+    def test_a_replacement_waits_until_a_squatter_leaves_the_port(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ):
+        port: Final = _free_port()
+        pooler: Final = PgBouncerProcess(
+            argv=(str(_fake_pooler(tmp_path, port)),), port=port, restart_delay_seconds=0.5
+        )
+        assert pooler.start() is None
+        first_pid: Final = pooler.pid
+        assert first_pid is not None
+        os.kill(first_pid, signal.SIGKILL)
+        assert _wait_until(lambda: not _listening(port))
+        with socket.socket() as squatter, caplog.at_level(logging.ERROR, logger=verbose_proxy_logger.name):
+            squatter.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            squatter.bind(("127.0.0.1", port))
+            squatter.listen()
+            assert _wait_until(lambda: any("already in use" in record.message for record in caplog.records))
+            assert pooler.pid == first_pid
+        assert _wait_until(lambda: pooler.pid not in (None, first_pid) and _listening(port))
+        pooler.stop()
+        assert _wait_until(lambda: not _listening(port))
+
     def test_a_pooler_that_never_listens_times_out(self, tmp_path: Path):
         port: Final = _free_port()
         pooler: Final = PgBouncerProcess(
