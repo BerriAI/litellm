@@ -6872,3 +6872,64 @@ class TestLitellmReceivedAtStamping:
 
         assert result == earlier
         assert request.state.litellm_received_at == earlier
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_builder_updates_cached_token_end_user():
+    """
+    Test that if valid_token comes from cache, the _user_api_key_auth_builder updates
+    the end_user_params from the current request payload instead of pinning to the cached token's values.
+    """
+    from starlette.requests import Request
+    from starlette.datastructures import URL
+    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from unittest.mock import MagicMock, AsyncMock, patch
+
+    api_key = "sk-test-cached-key"
+    cached_token = UserAPIKeyAuth(
+        api_key=api_key,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        end_user_id="alice",
+        end_user_tpm_limit=10,
+        end_user_rpm_limit=10,
+        team_id=None,
+    )
+
+    request_data = {"user": "bob"}
+    
+    mock_request = MagicMock(spec=Request)
+    mock_request.url = URL("http://testserver/v1/chat/completions")
+    mock_request.headers = {"authorization": f"Bearer {api_key}"}
+    mock_request.method = "POST"
+    mock_request.state = MagicMock()
+    mock_request.state.litellm_received_at = None
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.auth.user_api_key_auth.pre_db_read_auth_checks", new_callable=AsyncMock),
+        patch("litellm.proxy.auth.user_api_key_auth.get_end_user_id_from_request_body", return_value="bob"),
+        patch("litellm.proxy.auth.user_api_key_auth.resolve_and_validate_end_user_id", new_callable=AsyncMock, return_value="bob"),
+        patch("litellm.proxy.auth.user_api_key_auth.get_api_key", return_value=(api_key, True)),
+        patch("litellm.proxy.auth.user_api_key_auth.IdentityStore.key_from_principal", return_value=cached_token),
+        patch("litellm.proxy.auth.user_api_key_auth.IdentityStore.resolve", new_callable=AsyncMock),
+        patch("litellm.proxy.auth.user_api_key_auth.get_user_object", new_callable=AsyncMock, return_value=None),
+        patch("litellm.proxy.auth.user_api_key_auth._enforce_key_and_fallback_model_access", new_callable=AsyncMock),
+        patch("litellm.proxy.auth.user_api_key_auth._update_key_budget_with_temp_budget_increase", side_effect=lambda x: x)
+    ):
+        result = await _user_api_key_auth_builder(
+            request=mock_request,
+            api_key=api_key,
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data=request_data,
+        )
+
+        assert result.end_user_id == "bob"
+        assert result.end_user_tpm_limit == 10
+        assert result.end_user_rpm_limit == 10
