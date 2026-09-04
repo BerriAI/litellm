@@ -777,7 +777,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def _fetch_model_ids(
         api_base: str | None, bearer_token: str | None
     ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
-        parsed_url: Final = httpx.URL("https://api.openai.com" if api_base is None else api_base)
+        parsed_url: Final = httpx.URL(api_base or "https://api.openai.com")
         port_suffix: Final = f":{parsed_url.port}" if parsed_url.port else ""
         response: Final = litellm.module_level_client.get(
             url=f"{parsed_url.scheme}://{parsed_url.host}{port_suffix}/v1/models",

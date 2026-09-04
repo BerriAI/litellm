@@ -582,6 +582,14 @@ class TestDiscoverModels:
         assert not exchange_route.called
 
     @respx.mock
+    def test_blank_api_base_in_params_discovers_from_openai(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("blank-base-bearer")
+        models_route: Final = self.mock_models()
+
+        assert OpenAIGPTConfig().discover_models({**deployment_wif, "api_base": ""}) == ["gpt-4o-mini", "gpt-4.1"]
+        assert models_route.calls.last.request.headers["Authorization"] == "Bearer blank-base-bearer"
+
+    @respx.mock
     def test_openai_compatible_subclass_never_mints_wif(self, deployment_wif: dict[str, str]) -> None:
         exchange_route: Final = mock_token_exchange()
         models_route: Final = self.mock_models()
