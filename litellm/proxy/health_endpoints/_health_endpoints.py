@@ -880,7 +880,9 @@ def _health_accessible_model_names(
 def _caller_may_probe_deployment(
     deployment: Mapping[str, object], allowed_models: frozenset[str], llm_router: Router | None, team_id: str | None
 ) -> bool:
-    """Same deployment visibility rule as request auth: another team's deployment is never in scope."""
+    """Same deployment visibility rule as routing: another team's deployment is never in scope, team-less callers included."""
+    if not Router._deployment_usable_by_team(deployment, team_id):
+        return False
     if llm_router is None:
         return deployment.get("model_name") in allowed_models
     model: Final = dict(deployment)
