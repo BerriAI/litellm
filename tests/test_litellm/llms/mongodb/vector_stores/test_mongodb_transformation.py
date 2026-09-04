@@ -8,10 +8,12 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from litellm.exceptions import BadRequestError, Timeout
+import litellm
+from litellm.exceptions import BadRequestError, ServiceUnavailableError, Timeout
 from litellm.llms.mongodb.common_utils import (
     _MAX_CACHED_CLIENTS,
     _async_clients,
+    _sync_clients,
     MongoClientKey,
     index_not_ready_error,
     missing_index_error,
@@ -643,6 +645,37 @@ class TestClientCache:
         assert first.connection_string == CONNECTION_STRING
 
 
+    def _fill_cache(self):
+        for slot in range(_MAX_CACHED_CLIENTS):
+            get_sync_client(self._key(f"mongodb://cold-{slot}:27017"), RecordingClient)
+
+    def test_a_store_added_after_the_cache_filled_is_still_cached(self):
+        """Rebuilding a client costs an SRV lookup, a TLS handshake and topology discovery, so a
+        store that misses the cache on every single search pays that on every search."""
+        self._fill_cache()
+        latecomer = self._key("mongodb://latecomer:27017")
+
+        first = get_sync_client(latecomer, RecordingClient)
+
+        assert get_sync_client(latecomer, RecordingClient) is first
+
+    def test_the_cache_evicts_the_least_recently_used_client(self):
+        self._fill_cache()
+        oldest = self._key("mongodb://cold-0:27017")
+        newest = self._key(f"mongodb://cold-{_MAX_CACHED_CLIENTS - 1}:27017")
+        kept = get_sync_client(newest, RecordingClient)
+
+        get_sync_client(self._key("mongodb://latecomer:27017"), RecordingClient)
+
+        assert get_sync_client(newest, RecordingClient) is kept
+        assert oldest not in _sync_clients
+
+    def test_the_cache_never_grows_past_its_cap(self):
+        for slot in range(_MAX_CACHED_CLIENTS * 3):
+            get_sync_client(self._key(f"mongodb://host-{slot}:27017"), RecordingClient)
+
+        assert len(_sync_clients) == _MAX_CACHED_CLIENTS
+
     def test_a_new_loop_never_inherits_a_closed_loop_client(self):
         """CPython recycles id() so aggressively that a fresh event loop almost always lands on
         the id of one already collected: measured at 37 of 40 rounds. Keying the cache on the id
@@ -757,17 +790,51 @@ class TestErrorTranslation:
 
         assert "rejected the credentials" in str(translated)
 
-    def test_a_dropped_connection_is_a_400_not_an_unhandled_driver_error(self):
-        """AutoReconnect sits under ConnectionFailure alongside the two timeout classes, and Atlas
-        answers a URI with no credentials by closing the connection rather than failing auth. Left
-        untranslated it is not a litellm exception type, so it reaches the caller as a 500."""
+    def test_a_dropped_connection_stays_retryable(self):
+        """A replica set failover reaches the driver as AutoReconnect. litellm only retries 408,
+        409, 429 and 5xx, so classifying it as a client error would turn one failover into a
+        permanently failed search."""
         from pymongo.errors import AutoReconnect
 
         translated = self._translate(AutoReconnect("connection closed"))
 
-        assert isinstance(translated, BadRequestError)
-        assert "refused or dropped" in str(translated)
+        assert litellm._should_retry(translated.status_code)
+        assert "dropped or refused" in str(translated)
+
+    def test_a_dropped_connection_still_names_the_misconfigurations_behind_it(self):
+        """Atlas answers a URI with no credentials by closing the connection rather than failing
+        auth, so the retryable message still has to name that."""
+        from pymongo.errors import AutoReconnect
+
+        translated = self._translate(AutoReconnect("connection closed"))
+
         assert "no username and password" in str(translated)
+        assert "mongod is listening" in str(translated)
+
+    def test_the_retryable_classification_survives_the_public_sdk_error_wrapper(self):
+        """litellm.exception_type only passes its own exception types through; anything else becomes
+        an APIConnectionError and a 500, which would drop the retryable classification."""
+        from pymongo.errors import AutoReconnect
+
+        translated = self._translate(AutoReconnect("connection closed"))
+
+        wrapped = litellm.exception_type(
+            model=None,
+            original_exception=translated,
+            custom_llm_provider="mongodb",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+        assert isinstance(wrapped, ServiceUnavailableError)
+        assert litellm._should_retry(wrapped.status_code)
+
+    def test_a_pool_wait_queue_timeout_stays_retryable(self):
+        from pymongo.errors import WaitQueueTimeoutError
+
+        translated = self._translate(WaitQueueTimeoutError("timed out waiting for a connection"))
+
+        assert litellm._should_retry(translated.status_code)
 
     def test_server_selection_timeout_still_wins_over_the_connection_branch(self):
         from pymongo.errors import ServerSelectionTimeoutError
@@ -775,7 +842,7 @@ class TestErrorTranslation:
         translated = self._translate(ServerSelectionTimeoutError("no servers"))
 
         assert isinstance(translated, Timeout)
-        assert "refused or dropped" not in str(translated)
+        assert "dropped or refused" not in str(translated)
 
     def test_network_timeout_still_wins_over_the_connection_branch(self):
         from pymongo.errors import NetworkTimeout
@@ -783,7 +850,7 @@ class TestErrorTranslation:
         translated = self._translate(NetworkTimeout("socket timed out"))
 
         assert isinstance(translated, Timeout)
-        assert "refused or dropped" not in str(translated)
+        assert "dropped or refused" not in str(translated)
 
     def test_an_unescaped_password_character_is_a_400_not_a_500(self):
         """pymongo's URI parser raises a plain ValueError, not a PyMongoError, for an unusable port,
@@ -1239,7 +1306,7 @@ class TestSelfManagedDeploymentsAreFirstClass:
 
         config = self._config_that_fails_to_connect(ConnectionFailure("connection closed"))
 
-        with pytest.raises(BadRequestError) as excinfo:
+        with pytest.raises(ServiceUnavailableError) as excinfo:
             _search(config)
 
         assert "self-managed" in str(excinfo.value)
