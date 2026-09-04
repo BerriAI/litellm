@@ -29,6 +29,7 @@ from typing import (
     NoReturn,
     Optional,
     Protocol,
+    TypeAlias,
     Union,
     cast,
     overload,
@@ -1681,7 +1682,7 @@ async def get_generic_sso_response(
     return result or {}, received_response, access_token_payload, sso_assertion
 
 
-RetentionCheck = Callable[[], Awaitable[bool]]
+RetentionCheck: TypeAlias = Callable[[], Awaitable[bool]]  # mutable-ok: Callable parameter syntax
 
 
 async def warn_if_id_jag_assertion_uncaptured(
