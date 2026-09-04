@@ -19,7 +19,9 @@ def ensure_mappers(mapper_names: Iterable[str], *names: str) -> list[str]:
     return result
 
 
-def credential_gated_exporters(exporters: "Iterable[ExporterSpec]", owner: "ExporterOwner") -> "list[ExporterSpec]":
+def credential_gated_exporters(
+    exporters: "Iterable[ExporterSpec]", owner: "ExporterOwner"
+) -> "tuple[ExporterSpec, ...]":
     """``exporters`` with the operator's destination replaced by a header-gated one.
 
     Used when a credential-mandatory backend is asked to build without the operator's
@@ -29,10 +31,10 @@ def credential_gated_exporters(exporters: "Iterable[ExporterSpec]", owner: "Expo
     span would be printed to stdout, and the gated spec keeps the owner so the
     override filter still recognises which backend this provider speaks for.
     """
-    return [
+    return (
         *(spec for spec in exporters if not _is_unconfigured_placeholder(spec)),
         ExporterSpec(owner=owner, requires_headers=True),
-    ]
+    )
 
 
 def _is_unconfigured_placeholder(spec: "ExporterSpec") -> bool:
