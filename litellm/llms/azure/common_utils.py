@@ -718,11 +718,11 @@ class BaseAzureLLM(BaseOpenAILLM):
             (value for name, value in headers.items() if name.lower() == "api-key" and str(value).strip()),
             None,
         )
-        non_auth_headers: Final = {
-            name: value for name, value in headers.items() if name.lower() not in {"api-key", "authorization"}
-        }
+        non_auth_headers: Final = MappingProxyType(
+            {name: value for name, value in headers.items() if name.lower() not in ("api-key", "authorization")}
+        )
         if forwarded_api_key is not None:
-            return {**non_auth_headers, "api-key": forwarded_api_key}
+            return MappingProxyType({**non_auth_headers, "api-key": forwarded_api_key}).copy()
 
         api_key: Final = (
             litellm_params.api_key
@@ -733,15 +733,15 @@ class BaseAzureLLM(BaseOpenAILLM):
         )
 
         if api_key:
-            return {**non_auth_headers, "api-key": api_key}
+            return MappingProxyType({**non_auth_headers, "api-key": api_key}).copy()
 
         ### Fallback to Azure AD token-based authentication if no API key is available
         ### Retrieves Azure AD token and adds it to the Authorization header
         azure_ad_token: Final = get_azure_ad_token(litellm_params)
         if azure_ad_token:
-            return {**non_auth_headers, "Authorization": f"Bearer {azure_ad_token}"}
+            return MappingProxyType({**non_auth_headers, "Authorization": f"Bearer {azure_ad_token}"}).copy()
 
-        return non_auth_headers
+        return non_auth_headers.copy()
 
     @staticmethod
     def _get_base_azure_url(

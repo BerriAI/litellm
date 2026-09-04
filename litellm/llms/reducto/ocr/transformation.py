@@ -1,3 +1,4 @@
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -55,7 +56,9 @@ class _BaseReductoOCRConfig(BaseOCRConfig):
                 "Missing REDUCTO_API_KEY - set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()"
             )
 
-        non_auth_headers: Final = {name: value for name, value in headers.items() if name.lower() != "authorization"}
+        non_auth_headers: Final = MappingProxyType(
+            {name: value for name, value in headers.items() if name.lower() != "authorization"}
+        )
         return {
             **non_auth_headers,
             "Authorization": f"Bearer {resolved_key}",
