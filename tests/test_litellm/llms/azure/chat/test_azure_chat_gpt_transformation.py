@@ -5,9 +5,7 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
@@ -53,6 +51,24 @@ class TestAzureOpenAIConfig:
         assert "prompt_cache_key" in supported_params
 
 
+@pytest.mark.parametrize("model", ("gpt-4.1", "gpt-4o", "gpt-5.1"))
+@pytest.mark.parametrize("drop_params", (True, False))
+@pytest.mark.parametrize("service_tier", ("priority", "bogus_tier_xyz", None))
+def test_azure_service_tier_forwarded(model: str, drop_params: bool, service_tier: str | None) -> None:
+    mapped: Final = _MAPPED_PARAMS.validate_python(
+        get_optional_params(
+            model=model,
+            custom_llm_provider="azure",
+            service_tier=service_tier,
+            drop_params=drop_params,
+        )
+    )
+    if service_tier is None:
+        assert "service_tier" not in mapped
+    else:
+        assert mapped["service_tier"] == service_tier
+
+
 def test_map_openai_params_with_preview_api_version():
     config = AzureOpenAIConfig()
     non_default_params = {
@@ -62,9 +78,7 @@ def test_map_openai_params_with_preview_api_version():
     model = "azure/gpt-4-1"
     drop_params = False
     api_version = "preview"
-    assert config.map_openai_params(
-        non_default_params, optional_params, model, drop_params, api_version
-    )
+    assert config.map_openai_params(non_default_params, optional_params, model, drop_params, api_version)
 
 
 def test_transform_request_hoists_tool_message_image():
