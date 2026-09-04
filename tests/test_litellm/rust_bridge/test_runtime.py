@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Final
 
 import pytest
 
@@ -93,3 +94,16 @@ def test_required_mode_rejects_unavailable_bridge() -> None:
             mode=runtime.FallbackMode.RUST_REQUIRED,
             context=context(),
         )
+
+
+def test_attempt_binding_does_not_prepare_when_native_is_unavailable() -> None:
+    binding: bindings.NativeBinding[object] = bindings.NativeBinding("missing", validate=lambda value: value)
+
+    result: Final = runtime.attempt_binding(
+        binding=binding,
+        native_call=lambda _loaded: pytest.fail("unavailable binding must not prepare the request"),
+        adapt=str,
+        context=context(),
+    )
+
+    assert isinstance(result, runtime.RustUnavailable)

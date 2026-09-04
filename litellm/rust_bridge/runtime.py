@@ -6,8 +6,9 @@ from enum import Enum
 from typing import Final, Generic, NoReturn, TypeAlias, TypeVar
 
 from litellm.exceptions import APIError
-from litellm.rust_bridge.bindings import native_exception_types
+from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
 
+BindingT = TypeVar("BindingT")
 NativeT = TypeVar("NativeT")
 ResultT = TypeVar("ResultT")
 
@@ -114,6 +115,36 @@ async def aattempt(
     except upstream as error:
         _raise_upstream(error, context)
     return RustHandled(adapt(value))
+
+
+def attempt_binding(
+    *,
+    binding: NativeBinding[BindingT],
+    native_call: Callable[[BindingT], NativeT],
+    adapt: Callable[[NativeT], ResultT],
+    context: BridgeErrorContext,
+) -> RustAttempt[ResultT]:
+    loaded: Final = binding.load()
+    return attempt(
+        native_call=None if loaded is None else lambda: native_call(loaded),
+        adapt=adapt,
+        context=context,
+    )
+
+
+async def aattempt_binding(
+    *,
+    binding: NativeBinding[BindingT],
+    native_call: Callable[[BindingT], Awaitable[NativeT]],
+    adapt: Callable[[NativeT], ResultT],
+    context: BridgeErrorContext,
+) -> RustAttempt[ResultT]:
+    loaded: Final = binding.load()
+    return await aattempt(
+        native_call=None if loaded is None else lambda: native_call(loaded),
+        adapt=adapt,
+        context=context,
+    )
 
 
 def call(operation: Callable[[], ResultT], context: BridgeErrorContext) -> ResultT:
