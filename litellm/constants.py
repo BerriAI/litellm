@@ -933,7 +933,7 @@ openai_compatible_providers: Final[list] = [
     "docker_model_runner",
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
-    "aitokenking",  # AI Token King - JSON-configured provider
+    "aitokenking",
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
