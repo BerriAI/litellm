@@ -1,10 +1,10 @@
-"""Shared helpers for MongoDB Atlas integrations.
+"""Shared helpers for MongoDB integrations.
 
 pymongo ships in the optional ``mongodb`` extra, so every import of it is
 deferred to call time and raises an actionable error when it is absent.
 
 Clients are cached per connection because building one costs an SRV lookup, a
-TLS handshake and topology discovery: measured at ~890ms against Atlas versus
+TLS handshake and topology discovery: measured at ~890ms against a remote deployment versus
 ~80ms on a warm client, so a client per search would dominate query latency.
 """
 
@@ -141,15 +141,16 @@ def reset_client_cache() -> None:
 
 _AUTHENTICATION_FAILED_CODE: Final = 18
 _UNAUTHORIZED_CODE: Final = 13
-# Atlas reports a rejected user as code 8000 "AtlasError", not 18, so only the message is reliable
+# Atlas reports a rejected user as code 8000 "AtlasError" where a self-managed mongod reports 18
 _AUTHENTICATION_MESSAGE_MARKERS: Final = ("bad auth", "authentication failed", "not authorized")
 _RESOLUTION_TIMEOUT_MARKERS: Final = ("resolution lifetime expired", "dns operation timed out")
 _UNKNOWN_HOSTNAME_MARKERS: Final = ("dns query name does not exist", "name or service not known")
+_CREDENTIAL_ESCAPING_MARKERS: Final = ("must be escaped according to rfc 3986", "bad database name")
 
 
 def _index_hint(index_name: str, database: str, collection: str) -> str:
     return (
-        f"No queryable Atlas Vector Search index named '{index_name}' was found on "
+        f"No queryable MongoDB Vector Search index named '{index_name}' was found on "
         f"'{database}.{collection}'. Confirm the index exists on that exact collection, that its "
         "status is READY rather than still building, and that the vector store id matches the index name."
     )
@@ -168,7 +169,7 @@ def missing_index_error(index_name: str, database: str, collection: str) -> BadR
 
 def index_not_ready_error(index_name: str, database: str, collection: str, status: str) -> BadRequestError:
     return config_error(
-        f"The Atlas Vector Search index '{index_name}' on '{database}.{collection}' is not queryable "
+        f"The MongoDB Vector Search index '{index_name}' on '{database}.{collection}' is not queryable "
         f"yet; its status is {status}. Searches against it return no results until the build finishes."
     )
 
@@ -194,8 +195,9 @@ def translate_mongo_error(error: Exception, index_name: str, database: str, coll
     if isinstance(error, ServerSelectionTimeoutError):
         return timeout_error(
             "Could not reach the MongoDB deployment before the timeout. On Atlas this is usually the "
-            "project's IP access list not containing this host, or a paused cluster; it can also be an "
-            f"unresolvable hostname. Driver detail: {error}"
+            "project's IP access list not containing this host, or a paused cluster. On a self-managed "
+            "deployment it is usually the host or port in the URI, or a firewall between this process "
+            f"and mongod. Either way it can also be an unresolvable hostname. Driver detail: {error}"
         )
     # ExecutionTimeout subclasses OperationFailure, so it has to be matched before it
     if isinstance(error, (NetworkTimeout, ExecutionTimeout)):
@@ -208,8 +210,9 @@ def translate_mongo_error(error: Exception, index_name: str, database: str, coll
     if isinstance(error, ConnectionFailure):
         return config_error(
             f"The connection to '{database}.{collection}' was refused or dropped. On Atlas this is "
-            "usually a connection string with no username and password, or a TLS failure. Confirm "
-            f"the URI is the one Atlas shows under Connect, Drivers. Driver detail: {error}"
+            "usually a connection string with no username and password, or a TLS failure, so confirm "
+            "the URI is the one Atlas shows under Connect, Drivers. On a self-managed deployment, check "
+            f"that mongod is listening on the host and port in the URI. Driver detail: {error}"
         )
     if isinstance(error, OperationFailure):
         code: Final = error.code
@@ -223,13 +226,13 @@ def translate_mongo_error(error: Exception, index_name: str, database: str, coll
             )
         if "dimension" in detail:
             return config_error(
-                "The query embedding does not match the vector dimensions the Atlas index was built for. "
+                "The query embedding does not match the vector dimensions the index was built for. "
                 "litellm_embedding_model must be the same model that produced the stored vectors. "
                 f"Driver detail: {error}"
             )
         if "is not indexed as vector" in detail:
             return config_error(
-                "mongodb_embedding_field names a field the Atlas Vector Search index does not cover. "
+                "mongodb_embedding_field names a field the MongoDB Vector Search index does not cover. "
                 f"It must match the 'path' the index '{index_name}' was created on. Driver detail: {error}"
             )
         if "index" in detail and ("not found" in detail or "does not exist" in detail or "unknown" in detail):
@@ -248,19 +251,28 @@ def translate_mongo_error(error: Exception, index_name: str, database: str, coll
             )
         if any(marker in configuration_detail for marker in _UNKNOWN_HOSTNAME_MARKERS):
             return config_error(
-                "The cluster hostname in mongodb_connection_string does not exist in DNS. Check the "
-                f"cluster name against the URI Atlas shows under Connect, Drivers. Driver detail: {error}"
+                "The hostname in mongodb_connection_string does not exist in DNS. On Atlas, check the "
+                "cluster name against the URI shown under Connect, Drivers. On a self-managed deployment, "
+                f"check that the hostname resolves from this process. Driver detail: {error}"
+            )
+        if any(marker in configuration_detail for marker in _CREDENTIAL_ESCAPING_MARKERS):
+            return config_error(
+                "mongodb_connection_string could not be parsed. A username or password containing "
+                "'@', '/', ':' or '%' has to be percent-encoded per RFC 3986, so 'p@ss/word' becomes "
+                "'p%40ss%2Fword'. If the credentials are already encoded, check the database name in "
+                f"the URI path instead. Driver detail: {error}"
             )
         return config_error(
             f"mongodb_connection_string is not a usable MongoDB connection string. Driver detail: {error}"
         )
     if isinstance(error, InvalidOperation):
         return config_error(f"The MongoDB client was already closed or is unusable. Driver detail: {error}")
-    # pymongo's URI parser raises a plain ValueError, not a PyMongoError, for a password holding an
-    # unescaped '/', which would otherwise reach the caller as a 500
+    # pymongo raises a plain ValueError, not a PyMongoError, for an unusable port, which an unescaped
+    # ':' in a password also produces, and which would otherwise reach the caller as a 500
     if isinstance(error, ValueError):
         return config_error(
-            "mongodb_connection_string could not be parsed. A username or password containing "
-            f"'@', '/', ':' or '%' has to be percent-encoded per RFC 3986. Driver detail: {error}"
+            "The host and port in mongodb_connection_string could not be parsed. If the port is a "
+            "number between 0 and 65535, the cause is usually an unescaped ':' in the password, which "
+            f"has to be percent-encoded per RFC 3986 as '%3A'. Driver detail: {error}"
         )
     return error
