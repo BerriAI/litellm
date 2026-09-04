@@ -972,11 +972,10 @@ async def test_provider_path_completed_event_without_guardrails_skips_response_c
         provider_config=provider_config,
         model="gemini-2.5-flash",
     )
-    streaming._send_to_backend = AsyncMock()  # type: ignore[method-assign]
 
     await streaming._handle_provider_config_message("{}")
 
-    assert streaming._send_to_backend.await_count == 0
+    assert backend_ws.send.await_count == 0
 
 
 def test_client_session_update_marks_transcription_session():
