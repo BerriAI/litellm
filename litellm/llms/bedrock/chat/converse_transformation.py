@@ -467,7 +467,6 @@ class AmazonConverseConfig(BaseConfig):
                         max_tokens,
                     )
                     optional_params.pop("thinking", None)
-                    optional_params.pop("output_config", None)
                 else:
                     optional_params["thinking"] = fitted_thinking
                 if fitted_thinking is not None and AnthropicConfig._is_adaptive_thinking_model(model, "bedrock"):
@@ -894,10 +893,14 @@ class AmazonConverseConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:
         is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
+        max_tokens: Final = non_default_params.get("max_tokens")
+        max_completion_tokens: Final = non_default_params.get("max_completion_tokens")
         resolved_max_tokens: Final = (
-            non_default_params.get("max_completion_tokens")
-            if non_default_params.get("max_completion_tokens") is not None
-            else non_default_params.get("max_tokens")
+            min(max_tokens, max_completion_tokens)
+            if isinstance(max_tokens, int) and isinstance(max_completion_tokens, int)
+            else max_completion_tokens
+            if max_completion_tokens is not None
+            else max_tokens
         )
 
         for param, value in non_default_params.items():

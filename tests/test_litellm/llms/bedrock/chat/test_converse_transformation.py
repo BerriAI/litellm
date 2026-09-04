@@ -507,12 +507,12 @@ def test_reasoning_effort_budget_fits_max_tokens_for_anthropic_converse(
     "params,expected_max_tokens,expects_thinking",
     [
         (
-            {"reasoning_effort": "medium", "max_tokens": 1024, "max_completion_tokens": 4096},
+            {"reasoning_effort": "medium", "max_tokens": 4096, "max_completion_tokens": 8192},
             4096,
             True,
         ),
         (
-            {"reasoning_effort": "medium", "max_completion_tokens": 4096, "max_tokens": 1024},
+            {"reasoning_effort": "medium", "max_completion_tokens": 8192, "max_tokens": 4096},
             4096,
             True,
         ),
@@ -528,10 +528,10 @@ def test_reasoning_effort_budget_fits_max_tokens_for_anthropic_converse(
         ),
     ],
 )
-def test_max_completion_tokens_wins_for_reasoning_effort_anthropic_converse(
+def test_restrictive_token_alias_wins_for_reasoning_effort_anthropic_converse(
     params, expected_max_tokens, expects_thinking
 ):
-    """The completion-token alias controls both output and thinking limits regardless of input order."""
+    """The smaller output-token alias controls both limits regardless of input order."""
     config = AmazonConverseConfig()
     model = "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
@@ -547,6 +547,35 @@ def test_max_completion_tokens_wins_for_reasoning_effort_anthropic_converse(
         assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 2048}
     else:
         assert "thinking" not in optional_params
+
+
+@pytest.mark.parametrize("output_config_first", [True, False])
+def test_unfitting_reasoning_effort_preserves_explicit_output_config(output_config_first):
+    """Dropping generated thinking must not delete an independent structured-output configuration."""
+    config = AmazonConverseConfig()
+    model = "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    output_config = {"format": {"type": "json_schema", "schema": {"type": "object"}}}
+    params = {
+        "output_config": output_config,
+        "reasoning_effort": "medium",
+        "max_tokens": 1024,
+    }
+    if not output_config_first:
+        params = {
+            "reasoning_effort": "medium",
+            "max_tokens": 1024,
+            "output_config": output_config,
+        }
+
+    optional_params = config.map_openai_params(
+        non_default_params=params,
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "thinking" not in optional_params
+    assert optional_params["output_config"] == output_config
 
 
 def test_reasoning_effort_without_max_tokens_synthesizes_valid_limit():
