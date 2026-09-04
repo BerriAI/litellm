@@ -9,13 +9,13 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyTuple};
 use pyo3_async_runtimes::TaskLocals;
 
-pub(crate) struct PythonTokenProvider {
+pub struct PythonTokenProvider {
     callable: Py<PyAny>,
     locals: Option<TaskLocals>,
 }
 
 impl PythonTokenProvider {
-    pub(crate) fn capture(py: Python<'_>, callable: Py<PyAny>) -> PyResult<Self> {
+    pub fn capture(py: Python<'_>, callable: Py<PyAny>) -> PyResult<Self> {
         if !callable.bind(py).is_callable() {
             return Err(PyTypeError::new_err("token provider must be callable"));
         }
@@ -23,7 +23,7 @@ impl PythonTokenProvider {
         Ok(Self { callable, locals })
     }
 
-    pub(crate) async fn resolve(&self) -> PyResult<TokenCredential> {
+    pub async fn resolve(&self) -> PyResult<TokenCredential> {
         let callable = Python::attach(|py| self.callable.clone_ref(py));
         let result = tokio::task::spawn_blocking(move || Python::attach(|py| callable.call0(py)))
             .await
