@@ -1302,7 +1302,7 @@ class TestOpenAIGPTConfigGetModelInfo:
 
     def test_uses_provider_reported_max_model_len(self):
         """Provider's max_model_len should override max_input_tokens."""
-        with patch("litellm.module_level_client.get") as mock_get:
+        with patch("litellm.module_level_client.get") as mock_get:  # test-quality-ok: isolates /v1/models without network I/O
             mock_get.return_value = self._mock_models_response(
                 [{"id": "my-custom-llama-70b", "max_model_len": 131072}]
             )
@@ -1319,7 +1319,7 @@ class TestOpenAIGPTConfigGetModelInfo:
 
     def test_reuses_static_map_max_output_tokens_when_model_name_matches(self):
         """Known models should retain their static max_output_tokens."""
-        with patch("litellm.module_level_client.get") as mock_get:
+        with patch("litellm.module_level_client.get") as mock_get:  # test-quality-ok: isolates /v1/models without network I/O
             mock_get.return_value = self._mock_models_response(
                 [{"id": "gpt-4o", "max_model_len": 131072}]
             )
@@ -1337,7 +1337,7 @@ class TestOpenAIGPTConfigGetModelInfo:
 
     def test_does_not_match_unverified_field_names(self):
         """Only max_model_len is used for the context window."""
-        with patch("litellm.module_level_client.get") as mock_get:
+        with patch("litellm.module_level_client.get") as mock_get:  # test-quality-ok: isolates /v1/models without network I/O
             mock_get.return_value = self._mock_models_response(
                 [{"id": "custom-model", "context_length": 65536}]
             )
@@ -1352,7 +1352,7 @@ class TestOpenAIGPTConfigGetModelInfo:
 
     def test_returns_none_when_model_not_in_provider_response(self):
         """Return None when the requested model is not reported by the provider."""
-        with patch("litellm.module_level_client.get") as mock_get:
+        with patch("litellm.module_level_client.get") as mock_get:  # test-quality-ok: isolates /v1/models without network I/O
             mock_get.return_value = self._mock_models_response(
                 [{"id": "some-other-model", "max_model_len": 4096}]
             )
@@ -1367,7 +1367,7 @@ class TestOpenAIGPTConfigGetModelInfo:
 
     def test_returns_none_when_no_context_field_present(self):
         """Return None when the provider does not report context size."""
-        with patch("litellm.module_level_client.get") as mock_get:
+        with patch("litellm.module_level_client.get") as mock_get:  # test-quality-ok: isolates /v1/models without network I/O
             mock_get.return_value = self._mock_models_response(
                 [{"id": "gpt-4o"}]
             )
@@ -1382,7 +1382,7 @@ class TestOpenAIGPTConfigGetModelInfo:
 
     def test_returns_none_for_real_openai_without_network_call(self):
         """Real OpenAI should continue using the static map."""
-        with patch("litellm.module_level_client.get") as mock_get:
+        with patch("litellm.module_level_client.get") as mock_get:  # test-quality-ok: isolates /v1/models without network I/O
             info = self.config.get_model_info(
                 model="gpt-4o",
                 api_base=None,
@@ -1394,7 +1394,7 @@ class TestOpenAIGPTConfigGetModelInfo:
 
     def test_returns_none_on_request_failure(self):
         """API failures should fall back gracefully."""
-        with patch("litellm.module_level_client.get") as mock_get:
+        with patch("litellm.module_level_client.get") as mock_get:  # test-quality-ok: isolates /v1/models without network I/O
             mock_get.side_effect = httpx.ConnectError("connection refused")
 
             info = self.config.get_model_info(
@@ -1409,7 +1409,7 @@ class TestOpenAIGPTConfigGetModelInfo:
         """Full integration through litellm.get_model_info."""
         litellm.get_model_info.cache_clear()
 
-        with patch("litellm.module_level_client.get") as mock_get:
+        with patch("litellm.module_level_client.get") as mock_get:  # test-quality-ok: isolates /v1/models without network I/O
             mock_get.return_value = self._mock_models_response(
                 [{"id": "my-custom-llama-70b", "max_model_len": 200000}]
             )
