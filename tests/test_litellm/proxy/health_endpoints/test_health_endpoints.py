@@ -19,6 +19,7 @@ from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAut
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
+    _hydrate_stored_credential_for_health_check,
     _show_no_redis_warning,
     get_callback_identifier,
     health_license_endpoint,
@@ -458,6 +459,60 @@ async def test_test_model_connection_loads_config_from_router():
         # Verify result
         assert result["status"] == "success"
         assert "result" in result
+
+
+@pytest.mark.asyncio
+async def test_hydrate_stored_credential_reads_db_when_worker_cache_is_stale():
+    from litellm.types.utils import CredentialItem
+
+    async def find_credential(credential_name: str) -> CredentialItem | None:
+        assert credential_name == "xai-production"
+        return CredentialItem(
+            credential_name=credential_name,
+            credential_values={"api_key": "selected-xai-key"},
+            credential_info={"custom_llm_provider": "xai"},
+        )
+
+    def decrypt_credential(credential: CredentialItem) -> CredentialItem:
+        return credential
+
+    def get_stale_credential_values(_credential_name: str) -> object:
+        return {"api_key": "stale-xai-key"}
+
+    result = await _hydrate_stored_credential_for_health_check(
+        litellm_params={
+            "model": "xai/grok-4",
+            "custom_llm_provider": "xai",
+            "litellm_credential_name": "xai-production",
+        },
+        find_credential=find_credential,
+        decrypt_credential=decrypt_credential,
+        get_cached_credential_values=get_stale_credential_values,
+    )
+
+    assert result["api_key"] == "selected-xai-key"
+
+
+@pytest.mark.asyncio
+async def test_hydrate_stored_credential_rejects_missing_name_before_provider_fallback():
+    from fastapi import HTTPException
+
+    async def find_credential(_credential_name: str):
+        return None
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _hydrate_stored_credential_for_health_check(
+            litellm_params={
+                "model": "xai/grok-4",
+                "custom_llm_provider": "xai",
+                "litellm_credential_name": "missing-credential",
+            },
+            find_credential=find_credential,
+            decrypt_credential=lambda credential: credential,
+            get_cached_credential_values=lambda _credential_name: {},
+        )
+
+    assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio

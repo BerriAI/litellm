@@ -7,10 +7,6 @@ import { captureRequestBody, readBack } from "../../helpers/roundTrip";
 import { sendChatCompletion } from "../../helpers/traffic";
 import { proxyIsPremium } from "../../helpers/premium";
 
-/** Four probes 13s apart span 39s, one PROXY_CONFIG_RELOAD_INTERVAL_SECONDS (30s) plus margin. */
-const CREDENTIAL_PROBE_SUCCESSES = 4;
-const CREDENTIAL_PROBE_SPACING_MS = 13_000;
-
 /** The mock LLM as the proxy reaches it: same host locally, a sidecar in the deployed stack. */
 const MOCK_LLM_BASE = `http://127.0.0.1:${process.env.MOCK_LLM_PORT ?? "8090"}/v1`;
 
@@ -236,39 +232,6 @@ test.describe("Add Model", () => {
       },
     });
     expect(createCred.ok(), `POST /credentials failed (${createCred.status()}): ${await createCred.text()}`).toBe(true);
-
-    // The proxy's periodic credential refresh prunes its in-memory list against a database snapshot
-    // it took before this credential landed, so a credential that resolves right after POST
-    // /credentials can stop resolving until the refresh after that. Successes spanning a whole
-    // PROXY_CONFIG_RELOAD_INTERVAL_SECONDS prove it survived a refresh, after which it stays.
-    // Resolution fails open onto the ambient key, so losing it reads as a confusing upstream 404.
-    let consecutiveProbeSuccesses = 0;
-    await expect
-      .poll(
-        async () => {
-          const probe = await page.request.post("/health/test_connection", {
-            headers: auth,
-            data: {
-              litellm_params: {
-                model: "openai/fake-gpt-4",
-                custom_llm_provider: "openai",
-                litellm_credential_name: credentialName,
-              },
-              model_info: {},
-              mode: "chat",
-            },
-          });
-          const healthy = probe.ok() && (await probe.json()).status === "success";
-          consecutiveProbeSuccesses = healthy ? consecutiveProbeSuccesses + 1 : 0;
-          return consecutiveProbeSuccesses;
-        },
-        {
-          message: `stored credential ${credentialName} never stayed usable across a config reload`,
-          intervals: [0, CREDENTIAL_PROBE_SPACING_MS],
-          timeout: 110_000,
-        },
-      )
-      .toBeGreaterThanOrEqual(CREDENTIAL_PROBE_SUCCESSES);
 
     try {
       await navigateToPage(page, Page.Models);

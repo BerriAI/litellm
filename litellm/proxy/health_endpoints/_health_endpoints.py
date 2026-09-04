@@ -6,12 +6,14 @@ import os
 import secrets
 import time
 import traceback
-from collections.abc import Iterable, Mapping
+from collections import ChainMap
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import datetime, timedelta
 from typing import Any, Final, Literal, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -62,6 +64,7 @@ from litellm.router_utils.clientside_credential_handler import (
     clientside_credential_keys,
 )
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.utils import CredentialItem
 
 #### Health ENDPOINTS ####
 
@@ -113,6 +116,7 @@ _CONFIG_CONNECTION_FIELDS: Final[frozenset[str]] = frozenset(
         "litellm_credential_name",
     )
 )
+_CREDENTIAL_VALUES_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 def _config_base_for_health_check(
@@ -143,6 +147,37 @@ def _config_base_for_health_check(
     if not any(param in request_params for param in _BANNED_REQUEST_BODY_PARAMS):
         return dict(config_params)
     return {key: value for key, value in config_params.items() if key not in _CONFIG_CONNECTION_FIELDS}
+
+
+async def _hydrate_stored_credential_for_health_check(
+    litellm_params: dict[str, object],  # mutable-ok: Pydantic validated this dict for the mutable health-check API
+    find_credential: Callable[[str], Awaitable[CredentialItem | None]],
+    decrypt_credential: Callable[[CredentialItem], CredentialItem],
+    get_cached_credential_values: Callable[[str], object],
+) -> dict[str, object]:  # mutable-ok: downstream health-check helpers mutate their parameter dict
+    credential_name: Final = litellm_params.get("litellm_credential_name")
+    if credential_name is None:
+        return _CREDENTIAL_VALUES_ADAPTER.validate_python(litellm_params)
+    if not isinstance(credential_name, str) or not credential_name.strip():
+        raise HTTPException(status_code=400, detail="litellm_credential_name must be a non-empty string.")
+
+    stored_credential: Final = await find_credential(credential_name)
+    credential_values: Final[dict[str, object]] = (  # mutable-ok: ChainMap needs dict inputs
+        _CREDENTIAL_VALUES_ADAPTER.validate_python(
+            decrypt_credential(stored_credential).credential_values
+            if stored_credential is not None
+            else get_cached_credential_values(credential_name)
+        )
+    )
+    if not credential_values:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Credential not found. Got credential name: {credential_name}",
+        )
+
+    return _CREDENTIAL_VALUES_ADAPTER.validate_python(
+        ChainMap(litellm_params, credential_values)  # mutable-ok: adapter immediately copies the merged view
+    )
 
 
 def get_callback_identifier(callback):
@@ -1966,6 +2001,7 @@ async def test_model_connection(
     Returns:
         dict: A dictionary containing the health check result with either success information or error details.
     """
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
     from litellm.proxy._types import CommonProxyErrors
     from litellm.proxy.management_endpoints.model_management_endpoints import (
         ModelManagementAuthChecks,
@@ -1975,7 +2011,9 @@ async def test_model_connection(
         llm_router,
         premium_user,
         prisma_client,
+        proxy_config,
     )
+    from litellm.repositories.credentials_repository import CredentialsRepository
     from litellm.types.router import Deployment, LiteLLM_Params
 
     try:
@@ -2046,14 +2084,23 @@ async def test_model_connection(
                 )
 
         # Merge: config params (from proxy config) as base, request params override
-        litellm_params = {
-            **_config_base_for_health_check(
-                config_litellm_params,
+        merged_litellm_params: Final = _CREDENTIAL_VALUES_ADAPTER.validate_python(
+            ChainMap(
                 request_litellm_params,
-                allow_client_side_credentials=general_settings.get("allow_client_side_credentials") is True,
+                _config_base_for_health_check(
+                    config_litellm_params,
+                    request_litellm_params,
+                    allow_client_side_credentials=general_settings.get("allow_client_side_credentials") is True,
+                ),
             ),
-            **request_litellm_params,
-        }
+        )
+        credentials_repository: Final = CredentialsRepository(prisma_client)
+        litellm_params = await _hydrate_stored_credential_for_health_check(
+            litellm_params=merged_litellm_params,
+            find_credential=credentials_repository.find_by_name,
+            decrypt_credential=proxy_config.decrypt_credentials,
+            get_cached_credential_values=CredentialAccessor.get_credential_values,
+        )
 
         resolved_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
         litellm_params = _update_litellm_params_for_health_check(
