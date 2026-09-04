@@ -363,6 +363,17 @@ def test_get_supported_openai_params_parallel_tool_calls():
     assert "parallel_tool_calls" not in unsupported_params
 
 
+def test_get_supported_openai_params_short_model_name_resolves_account_prefixed_entry():
+    config = FireworksAIConfig()
+
+    supported_params = config.get_supported_openai_params(
+        "fireworks_ai/deepseek-v4-pro-0813"
+    )
+
+    assert "tool_choice" in supported_params
+    assert "reasoning_effort" in supported_params
+
+
 def test_get_supported_openai_params_parallel_tool_calls_without_tool_choice(
     monkeypatch,
 ):
