@@ -15,27 +15,17 @@ async fn handle(...) -> impl IntoResponse { ... }
 ```
 `health.rs` is the example.
 
-## Split out `service` when there's real logic
-When a route has business logic worth testing without axum, put it in a sibling
-`service` (a file, or a folder if the route grows). The route file stays the
-**axum surface** (router + handler + any socket/SSE adapter); `service` is plain
-Rust with **no axum types**, and its job is to pick the deployment and call the
-`core` route entrypoint (see `messages/service.rs` calling
-`litellm_core::messages::messages`). Never build a provider request, resolve a
-key, or perform the provider call here. `realtime/` is the older example:
-```
-realtime/
-  mod.rs       # axum surface: router() + handler + the WS<->events adapter
-  service.rs   # pure logic: select deployment + call provider (no axum) — testable
-```
-Split `service` further (or add `transport`, `repo`, …) only once a single file
-genuinely gets hard to read.
+## Runtime boundary
+When a route has transport-neutral orchestration, put it under
+`litellm-ai-gateway::runtime` and test it there. The route file stays the Axum
+surface: router, handler, and socket or SSE adapter. Never build a provider
+request, resolve a provider key, or perform the provider call in this crate.
 
 ## Invariants
 - **Auth is an extractor, not a manual call.** A handler requires auth by adding
   `crate::auth::RequireMasterKey` to its arguments; it runs during extraction.
   Never re-implement the check per route.
-- **Handlers contain no business logic; `service` contains no axum types.**
+- **Handlers contain no business logic; `litellm-ai-gateway` contains no Axum types.**
 - **No provider handlers in this crate.** Transforms, auth headers, and the
   provider HTTP call live in `core/src/<route>/`.
 - A route owns its paths in its own `router()`; `mod.rs` only merges.

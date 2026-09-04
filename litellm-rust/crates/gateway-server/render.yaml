@@ -14,7 +14,7 @@ services:
     name: litellm-rust-ai-gateway
     runtime: docker
     plan: standard
-    dockerfilePath: ./litellm-rust/crates/ai-gateway/Dockerfile
+    dockerfilePath: ./litellm-rust/crates/gateway-server/Dockerfile
     dockerContext: .
     healthCheckPath: /health/readiness
     numInstances: 1

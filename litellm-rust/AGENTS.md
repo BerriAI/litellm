@@ -1,6 +1,6 @@
 # AGENTS.md
 
-litellm-rust has five crates. A crate is a layer or shared foundation, not a route. Routes (ocr, realtime, chat) and providers (mistral, openai) are modules inside the layers.
+litellm-rust has six crates. A crate is a layer, shared foundation, or separately built host, not a route. Routes (ocr, realtime, chat) and providers (mistral, openai) are modules inside the layers.
 
 ## Crates
 
@@ -8,11 +8,12 @@ litellm-rust has five crates. A crate is a layer or shared foundation, not a rou
 |-------|------|
 | litellm-core | The LiteLLM SDK in Rust. One public entrypoint per top-level call (`messages::messages()`), owning types, transforms, provider resolution, auth, and the provider HTTP call. Call it, get a typed response. |
 | litellm-config | Config-loading boundary. Returns resolved core deployment data and optionally delegates loading to Python. |
-| litellm-ai-gateway | The axum server (behind the `server` feature) plus the WebSocket hosts. Translates HTTP/WS to core entrypoints; owns no provider logic and no handlers. |
+| litellm-ai-gateway | Framework-independent gateway runtime and integrations shared by the server and Python bridge. Owns transport-neutral orchestration and legacy call modules, but no Axum or Tower dependencies. |
+| litellm-gateway-server | The Axum binary and HTTP/WebSocket host. Owns routes, auth extractors, application state, startup config, and HTTP-only Tower dependencies. |
 | litellm-python-interop | Domain-neutral PyO3 foundation for GIL handling and typed Python/Serde conversion. |
 | litellm-python-bridge | PyO3 cdylib exposing LiteLLM Rust APIs to the Python SDK. Owns API registration, domain wiring, and Python exception mapping. |
 
-Dependency direction is acyclic: `litellm-config` depends on `litellm-core`, the gateway depends on both, and `litellm-python-bridge` depends on the domain layers and `litellm-python-interop`. The interop foundation depends on no LiteLLM domain crate.
+Dependency direction is acyclic: `litellm-config` depends on `litellm-core`; `litellm-ai-gateway` depends on core; `litellm-gateway-server` depends on gateway, core, and config; and `litellm-python-bridge` depends on the reusable domain layers and `litellm-python-interop`. Reusable crates must not depend on `litellm-gateway-server`. The interop foundation depends on no LiteLLM domain crate.
 
 ## Where a route lives
 
@@ -28,7 +29,7 @@ core/src/messages/
   client.rs          # the shared reqwest client
 ```
 
-Handlers never live in `ai-gateway`. `ocr`, `audio_transcription`, and `realtime` are still hosted there from before this rule; they move to `core` as they are touched.
+Provider handlers never live in `gateway-server`. `ocr`, `audio_transcription`, and realtime provider I/O are still hosted in `ai-gateway` from before this rule; they move to `core` as they are touched.
 
 Adding a crate: default to a module. A new crate requires a real trigger: separate artifact (binary/cdylib), proc-macro, shared foundation, or publishable standalone. A new provider or route is none of these.
 

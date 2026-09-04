@@ -7,7 +7,7 @@ use litellm_core::messages::{messages, messages_stream};
 use litellm_core::router::Router;
 use serde_json::{Map, Value};
 
-pub(crate) enum MessagesResponse {
+pub enum MessagesResponse {
     Json(Value),
     Stream(reqwest::Response),
 }

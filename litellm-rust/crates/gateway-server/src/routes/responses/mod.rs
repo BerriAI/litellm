@@ -1,5 +1,3 @@
-mod service;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -11,13 +9,14 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::get;
 use futures_util::{Sink, SinkExt, StreamExt};
+use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
+use litellm_ai_gateway::integrations::types::RequestMetadata;
+use litellm_ai_gateway::runtime::responses;
 use litellm_core::responses::types::{ResponsesErrorFrame, ResponsesWsEvent, ResponsesWsEventType};
 use litellm_core::router::Router as ModelRouter;
 use serde::Deserialize;
 
 use crate::auth::RequireMasterKey;
-use crate::integrations::custom_logger::CustomLogger;
-use crate::integrations::types::RequestMetadata;
 use crate::state::AppState;
 
 static CALL_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -217,7 +216,7 @@ async fn bridge(
         }
     }));
     let mut client_out = ResponseClientSink { sink: ws_sink };
-    let result = service::run(
+    let result = responses::run(
         &router,
         &model,
         first_frame,
@@ -239,10 +238,10 @@ async fn bridge(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::realtime_pool::RealtimePool;
     use crate::state::AppState;
     use axum::body::Body;
     use axum::http::Request;
+    use litellm_ai_gateway::io::realtime_pool::RealtimePool;
     use litellm_core::router::Router as ModelRouter;
     use serde_json::json;
     use std::pin::Pin;

@@ -1,14 +1,17 @@
 # ai-gateway architecture
 
-The Rust ai-gateway does LLM inference (realtime WebSocket). Spend tracking is an
-API callback: it POSTs each finished session to the LiteLLM proxy, which records
-spend and runs the usual callbacks.
+`litellm-ai-gateway` is between hosts and `litellm-core`. It exposes
+framework-independent runtime services and callback integrations without
+depending on an HTTP framework
 
 ```mermaid
 flowchart LR
-  C[client] <--> G[Rust ai-gateway<br/>LLM inference]
-  G <--> O[OpenAI realtime]
-  G -. spend tracking callback .-> P[litellm proxy]
-  F[litellm-config<br/>load-time only] --> G
-  F -. Python backend .-> P
+  S[litellm-gateway-server] --> G[litellm-ai-gateway runtime]
+  B[litellm-python-bridge] --> G
+  G --> C[litellm-core]
+  S --> C
+  S --> F[litellm-config]
 ```
+
+The server may depend on the runtime, core, and config crates. Reusable crates
+must not depend on the server

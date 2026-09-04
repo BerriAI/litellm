@@ -2,7 +2,7 @@
 
 Measures what the gateway adds over talking to OpenAI's realtime WebSocket
 directly, and what the pre-warmed connection pool removes. See
-`../../src/routes/realtime/README.md` for how the pool works.
+`../../../gateway-server/src/routes/realtime/README.md` for how the pool works.
 
 ## Results
 

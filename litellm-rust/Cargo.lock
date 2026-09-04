@@ -1408,20 +1408,15 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 name = "litellm-ai-gateway"
 version = "0.1.0"
 dependencies = [
- "axum",
  "base64",
  "futures-channel",
  "futures-util",
- "litellm-config",
  "litellm-core",
  "reqwest",
  "serde",
  "serde_json",
- "sha2 0.10.9",
- "subtle",
  "tokio",
  "tokio-tungstenite",
- "tower",
  "tracing",
 ]
 
@@ -1456,6 +1451,25 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "litellm-gateway-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "litellm-ai-gateway",
+ "litellm-config",
+ "litellm-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "tokio",
+ "tower",
+ "tracing",
 ]
 
 [[package]]

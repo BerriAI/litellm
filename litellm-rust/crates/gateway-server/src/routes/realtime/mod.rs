@@ -1,16 +1,14 @@
 //! `GET /v1/realtime` (WebSocket).
 //!
 //! This file is the **axum surface**: `router()`, the handler, and the small
-//! socket↔events adapter. The pure logic (no axum) lives in [`service`]. Auth is
-//! the `RequireMasterKey` extractor, so the handler stays thin.
-
-mod service;
+//! socket↔events adapter. The pure logic lives in
+//! [`litellm_ai_gateway::runtime::realtime`]. Auth is the `RequireMasterKey`
+//! extractor, so the handler stays thin.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::io::realtime_pool::RealtimePool;
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
@@ -18,14 +16,16 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::get;
 use futures_util::{SinkExt, StreamExt};
+use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
+use litellm_ai_gateway::integrations::types::RequestMetadata;
+use litellm_ai_gateway::io::realtime_pool::RealtimePool;
+use litellm_ai_gateway::realtime::streaming::{RealTimeStreaming, SessionStatus};
+use litellm_ai_gateway::runtime::realtime;
 use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::router::Router as ModelRouter;
 use serde::Deserialize;
 
 use crate::auth::RequireMasterKey;
-use crate::integrations::custom_logger::CustomLogger;
-use crate::integrations::types::RequestMetadata;
-use crate::realtime::streaming::{RealTimeStreaming, SessionStatus};
 use crate::state::AppState;
 
 /// Process-local monotonic counter, mixed into the per-session call id so two
@@ -84,7 +84,7 @@ async fn handle(
 }
 
 /// Adapt the axum socket (text frames) to the typed-event `Stream`/`Sink` the
-/// service wants, keeping axum types out of `service`.
+/// runtime wants, keeping axum types out of `litellm-ai-gateway`.
 ///
 /// This is also the realtime-logging seam: every upstream→client event (the
 /// direction carrying `session.created` and `response.done` with usage) is fed
@@ -146,7 +146,7 @@ async fn bridge(
     // splice; the borrow ends when `run` returns, freeing the collector for the
     // single post-session `log_messages` flush. `run` picks a pooled (warm) or
     // fresh upstream — observe fires on the upstream arm either way.
-    let result = service::run(
+    let result = realtime::run(
         &router,
         &pool,
         &model,

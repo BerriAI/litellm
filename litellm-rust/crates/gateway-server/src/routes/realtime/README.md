@@ -1,9 +1,9 @@
 # Realtime route (`GET /v1/realtime`)
 
-Proxies OpenAI's realtime WebSocket. `mod.rs` is the axum surface (handler +
-socket↔events adapter); `service.rs` is the pure logic (select a deployment, then
-splice client ↔ upstream). The pool itself lives in
-`crates/providers/src/realtime_pool.rs`.
+Proxies OpenAI's realtime WebSocket. `mod.rs` is the Axum surface (handler and
+socket-to-events adapter); the pure logic lives in
+`litellm-ai-gateway::runtime::realtime`. The pool lives in
+`litellm-ai-gateway::io::realtime_pool`.
 
 ## Connection pooling
 
@@ -27,7 +27,7 @@ never a correctness dependency.
 
 ```
                           ┌───────────────────────────────────────┐
-   client connect ──────► │ routes/realtime → service::run         │
+   client connect ──────► │ routes/realtime -> runtime::run        │
                           │   pool.take(key)                        │
                           │     hit  → relay buffered               │
                           │            session.created, then splice │
@@ -84,4 +84,4 @@ upstream sockets, which is why warm sockets are short-lived
   attempts against a broken key so it can't exhaust upstream rate limits and degrade
   valid cold-path traffic; the backoff resets the moment a dial succeeds.
 
-Benchmarks and repro: `../../benchmarks/realtime/README.md`.
+Benchmarks and repro: `../../../../ai-gateway/benchmarks/realtime/README.md`.

@@ -1,28 +1,20 @@
-//! LiteLLM AI Gateway — a minimal Axum server fronting the Rust router.
+//! LiteLLM AI Gateway server.
 //!
-//! Flow: client → `POST /v1/realtime` → `router.realtime()` selects a deployment
-//! (simple-shuffle) → `io::realtime::realtime()` invokes OpenAI. The
-//! server owns transport + config; routing lives in the `router` crate.
-//!
-//! The binary requires the `server` feature (declared in `Cargo.toml` via
-//! `required-features`), so cargo skips it unless that feature is on. Everything
-//! the binary needs lives in the library (`litellm_ai_gateway`); `main` just
-//! wires startup.
+//! The binary owns startup and config, then mounts the Axum routes from
+//! `litellm_gateway_server`. Transport-neutral runtime and integrations come
+//! from `litellm_ai_gateway`.
 
 use std::sync::Arc;
 
+use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
+use litellm_ai_gateway::integrations::litellm_python_proxy_api::LiteLLMPythonProxyAPILogger;
 use litellm_ai_gateway::io::realtime_pool::{PoolConfig, RealtimePool, upstream_key};
-use litellm_ai_gateway::routes;
-use litellm_ai_gateway::state::AppState;
 #[cfg(feature = "python-config")]
 use litellm_config::load_model_list;
 use litellm_core::router::{Deployment, LiteLLMParams, Router};
+use litellm_gateway_server::routes;
+use litellm_gateway_server::state::AppState;
 
-use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
-use litellm_ai_gateway::integrations::litellm_python_proxy_api::LiteLLMPythonProxyAPILogger;
-
-/// Bind to localhost by default so the gateway is not a public, unauthenticated
-/// provider proxy out of the box. Override with `HOST` (e.g. `0.0.0.0`).
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 4001;
 
@@ -87,9 +79,10 @@ async fn main() {
 }
 
 /// Register every deployment's upstream key with the pool so the replenisher
-/// pre-warms it. Mirrors `service::run`'s key derivation (strip `openai/`, resolve
-/// api_key); deployments whose key can't be resolved are skipped (they fresh-dial
-/// and surface the auth error on the request path, as before).
+/// pre-warms it. Mirrors `runtime::realtime::run`'s key derivation (strip
+/// `openai/`, resolve api_key); deployments whose key can't be resolved are
+/// skipped (they fresh-dial and surface the auth error on the request path, as
+/// before).
 fn register_deployments(router: &Router, pool: &RealtimePool) {
     for deployment in router.deployments() {
         let params = &deployment.litellm_params;

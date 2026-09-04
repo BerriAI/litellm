@@ -25,10 +25,12 @@ the base when behavior is genuinely different, and say so explicitly in the PR.
 
 `litellm-core` **is** the LiteLLM SDK in Rust: it makes the LLM call.
 `litellm-config` is the config-loading boundary and returns resolved core types.
-`litellm-ai-gateway` is an HTTP/WebSocket server in front of it, and
-`litellm-python-bridge` exposes it to the Python SDK. `litellm-python-interop`
-holds domain-neutral PyO3 primitives shared by Python-facing Rust code. A crate
-is a layer or shared foundation, not a route; add modules, not crates.
+`litellm-ai-gateway` is the framework-independent gateway runtime and integration
+layer. `litellm-gateway-server` is the HTTP/WebSocket server in front of it, and
+`litellm-python-bridge` exposes reusable Rust APIs to the Python SDK.
+`litellm-python-interop` holds domain-neutral PyO3 primitives shared by
+Python-facing Rust code. A crate is a layer, shared foundation, or separate host,
+not a route; add modules, not crates.
 
 ## Core Boundary
 
@@ -45,7 +47,7 @@ Route-level Rust structure mirrors LiteLLM's Python responsibilities:
 - `core/src/providers/<provider>/<route>/transformation.rs` owns the
   provider-specific transform. For Anthropic Messages, this means
   `core/src/providers/anthropic/messages/transformation.rs`.
-- Handlers live in `core`, never in a host. `ai-gateway` must not contain a
+- Provider handlers live in `core`, never in a host. `gateway-server` must not contain a
   route handler that talks to a provider; its axum route reads the HTTP request,
   picks a deployment, and calls the `core` entrypoint. `python-bridge` marshals
   Python objects and calls the same entrypoint.
@@ -57,7 +59,7 @@ its own caller; the host still owns no provider logic.
 Call-hook and lifecycle instrumentation, including phase timing, usage
 accumulation, and callback payload construction, always lives in `core`.
 Hosts feed observed events into core and dispatch the completed payloads through
-their I/O logger; hosts must not own callback orchestration.
+the reusable gateway integrations; HTTP hosts must not own callback orchestration.
 
 Allowed in `core`:
 - The public entrypoint for a top-level LiteLLM call
@@ -81,9 +83,11 @@ Env reads in `core` are limited to credential fallback inside a route's
 no key is passed. Everything else config-shaped is resolved by the host and
 passed in.
 
-Routes still hosted in `ai-gateway` (`ocr`, `audio_transcription`, `realtime`)
-predate this rule and are being moved into `core` route modules; do not add new
-ones there, and prefer moving one when you touch it.
+Legacy call runtimes still hosted in `ai-gateway` (`ocr`,
+`audio_transcription`, realtime provider I/O) predate this rule and are being
+moved into `core` route modules; do not add new ones there, and prefer moving
+one when you touch it. Axum routes, auth extractors, application state, and
+startup belong only in `gateway-server`.
 
 Python owns rollout state and fallback while Rust is being introduced. Rust
 paths must be off by default until parity tests prove equivalence with Python.
@@ -121,7 +125,7 @@ the first PR:
 ## Network I/O Rules
 
 These rules apply to every module that executes network I/O, whether it is a
-`core` route handler or a host such as `ai-gateway`:
+`core` route handler or a host such as `gateway-server`:
 
 - Set connect and full-request timeouts. No unbounded waits.
 - Reuse HTTP clients; do not construct clients per request.
@@ -177,12 +181,11 @@ cd litellm-rust
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy -p litellm-core --all-targets --features bedrock-auth -- -D warnings
-# the ai-gateway binary + server code is behind the `server` feature
 cargo clippy -p litellm-ai-gateway --all-targets --all-features -- -D warnings
+cargo clippy -p litellm-gateway-server --all-targets -- -D warnings
 cargo test --workspace
 cargo test -p litellm-core --features bedrock-auth
-# the `auth`, `routes`, `state` and `realtime` tests only exist under `server`
-cargo test -p litellm-ai-gateway --features server
+cargo test -p litellm-gateway-server
 ```
 
 When a Rust path is exposed through Python, add Python parity tests that compare

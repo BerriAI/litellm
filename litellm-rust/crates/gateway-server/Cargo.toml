@@ -1,0 +1,34 @@
+[package]
+name = "litellm-gateway-server"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "litellm_gateway_server"
+
+[[bin]]
+name = "litellm-ai-gateway"
+path = "src/main.rs"
+
+[dependencies]
+axum = { workspace = true, features = ["ws"] }
+futures-util.workspace = true
+litellm-ai-gateway.workspace = true
+litellm-config.workspace = true
+litellm-core = { workspace = true, features = ["bedrock-auth"] }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
+tracing.workspace = true
+
+[features]
+default = []
+python-config = ["litellm-config/python"]
+
+[dev-dependencies]
+tower = { version = "0.5.3", features = ["util"] }

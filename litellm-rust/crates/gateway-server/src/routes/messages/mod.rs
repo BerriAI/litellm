@@ -1,7 +1,5 @@
 //! `POST /v1/messages`, the Anthropic Messages HTTP surface.
 
-mod service;
-
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Json, State};
@@ -9,6 +7,7 @@ use axum::http::StatusCode;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
+use litellm_ai_gateway::runtime::messages::{MessagesResponse, run};
 use litellm_core::Error;
 use serde_json::{Map, Value};
 
@@ -34,12 +33,12 @@ async fn handle(
     Json(body): Json<Value>,
 ) -> Result<Response, MessagesRouteError> {
     let extra_headers = forwarded_headers(&headers)?;
-    match service::run(&state.router, body, extra_headers)
+    match run(&state.router, body, extra_headers)
         .await
         .map_err(MessagesRouteError::from)?
     {
-        service::MessagesResponse::Json(body) => Ok(Json(body).into_response()),
-        service::MessagesResponse::Stream(upstream) => stream_response(upstream),
+        MessagesResponse::Json(body) => Ok(Json(body).into_response()),
+        MessagesResponse::Stream(upstream) => stream_response(upstream),
     }
 }
 
@@ -149,8 +148,8 @@ mod tests {
     use tower::ServiceExt;
 
     use super::super::app;
-    use crate::io::realtime_pool::RealtimePool;
     use crate::state::AppState;
+    use litellm_ai_gateway::io::realtime_pool::RealtimePool;
 
     fn state(model: &str, api_base: String, master_key: Option<&str>) -> AppState {
         state_with_provider(model, model, api_base, master_key)

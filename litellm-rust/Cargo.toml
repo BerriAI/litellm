@@ -3,6 +3,7 @@ members = [
     "crates/core",
     "crates/config",
     "crates/ai-gateway",
+    "crates/gateway-server",
     "crates/python-interop",
     "crates/python-bridge",
 ]
@@ -20,6 +21,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["r
 litellm-core = { path = "crates/core" }
 litellm-config = { path = "crates/config" }
 litellm-ai-gateway = { path = "crates/ai-gateway", default-features = false }
+litellm-gateway-server = { path = "crates/gateway-server" }
 litellm-python-interop = { path = "crates/python-interop" }
 axum = "0.7"
 pyo3 = "0.29.2"

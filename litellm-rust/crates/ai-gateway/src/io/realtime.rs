@@ -212,7 +212,7 @@ where
 /// `transform_realtime_response`). Returns when either side closes.
 ///
 /// Generic over the client transport (typed events) so this crate stays
-/// framework-agnostic; the gateway adapts its axum socket to these. This is the
+/// framework-agnostic; the gateway server adapts its Axum socket to these. This is the
 /// fresh-dial path: dial, then splice. The pool's warm-handoff path skips the dial
 /// and calls [`splice`] directly with a buffered `session.created`.
 #[allow(clippy::too_many_arguments)]
@@ -295,7 +295,7 @@ mod tests {
 
     /// Live end-to-end check against OpenAI. Ignored by default (CI never runs
     /// it); run explicitly with `OPENAI_API_KEY` set:
-    ///   `cargo test -p litellm-ai-gateway --features server realtime_invokes_openai -- --ignored --nocapture`
+    ///   `cargo test -p litellm-ai-gateway realtime_invokes_openai -- --ignored --nocapture`
     #[tokio::test]
     #[ignore = "hits the live OpenAI realtime API; needs OPENAI_API_KEY"]
     async fn realtime_invokes_openai_and_responds() {
