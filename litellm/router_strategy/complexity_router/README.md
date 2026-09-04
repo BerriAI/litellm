@@ -275,6 +275,15 @@ model_list:
 keep the classifier deployment or provider default, or set a supported value such as `none` or
 `low` to override that call.
 
+Classifier calls have a one-attempt hard deadline. After a timeout, the router opens a process-local
+circuit for that classifier and sends every session through `classifier_fallback` for
+`classifier_llm_config.circuit_breaker_cooldown_seconds` (30 seconds by default). When the cooldown
+expires, one request probes the classifier while concurrent requests continue through the fallback.
+A successful probe closes the circuit; a failed probe restarts the cooldown. The circuit breaker is
+on by default; set `classifier_llm_config.circuit_breaker_enabled: false` to disable it. The default
+fallback is the local heuristic scorer, so a classifier outage does not repeat its timeout across
+every turn or session handled by the router process.
+
 A request short-circuits, meaning it routes on the scorer's own tier with no classifier call, when
 two things hold: the scorer landed at or below `heuristic_first_max_tier`, and it produced at least
 one signal. Everything else goes to the classifier, which then decides as it normally would.

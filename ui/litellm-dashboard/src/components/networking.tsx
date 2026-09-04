@@ -81,6 +81,7 @@ import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./e
 import type { SkillRegisterRequest } from "./claude_code_plugins/types";
 import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelMaxBudgetEditor";
 import type { ObjectPermission } from "./object_permission_types";
+import type { components } from "@/lib/http/schema";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
 import type {
@@ -1534,6 +1535,23 @@ export const teamDailyActivityAggregatedCall = async (
     throw error;
   }
 };
+
+export type TeamUserSpendResponse = components["schemas"]["TeamUserSpendResponse"];
+
+export const teamSpendByUserCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  teamIds: string[],
+): Promise<TeamUserSpendResponse> =>
+  apiClient.get<TeamUserSpendResponse>(`/team/spend/by_user`, {
+    accessToken,
+    query: {
+      start_date: formatDate(startTime),
+      end_date: formatDate(endTime),
+      team_ids: teamIds.join(","),
+    },
+  });
 
 export const organizationDailyActivityCall = async (
   accessToken: string,
