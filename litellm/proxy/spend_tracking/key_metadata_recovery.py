@@ -186,7 +186,7 @@ def _row_with_recovered_fields(
             **row,
             alias_field: meta.get("key_alias") or row.get(alias_field),
             team_id_field: meta.get("team_id") or row.get(team_id_field),
-            user_email_field: meta.get("user_email") or row.get(user_email_field),
+            user_email_field: row.get(user_email_field) or meta.get("user_email"),
         }
     )
 
