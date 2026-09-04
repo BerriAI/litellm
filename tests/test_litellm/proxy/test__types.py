@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from litellm.proxy._types import (
     ROLES_WITHIN_ORG,
+    ChangePasswordRequest,
     GenerateKeyRequest,
     KeyRequest,
     LiteLLM_AuditLogs,
@@ -293,3 +294,28 @@ def test_new_user_request_loudly_rejects_a_password():
 def test_new_user_request_without_password_still_works():
     request = NewUserRequest(user_email="alice@example.com")
     assert request.password is None
+
+
+def test_update_user_request_accepts_a_password():
+    """Admins set user passwords through /user/update; the value must survive
+    model validation so the endpoint can policy-check and hash it."""
+    request = UpdateUserRequest(user_id="user-123", password="hunter2hunter2")
+    assert request.password == "hunter2hunter2"
+
+
+def test_update_user_request_password_hidden_from_repr():
+    """management_endpoint_wrapper string-formats endpoint kwargs into Slack
+    alerts, so the model's repr/str must never contain the plaintext password."""
+    request = UpdateUserRequest(user_id="user-123", password="hunter2hunter2")
+    assert "hunter2hunter2" not in repr(request)
+    assert "hunter2hunter2" not in str(request)
+
+
+def test_change_password_request_passwords_hidden_from_repr():
+    """Any accidental str()/repr() of the request model (debug logs, exception
+    handlers, a future management_endpoint_wrapper) must never contain either
+    plaintext password."""
+    request = ChangePasswordRequest(current_password="hunter2hunter2", new_password="NewP@ssw0rd-2026")
+    for rendered in (repr(request), str(request)):
+        assert "hunter2hunter2" not in rendered
+        assert "NewP@ssw0rd-2026" not in rendered

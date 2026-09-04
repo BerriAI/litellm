@@ -2,7 +2,6 @@ import os
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-
 import pytest
 from fastapi import HTTPException, Request
 
@@ -38,7 +37,7 @@ def test_non_admin_config_update_route_rejected():
     request.query_params = {}
 
     # Test that calling /config/update route raises HTTPException with 403 status
-    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate, delete, update") as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -49,9 +48,8 @@ def test_non_admin_config_update_route_rejected():
         )
 
     # Verify the exception is raised with the correct message
-    assert (
-        "Only proxy admin can be used to generate, delete, update info for new keys/users/teams"
-        in str(exc_info.value)
+    assert "Only proxy admin can be used to generate, delete, update info for new keys/users/teams" in str(
+        exc_info.value
     )
     assert "Route=/config/update" in str(exc_info.value)
     assert "Your role=internal_user" in str(exc_info.value)
@@ -130,7 +128,7 @@ def test_user_banner_update_rejected_for_non_admin():
     request = MagicMock(spec=Request)
     request.query_params = {}
 
-    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate, delete, update") as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -703,9 +701,7 @@ def test_virtual_key_llm_api_route_includes_passthrough_prefix(route):
 
     valid_token = UserAPIKeyAuth(user_id="test_user", allowed_routes=["llm_api_routes"])
 
-    result = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route=route, valid_token=valid_token
-    )
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token)
 
     assert result is True
 
@@ -730,9 +726,7 @@ def test_virtual_key_llm_api_routes_allows_google_routes(route):
 
     valid_token = UserAPIKeyAuth(user_id="test_user", allowed_routes=["llm_api_routes"])
 
-    result = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route=route, valid_token=valid_token
-    )
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token)
 
     assert result is True
 
@@ -802,18 +796,14 @@ def test_google_routes_with_dynamic_model_names_accessible_to_internal_users():
         )
         # If no exception is raised, the test passes
     except Exception as e:
-        pytest.fail(
-            f"Internal user should be able to access Google generateContent route. Got error: {str(e)}"
-        )
+        pytest.fail(f"Internal user should be able to access Google generateContent route. Got error: {e!s}")
 
 
 def test_virtual_key_allowed_routes_with_multiple_litellm_routes_member_names():
     """Test that virtual key works with multiple LiteLLMRoutes member names in allowed_routes"""
 
     # Create a UserAPIKeyAuth with multiple LiteLLMRoutes member names
-    valid_token = UserAPIKeyAuth(
-        user_id="test_user", allowed_routes=["openai_routes", "info_routes"]
-    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", allowed_routes=["openai_routes", "info_routes"])
 
     # Test that routes from both groups are allowed
     result1 = RouteChecks.is_virtual_key_allowed_to_call_route(
@@ -867,13 +857,9 @@ def test_virtual_key_allowed_routes_with_no_member_names_only_explicit():
     )
 
     # Test that explicit routes are allowed
-    result1 = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route="/chat/completions", valid_token=valid_token
-    )
+    result1 = RouteChecks.is_virtual_key_allowed_to_call_route(route="/chat/completions", valid_token=valid_token)
 
-    result2 = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route="/custom/route", valid_token=valid_token
-    )
+    result2 = RouteChecks.is_virtual_key_allowed_to_call_route(route="/custom/route", valid_token=valid_token)
 
     assert result1 is True
     assert result2 is True
@@ -1241,9 +1227,7 @@ def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
             )
 
         assert exc_info.value.status_code == 403
-        assert "Virtual key is not allowed to call this route" in str(
-            exc_info.value.detail
-        )
+        assert "Virtual key is not allowed to call this route" in str(exc_info.value.detail)
 
 
 def test_check_passthrough_route_access_key_metadata_exact_match():
@@ -1702,9 +1686,7 @@ def test_videos_route_accessible_to_internal_users():
         )
         # If no exception is raised, the test passes
     except Exception as e:
-        pytest.fail(
-            f"Internal user should be able to access /v1/videos route. Got error: {str(e)}"
-        )
+        pytest.fail(f"Internal user should be able to access /v1/videos route. Got error: {e!s}")
 
 
 def test_videos_route_with_virtual_key_llm_api_routes():
@@ -1726,12 +1708,8 @@ def test_videos_route_with_virtual_key_llm_api_routes():
     ]
 
     for route in test_routes:
-        result = RouteChecks.is_virtual_key_allowed_to_call_route(
-            route=route, valid_token=valid_token
-        )
-        assert (
-            result is True
-        ), f"Virtual key with llm_api_routes should be able to access {route}"
+        result = RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token)
+        assert result is True, f"Virtual key with llm_api_routes should be able to access {route}"
 
 
 def test_non_proxy_admin_wildcard_allowed_routes():
@@ -1802,9 +1780,7 @@ def test_proxy_admin_viewer_can_access_global_spend_tags():
         )
         # If no exception is raised, the test passes
     except Exception as e:
-        pytest.fail(
-            f"proxy_admin_viewer should be able to access /global/spend/tags route. Got error: {str(e)}"
-        )
+        pytest.fail(f"proxy_admin_viewer should be able to access /global/spend/tags route. Got error: {e!s}")
 
 
 # Routes returning proxy-wide spend across every team / customer / api_key.
@@ -1832,7 +1808,7 @@ def test_internal_user_blocked_from_global_spend_routes(route):
     request = MagicMock(spec=Request)
     request.query_params = {}
 
-    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate, delete, update") as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -1861,7 +1837,7 @@ def test_internal_user_view_only_blocked_from_global_spend_routes(route):
     request = MagicMock(spec=Request)
     request.query_params = {}
 
-    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate, delete, update") as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
@@ -1963,9 +1939,7 @@ def test_proxy_admin_viewer_can_access_audit_logs(route):
             request_data={},
         )
     except Exception as e:
-        pytest.fail(
-            f"proxy_admin_viewer should be able to access {route} route. Got error: {str(e)}"
-        )
+        pytest.fail(f"proxy_admin_viewer should be able to access {route} route. Got error: {e!s}")
 
 
 # ── Admin Viewer parity: Logs page endpoints ──────────────────────────────────
@@ -2028,9 +2002,7 @@ def test_proxy_admin_viewer_can_access_logs_page_endpoints(route):
             request_data={},
         )
     except Exception as e:
-        pytest.fail(
-            f"proxy_admin_viewer should be able to access {route}. Got error: {str(e)}"
-        )
+        pytest.fail(f"proxy_admin_viewer should be able to access {route}. Got error: {e!s}")
 
 
 @pytest.mark.parametrize(
@@ -2140,7 +2112,7 @@ def test_internal_user_blocked_from_admin_viewer_logs_routes(route):
     if route not in INTERNAL_USER_BLOCKED_SUBSET:
         return
 
-    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate, delete, update") as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -2216,9 +2188,7 @@ def test_proxy_admin_viewer_can_access_settings_read_endpoints(route):
             request_data={},
         )
     except Exception as e:
-        pytest.fail(
-            f"proxy_admin_viewer should be able to access {route}. Got error: {str(e)}"
-        )
+        pytest.fail(f"proxy_admin_viewer should be able to access {route}. Got error: {e!s}")
 
 
 # ── Admin Viewer parity: default-allow GET semantics ─────────────────────────
@@ -2417,9 +2387,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         )
         local_file = os.path.abspath(local_file)
 
-        spec = importlib.util.spec_from_file_location(
-            "local_enterprise_route_checks", local_file
-        )
+        spec = importlib.util.spec_from_file_location("local_enterprise_route_checks", local_file)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod.EnterpriseRouteChecks
@@ -2430,9 +2398,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
         with (
-            patch.object(
-                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
-            ),
+            patch.object(EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True),
             patch.object(
                 EnterpriseRouteChecks,
                 "is_management_routes_disabled",
@@ -2448,9 +2414,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
         with (
-            patch.object(
-                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
-            ),
+            patch.object(EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True),
             patch.object(
                 EnterpriseRouteChecks,
                 "is_management_routes_disabled",
@@ -2466,9 +2430,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
         with (
-            patch.object(
-                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
-            ),
+            patch.object(EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True),
             patch.object(
                 EnterpriseRouteChecks,
                 "is_management_routes_disabled",
@@ -2479,9 +2441,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
                 EnterpriseRouteChecks.should_call_route("/v1/chat/completions")
 
             assert exc_info.value.status_code == 403
-            assert "LLM API routes are disabled for this instance." in str(
-                exc_info.value.detail
-            )
+            assert "LLM API routes are disabled for this instance." in str(exc_info.value.detail)
 
     @patch("litellm.proxy.proxy_server.premium_user", True)
     def test_should_embeddings_still_blocked_when_llm_api_disabled(self):
@@ -2489,9 +2449,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
         with (
-            patch.object(
-                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
-            ),
+            patch.object(EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True),
             patch.object(
                 EnterpriseRouteChecks,
                 "is_management_routes_disabled",
@@ -2509,9 +2467,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
         with (
-            patch.object(
-                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=False
-            ),
+            patch.object(EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=False),
             patch.object(
                 EnterpriseRouteChecks,
                 "is_management_routes_disabled",
@@ -2530,9 +2486,7 @@ def test_route_in_additional_public_routes_wildcard_match():
     from litellm.proxy.auth.auth_utils import route_in_additonal_public_routes
 
     with (
-        patch(
-            "litellm.proxy.proxy_server.general_settings", {"public_routes": ["/api/*"]}
-        ),
+        patch("litellm.proxy.proxy_server.general_settings", {"public_routes": ["/api/*"]}),
         patch("litellm.proxy.proxy_server.premium_user", True),
     ):
         # Wildcard should match subpaths
@@ -2624,7 +2578,7 @@ def test_non_admin_non_team_admin_cannot_access_config_update_but_can_attempt_re
     )
 
     # /config/update is still blocked
-    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate, delete, update") as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -2710,8 +2664,6 @@ def test_available_roles_accessible_to_non_admin_users(user_role):
 
 
 # ── _user_is_org_admin tests ──────────────────────────────────────────────────
-
-
 
 
 def _make_org_admin_user(org_id: str) -> LiteLLM_UserTable:
@@ -2836,9 +2788,7 @@ async def test_add_team_org_context_noop_when_org_id_already_present():
         raise AssertionError("must not resolve when organization_id is present")
 
     body = {"team_id": "team-1", "organization_id": "org-explicit"}
-    out = await add_team_org_context_to_request_body(
-        route="/team/update", request_body=body, fetch_team_org_id=fetch
-    )
+    out = await add_team_org_context_to_request_body(route="/team/update", request_body=body, fetch_team_org_id=fetch)
     assert out == body
 
 
@@ -2850,9 +2800,7 @@ async def test_add_team_org_context_noop_for_other_routes():
         raise AssertionError("must not resolve for a non-opted-in route")
 
     body = {"team_id": "team-1"}
-    out = await add_team_org_context_to_request_body(
-        route="/team/delete", request_body=body, fetch_team_org_id=fetch
-    )
+    out = await add_team_org_context_to_request_body(route="/team/delete", request_body=body, fetch_team_org_id=fetch)
     assert out == body
 
 
@@ -2865,9 +2813,7 @@ async def test_add_team_org_context_noop_when_team_has_no_org():
         return None
 
     body = {"team_id": "team-1"}
-    out = await add_team_org_context_to_request_body(
-        route="/team/update", request_body=body, fetch_team_org_id=fetch
-    )
+    out = await add_team_org_context_to_request_body(route="/team/update", request_body=body, fetch_team_org_id=fetch)
     assert out == body
 
 
@@ -3151,9 +3097,7 @@ async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
             # Removing the endpoint should clean up openai_routes
             # remove_endpoint_routes takes endpoint_id (UUID portion of
             # the route key "{id}:exact:{path}:{methods}")
-            registered = (
-                InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
-            )
+            registered = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
             endpoint_ids = {k.split(":")[0] for k in registered}
             for eid in endpoint_ids:
                 InitPassThroughEndpointHelpers.remove_endpoint_routes(eid)
@@ -3163,9 +3107,7 @@ async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
         LiteLLMRoutes.openai_routes.value[:] = original_routes
         # Clean up any routes registered during this test to avoid
         # polluting the module-level _registered_pass_through_routes
-        registered = (
-            InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
-        )
+        registered = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
         for k in registered:
             InitPassThroughEndpointHelpers.remove_endpoint_routes(k.split(":")[0])
 
@@ -3196,8 +3138,7 @@ def test_provider_name_substring_not_classified_as_llm_route(route):
     from litellm.proxy.auth.route_checks import RouteChecks
 
     assert RouteChecks.is_llm_api_route(route=route) is False, (
-        f"{route!r} should NOT be classified as an LLM API route — "
-        "provider-name substring match bypass"
+        f"{route!r} should NOT be classified as an LLM API route — provider-name substring match bypass"
     )
 
 
@@ -3219,9 +3160,7 @@ def test_legitimate_passthrough_routes_still_classified_as_llm_route(route):
     """Legitimate passthrough routes must still pass is_llm_api_route."""
     from litellm.proxy.auth.route_checks import RouteChecks
 
-    assert (
-        RouteChecks.is_llm_api_route(route=route) is True
-    ), f"{route!r} should be classified as an LLM API route"
+    assert RouteChecks.is_llm_api_route(route=route) is True, f"{route!r} should be classified as an LLM API route"
 
 
 @pytest.mark.parametrize(
@@ -3279,7 +3218,7 @@ def test_internal_user_blocked_from_search_tool_writes(route):
     request = MagicMock(spec=Request)
     request.query_params = {}
 
-    with pytest.raises(Exception, match='Only proxy admin can be used to generate, delete, update') as exc_info:
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate, delete, update") as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -3655,12 +3594,7 @@ def test_agent_inference_routes_stay_llm_api(route):
 def test_agent_routes_union_still_covers_both_halves(route):
     """Keys configured with allowed_routes=["agent_routes"] must keep both halves."""
 
-    assert (
-        RouteChecks.check_route_access(
-            route=route, allowed_routes=LiteLLMRoutes.agent_routes.value
-        )
-        is True
-    )
+    assert RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.agent_routes.value) is True
 
 
 @pytest.mark.parametrize("route", AGENT_MANAGEMENT_ROUTES)
@@ -3714,6 +3648,75 @@ def test_agent_registry_route_gate_open_to_non_admin_roles(user_role, method, ro
         valid_token=valid_token,
         request_data={},
     )
+
+
+def test_proxy_admin_viewer_user_update_password_param_rejected():
+    """The self-service /user/update password carve-out is closed: non-admins
+    change their own password through /user/password/change, which verifies
+    the current password. Admin password sets don't pass through this check."""
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks._check_proxy_admin_viewer_access(
+            route="/user/update",
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            request_data={"password": "hunter2hunter2"},
+        )
+    assert exc_info.value.status_code == 403
+    assert "password" in str(exc_info.value.detail)
+
+
+def test_proxy_admin_viewer_user_update_user_email_still_allowed():
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+
+    allowed = RouteChecks._check_proxy_admin_viewer_access(
+        route="/user/update",
+        _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        request_data={"user_email": "viewer@example.com"},
+        request=request,
+    )
+
+    assert allowed is None
+
+
+def test_proxy_admin_viewer_can_change_own_password():
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+
+    allowed = RouteChecks._check_proxy_admin_viewer_access(
+        route="/user/password/change",
+        _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        request_data={"current_password": "a", "new_password": "b"},
+        request=request,
+    )
+
+    assert allowed is None
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+def test_non_admin_roles_can_change_own_password(user_role):
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=user_role)
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+    request.query_params = {}
+
+    allowed = RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=LiteLLM_UserTable(user_id="test_user", user_role=user_role),
+        _user_role=user_role,
+        route="/user/password/change",
+        request=request,
+        valid_token=valid_token,
+        request_data={"current_password": "a", "new_password": "b"},
+    )
+
+    assert allowed is None
+
+
 TEAM_CALLBACK_ROUTES = (
     "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/callback",
     "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/callback/langfuse",
