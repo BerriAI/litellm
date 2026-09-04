@@ -1,5 +1,6 @@
 import { isAutoRouterDeployment, type AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
+import { resolveAvailableModel, type AutoRouterPreset, type ModelAvailability } from "@/lib/autorouter_presets";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 
 type ModelCost = {
@@ -8,6 +9,10 @@ type ModelCost = {
 };
 
 export type ModelCostMap = Record<string, ModelCost>;
+
+const TIER_NAMES = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"] as const;
+type TierName = (typeof TIER_NAMES)[number];
+export type PreferredTierModels = Record<TierName, string[]>;
 
 const price = (cost: ModelCost | null | undefined): number | undefined => {
   const input = cost?.input_cost_per_token;
@@ -56,10 +61,46 @@ const selectTierModels = (ranked: string[]): [string, string, string, string] =>
   return [ranked[0], ranked[Math.floor(last / 3)], ranked[Math.floor((2 * last) / 3)], ranked[last]];
 };
 
+export const buildPreferredTierModels = (
+  presets: AutoRouterPreset[],
+  availability: ModelAvailability,
+): PreferredTierModels =>
+  Object.fromEntries(
+    TIER_NAMES.map((tier) => [
+      tier,
+      Array.from(
+        new Set(
+          presets.flatMap((preset) =>
+            preset.complexity_router_config.tiers[tier].flatMap((model) => {
+              const resolved = resolveAvailableModel(model, availability);
+              return resolved ? [resolved] : [];
+            }),
+          ),
+        ),
+      ),
+    ]),
+  ) as PreferredTierModels;
+
+const selectPreferredTierModels = (
+  preferredByTier: PreferredTierModels,
+  usableNames: ReadonlySet<string>,
+): [string, string, string, string] | null => {
+  const preferred = TIER_NAMES.map((tier) => preferredByTier[tier].find((name) => usableNames.has(name)));
+  const candidates = preferred.flatMap((model, tier) => (model ? [{ model, tier }] : []));
+  if (candidates.length === 0) return null;
+
+  const nearest = (tier: number): string =>
+    [...candidates].sort(
+      (left, right) => Math.abs(left.tier - tier) - Math.abs(right.tier - tier) || left.tier - right.tier,
+    )[0].model;
+  return preferred.map((model, tier) => model ?? nearest(tier)) as [string, string, string, string];
+};
+
 export const buildAutomaticRouterConfig = (
   models: ModelGroup[],
   deployments: AutoRouterDeployment[],
   costMap: ModelCostMap,
+  preferredByTier?: PreferredTierModels,
 ): ComplexityRouterConfigValue | null => {
   const autoRouterNames: ReadonlySet<string> = new Set(
     deployments
@@ -75,6 +116,7 @@ export const buildAutomaticRouterConfig = (
     ),
   );
   if (names.length === 0) return null;
+  const usableNames: ReadonlySet<string> = new Set(names);
 
   const ranked = names
     .map((name) => ({ name, price: groupPrice(name, deployments, costMap) }))
@@ -88,7 +130,9 @@ export const buildAutomaticRouterConfig = (
     })
     .map(({ name }) => name);
 
-  const selected = selectTierModels(ranked);
+  const selected = preferredByTier
+    ? selectPreferredTierModels(preferredByTier, usableNames) ?? selectTierModels(ranked)
+    : selectTierModels(ranked);
 
   return {
     tiers: {

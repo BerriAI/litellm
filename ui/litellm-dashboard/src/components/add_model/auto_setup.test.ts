@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
-import { buildAutomaticRouterConfig } from "./auto_setup";
+import { buildAutomaticRouterConfig, type PreferredTierModels } from "./auto_setup";
 
 const models = (...names: string[]) => names.map((model_group) => ({ model_group, mode: "chat" }));
 
@@ -24,6 +24,68 @@ const tierModels = (config: ReturnType<typeof buildAutomaticRouterConfig>) =>
   ];
 
 describe("buildAutomaticRouterConfig", () => {
+  it("uses available preferred models before price ranking", () => {
+    const preferred: PreferredTierModels = {
+      SIMPLE: ["preferred-simple"],
+      MEDIUM: ["preferred-medium"],
+      COMPLEX: ["preferred-complex"],
+      REASONING: ["preferred-reasoning"],
+    };
+    const available = [...Object.values(preferred).flat(), "cheap-decoy", "expensive-decoy"];
+    const config = buildAutomaticRouterConfig(
+      models(...available),
+      available.map((name, index) => deployment(name, index + 1)),
+      {},
+      preferred,
+    );
+
+    expect(tierModels(config)).toEqual([
+      "preferred-simple",
+      "preferred-medium",
+      "preferred-complex",
+      "preferred-reasoning",
+    ]);
+  });
+
+  it("reuses the nearest preferred model for tiers with no preferred match", () => {
+    const preferred: PreferredTierModels = {
+      SIMPLE: ["preferred-simple"],
+      MEDIUM: [],
+      COMPLEX: ["preferred-complex"],
+      REASONING: [],
+    };
+    const config = buildAutomaticRouterConfig(
+      models("preferred-simple", "preferred-complex", "cheap-decoy"),
+      [deployment("preferred-simple", 4), deployment("preferred-complex", 5), deployment("cheap-decoy", 1)],
+      {},
+      preferred,
+    );
+
+    expect(tierModels(config)).toEqual([
+      "preferred-simple",
+      "preferred-simple",
+      "preferred-complex",
+      "preferred-complex",
+    ]);
+  });
+
+  it("uses price ranking when none of the preferred models are available", () => {
+    const unavailablePreferred: PreferredTierModels = {
+      SIMPLE: ["missing-simple"],
+      MEDIUM: ["missing-medium"],
+      COMPLEX: ["missing-complex"],
+      REASONING: ["missing-reasoning"],
+    };
+    const config = buildAutomaticRouterConfig(
+      models("expensive", "cheap", "premium", "middle"),
+      [deployment("cheap", 1), deployment("middle", 2), deployment("premium", 3), deployment("expensive", 4)],
+      {},
+      unavailablePreferred,
+    );
+
+    expect(tierModels(config)).toEqual(["cheap", "middle", "premium", "expensive"]);
+  });
+
   it("uses four different models when four are available", () => {
     const config = buildAutomaticRouterConfig(
       models("expensive", "cheap", "premium", "middle"),
