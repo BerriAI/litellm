@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, get_type_hints, overload
 
 import httpx
@@ -112,7 +112,7 @@ class MistralConfig(OpenAIGPTConfig):
         return supported_params
 
     @staticmethod
-    def _map_tool_choice(tool_choice: str | dict[str, object]) -> str | ChatCompletionToolChoiceObjectParam | None:
+    def _map_tool_choice(tool_choice: str | Mapping[str, object]) -> str | ChatCompletionToolChoiceObjectParam | None:
         match tool_choice:
             case "auto" | "none":
                 return tool_choice
