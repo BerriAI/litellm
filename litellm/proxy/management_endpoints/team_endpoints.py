@@ -170,6 +170,8 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamMemberAddResult,
     TeamMemberInfoResponse,
     TeamMetadataSchemaResponse,
+    TeamUserSpendResponse,
+    TeamUserSpendRow,
     UpdateTeamMemberPermissionsRequest,
 )
 
@@ -6231,3 +6233,138 @@ async def get_team_daily_activity_aggregated(
         timezone_offset_minutes=timezone,
         include_entity_breakdown=True,
     )
+
+
+def _team_user_spend_sql(*, team_count: int, restrict_to_user: bool) -> str:
+    """Per-(team, user) rollup straight from LiteLLM_SpendLogs. The daily spend
+    tables key on (team_id, api_key) or (user_id, api_key) only, so this is the
+    one place both dimensions of a request survive, including JWT/SSO traffic
+    that carries no virtual key."""
+    team_placeholders: Final = ", ".join(f"${i}" for i in range(3, 3 + team_count))
+    user_clause: Final = f' AND sl."user" = ${3 + team_count}' if restrict_to_user else ""
+    return f"""
+        SELECT
+            sl.team_id,
+            sl."user" AS user_id,
+            u.user_email,
+            u.user_alias,
+            SUM(sl.spend)::float AS spend,
+            SUM(sl.prompt_tokens)::bigint AS prompt_tokens,
+            SUM(sl.completion_tokens)::bigint AS completion_tokens,
+            SUM(sl.total_tokens)::bigint AS total_tokens,
+            COUNT(*)::bigint AS api_requests,
+            COUNT(*) FILTER (WHERE sl.status IS DISTINCT FROM 'failure')::bigint AS successful_requests,
+            COUNT(*) FILTER (WHERE sl.status = 'failure')::bigint AS failed_requests
+        FROM "LiteLLM_SpendLogs" sl
+        LEFT JOIN "LiteLLM_UserTable" u ON u.user_id = sl."user"
+        WHERE sl."startTime" >= $1::timestamp
+            AND sl."startTime" < $2::timestamp + INTERVAL '1 day'
+            AND sl.team_id IN ({team_placeholders}){user_clause}
+        GROUP BY sl.team_id, sl."user", u.user_email, u.user_alias
+        ORDER BY spend DESC, sl.team_id, sl."user"
+    """
+
+
+class _TeamUserSpendDbRow(TypedDict):
+    team_id: ReadOnly[str]
+    user_id: ReadOnly[str | None]
+    user_email: ReadOnly[str | None]
+    user_alias: ReadOnly[str | None]
+    spend: ReadOnly[float]
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+    api_requests: ReadOnly[int]
+    successful_requests: ReadOnly[int]
+    failed_requests: ReadOnly[int]
+
+
+@router.get(
+    "/team/spend/by_user",
+    response_model=TeamUserSpendResponse,
+    tags=["team management"],  # mutable-ok: fastapi route tags must be a list
+)
+async def get_team_spend_by_user(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    team_ids: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> TeamUserSpendResponse:
+    """
+    Spend per user within the given teams, attributed per request from spend logs.
+
+    Unlike /team/daily/activity (grouped by api_key) and /user/daily/activity
+    (grouped by user across every team), this answers "which members of team X
+    spent what", which is what chargeback needs when users belong to several
+    teams and authenticate with JWT/SSO instead of virtual keys.
+
+    Proxy admins may query any team. Team admins and members holding the
+    `/team/daily/activity` permission see every user of the requested teams;
+    other members only see their own row.
+
+    Args:
+        team_ids (str): Comma-separated list of team IDs. Required.
+        start_date (str): Start of the range, inclusive (YYYY-MM-DD, UTC).
+        end_date (str): End of the range, inclusive (YYYY-MM-DD, UTC).
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
+    if range_error is not None or start_date is None or end_date is None:
+        raise _daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
+
+    if not team_ids:
+        raise _daily_activity_error(status_code=400, message="Please provide team_ids")
+
+    scope: Final = await _resolve_team_daily_activity_scope(
+        team_ids=team_ids,
+        exclude_team_ids=None,
+        api_key=None,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    scoped_team_ids: Final = tuple(scope.team_ids or ())
+    if not scoped_team_ids:
+        return TeamUserSpendResponse(start_date=start_date, end_date=end_date, results=())
+
+    own_user_only: Final = scope.api_key_filter is not None
+    user_param: Final = (user_api_key_dict.user_id or "",) if own_user_only else ()
+    rows: Final[Sequence[_TeamUserSpendDbRow]] = await prisma_client.db.query_raw(
+        _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
+        start_date,
+        end_date,
+        *scoped_team_ids,
+        *user_param,
+    )
+    results: Final = tuple(
+        TeamUserSpendRow(
+            team_id=row["team_id"],
+            team_alias=_team_alias_or_none(scope.team_alias_metadata.get(row["team_id"])),
+            user_id=row["user_id"] or "",
+            user_email=row["user_email"],
+            user_alias=row["user_alias"],
+            spend=row["spend"],
+            prompt_tokens=row["prompt_tokens"],
+            completion_tokens=row["completion_tokens"],
+            total_tokens=row["total_tokens"],
+            api_requests=row["api_requests"],
+            successful_requests=row["successful_requests"],
+            failed_requests=row["failed_requests"],
+        )
+        for row in rows
+    )
+    return TeamUserSpendResponse(start_date=start_date, end_date=end_date, results=results)
+
+
+def _team_alias_or_none(metadata: Mapping[str, object] | None) -> str | None:
+    alias: Final = metadata.get("team_alias") if metadata is not None else None
+    return alias if isinstance(alias, str) else None

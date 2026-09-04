@@ -3312,6 +3312,45 @@ def test_user_daily_activity_routes_reachable_by_non_admin(route, user_role):
     )
 
 
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+def test_team_spend_by_user_reachable_by_non_admin(user_role):
+    """Team admins are internal users, and /team/spend/by_user is how they read
+    per-member spend for their own team. The handler scopes non-admins itself, so
+    the route layer must let them through like the /team/daily/activity siblings.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=user_role,
+    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=user_role)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    def outcome(route: str) -> str:
+        try:
+            RouteChecks.non_proxy_admin_allowed_routes_check(
+                user_obj=user_obj,
+                _user_role=user_role,
+                route=route,
+                request=request,
+                valid_token=valid_token,
+                request_data={},
+            )
+        except Exception as exc:
+            return f"denied: {exc}"
+        return "allowed"
+
+    assert outcome("/team/spend/by_user") == "allowed"
+    assert outcome("/team/spend/by_key").startswith("denied: Only proxy admin")
+
+
 def test_user_daily_activity_aggregated_not_covered_by_prefix_match():
     """check_route_access is exact-match plus explicit wildcards, so listing the
     parent /user/daily/activity does not implicitly cover the /aggregated
