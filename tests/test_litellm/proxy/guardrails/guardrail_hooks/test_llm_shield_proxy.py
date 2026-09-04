@@ -392,14 +392,26 @@ class TestRequestCoverage:
         following it as far as it goes.
         """
         guardrail = _guardrail()
-        _mock_post(guardrail, {"texts": ["ok"] * 64})
 
-        deep: dict = {"type": "tool_result", "content": "jane.doe@example.com"}
+        captured: list = []
+
+        async def echo(url, headers, json, timeout):  # noqa: ARG001
+            captured.append(json["texts"])
+            return _response({"texts": list(json["texts"])})
+
+        guardrail.async_handler.post = AsyncMock(side_effect=echo)  # type: ignore[method-assign]
+
+        deep: dict = {"type": "tool_result", "content": "past-the-bound@example.com"}
         for _ in range(200):
             deep = {"type": "tool_result", "content": [deep]}
-        data = {"messages": [{"role": "user", "content": [deep]}]}
+        data = {"messages": [{"role": "user", "content": [{"type": "text", "text": "shallow"}, deep]}]}
 
         await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
+
+        sent = captured[0]
+        assert "shallow" in sent
+        assert "past-the-bound@example.com" not in sent, "the walk followed the chain past its bound"
+        assert len(sent) < 200
 
     @pytest.mark.asyncio
     async def test_responses_prompt_object_variables_are_redacted(self):
