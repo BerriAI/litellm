@@ -24,7 +24,13 @@ from litellm.integrations.shadow_eval_logger import (
     _unmask_preference,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN, ModelResponse
+from litellm.types.utils import (
+    SHADOW_EVAL_JUDGE_CALL_ORIGIN,
+    SHADOW_EVAL_ROUTER_CALL_ORIGIN,
+    ChatCompletionCustomToolCallPayload,
+    ChatCompletionMessageCustomToolCall,
+    ModelResponse,
+)
 
 
 def _job(**overrides) -> ActiveShadowEvalJob:
@@ -141,6 +147,15 @@ def _shadow_reply_router(message, finish_reason="stop", routed_model="cheap-mode
 TOOL_CALL_MESSAGE = {
     "content": None,
     "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "Read", "arguments": "{}"}}],
+}
+
+CUSTOM_TOOL_CALL_MESSAGE = {
+    "content": None,
+    "tool_calls": [
+        ChatCompletionMessageCustomToolCall(
+            id="c2", custom=ChatCompletionCustomToolCallPayload(name="exec_sql", input="select 1")
+        )
+    ],
 }
 
 
@@ -1188,6 +1203,16 @@ class TestShadowPipeline:
         assert "tool call" in error
         assert "tool=Read" in error
         assert "empty response" not in error
+
+    async def test_a_custom_tool_call_shadow_reply_still_names_its_tool(self):
+        """Custom tool calls carry no `function` key: the name lives under `custom`, so
+        reading only `function.name` reports every one of them as `tool=unnamed`."""
+        error = await self._no_text_error(
+            _shadow_reply_router(CUSTOM_TOOL_CALL_MESSAGE, finish_reason="tool_calls")
+        )
+
+        assert "tool call" in error
+        assert "tool=exec_sql" in error
 
     async def test_an_empty_shadow_reply_names_the_finish_reason_and_the_routed_model(self):
         """A reply that really carried no text is diagnosable only if the row says what

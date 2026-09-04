@@ -166,12 +166,11 @@ def _chat_request_from_responses(
 
 
 def _chat_choice(response_obj: object) -> object | None:
-    """The response's first choice, whichever of the two shapes the caller holds: a plain
-    payload mapping or a duck-typed ModelResponse."""
+    """The response's first choice, from a payload mapping or a duck-typed ModelResponse."""
     try:
-        return (
-            response_obj["choices"][0] if isinstance(response_obj, Mapping) else response_obj.choices[0]  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed ModelResponse
-        )
+        if isinstance(response_obj, Mapping):
+            return response_obj["choices"][0]
+        return response_obj.choices[0]  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed ModelResponse
     except (AttributeError, KeyError, IndexError, TypeError):
         return None
 
@@ -208,27 +207,27 @@ def _chat_finish_reason(response_obj: object) -> str:
 
 
 def _tool_call_name(read: Callable[[str], object]) -> str | None:
-    """The tool a reply chose, or None when it carries no tool call. A tool call whose
-    name cannot be read still answers "it called a tool", which is the question here."""
+    """The tool a reply chose, or None when it carries no tool call. Custom tool calls name
+    themselves under ``custom`` rather than ``function``. A tool call whose name cannot be
+    read still answers "it called a tool", which is the question here."""
     calls: Final = read("tool_calls")
     listed: Final = calls if isinstance(calls, Sequence) and not isinstance(calls, str) else ()
     call: Final = listed[0] if listed else read("function_call")
     if call is None:
         return None
-    nested: Final = _field_reader(call)("function")
-    name: Final = _field_reader(nested if nested is not None else call)("name")
+    read_call: Final = _field_reader(call)
+    payload: Final = read_call("function") or read_call("custom") or call
+    name: Final = _field_reader(payload)("name")
     return str(name) if name else "unnamed"
 
 
 def _shadow_no_text_error(response_obj: object, routed_model: str) -> str:
     """Why a shadow reply yielded no judgeable text, as the attempt row's error string.
 
-    A tool-call-final reply is a divergence a text judge cannot score rather than a failed
-    call, and the sampling side already drops the real arm's tool-final turns for exactly
-    that reason, so collapsing both into one string leaves an all-error job with no way to
-    tell a tool-happy arm from a broken one. The stable sentence comes first and every
-    varying part after the semicolon, so grouping rows by error still yields one row per
-    cause."""
+    A tool-call-final reply is a divergence a text judge cannot score, not a failed call, so
+    collapsing both into one string leaves an all-error job with no way to tell a tool-happy
+    arm from a broken one. The stable sentence comes first and every varying part after the
+    semicolon, so grouping rows by error still yields one row per cause."""
     read: Final = _chat_message_reader(response_obj)
     tool_name: Final = _tool_call_name(read) if read is not None else None
     detail: Final = f"finish_reason={_chat_finish_reason(response_obj)}, model={routed_model or 'unknown'}"
