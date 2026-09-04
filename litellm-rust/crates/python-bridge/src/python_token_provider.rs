@@ -1,7 +1,8 @@
 use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
-use litellm_core::auth::{AuthError, AuthErrorKind, SecretString, TokenLease, TokenProvider};
+use litellm_core::Error;
+use litellm_core::auth::{SecretString, TokenLease, TokenProvider};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyTuple};
@@ -90,14 +91,10 @@ fn parse_token_result(value: &Bound<'_, PyAny>) -> PyResult<Option<TokenLease>> 
 
 #[async_trait]
 impl TokenProvider for PythonTokenProvider {
-    async fn token(&self) -> Result<TokenLease, AuthError> {
-        self.resolve().await.map_err(|_| {
-            AuthError::new(
-                AuthErrorKind::ExternalProviderFailed,
-                "python_token_provider_failed",
-                "Python token provider failed",
-            )
-        })
+    async fn token(&self) -> Result<TokenLease, Error> {
+        self.resolve()
+            .await
+            .map_err(|_| Error::Auth("Python token provider failed".to_string()))
     }
 }
 

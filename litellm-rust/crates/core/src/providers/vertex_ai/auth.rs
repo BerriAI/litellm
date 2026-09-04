@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 
 use crate::Error;
 use crate::auth::{
-    Environment, ExpiringToken, ResolvedAuth, SecretString, TokenCache, TokenProvider,
+    Environment, ExpiringToken, ResolvedAuth, SecretString, SystemClock, TokenCache, TokenProvider,
 };
 use crate::constants::{
     VERTEX_AUTH_CLOUD_PLATFORM_SCOPE, VERTEX_AUTH_SDK_TOKEN_CACHE_TTL_SECS,
@@ -225,7 +225,10 @@ pub async fn resolve_vertex_auth(
             };
             TOKENS
                 .get_or_init(|| {
-                    TokenCache::new(Duration::from_secs(VERTEX_AUTH_TOKEN_REFRESH_WINDOW_SECS))
+                    TokenCache::new(
+                        Duration::from_secs(VERTEX_AUTH_TOKEN_REFRESH_WINDOW_SECS),
+                        Arc::new(SystemClock),
+                    )
                 })
                 .token(key, &provider)
                 .await?

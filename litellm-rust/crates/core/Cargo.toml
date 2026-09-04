@@ -7,6 +7,8 @@ repository.workspace = true
 
 [dependencies]
 async-trait = "0.1"
+azure_core = "1.0.0"
+azure_identity = { version = "1.0.0", features = ["tokio"] }
 base64.workspace = true
 google-cloud-auth = { version = "=1.15.0", default-features = false, features = ["default-rustls-provider"] }
 rand.workspace = true
@@ -14,9 +16,8 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["net", "sync", "time"] }
+tokio = { workspace = true, features = ["net", "rt", "sync", "time"] }
 tracing.workspace = true
-tokio = { workspace = true, features = ["sync", "rt"] }
 tracing-subscriber = { workspace = true, optional = true }
 sha2.workspace = true
 aws-config = { version = "1.9.0", default-features = false, features = ["rustls", "rt-tokio"], optional = true }

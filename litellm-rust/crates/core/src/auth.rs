@@ -58,6 +58,96 @@ impl fmt::Debug for SecretString {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthHeaderKind {
+    Bearer,
+    Header(&'static str),
+}
+
+impl AuthHeaderKind {
+    pub fn header_name(self) -> &'static str {
+        match self {
+            Self::Bearer => "authorization",
+            Self::Header(name) => name,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResolvedAuth {
+    Bearer(SecretString),
+    Header {
+        name: &'static str,
+        value: SecretString,
+    },
+}
+
+impl ResolvedAuth {
+    pub fn from_credential(kind: AuthHeaderKind, credential: impl Into<String>) -> Self {
+        let credential = SecretString::new(credential);
+        match kind {
+            AuthHeaderKind::Bearer => Self::Bearer(credential),
+            AuthHeaderKind::Header(name) => Self::Header {
+                name,
+                value: credential,
+            },
+        }
+    }
+
+    pub fn header_name(&self) -> &'static str {
+        match self {
+            Self::Bearer(_) => "authorization",
+            Self::Header { name, .. } => name,
+        }
+    }
+
+    pub fn credential_header(&self) -> (String, String) {
+        match self {
+            Self::Bearer(token) => (
+                "Authorization".to_string(),
+                format!("Bearer {}", token.expose()),
+            ),
+            Self::Header { name, value } => ((*name).to_string(), value.expose().to_string()),
+        }
+    }
+
+    pub fn from_header(kind: AuthHeaderKind, value: &str) -> Option<Self> {
+        match kind {
+            AuthHeaderKind::Bearer => value
+                .trim()
+                .split_once(char::is_whitespace)
+                .filter(|(scheme, token)| {
+                    scheme.eq_ignore_ascii_case("bearer") && !token.trim().is_empty()
+                })
+                .map(|(_, token)| Self::Bearer(SecretString::new(token.trim()))),
+            AuthHeaderKind::Header(name) if !value.trim().is_empty() => Some(Self::Header {
+                name,
+                value: SecretString::new(value),
+            }),
+            AuthHeaderKind::Header(_) => None,
+        }
+    }
+
+    pub fn apply_preserving_existing(
+        &self,
+        mut headers: Vec<(String, String)>,
+    ) -> Vec<(String, String)> {
+        if !crate::http_utils::has_header(&headers, self.header_name()) {
+            headers.push(self.credential_header());
+        }
+        headers
+    }
+
+    pub fn apply_replacing_existing(
+        &self,
+        mut headers: Vec<(String, String)>,
+    ) -> Vec<(String, String)> {
+        headers.retain(|(name, _)| !name.eq_ignore_ascii_case(self.header_name()));
+        headers.push(self.credential_header());
+        headers
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuthErrorKind {
     MissingCredential,
     InvalidConfiguration,
@@ -103,9 +193,11 @@ pub struct TokenLease {
     pub expires_at: Instant,
 }
 
+pub type ExpiringToken = TokenLease;
+
 #[async_trait]
 pub trait TokenProvider: Send + Sync {
-    async fn token(&self) -> Result<TokenLease, AuthError>;
+    async fn token(&self) -> Result<TokenLease, Error>;
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -174,11 +266,11 @@ impl TokenCache {
             .clone()
     }
 
-    pub async fn token(
+    pub async fn token_cached(
         self: &Arc<Self>,
         key: TokenCacheKey,
         provider: Arc<dyn TokenProvider>,
-    ) -> Result<SecretString, AuthError> {
+    ) -> Result<SecretString, Error> {
         let entry = self.entry(key).await;
         let now = self.clock.now();
         let cached = entry.lease.read().await.clone();
@@ -213,7 +305,7 @@ impl TokenCache {
         &self,
         entry: Arc<TokenEntry>,
         provider: Arc<dyn TokenProvider>,
-    ) -> Result<SecretString, AuthError> {
+    ) -> Result<SecretString, Error> {
         let _guard = entry.refresh.lock().await;
         let now = self.clock.now();
         if let Some(lease) = entry.lease.read().await.as_ref()
@@ -223,10 +315,8 @@ impl TokenCache {
         }
         let lease = provider.token().await?;
         if lease.expires_at <= self.clock.now() {
-            return Err(AuthError::new(
-                AuthErrorKind::CredentialUnavailable,
-                "expired_token",
-                "credential provider returned an expired token",
+            return Err(Error::Auth(
+                "credential provider returned an expired token".to_string(),
             ));
         }
         let token = lease.token.clone();
@@ -238,6 +328,31 @@ impl TokenCache {
         if let Some(entry) = self.entries.lock().await.get(key).cloned() {
             *entry.lease.write().await = None;
         }
+    }
+
+    pub async fn token(
+        &self,
+        key: String,
+        provider: &dyn TokenProvider,
+    ) -> Result<SecretString, Error> {
+        let key = TokenCacheKey::fingerprint([key.as_bytes()]);
+        let entry = self.entry(key).await;
+        let _guard = entry.refresh.lock().await;
+        let now = self.clock.now();
+        if let Some(lease) = entry.lease.read().await.as_ref()
+            && lease.expires_at.saturating_duration_since(now) > self.refresh_before
+        {
+            return Ok(lease.token.clone());
+        }
+        let lease = provider.token().await?;
+        if lease.expires_at <= self.clock.now() {
+            return Err(Error::Auth(
+                "credential provider returned an expired token".to_string(),
+            ));
+        }
+        let token = lease.token.clone();
+        *entry.lease.write().await = Some(lease);
+        Ok(token)
     }
 }
 
@@ -393,7 +508,7 @@ mod tests {
 
     #[async_trait]
     impl TokenProvider for CountingProvider {
-        async fn token(&self) -> Result<TokenLease, AuthError> {
+        async fn token(&self) -> Result<TokenLease, Error> {
             let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
             Ok(TokenLease {
                 token: SecretString::new(format!("token-{call}")),
@@ -415,7 +530,7 @@ mod tests {
             let cache = cache.clone();
             let provider = provider.clone();
             let key = key.clone();
-            tokio::spawn(async move { cache.token(key, provider).await.unwrap() })
+            tokio::spawn(async move { cache.token_cached(key, provider).await.unwrap() })
         });
         for request in requests {
             assert_eq!(request.await.unwrap().expose(), "token-1");

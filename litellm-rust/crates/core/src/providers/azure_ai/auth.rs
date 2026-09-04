@@ -15,8 +15,8 @@ use sha2::{Digest, Sha256};
 
 use crate::Error;
 use crate::auth::{
-    AuthHeaderKind, Environment, ExpiringToken, ResolvedAuth, SecretString, TokenCache,
-    TokenProvider,
+    AuthHeaderKind, Environment, ExpiringToken, ResolvedAuth, SecretString, SystemClock,
+    TokenCache, TokenProvider,
 };
 use crate::constants::{AZURE_AUTH_DEFAULT_SCOPE, AZURE_AUTH_TOKEN_REFRESH_WINDOW_SECS};
 
@@ -417,7 +417,10 @@ pub async fn resolve_azure_auth(input: AzureAuthInput<'_>) -> Result<ResolvedAut
             let provider = AzureTokenProvider { credential, scope };
             let token = TOKENS
                 .get_or_init(|| {
-                    TokenCache::new(Duration::from_secs(AZURE_AUTH_TOKEN_REFRESH_WINDOW_SECS))
+                    TokenCache::new(
+                        Duration::from_secs(AZURE_AUTH_TOKEN_REFRESH_WINDOW_SECS),
+                        Arc::new(SystemClock),
+                    )
                 })
                 .token(key, &provider)
                 .await?;
