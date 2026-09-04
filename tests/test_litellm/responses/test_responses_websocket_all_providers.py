@@ -102,6 +102,32 @@ class TestResponsesAPIWebSocketSupport:
     def test_openai_model_in_websocket_url_default(self):
         assert OpenAIResponsesAPIConfig().model_in_websocket_url() is True
 
+    @pytest.mark.asyncio
+    async def test_openai_websocket_forwards_explicit_api_key(self, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        import litellm
+        from litellm.responses import main as responses_main
+
+        websocket_handler = AsyncMock()
+        monkeypatch.setattr(litellm, "api_key", None)
+        monkeypatch.setattr(litellm, "openai_key", None)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setattr(
+            responses_main.base_llm_http_handler,
+            "async_responses_websocket",
+            websocket_handler,
+        )
+
+        await responses_main._aresponses_websocket.__wrapped__(
+            model="gpt-4o",
+            websocket=MagicMock(),
+            api_key="explicit-api-key",
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert websocket_handler.await_args.kwargs["api_key"] == "explicit-api-key"
+
     def test_xai_uses_managed_websocket(self):
         """XAI should use managed websocket handler"""
         config = XAIResponsesAPIConfig()
