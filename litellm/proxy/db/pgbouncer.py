@@ -258,6 +258,20 @@ def _port_open(port: int) -> bool:
         return False
 
 
+def _unix_socket_open(path: Path) -> bool:
+    with socket.socket(socket.AF_UNIX) as probe:
+        probe.settimeout(0.5)
+        try:
+            probe.connect(str(path))
+        except OSError:
+            return False
+        return True
+
+
+def unix_socket_path(runtime_dir: Path, port: int) -> Path:
+    return runtime_dir / f".s.PGSQL.{port}"
+
+
 def _end(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
@@ -278,17 +292,24 @@ class PgBouncerProcess:
     listening again. A replacement that cannot be spawned, finds its port
     taken, exits again or never starts listening is retried every
     ``restart_delay_seconds`` until ``stop`` is called.
+
+    A connect probe of ``port`` cannot tell the child from another process
+    that grabbed the port after the availability check, so readiness also
+    needs ``socket_path``: the unix socket PgBouncer creates in the private
+    runtime directory, which it only does once every TCP listener is bound.
     """
 
     def __init__(
         self,
         argv: Sequence[str],
         port: int,
+        socket_path: Path,
         restart_delay_seconds: float = PGBOUNCER_RESTART_DELAY_SECONDS,
         ready_timeout_seconds: float = PGBOUNCER_READY_TIMEOUT_SECONDS,
     ) -> None:
         self.argv: Final = tuple(argv)
         self.port: Final = port
+        self.socket_path: Final = socket_path
         self.restart_delay_seconds: Final = restart_delay_seconds
         self.ready_timeout_seconds: Final = ready_timeout_seconds
         self._stopping: Final = threading.Event()
@@ -323,16 +344,20 @@ class PgBouncerProcess:
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 return PgBouncerError(f"pgbouncer exited with status {process.returncode} during startup")
-            if _port_open(self.port):
+            if _port_open(self.port) and _unix_socket_open(self.socket_path):
                 return None
             time.sleep(0.1)
+        if _port_open(self.port):
+            return PgBouncerError(
+                f"{PGBOUNCER_LISTEN_ADDR}:{self.port} is served by another process, not the pgbouncer that was started"
+            )
         return PgBouncerError(
             f"pgbouncer did not start listening on {PGBOUNCER_LISTEN_ADDR}:{self.port} "
             f"within {self.ready_timeout_seconds:.0f}s"
         )
 
     def start(self) -> PgBouncerError | None:
-        """Spawn PgBouncer, wait until it accepts connections, then supervise it from a daemon thread."""
+        """Spawn PgBouncer, wait until it listens on port and unix socket, then supervise it from a daemon thread."""
         process: Final = self._spawn()
         if process is None:
             return PgBouncerError("pgbouncer was stopped before it started")
@@ -411,7 +436,11 @@ def start_in_container_pgbouncer(
     if isinstance(plan, PgBouncerError):
         return plan
     ini_path: Final = write_pgbouncer_files(plan, runtime_dir, run_as_user)
-    pooler: Final = PgBouncerProcess(argv=(settings.binary, str(ini_path)), port=settings.port)
+    pooler: Final = PgBouncerProcess(
+        argv=(settings.binary, str(ini_path)),
+        port=settings.port,
+        socket_path=unix_socket_path(runtime_dir, settings.port),
+    )
     failed: Final = pooler.start()
     if failed is not None:
         return failed
