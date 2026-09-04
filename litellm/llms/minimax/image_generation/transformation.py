@@ -24,7 +24,8 @@ Response format:
 Reference: https://platform.minimax.io/docs/api-reference/image-generation-t2i
 """
 
-from typing import TYPE_CHECKING
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -43,17 +44,15 @@ from litellm.types.utils import ImageObject, ImageResponse
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    LiteLLMLoggingObj = _LiteLLMLoggingObj
+    LiteLLMLoggingObj = _LiteLLMLoggingObj  # rebind-ok: conditional runtime/type-checking alias
 else:
-    LiteLLMLoggingObj = object
+    LiteLLMLoggingObj = object  # rebind-ok: conditional runtime/type-checking alias
 
-DEFAULT_API_BASE = "https://api.minimax.io"
-IMAGE_GENERATION_ENDPOINT = "/v1/image_generation"
+DEFAULT_API_BASE: Final = "https://api.minimax.io"
+IMAGE_GENERATION_ENDPOINT: Final = "/v1/image_generation"
 
 # OpenAI uses "b64_json", MiniMax uses "base64".
-OPENAI_TO_MINIMAX_RESPONSE_FORMAT = {
-    "b64_json": "base64",
-}
+OPENAI_TO_MINIMAX_RESPONSE_FORMAT: Final = MappingProxyType({"b64_json": "base64"})
 
 
 class MinimaxImageGenerationException(BaseLLMException):
@@ -63,7 +62,7 @@ class MinimaxImageGenerationException(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: dict | httpx.Headers | None = None,
+        headers: dict | httpx.Headers | None = None,  # mutable-ok: BaseLLMException interface requires dict
     ) -> None:
         super().__init__(status_code=status_code, message=message, headers=headers)
 
@@ -73,16 +72,25 @@ class MinimaxImageGenerationConfig(BaseImageGenerationConfig):
     Configuration for MiniMax image generation models (image-01, image-01-live).
     """
 
-    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
-        return ["n", "size", "response_format", "seed", "user", "aspect_ratio"]
+    def get_supported_openai_params(
+        self, model: str
+    ) -> list[OpenAIImageGenerationOptionalParams]:  # mutable-ok: BaseImageGenerationConfig returns list
+        return [  # mutable-ok: BaseImageGenerationConfig returns a mutable parameter list
+            "n",
+            "size",
+            "response_format",
+            "seed",
+            "user",
+            "aspect_ratio",
+        ]
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict,  # mutable-ok: BaseImageGenerationConfig interface requires dict
+        optional_params: dict,  # mutable-ok: BaseImageGenerationConfig interface requires dict
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: BaseImageGenerationConfig interface returns dict
         """
         Map OpenAI image generation params to MiniMax params.
 
@@ -90,77 +98,82 @@ class MinimaxImageGenerationConfig(BaseImageGenerationConfig):
         - `response_format` "b64_json" is mapped to "base64"
         - remaining supported params are passed through
         """
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
+        mapped_params: Final = dict(  # mutable-ok: provider interface returns a mutable request mapping
+            optional_params
+        )
         for k, v in non_default_params.items():
-            if k in optional_params:
+            if k in mapped_params:
                 continue
             if k not in supported_params:
                 continue
             if k == "size":
                 width, height = self._parse_size(v)
                 if width is not None and height is not None:
-                    optional_params["width"] = width
-                    optional_params["height"] = height
+                    mapped_params["width"] = width
+                    mapped_params["height"] = height
             elif k == "response_format":
-                optional_params["response_format"] = OPENAI_TO_MINIMAX_RESPONSE_FORMAT.get(v, v)
+                mapped_params["response_format"] = OPENAI_TO_MINIMAX_RESPONSE_FORMAT.get(v, v)
             else:
-                optional_params[k] = v
-        return optional_params
+                mapped_params[k] = v
+        return mapped_params
 
     def get_complete_url(
         self,
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict,  # mutable-ok: BaseImageGenerationConfig interface requires dict
+        litellm_params: dict,  # mutable-ok: BaseImageGenerationConfig interface requires dict
         stream: bool | None = None,
     ) -> str:
         """
         Build the MiniMax image generation endpoint URL.
         """
-        base_url: str = api_base or get_secret_str("MINIMAX_API_BASE") or DEFAULT_API_BASE
-        base_url = base_url.rstrip("/")
-        if base_url.endswith(IMAGE_GENERATION_ENDPOINT):
-            base_url = base_url.removesuffix(IMAGE_GENERATION_ENDPOINT)
-        if not base_url.endswith("/v1"):
-            base_url = f"{base_url}/v1"
-        return f"{base_url}/image_generation"
+        configured_base_url: Final = api_base or get_secret_str("MINIMAX_API_BASE") or DEFAULT_API_BASE
+        endpoint_base_url: Final = configured_base_url.rstrip("/").removesuffix(IMAGE_GENERATION_ENDPOINT)
+        versioned_base_url: Final = (
+            endpoint_base_url if endpoint_base_url.endswith("/v1") else f"{endpoint_base_url}/v1"
+        )
+        return f"{versioned_base_url}/image_generation"
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict,  # mutable-ok: BaseImageGenerationConfig interface requires dict
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        messages: list[AllMessageValues],  # mutable-ok: BaseImageGenerationConfig interface requires list
+        optional_params: dict,  # mutable-ok: BaseImageGenerationConfig interface requires dict
+        litellm_params: dict,  # mutable-ok: BaseImageGenerationConfig interface requires dict
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: BaseImageGenerationConfig interface returns dict
         """
         Validate the MiniMax environment and set auth headers.
         """
-        final_api_key: str | None = api_key or get_secret_str("MINIMAX_API_KEY") or litellm.api_key
+        final_api_key: Final[str | None] = api_key or get_secret_str("MINIMAX_API_KEY") or litellm.api_key
         if not final_api_key:
             raise ValueError(
                 "MiniMax API key is required. Set MINIMAX_API_KEY environment variable or pass api_key parameter."
             )
-        headers["Authorization"] = f"Bearer {final_api_key}"
-        headers["Content-Type"] = "application/json"
-        return headers
+        validated_headers: Final = dict(  # mutable-ok: provider interface returns fresh mutable headers
+            headers
+        )
+        validated_headers["Authorization"] = f"Bearer {final_api_key}"
+        validated_headers["Content-Type"] = "application/json"
+        return validated_headers
 
     def transform_image_generation_request(
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict,  # mutable-ok: BaseImageGenerationConfig interface requires dict
+        litellm_params: dict,  # mutable-ok: BaseImageGenerationConfig interface requires dict
+        headers: dict,  # mutable-ok: BaseImageGenerationConfig interface requires dict
+    ) -> dict:  # mutable-ok: BaseImageGenerationConfig interface returns dict
         """
         Build the MiniMax image generation request body.
         """
-        request_data: dict = {
+        request_data: Final = {  # mutable-ok: request payload is assembled before being returned
             "model": model,
             "prompt": prompt,
         }
@@ -168,13 +181,13 @@ class MinimaxImageGenerationConfig(BaseImageGenerationConfig):
         for k, v in optional_params.items():
             if v is None:
                 continue
-            if k in {"extra_headers", "extra_body", "user"}:
+            if k in ("extra_headers", "extra_body", "user"):
                 continue
             request_data[k] = v
 
-        extra_body = optional_params.get("extra_body")
+        extra_body: Final = optional_params.get("extra_body")
         if isinstance(extra_body, dict):
-            request_data.update({k: v for k, v in extra_body.items() if v is not None})
+            request_data.update((k, v) for k, v in extra_body.items() if v is not None)
 
         return request_data
 
@@ -184,9 +197,9 @@ class MinimaxImageGenerationConfig(BaseImageGenerationConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: dict,  # mutable-ok: BaseImageGenerationConfig interface requires dict
+        optional_params: dict,  # mutable-ok: BaseImageGenerationConfig interface requires dict
+        litellm_params: dict,  # mutable-ok: BaseImageGenerationConfig interface requires dict
         encoding: object,
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -198,7 +211,7 @@ class MinimaxImageGenerationConfig(BaseImageGenerationConfig):
         `data.image_base64` (response_format=base64).
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except ValueError as e:
             raise self.get_error_class(
                 error_message=f"Failed to parse MiniMax image generation response: {e}",
@@ -206,8 +219,8 @@ class MinimaxImageGenerationConfig(BaseImageGenerationConfig):
                 headers=raw_response.headers,
             )
 
-        base_resp = response_data.get("base_resp") or {}
-        status_code = base_resp.get("status_code")
+        base_resp: Final = response_data.get("base_resp") or MappingProxyType({})
+        status_code: Final = base_resp.get("status_code")
         if status_code not in (None, 0, "0"):
             raise self.get_error_class(
                 error_message=str(base_resp.get("status_msg") or response_data),
@@ -216,12 +229,12 @@ class MinimaxImageGenerationConfig(BaseImageGenerationConfig):
             )
 
         if not model_response.data:
-            model_response.data = []
+            model_response.data = []  # mutable-ok: ImageResponse schema requires list  # rebind-ok: transformer populates the supplied response
 
-        data = response_data.get("data") or {}
-        for image_url in data.get("image_urls") or []:
+        data: Final = response_data.get("data") or MappingProxyType({})
+        for image_url in data.get("image_urls") or ():
             model_response.data.append(ImageObject(url=image_url))
-        for image_base64 in data.get("image_base64") or []:
+        for image_base64 in data.get("image_base64") or ():
             model_response.data.append(ImageObject(b64_json=image_base64))
 
         return model_response
@@ -230,7 +243,7 @@ class MinimaxImageGenerationConfig(BaseImageGenerationConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: dict | httpx.Headers,  # mutable-ok: BaseImageGenerationConfig interface requires dict
     ) -> BaseLLMException:
         return MinimaxImageGenerationException(
             status_code=status_code,
@@ -247,7 +260,7 @@ class MinimaxImageGenerationConfig(BaseImageGenerationConfig):
         """
         if not isinstance(size, str) or "x" not in size:
             return None, None
-        parts = size.split("x")
+        parts: Final = size.split("x")
         if len(parts) != 2:
             return None, None
         try:
