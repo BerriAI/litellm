@@ -207,7 +207,6 @@ def _processor_for(exporter: SpanExporter, use_simple: bool | None) -> SpanProce
 #: Distinct tenant destinations whose exporters stay alive. Each holds a connection
 #: pool and a batch thread, so the cache is bounded and evicts least-recently-used.
 _MAX_CACHED_DESTINATION_PROCESSORS: Final = 32
-_MAX_RETIRED_DESTINATION_PROCESSORS: Final = 8
 
 
 class _ResourceWrappedReadableSpan(ReadableSpan):
@@ -246,29 +245,42 @@ class TenantFanOutSpanProcessor(SpanProcessor):
     Destinations ride a request-scoped ``ContextVar`` set during auth, so concurrent
     requests stay isolated. The forwarded view keeps the original trace and parent
     ids, so the tenant gets the same tree the operator would have received.
+
+    ``callback_name`` scopes the fan-out to the backend this provider speaks for. Every
+    v2 logger carries its own provider and emits its own copy of a gen-AI span, so a
+    proxy running two of them would otherwise deliver the tenant two copies of the same
+    model call. The tenant's own backend always has a logger, since naming it in the
+    key or team config is what builds one.
     """
 
     def __init__(
         self,
+        callback_name: str | None = None,
         processor_factory: 'Callable[["OtelDestination"], SpanProcessor | None] | None' = None,
     ) -> None:
         self._lock: Final = threading.Lock()
+        self._callback_name: Final = callback_name
         self._build: Final = processor_factory if processor_factory is not None else _destination_processor
         self._processors: OrderedDict[object, SpanProcessor] = OrderedDict()  # mutable-ok: bounded LRU
-        self._retired: OrderedDict[object, SpanProcessor] = OrderedDict()  # mutable-ok: bounded drain list
+        self._retired: OrderedDict[int, SpanProcessor] = OrderedDict()  # mutable-ok: drains as exports finish
+        self._exporting: dict[int, int] = {}  # mutable-ok: per-processor in-flight export count
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         return None
 
     def on_end(self, span: ReadableSpan) -> None:
         for destination in request_destinations():
-            processor = self._processor_for(destination)  # rebind-ok: loop variable; pyright forbids Final in a loop
+            if destination.callback_name != self._callback_name:
+                continue
+            processor = self._acquire(destination)  # rebind-ok: loop variable; pyright forbids Final in a loop
             if processor is None:
                 continue
             try:
                 processor.on_end(_with_destination_resource(span, destination))
             except Exception as exc:  # noqa: BLE001  # one destination's failure must not cost the others their span
                 verbose_logger.debug("OTel V2 fan-out: forwarding to %s failed: %s", destination.endpoint, exc)
+            finally:
+                self._release(processor)
 
     def shutdown(self) -> None:
         # Snapshot first: ``on_end`` mutates the cache on whichever thread ends a span
@@ -282,6 +294,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         with self._lock:
             self._processors.clear()
             self._retired.clear()
+            self._exporting.clear()
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         results: Final = tuple(self._flush_one(processor, timeout_millis) for processor in self._snapshot())
@@ -298,12 +311,14 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         except Exception:  # noqa: BLE001  # one exporter's flush failure must not fail the whole flush
             return False
 
-    def _processor_for(self, destination: "OtelDestination") -> SpanProcessor | None:
+    def _acquire(self, destination: "OtelDestination") -> SpanProcessor | None:
+        """The processor for ``destination``, marked busy until ``_release``."""
         key: Final = destination.cache_key()
         with self._lock:
-            cached: Final = self._processors.get(key)
+            cached = self._processors.get(key)  # rebind-ok: reassigned after the build below
             if cached is not None:
                 self._processors.move_to_end(key)
+                self._exporting[id(cached)] = self._exporting.get(id(cached), 0) + 1
                 return cached
         built: Final = self._build(destination)
         if built is None:
@@ -312,28 +327,44 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             existing: Final = self._processors.get(key)
             if existing is not None:
                 # Another thread won the race; drop ours rather than leak its thread.
-                _shutdown_quietly(built)
+                _drain_in_background(built)
+                self._exporting[id(existing)] = self._exporting.get(id(existing), 0) + 1
                 return existing
             self._processors[key] = built
-            overflowed: Final = self._retired_on_overflow_locked()
-        if overflowed is not None:
-            _shutdown_quietly(overflowed)
+            self._exporting[id(built)] = 1
+            self._retire_overflow_locked()
+            drained: Final = self._drainable_locked()
+        for processor in drained:
+            _drain_in_background(processor)
         return built
 
-    def _retired_on_overflow_locked(self) -> SpanProcessor | None:
-        """Drop the LRU processor past the cap; return one only once it is safe to close.
+    def _release(self, processor: SpanProcessor) -> None:
+        with self._lock:
+            remaining: Final = self._exporting.get(id(processor), 1) - 1
+            if remaining > 0:
+                self._exporting[id(processor)] = remaining
+            else:
+                self._exporting.pop(id(processor), None)
+            drained: Final = self._drainable_locked()
+        for retired in drained:
+            _drain_in_background(retired)
 
-        ``on_end`` hands a processor back and then exports outside the lock, so shutting
-        an evicted one down there loses that span. Evictions retire to drain instead, and
-        the retirees are capped so they cannot accumulate a thread each.
-        """
+    def _retire_overflow_locked(self) -> None:
+        """Move the LRU processor out of the cache once it is past the cap."""
         if len(self._processors) <= _MAX_CACHED_DESTINATION_PROCESSORS:
-            return None
+            return
         _, evicted = self._processors.popitem(last=False)
         self._retired[id(evicted)] = evicted
-        if len(self._retired) <= _MAX_RETIRED_DESTINATION_PROCESSORS:
-            return None
-        return self._retired.popitem(last=False)[1]
+
+    def _drainable_locked(self) -> tuple[SpanProcessor, ...]:
+        """Retired processors no thread is exporting through, removed from the list.
+
+        ``on_end`` holds a processor across an export, so closing an evicted one there
+        drops the span it is holding. A retiree is out of the cache and can never be
+        handed out again, so once its export count reaches zero it stays there.
+        """
+        idle: Final = tuple(key for key in self._retired if self._exporting.get(key, 0) == 0)
+        return tuple(self._retired.pop(key) for key in idle)
 
 
 def _destination_processor(destination: "OtelDestination") -> SpanProcessor | None:
@@ -349,6 +380,18 @@ def _destination_processor(destination: "OtelDestination") -> SpanProcessor | No
     except Exception as exc:  # noqa: BLE001  # a malformed destination must not break the request or the other destinations
         verbose_logger.debug("OTel V2 fan-out: no processor for %s: %s", destination.endpoint, exc)
         return None
+
+
+def _drain_in_background(processor: SpanProcessor) -> None:
+    """Close a shed processor off the span-export path.
+
+    ``shutdown`` flushes over the network and is reached from ``on_end``, so closing
+    one inline would let a single unreachable tenant collector stall every other
+    tenant's spans behind it.
+    """
+    threading.Thread(
+        target=_shutdown_quietly, args=(processor,), daemon=True, name="litellm-otel-destination-drain"
+    ).start()
 
 
 def _shutdown_quietly(processor: SpanProcessor) -> None:
@@ -629,6 +672,7 @@ def build_tracer_provider(
     baggage_processor: SpanProcessor | None = None,
     use_simple_processor: bool | None = None,
     tenant_overrides: bool = False,
+    tenant_callback_name: str | None = None,
 ) -> TracerProvider:
     """Build the shared :class:`TracerProvider`.
 
@@ -668,7 +712,7 @@ def build_tracer_provider(
             _OverriddenBackendFilter(processor, owner) if tenant_overrides and owner is not None else processor
         )
     if tenant_overrides:
-        provider.add_span_processor(TenantFanOutSpanProcessor())
+        provider.add_span_processor(TenantFanOutSpanProcessor(tenant_callback_name))
     return provider
 
 
