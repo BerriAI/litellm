@@ -147,9 +147,7 @@ class TestOutputConfigStructuredOutput:
 
     def test_output_config_format_explicit_strict_true_is_preserved(self):
         """Nested output_config.format with explicit strict=True is preserved."""
-        req = _make_request(
-            output_config={"format": {"type": "json_schema", "schema": self._SCHEMA, "strict": True}}
-        )
+        req = _make_request(output_config={"format": {"type": "json_schema", "schema": self._SCHEMA, "strict": True}})
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["text"]["format"]["strict"] is True
 
@@ -1207,6 +1205,18 @@ def _make_output_message(texts: List[str]) -> MagicMock:
     return msg
 
 
+def _make_refusal_message(refusal_text: str) -> MagicMock:
+    from openai.types.responses import ResponseOutputMessage
+
+    part = MagicMock()
+    part.type = "refusal"
+    part.refusal = refusal_text
+
+    msg = MagicMock(spec=ResponseOutputMessage)
+    msg.content = [part]
+    return msg
+
+
 def _make_function_call_item(call_id: str, name: str, arguments: str) -> MagicMock:
     """Build a mock ResponseFunctionToolCall."""
     from openai.types.responses import ResponseFunctionToolCall  # type: ignore[import]
@@ -1279,6 +1289,38 @@ class TestTranslateResponse:
         result: Any = _ADAPTER.translate_response(response)
         assert result["stop_reason"] == "end_turn"
 
+    def test_refusal_part_becomes_text_block_and_sets_stop_reason_refusal(self):
+        response = _make_mock_response(output=[_make_refusal_message("I cannot fulfill this request.")])
+        result: Any = _ADAPTER.translate_response(response)
+        assert len(result["content"]) == 1
+        assert result["content"][0]["type"] == "text"
+        assert result["content"][0]["text"] == "I cannot fulfill this request."
+        assert result["stop_reason"] == "refusal"
+
+    def test_dict_refusal_part_in_message_becomes_text_block(self):
+        output_item = {
+            "type": "message",
+            "content": [{"type": "refusal", "refusal": "Refused by policy"}],
+        }
+        response = _make_mock_response(output=[output_item])
+        result: Any = _ADAPTER.translate_response(response)
+        assert len(result["content"]) == 1
+        assert result["content"][0]["type"] == "text"
+        assert result["content"][0]["text"] == "Refused by policy"
+        assert result["stop_reason"] == "refusal"
+
+    def test_dict_refusal_item_becomes_text_block(self):
+        output_item = {
+            "type": "refusal",
+            "refusal": "Standalone refusal",
+        }
+        response = _make_mock_response(output=[output_item])
+        result: Any = _ADAPTER.translate_response(response)
+        assert len(result["content"]) == 1
+        assert result["content"][0]["type"] == "text"
+        assert result["content"][0]["text"] == "Standalone refusal"
+        assert result["stop_reason"] == "refusal"
+
     def test_incomplete_status_sets_max_tokens(self):
         """status='incomplete' overrides stop_reason to 'max_tokens'."""
         response = _make_mock_response(
@@ -1337,9 +1379,7 @@ class TestTranslateResponse:
             ]
         )
         result: Any = _ADAPTER.translate_response(response)
-        assert result["content"] == [
-            {"type": "thinking", "thinking": "Weighing the options.", "signature": None}
-        ]
+        assert result["content"] == [{"type": "thinking", "thinking": "Weighing the options.", "signature": None}]
 
     def test_thinking_blocks_are_dropped_when_replayed_to_anthropic(self):
         """Replaying this turn to an Anthropic model must not send a signature it cannot verify."""
@@ -1481,9 +1521,7 @@ class TestToolResultImages:
             },
             {
                 "role": "user",
-                "content": [
-                    {"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content}
-                ],
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content}],
             },
         ]
 
@@ -1630,9 +1668,7 @@ class TestToolResultDocuments:
             },
             {
                 "role": "user",
-                "content": [
-                    {"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content}
-                ],
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content}],
             },
         ]
 
@@ -1665,9 +1701,7 @@ class TestToolResultDocuments:
 
     def test_document_title_becomes_filename(self):
         output = self._tool_output(self._translate([self._base64_document(title="quarterly-report.pdf")]))
-        assert output == [
-            {"type": "input_file", "filename": "quarterly-report.pdf", "file_data": self.PDF_DATA_URI}
-        ]
+        assert output == [{"type": "input_file", "filename": "quarterly-report.pdf", "file_data": self.PDF_DATA_URI}]
 
     def test_url_document_becomes_file_url_part(self):
         output = self._tool_output(
@@ -1776,9 +1810,7 @@ class TestUserContentDocuments:
 
     def test_document_title_becomes_filename(self):
         content = self._user_content(self._translate([self._base64_document(title="quarterly-report.pdf")]))
-        assert content == [
-            {"type": "input_file", "filename": "quarterly-report.pdf", "file_data": self.PDF_DATA_URI}
-        ]
+        assert content == [{"type": "input_file", "filename": "quarterly-report.pdf", "file_data": self.PDF_DATA_URI}]
 
     def test_url_document_becomes_file_url_part(self):
         content = self._user_content(
@@ -1808,9 +1840,7 @@ class TestUserContentDocuments:
         assert content == [{"type": "input_text", "text": "still here"}]
 
     def test_document_breakpoint_rides_on_the_file_part(self):
-        content = self._user_content(
-            self._translate([self._base64_document(prompt_cache_breakpoint=self.EXPLICIT)])
-        )
+        content = self._user_content(self._translate([self._base64_document(prompt_cache_breakpoint=self.EXPLICIT)]))
         assert content == [
             {
                 "type": "input_file",
@@ -1857,7 +1887,9 @@ class TestPromptCacheBreakpointToResponses:
         ]
 
     def test_system_without_breakpoint_still_becomes_instructions(self):
-        request = _make_request(system=[{"type": "text", "text": "Be concise."}, {"type": "text", "text": "Be helpful."}])
+        request = _make_request(
+            system=[{"type": "text", "text": "Be concise."}, {"type": "text", "text": "Be helpful."}]
+        )
         kwargs = _ADAPTER.translate_request(request)
         assert kwargs["instructions"] == "Be concise.\nBe helpful."
         assert kwargs["input"] == [

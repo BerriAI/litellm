@@ -111,7 +111,7 @@ class AnthropicResponsesStreamWrapper:
             item_type: Final = getattr(item, "type", None) or (item.get("type") if isinstance(item, dict) else None)
             item_id = getattr(item, "id", None) or (item.get("id") if isinstance(item, dict) else None)
 
-            if item_type == "message":
+            if item_type in ("message", "refusal"):
                 self._open_block(item_id, {"type": "text", "text": ""})
             elif item_type == "function_call":
                 call_id: Final = (
@@ -132,7 +132,7 @@ class AnthropicResponsesStreamWrapper:
             return
 
         # ---- text delta ----
-        if event_type == "response.output_text.delta":
+        if event_type in ("response.output_text.delta", "response.refusal.delta"):
             item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
             delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
             block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
@@ -238,6 +238,24 @@ class AnthropicResponsesStreamWrapper:
                     if out_type == "function_call":
                         stop_reason = "tool_use"
                         break
+                    elif out_type == "refusal":
+                        stop_reason = "refusal"
+                        break
+                    elif out_type == "message":
+                        content_parts = getattr(out_item, "content", ()) or (
+                            out_item.get("content") or () if isinstance(out_item, dict) else ()
+                        )
+                        for part in content_parts:
+                            part_type = getattr(part, "type", None) or (
+                                part.get("type") if isinstance(part, dict) else None
+                            )
+                            if (
+                                part_type == "refusal"
+                                or hasattr(part, "refusal")
+                                or (isinstance(part, dict) and "refusal" in part)
+                            ):
+                                stop_reason = "refusal"
+                                break
 
             self._chunk_queue.append(
                 {
