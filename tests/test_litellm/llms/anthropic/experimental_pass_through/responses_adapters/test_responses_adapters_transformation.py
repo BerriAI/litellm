@@ -1205,16 +1205,16 @@ def _make_output_message(texts: List[str]) -> MagicMock:
     return msg
 
 
-def _make_refusal_message(refusal_text: str) -> MagicMock:
-    from openai.types.responses import ResponseOutputMessage
+def _make_refusal_message(refusal_text: str):
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputRefusal
 
-    part = MagicMock()
-    part.type = "refusal"
-    part.refusal = refusal_text
-
-    msg = MagicMock(spec=ResponseOutputMessage)
-    msg.content = [part]
-    return msg
+    return ResponseOutputMessage(
+        id="msg_refusal",
+        content=[ResponseOutputRefusal(type="refusal", refusal=refusal_text)],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
 
 
 def _make_function_call_item(call_id: str, name: str, arguments: str) -> MagicMock:
@@ -1296,6 +1296,11 @@ class TestTranslateResponse:
         assert result["content"][0]["type"] == "text"
         assert result["content"][0]["text"] == "I cannot fulfill this request."
         assert result["stop_reason"] == "refusal"
+        assert result.get("stop_details") == {
+            "type": "refusal",
+            "category": None,
+            "explanation": "I cannot fulfill this request.",
+        }
 
     def test_dict_refusal_part_in_message_becomes_text_block(self):
         output_item = {
@@ -1308,18 +1313,16 @@ class TestTranslateResponse:
         assert result["content"][0]["type"] == "text"
         assert result["content"][0]["text"] == "Refused by policy"
         assert result["stop_reason"] == "refusal"
+        assert result.get("stop_details", {}).get("explanation") == "Refused by policy"
 
-    def test_dict_refusal_item_becomes_text_block(self):
-        output_item = {
-            "type": "refusal",
-            "refusal": "Standalone refusal",
-        }
-        response = _make_mock_response(output=[output_item])
+    def test_incomplete_status_takes_precedence_over_refusal(self):
+        response = _make_mock_response(
+            output=[_make_refusal_message("Partial refusal")],
+            status="incomplete",
+        )
         result: Any = _ADAPTER.translate_response(response)
-        assert len(result["content"]) == 1
-        assert result["content"][0]["type"] == "text"
-        assert result["content"][0]["text"] == "Standalone refusal"
-        assert result["stop_reason"] == "refusal"
+        assert result["stop_reason"] == "max_tokens"
+        assert result.get("stop_details") is None
 
     def test_incomplete_status_sets_max_tokens(self):
         """status='incomplete' overrides stop_reason to 'max_tokens'."""
