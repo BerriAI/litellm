@@ -836,31 +836,45 @@ class _ClassifierCircuitBreaker:
         self._clock = clock
         self._state = self.CLOSED
         self._opened_at: float | None = None
+        self._generation = 0
         self._lock = Lock()
 
-    def allow_request(self) -> bool:
-        """Allow ordinary calls while closed and exactly one probe after cooldown."""
+    def acquire_permit(self) -> int | None:
+        """Return a generation-scoped permit, or deny the call while the circuit is open.
+
+        Calls admitted together while closed share a generation. The first timeout advances it,
+        making every other in-flight completion stale so it cannot erase the new cooldown.
+        """
         with self._lock:
             if self._state == self.CLOSED:
-                return True
+                return self._generation
             if self._state == self.HALF_OPEN:
-                return False
+                return None
             opened_at: Final = self._opened_at
             if opened_at is not None and self._clock() - opened_at >= self._cooldown_seconds:
                 self._state = self.HALF_OPEN
-                return True
-            return False
+                return self._generation
+            return None
 
-    def record_success(self) -> None:
+    def record_success(self, permit: int) -> None:
+        """Close only when the current half-open recovery probe succeeds."""
         with self._lock:
+            if self._state != self.HALF_OPEN or permit != self._generation:
+                return
             self._state = self.CLOSED
             self._opened_at = None
 
-    def record_failure(self, *, is_timeout: bool) -> None:
+    def record_failure(self, permit: int, *, is_timeout: bool) -> None:
         """Open on a normal timeout, or reopen when the single recovery probe fails."""
         with self._lock:
-            if not is_timeout and self._state != self.HALF_OPEN:
+            if permit != self._generation:
                 return
+            if self._state == self.CLOSED:
+                if not is_timeout:
+                    return
+            elif self._state != self.HALF_OPEN:
+                return
+            self._generation += 1
             self._state = self.OPEN
             self._opened_at = self._clock()
 
@@ -1541,7 +1555,8 @@ class ComplexityRouter(CustomLogger):
         has. It is handed to the failure path so a classifier error does not re-run the scorer.
         """
         breaker: Final = self._classifier_circuit_breaker
-        if breaker is not None and not breaker.allow_request():
+        permit: Final = breaker.acquire_permit() if breaker is not None else None
+        if breaker is not None and permit is None:
             return self._classifier_failure_outcome(
                 "LLM classifier circuit is open",
                 prompt,
@@ -1551,8 +1566,8 @@ class ComplexityRouter(CustomLogger):
             )
         try:
             tier, classifier_cost = await self._classify_with_llm(prompt, system_prompt, request_kwargs, messages)
-            if breaker is not None:
-                breaker.record_success()
+            if breaker is not None and permit is not None:
+                breaker.record_success(permit)
             return ClassificationOutcome(
                 tier=tier,
                 score=None,
@@ -1560,9 +1575,13 @@ class ComplexityRouter(CustomLogger):
                 cause="llm_classifier",
                 classifier_cost=classifier_cost,
             )
+        except asyncio.CancelledError:
+            if breaker is not None and permit is not None:
+                breaker.record_failure(permit, is_timeout=False)
+            raise
         except Exception as e:  # noqa: BLE001 -- external LLM call can fail in many distinct ways (timeout, provider error, validation, parse error); any failure must fall back to the configured fallback path
-            if breaker is not None:
-                breaker.record_failure(is_timeout=_is_classifier_timeout(e))
+            if breaker is not None and permit is not None:
+                breaker.record_failure(permit, is_timeout=_is_classifier_timeout(e))
             return self._classifier_failure_outcome(f"LLM classifier failed ({e})", prompt, system_prompt, scored)
 
     def _classifier_failure_outcome(

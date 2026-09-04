@@ -2100,29 +2100,74 @@ class TestLLMClassifier:
         now = 100.0
         breaker = _ClassifierCircuitBreaker(30.0, clock=lambda: now)
 
-        assert breaker.allow_request() is True
-        breaker.record_failure(is_timeout=True)
-        assert breaker.allow_request() is False
+        initial_permit = breaker.acquire_permit()
+        assert initial_permit is not None
+        breaker.record_failure(initial_permit, is_timeout=True)
+        assert breaker.acquire_permit() is None
 
         now = 130.0
-        assert breaker.allow_request() is True
-        assert breaker.allow_request() is False
+        probe_permit = breaker.acquire_permit()
+        assert probe_permit is not None
+        assert breaker.acquire_permit() is None
 
-        breaker.record_success()
-        assert breaker.allow_request() is True
+        breaker.record_success(probe_permit)
+        assert breaker.acquire_permit() is not None
 
     def test_failed_classifier_probe_restarts_cooldown(self):
         now = 100.0
         breaker = _ClassifierCircuitBreaker(30.0, clock=lambda: now)
-        breaker.record_failure(is_timeout=True)
+        initial_permit = breaker.acquire_permit()
+        assert initial_permit is not None
+        breaker.record_failure(initial_permit, is_timeout=True)
 
         now = 130.0
-        assert breaker.allow_request() is True
-        breaker.record_failure(is_timeout=False)
-        assert breaker.allow_request() is False
+        probe_permit = breaker.acquire_permit()
+        assert probe_permit is not None
+        breaker.record_failure(probe_permit, is_timeout=False)
+        assert breaker.acquire_permit() is None
 
         now = 160.0
-        assert breaker.allow_request() is True
+        assert breaker.acquire_permit() is not None
+
+    def test_stale_success_cannot_close_circuit_opened_by_overlapping_timeout(self):
+        breaker = _ClassifierCircuitBreaker(30.0)
+        timeout_permit = breaker.acquire_permit()
+        stale_success_permit = breaker.acquire_permit()
+        assert timeout_permit is not None
+        assert stale_success_permit is not None
+
+        breaker.record_failure(timeout_permit, is_timeout=True)
+        breaker.record_success(stale_success_permit)
+
+        assert breaker.acquire_permit() is None
+
+    @pytest.mark.asyncio
+    async def test_cancelled_classifier_probe_restarts_cooldown(self, mock_router_instance, llm_classifier_config):
+        now = 100.0
+        mock_router_instance.acompletion = AsyncMock(
+            side_effect=[
+                TimeoutError("classifier timed out"),
+                asyncio.CancelledError(),
+                _llm_response('{"tier": "SIMPLE"}'),
+            ]
+        )
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=llm_classifier_config,
+        )
+        router._classifier_circuit_breaker = _ClassifierCircuitBreaker(30.0, clock=lambda: now)
+
+        await router.aclassify("open the circuit")
+        now = 130.0
+        with pytest.raises(asyncio.CancelledError):
+            await router.aclassify("cancel the recovery probe")
+
+        outcome = await router.aclassify("stay in cooldown")
+
+        assert outcome.cause == "heuristic_scorer"
+        assert "classifier-circuit-open" in outcome.signals
+        assert mock_router_instance.acompletion.await_count == 2
 
     @pytest.mark.asyncio
     async def test_classifier_circuit_can_be_disabled(self, mock_router_instance, llm_classifier_config):
@@ -2146,8 +2191,10 @@ class TestLLMClassifier:
 
     def test_non_timeout_failure_does_not_open_closed_classifier_circuit(self):
         breaker = _ClassifierCircuitBreaker(30.0)
-        breaker.record_failure(is_timeout=False)
-        assert breaker.allow_request() is True
+        permit = breaker.acquire_permit()
+        assert permit is not None
+        breaker.record_failure(permit, is_timeout=False)
+        assert breaker.acquire_permit() is not None
 
     @pytest.mark.asyncio
     async def test_aclassify_classifier_cost_is_none_when_call_is_unpriced(
