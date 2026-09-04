@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -51,6 +52,15 @@ from litellm.utils import (
 )
 
 # Adds the parent directory to the system path
+
+
+def test_get_utc_datetime_returns_current_aware_utc_time() -> None:
+    before: Final = datetime.now(timezone.utc)
+    result: Final = litellm.utils.get_utc_datetime()
+    after: Final = datetime.now(timezone.utc)
+
+    assert result.utcoffset() == timedelta(0)
+    assert before <= result <= after
 
 
 def test_usage_openai_cache_write_tokens_populates_both_names():
