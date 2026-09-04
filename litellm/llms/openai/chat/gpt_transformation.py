@@ -745,7 +745,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         return headers
 
     @staticmethod
-    def _get_raw_models_data(api_key: str | None = None, api_base: str | None = None) -> tuple[Mapping[str, object], ...]:
+    def _get_raw_models_data(
+        api_key: str | None = None, api_base: str | None = None
+    ) -> tuple[Mapping[str, object], ...]:
         """
         Calls the `/v1/models` endpoint and returns the raw list of model entries
         (not just the ids), so callers can inspect provider-specific fields such
@@ -771,11 +773,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             raise ValueError(f"Failed to get models: {response.text}")
 
         data = response.json()["data"]
-        return tuple(
-            entry
-            for entry in data
-            if isinstance(entry, Mapping)
-        )
+        return tuple(entry for entry in data if isinstance(entry, Mapping))
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> tuple[str, ...]:
         """
@@ -884,7 +882,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 "mode": "chat",
                 "input_cost_per_token": input_cost,
                 "output_cost_per_token": output_cost,
-                "max_tokens": max_output_tokens,
+                "max_tokens": None,
+                "max_output_tokens": max_output_tokens,
                 "max_input_tokens": context_length,
             }
         )

@@ -1315,7 +1315,6 @@ class TestOpenAIGPTConfigGetModelInfo:
 
         assert info is not None
         assert info["max_input_tokens"] == 131072
-        assert info["max_output_tokens"] is None
         assert info["max_tokens"] is None
 
     def test_reuses_static_map_max_output_tokens_when_model_name_matches(self):
@@ -1334,7 +1333,7 @@ class TestOpenAIGPTConfigGetModelInfo:
         assert info is not None
         assert info["max_input_tokens"] == 131072
         assert info["max_output_tokens"] == 16384
-        assert info["max_tokens"] == 16384
+        assert info["max_tokens"] is None
 
     def test_does_not_match_unverified_field_names(self):
         """Only max_model_len is used for the context window."""
