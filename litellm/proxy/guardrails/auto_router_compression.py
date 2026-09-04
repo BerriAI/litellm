@@ -12,34 +12,32 @@ guardrail is suppressed for that request, and only these two settings decide wha
 each hop sees.
 """
 
-import copy
-from collections.abc import Mapping
+import contextvars
+from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY
-from litellm.litellm_core_utils.core_helpers import (
-    get_metadata_variable_name_from_kwargs,
-    get_or_create_metadata_bucket,
-)
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.router_utils.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.router import Router
-else:
-    CustomGuardrail = Any
-    Router = Any
 
 COMPRESSION_GUARDRAIL_PROVIDERS: Final = frozenset({"headroom", "compresr"})
 _NO_COMPRESSION: Final = "none"
 
-# Metadata key stashing the pre-compression messages so a routing decision that
-# names a different compression than the model call still compresses the
-# original text, not whatever the model-side guardrail already rewrote it to.
-AUTO_ROUTER_ROUTING_MESSAGES_SNAPSHOT_KEY: Final = "_auto_router_routing_messages_snapshot"
+# The pre-compression messages, so a routing decision that does not share the model
+# call's compression still classifies on the original text. Deliberately a ContextVar
+# rather than a metadata key: `refresh_proxy_server_request_body_snapshot` copies
+# metadata into `proxy_server_request.body`, which deployments persist to spend logs,
+# and this holds the prompt as it was before any masking guardrail rewrote it.
+_routing_messages_snapshot: Final[contextvars.ContextVar[tuple[Mapping[str, object], ...] | None]] = (
+    contextvars.ContextVar("litellm_auto_router_routing_messages_snapshot", default=None)
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,30 +70,51 @@ def policy_from_litellm_params(litellm_params: Mapping[str, object]) -> AutoRout
 
 
 def policy_for_model(
-    llm_router: "Router | None", model_alias: str, team_id: str | None
+    llm_router: "Router | None",
+    model_alias: str,
+    team_id: str | None,
+    request_tags: Sequence[str],
 ) -> AutoRouterCompressionPolicy | None:
-    """The compression policy declared by the auto router marker deployment `model_alias` resolves to.
+    """The compression policy of the auto router marker `model_alias` resolves to.
 
-    Mirrors the alias lookup in ``_check_and_merge_model_level_guardrails``: this runs
-    before routing has picked a strategy, so it takes the first marker deployment for
-    the alias rather than disambiguating by request tags.
+    Both the proxy's pre-call arming and the router's routing hook resolve the policy
+    through here, with the same tag rule, so an alias carrying several tag-scoped
+    markers can never suppress one marker's guardrail and then route under another
+    marker's policy.
     """
     if llm_router is None:
         return None
     deployments: Final = llm_router.get_model_list(model_name=model_alias, team_id=team_id) or []
-    for deployment in deployments:
-        litellm_params: Final = deployment.get("litellm_params") or {}
-        model_field = litellm_params.get("model")
-        if not isinstance(model_field, str) or not model_field.startswith(AUTO_ROUTER_MODEL_PREFIX):
-            continue
-        policy = policy_from_litellm_params(litellm_params)
+    markers: Final = tuple(
+        litellm_params
+        for deployment in deployments
+        if isinstance(litellm_params := deployment.get("litellm_params") or {}, Mapping)
+        and str(litellm_params.get("model", "")).startswith(AUTO_ROUTER_MODEL_PREFIX)
+    )
+    requested: Final = frozenset(request_tags)
+    tag_matched: Final = tuple(
+        params for params in markers if requested.issuperset(frozenset(params.get("tags") or ()))
+    )
+    for params in (*tag_matched, *markers):
+        policy = policy_from_litellm_params(params)
         if policy is not None:
             return policy
     return None
 
 
-def _active_compression_guardrail_names() -> frozenset[str]:
-    """Names of every currently-active guardrail whose type is a compression guardrail."""
+def team_id_from_request(request_kwargs: Mapping[str, object]) -> str | None:
+    """The caller's team id, from whichever metadata bucket this surface writes to."""
+    for meta_key in ("metadata", "litellm_metadata"):
+        meta = request_kwargs.get(meta_key)
+        if isinstance(meta, Mapping):
+            team_id = meta.get("user_api_key_team_id")
+            if isinstance(team_id, str):
+                return team_id
+    return None
+
+
+def _active_compression_guardrails() -> tuple["CustomGuardrail", ...]:
+    """Every currently-active guardrail whose type is a compression guardrail."""
     import litellm
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
@@ -104,21 +123,20 @@ def _active_compression_guardrail_names() -> frozenset[str]:
         cls for name, cls in guardrail_class_registry.items() if name in COMPRESSION_GUARDRAIL_PROVIDERS
     )
     if not compression_classes:
-        return frozenset()
+        return ()
     active: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=CustomGuardrail)
-    return frozenset(
-        cb.guardrail_name for cb in active if isinstance(cb, compression_classes) and cb.guardrail_name
-    )
+    return tuple(cb for cb in active if isinstance(cb, compression_classes) and cb.guardrail_name)
 
 
-async def arm_pre_call(data: dict, llm_router: "Router | None") -> dict:
+async def arm_pre_call(data: MutableMapping[str, object], llm_router: "Router | None") -> MutableMapping[str, object]:
     """Apply an auto router's compression policy, if any, before guardrails run.
 
     Suppresses every other compression guardrail, re-enables the model-side
     guardrail the policy names (if any) even when it isn't ``default_on``, and
-    snapshots the pre-compression messages so the routing decision can compress
-    them independently of whatever the model-side guardrail does to `data`.
+    snapshots the pre-compression messages so the routing decision can read them
+    independently of whatever the model-side guardrail does to `data`.
     """
+    _routing_messages_snapshot.set(None)
     if llm_router is None:
         return data
 
@@ -129,21 +147,27 @@ async def arm_pre_call(data: dict, llm_router: "Router | None") -> dict:
     # Read-only until a policy is confirmed: creating the metadata bucket for every
     # request, including the vast majority with no auto-router compression policy,
     # would be an unwanted side effect of merely checking for one.
-    metadata_key: Final = get_metadata_variable_name_from_kwargs(data)
-    existing_bucket: Final = data.get(metadata_key)
-    other_bucket: Final = data.get("metadata" if metadata_key == "litellm_metadata" else "litellm_metadata")
-    team_id: Final = (existing_bucket.get("user_api_key_team_id") if isinstance(existing_bucket, dict) else None) or (
-        other_bucket.get("user_api_key_team_id") if isinstance(other_bucket, dict) else None
-    )
+    from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
 
-    policy: Final = policy_for_model(llm_router=llm_router, model_alias=model_alias, team_id=team_id)
+    policy: Final = policy_for_model(
+        llm_router=llm_router,
+        model_alias=model_alias,
+        team_id=team_id_from_request(data),
+        request_tags=_get_tags_from_request_kwargs(data),
+    )
     if policy is None:
         return data
 
     _, metadata = get_or_create_metadata_bucket(data)
-    suppressed: Final = _active_compression_guardrail_names() - ({policy.model} if policy.model else set())
+    # Markers carry a per-process token so a caller cannot suppress a guardrail by
+    # naming it in its own request metadata.
+    suppressed: Final = tuple(
+        marker
+        for guardrail in _active_compression_guardrails()
+        if guardrail.guardrail_name != policy.model and (marker := guardrail.auto_router_suppression_marker())
+    )
     if suppressed:
-        metadata[AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY] = sorted(suppressed)
+        metadata[AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY] = list(suppressed)
 
     if policy.model is not None:
         requested = metadata.get("guardrails")
@@ -157,9 +181,14 @@ async def arm_pre_call(data: dict, llm_router: "Router | None") -> dict:
 
     snapshot: Final = resolve_structured_messages(messages=data.get("messages"), request_kwargs=data)
     if snapshot is not None:
-        metadata[AUTO_ROUTER_ROUTING_MESSAGES_SNAPSHOT_KEY] = copy.deepcopy(snapshot)
+        _routing_messages_snapshot.set(tuple(dict(message) for message in snapshot))
 
     return data
+
+
+def _snapshot_messages() -> list[dict[str, Any]] | None:
+    snapshot: Final = _routing_messages_snapshot.get()
+    return None if snapshot is None else [dict(message) for message in snapshot]
 
 
 async def messages_for_routing(
@@ -167,34 +196,37 @@ async def messages_for_routing(
     messages: list[dict[str, Any]] | None,
     request_kwargs: Mapping[str, object],
 ) -> list[dict[str, Any]] | None:
-    """Messages to use for a routing decision, compressed per `policy.routing`.
+    """Messages to use for a routing decision, per `policy.routing`.
 
-    Returns None when there is no policy or the policy's routing side names no
-    compression, meaning the caller should route on whatever messages it already
-    has. The model call is untouched by this function either way: model-side
-    compression, if any, already ran as an ordinary pre-call guardrail before the
-    router was ever reached.
+    Returns None when the caller should route on whatever messages it already has.
+    The model call is untouched either way: model-side compression, if any, already
+    ran as an ordinary pre-call guardrail before the router was reached, so when the
+    two hops differ the routing decision reads the pre-compression snapshot rather
+    than what that guardrail left behind.
     """
-    if policy is None or policy.routing is None:
+    if policy is None:
+        return None
+
+    original: Final = _snapshot_messages() or messages
+
+    if policy.routing is None:
+        # Explicitly no compression for routing. When the model side compressed, the
+        # messages in hand are its output, so fall back to the untouched snapshot.
+        return _snapshot_messages() if policy.model is not None else None
+
+    if not original:
         return None
 
     from litellm.proxy.common_utils.registry_read_through import (
         get_initialized_guardrail_with_read_through,
     )
 
-    metadata_key: Final = get_metadata_variable_name_from_kwargs(request_kwargs)
-    metadata: Final = request_kwargs.get(metadata_key)
-    snapshot: Final = metadata.get(AUTO_ROUTER_ROUTING_MESSAGES_SNAPSHOT_KEY) if isinstance(metadata, dict) else None
-    original: Final = snapshot if isinstance(snapshot, list) else messages
-    if not original:
-        return None
-
     guardrail: Final = await get_initialized_guardrail_with_read_through(policy.routing)
     if guardrail is None:
         verbose_proxy_logger.warning(
             "AutoRouter compression: guardrail '%s' not found; routing on uncompressed messages", policy.routing
         )
-        return None
+        return original
 
     inputs: GenericGuardrailAPIInputs = {"structured_messages": [dict(m) for m in original]}
     # A throwaway request_data: apply_guardrail writes its stats onto this dict, not

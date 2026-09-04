@@ -532,7 +532,9 @@ class TestCustomGuardrailShouldRunGuardrail:
         data = {
             "model": "smart-router",
             "metadata": {
-                AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY: ["headroom-default"],
+                AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY: [
+                    always_on.auto_router_suppression_marker()
+                ],
             },
         }
 
@@ -550,15 +552,44 @@ class TestCustomGuardrailShouldRunGuardrail:
             default_on=True,
             event_hook=GuardrailEventHooks.pre_call,
         )
+        other = CustomGuardrail(guardrail_name="some-other-guardrail", default_on=True)
         data = {
             "model": "smart-router",
             "metadata": {
-                AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY: ["some-other-guardrail"],
+                AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY: [
+                    other.auto_router_suppression_marker()
+                ],
             },
         }
 
         assert (
             always_on.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call)
+            is True
+        )
+
+    def test_should_run_guardrail_ignores_a_forged_suppression_marker(self):
+        """A caller controls request metadata, so a bare guardrail name there must not
+        switch off an always-on guardrail: only the per-process marker counts."""
+        from litellm.constants import AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        always_on = CustomGuardrail(
+            guardrail_name="headroom-default",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+        forged = {
+            "model": "smart-router",
+            "metadata": {
+                AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY: [
+                    "headroom-default",
+                    "forged-token:headroom-default",
+                ],
+            },
+        }
+
+        assert (
+            always_on.should_run_guardrail(data=forged, event_type=GuardrailEventHooks.pre_call)
             is True
         )
 

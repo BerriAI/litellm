@@ -4,28 +4,33 @@ Unit tests for litellm.proxy.guardrails.auto_router_compression.
 Covers:
 - policy_from_litellm_params: absent keys mean no policy; the "none" sentinel
   normalizes to explicit no-compression within an active policy; is_same
-- policy_for_model: finds the auto-router marker deployment for an alias
-- arm_pre_call: no-op without a policy; suppresses active compression guardrails;
-  arms the model-side guardrail even when it isn't default_on; snapshots messages
-- messages_for_routing: no-op without a policy or an unset routing side; compresses
-  via the named guardrail's apply_guardrail; never writes stats onto the caller's
-  own request_kwargs (regression for double-counted compression savings)
+- policy_for_model: finds the auto-router marker deployment for an alias, and
+  picks the tag-scoped marker the request's tags actually match
+- arm_pre_call: no-op without a policy; suppresses active compression guardrails
+  with a forgery-proof marker; arms the model-side guardrail even when it isn't
+  default_on; keeps the pre-compression snapshot out of persisted metadata
+- messages_for_routing: no-op without a policy; routes on the pre-compression
+  snapshot when the two hops differ; compresses via the named guardrail's
+  apply_guardrail; never writes stats onto the caller's own request_kwargs
+  (regression for double-counted compression savings)
 """
 
+import json
 from typing import Any
 
 import pytest
 
+from litellm.constants import AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy.guardrails import auto_router_compression
 from litellm.proxy.guardrails.auto_router_compression import (
-    AUTO_ROUTER_ROUTING_MESSAGES_SNAPSHOT_KEY,
     AutoRouterCompressionPolicy,
     arm_pre_call,
     messages_for_routing,
     policy_for_model,
     policy_from_litellm_params,
 )
-from litellm.constants import AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 
@@ -76,36 +81,61 @@ class _FakeRouter:
         return [d for d in self._deployments if d.get("model_name") == model_name]
 
 
+def _marker(compression: dict[str, str], tags: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "model_name": "smart-router",
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            **compression,
+            **({"tags": tags} if tags is not None else {}),
+        },
+    }
+
+
 class TestPolicyForModel:
     def test_no_router_returns_none(self):
-        assert policy_for_model(llm_router=None, model_alias="smart-router", team_id=None) is None
+        assert policy_for_model(llm_router=None, model_alias="smart-router", team_id=None, request_tags=()) is None
 
     def test_no_marker_deployment_returns_none(self):
         router = _FakeRouter(
             [{"model_name": "smart-router", "litellm_params": {"model": "openai/gpt-4o-mini"}}]
         )
-        assert policy_for_model(llm_router=router, model_alias="smart-router", team_id=None) is None
+        assert policy_for_model(llm_router=router, model_alias="smart-router", team_id=None, request_tags=()) is None
 
     def test_marker_deployment_without_policy_returns_none(self):
         router = _FakeRouter(
             [{"model_name": "smart-router", "litellm_params": {"model": "auto_router/complexity_router"}}]
         )
-        assert policy_for_model(llm_router=router, model_alias="smart-router", team_id=None) is None
+        assert policy_for_model(llm_router=router, model_alias="smart-router", team_id=None, request_tags=()) is None
 
     def test_marker_deployment_with_policy_is_found(self):
         router = _FakeRouter(
+            [_marker({"auto_router_routing_compression": "headroom-a", "auto_router_model_compression": "none"})]
+        )
+        policy = policy_for_model(llm_router=router, model_alias="smart-router", team_id=None, request_tags=())
+        assert policy == AutoRouterCompressionPolicy(routing="headroom-a", model=None)
+
+    def test_picks_the_marker_whose_tags_the_request_carries(self):
+        """Regression: an alias with several tag-scoped markers must not suppress one
+        marker's guardrail and then route under a different marker's policy."""
+        router = _FakeRouter(
             [
-                {
-                    "model_name": "smart-router",
-                    "litellm_params": {
-                        "model": "auto_router/complexity_router",
-                        "auto_router_routing_compression": "headroom-a",
-                        "auto_router_model_compression": "none",
-                    },
-                }
+                _marker({"auto_router_routing_compression": "headroom-eu"}, tags=["eu"]),
+                _marker({"auto_router_routing_compression": "headroom-us"}, tags=["us"]),
             ]
         )
-        policy = policy_for_model(llm_router=router, model_alias="smart-router", team_id=None)
+
+        eu = policy_for_model(llm_router=router, model_alias="smart-router", team_id=None, request_tags=("eu",))
+        us = policy_for_model(llm_router=router, model_alias="smart-router", team_id=None, request_tags=("us",))
+
+        assert eu == AutoRouterCompressionPolicy(routing="headroom-eu", model=None)
+        assert us == AutoRouterCompressionPolicy(routing="headroom-us", model=None)
+
+    def test_untagged_marker_matches_any_request(self):
+        router = _FakeRouter([_marker({"auto_router_routing_compression": "headroom-a"})])
+        policy = policy_for_model(
+            llm_router=router, model_alias="smart-router", team_id=None, request_tags=("anything",)
+        )
         assert policy == AutoRouterCompressionPolicy(routing="headroom-a", model=None)
 
 
@@ -186,9 +216,24 @@ class TestArmPreCall:
             data = {"model": "smart-router", "messages": [{"role": "user", "content": "hi"}]}
             result = await arm_pre_call(data=data, llm_router=router)
             suppressed = result["metadata"][AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY]
-            assert "always-on-compression" in suppressed
+            assert suppressed == [always_on.auto_router_suppression_marker()]
+            # The bare name alone must never suppress: that is what a caller could forge.
+            assert "always-on-compression" not in suppressed
+            assert always_on.should_run_guardrail(data=result, event_type=GuardrailEventHooks.pre_call) is False
         finally:
             litellm.logging_callback_manager.remove_callback_from_all_lists(always_on)
+
+    @pytest.mark.asyncio
+    async def test_a_caller_cannot_suppress_a_guardrail_by_naming_it_in_metadata(self):
+        """Regression: request metadata is caller-controlled, so a bare guardrail name
+        there must not switch off a PII, content-filter, or compression guardrail."""
+        guardrail = _RecordingCompressionGuardrail(guardrail_name="always-on-compression")
+        forged = {
+            "model": "smart-router",
+            "metadata": {AUTO_ROUTER_SUPPRESSED_COMPRESSION_GUARDRAILS_KEY: ["always-on-compression"]},
+        }
+
+        assert guardrail._suppressed_by_auto_router_compression(forged) is False
 
     @pytest.mark.asyncio
     async def test_model_side_guardrail_is_requested_even_when_not_default_on(self):
@@ -209,43 +254,82 @@ class TestArmPreCall:
         assert result["metadata"]["guardrails"] == ["headroom-b"]
 
     @pytest.mark.asyncio
-    async def test_snapshots_original_messages(self):
-        router = _FakeRouter(
-            [
-                {
-                    "model_name": "smart-router",
-                    "litellm_params": {
-                        "model": "auto_router/complexity_router",
-                        "auto_router_routing_compression": "headroom-a",
-                        "auto_router_model_compression": "none",
-                    },
-                }
-            ]
-        )
-        original_messages = [{"role": "user", "content": "hi"}]
+    async def test_snapshot_never_lands_in_persisted_metadata(self):
+        """Regression: refresh_proxy_server_request_body_snapshot copies metadata into
+        proxy_server_request.body, which deployments persist to spend logs. The
+        pre-compression snapshot holds the prompt before any masking guardrail ran, so
+        it must live outside anything that gets serialized."""
+        router = _FakeRouter([_marker({"auto_router_routing_compression": "headroom-a"})])
+        original_messages = [{"role": "user", "content": "my ssn is 123-45-6789"}]
         data = {"model": "smart-router", "messages": original_messages}
+
         result = await arm_pre_call(data=data, llm_router=router)
-        snapshot = result["metadata"][AUTO_ROUTER_ROUTING_MESSAGES_SNAPSHOT_KEY]
-        assert snapshot == original_messages
-        assert snapshot is not original_messages  # a copy, not the live reference
+
+        assert "123-45-6789" not in json.dumps(result["metadata"])
+        assert auto_router_compression._snapshot_messages() == original_messages
+
+    @pytest.mark.asyncio
+    async def test_snapshot_is_a_copy_not_the_live_message_list(self):
+        router = _FakeRouter([_marker({"auto_router_routing_compression": "headroom-a"})])
+        original_messages = [{"role": "user", "content": "hi"}]
+
+        await arm_pre_call(data={"model": "smart-router", "messages": original_messages}, llm_router=router)
+        original_messages[0]["content"] = "mutated after the snapshot"
+
+        assert auto_router_compression._snapshot_messages() == [{"role": "user", "content": "hi"}]
+
+    @pytest.mark.asyncio
+    async def test_a_request_without_a_policy_clears_a_previous_snapshot(self):
+        router_with = _FakeRouter([_marker({"auto_router_routing_compression": "headroom-a"})])
+        await arm_pre_call(data={"model": "smart-router", "messages": [{"role": "user", "content": "first"}]},
+                           llm_router=router_with)
+
+        router_without = _FakeRouter(
+            [{"model_name": "plain", "litellm_params": {"model": "openai/gpt-4o-mini"}}]
+        )
+        await arm_pre_call(data={"model": "plain", "messages": [{"role": "user", "content": "second"}]},
+                           llm_router=router_without)
+
+        assert auto_router_compression._snapshot_messages() is None
 
 
 class TestMessagesForRouting:
+    @pytest.fixture(autouse=True)
+    def _clear_snapshot(self):
+        auto_router_compression._routing_messages_snapshot.set(None)
+        yield
+        auto_router_compression._routing_messages_snapshot.set(None)
+
     @pytest.mark.asyncio
     async def test_no_policy_returns_none(self):
         assert await messages_for_routing(policy=None, messages=[], request_kwargs={}) is None
 
     @pytest.mark.asyncio
-    async def test_routing_side_unset_returns_none(self):
-        policy = AutoRouterCompressionPolicy(routing=None, model="headroom-a")
+    async def test_routing_none_with_no_model_compression_returns_none(self):
+        """Nothing compressed either hop, so the caller's own messages are already right."""
+        policy = AutoRouterCompressionPolicy(routing=None, model=None)
         assert await messages_for_routing(policy=policy, messages=[], request_kwargs={}) is None
 
     @pytest.mark.asyncio
-    async def test_unknown_guardrail_name_returns_none(self):
+    async def test_routing_none_with_model_compression_routes_on_the_snapshot(self):
+        """Regression: with routing explicitly off and the model side compressed, the
+        messages in hand are the model-side guardrail's output. Routing asked for no
+        compression, so it must read the pre-compression snapshot instead."""
+        original = [{"role": "user", "content": "the full original conversation"}]
+        auto_router_compression._routing_messages_snapshot.set(tuple(dict(m) for m in original))
+        policy = AutoRouterCompressionPolicy(routing=None, model="headroom-a")
+        model_compressed = [{"role": "user", "content": "[COMPRESSED] the full original conversation"}]
+
+        result = await messages_for_routing(policy=policy, messages=model_compressed, request_kwargs={})
+
+        assert result == original
+
+    @pytest.mark.asyncio
+    async def test_unknown_guardrail_name_routes_on_the_uncompressed_messages(self):
         policy = AutoRouterCompressionPolicy(routing="does-not-exist", model=None)
         messages = [{"role": "user", "content": "hi"}]
         result = await messages_for_routing(policy=policy, messages=messages, request_kwargs={})
-        assert result is None
+        assert result == messages
 
     @pytest.mark.asyncio
     async def test_compresses_via_the_named_guardrail(self, registered_guardrail):
@@ -256,15 +340,14 @@ class TestMessagesForRouting:
 
     @pytest.mark.asyncio
     async def test_uses_the_snapshot_when_present(self, registered_guardrail):
-        policy = AutoRouterCompressionPolicy(routing="fake-compress", model=None)
-        snapshot = [{"role": "user", "content": "original"}]
-        request_kwargs = {"metadata": {AUTO_ROUTER_ROUTING_MESSAGES_SNAPSHOT_KEY: snapshot}}
-        # `messages` here stands in for whatever a model-side guardrail already
+        policy = AutoRouterCompressionPolicy(routing="fake-compress", model="headroom-b")
+        auto_router_compression._routing_messages_snapshot.set(({"role": "user", "content": "original"},))
+        # `messages` here stands in for whatever the model-side guardrail already
         # rewrote `data["messages"]` to -- routing must ignore it and compress the
         # pristine snapshot instead.
         already_rewritten = [{"role": "user", "content": "rewritten by another guardrail"}]
         result = await messages_for_routing(
-            policy=policy, messages=already_rewritten, request_kwargs=request_kwargs
+            policy=policy, messages=already_rewritten, request_kwargs={}
         )
         assert result == [{"role": "user", "content": "[COMPRESSED] original"}]
 
