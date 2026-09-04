@@ -17340,10 +17340,10 @@
         "supports_vision": false
     },
     "databricks/databricks-gemini-2-5-flash": {
-        "cache_creation_input_token_cost": 3.7499e-07,
-        "cache_read_input_token_cost": 3.752e-08,
-        "input_cost_per_token": 3.7499e-07,
-        "input_dbu_cost_per_token": 5.3570000000000005e-06,
+        "cache_creation_input_token_cost": 3.0002e-07,
+        "cache_read_input_token_cost": 3.0002e-08,
+        "input_cost_per_token": 3.0002e-07,
+        "input_dbu_cost_per_token": 4.285999999999999e-06,
         "litellm_provider": "databricks",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65535,
@@ -17352,18 +17352,18 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 3.12501e-06,
-        "output_dbu_cost_per_token": 4.4643e-05,
+        "output_cost_per_token": 2.49998e-06,
+        "output_dbu_cost_per_token": 3.5714e-05,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-gemini-2-5-pro": {
-        "cache_creation_input_token_cost": 1.56247e-06,
-        "cache_read_input_token_cost": 1.5624e-07,
-        "input_cost_per_token": 1.56247e-06,
-        "input_dbu_cost_per_token": 2.2321000000000002e-05,
+        "cache_creation_input_token_cost": 1.24999e-06,
+        "cache_read_input_token_cost": 1.2499900000000002e-07,
+        "input_cost_per_token": 1.24999e-06,
+        "input_dbu_cost_per_token": 1.7857e-05,
         "litellm_provider": "databricks",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
@@ -17372,8 +17372,8 @@
             "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 1.249997e-05,
-        "output_dbu_cost_per_token": 0.000178571,
+        "output_cost_per_token": 9.99999e-06,
+        "output_dbu_cost_per_token": 0.000142857,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -58692,42 +58692,28 @@
         "max_input_tokens": 1048576
     },
     "databricks/databricks-gemini-3-7-flash": {
-        "cache_creation_input_token_cost": 1.87502e-06,
-        "cache_read_input_token_cost": 1.8753e-07,
-        "input_cost_per_token": 1.87502e-06,
-        "input_dbu_cost_per_token": 2.6786e-05,
         "litellm_provider": "databricks",
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Databricks DBU rates not yet published for this model; endpoint metadata only."
         },
         "mode": "chat",
-        "output_cost_per_token": 9.37503e-06,
-        "output_dbu_cost_per_token": 0.000133929,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_tool_choice": true,
         "max_input_tokens": 1048576
     },
     "databricks/databricks-gemini-3-8-flash": {
-        "cache_creation_input_token_cost": 1.87502e-06,
-        "cache_read_input_token_cost": 1.8753e-07,
-        "input_cost_per_token": 1.87502e-06,
-        "input_dbu_cost_per_token": 2.6786e-05,
         "litellm_provider": "databricks",
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Databricks DBU rates not yet published for this model; endpoint metadata only."
         },
         "mode": "chat",
-        "output_cost_per_token": 9.37503e-06,
-        "output_dbu_cost_per_token": 0.000133929,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_tool_choice": true,
         "max_input_tokens": 1048576
     },
@@ -58814,7 +58800,9 @@
         "output_dbu_cost_per_token": 0.002571429,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_prompt_caching": true,
-        "max_output_tokens": 128000
+        "max_output_tokens": 128000,
+        "cache_creation_input_token_cost": 2.999997e-05,
+        "cache_read_input_token_cost": 2.999997e-05
     },
     "databricks/databricks-gpt-5-6-luna": {
         "cache_creation_input_token_cost": 1.24999e-06,
@@ -58917,8 +58905,8 @@
         "cache_read_input_token_cost": 1.7003e-07
     },
     "databricks/databricks-qwen3-embedding-0-6b": {
-        "cache_creation_input_token_cost": 1.2999e-07,
-        "cache_read_input_token_cost": 1.2999e-07,
+        "cache_creation_input_token_cost": 2.002e-08,
+        "cache_read_input_token_cost": 2.002e-08,
         "input_cost_per_token": 2.002e-08,
         "input_dbu_cost_per_token": 2.86e-07,
         "litellm_provider": "databricks",
@@ -58946,7 +58934,9 @@
         "output_dbu_cost_per_token": 1.7143000000000002e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "max_input_tokens": 262144,
-        "max_output_tokens": 25000
+        "max_output_tokens": 25000,
+        "cache_creation_input_token_cost": 1.5001e-07,
+        "cache_read_input_token_cost": 1.5001e-07
     },
     "databricks/databricks-qwen35-122b-a10b": {
         "input_cost_per_token": 2.2001e-07,
@@ -58961,6 +58951,8 @@
         "output_dbu_cost_per_token": 3.1429e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "max_input_tokens": 262144,
-        "max_output_tokens": 25000
+        "max_output_tokens": 25000,
+        "cache_creation_input_token_cost": 2.2001e-07,
+        "cache_read_input_token_cost": 2.2001e-07
     }
 }

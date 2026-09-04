@@ -65,6 +65,18 @@ PUBLISHED_DBU_PER_MILLION: Final = {
     "databricks/databricks-deepseek-v4-flash-0731": ("2.000", "4.000", "2.000", "0.400"),
     "databricks/databricks-deepseek-v4-pro-0813": ("18.857", "56.571", "18.857", "1.886"),
     "databricks/databricks-glm-5-2": ("20.000", "62.857", "20.000", "3.714"),
+    "databricks/databricks-gpt-5-6-sol": ("57.143", "285.714", "71.429", "5.714"),
+    "databricks/databricks-gpt-5-6-terra": ("35.714", "214.286", "44.643", "3.571"),
+    "databricks/databricks-gpt-5-6-luna": ("14.286", "85.714", "17.857", "1.429"),
+    "databricks/databricks-gpt-5-5": ("71.429", "428.571", "71.429", "7.143"),
+    "databricks/databricks-claude-fable-5-1": ("142.858", "714.286", "178.572", "3.572"),
+    "databricks/databricks-gemini-3-6-flash": ("26.786", "133.929", "26.786", "2.679"),
+    "databricks/databricks-gemini-3-5-flash": ("26.786", "160.714", "26.786", "2.679"),
+    "databricks/databricks-gemini-3-5-flash-lite": ("5.357", "44.643", "5.357", "0.536"),
+    "databricks/databricks-glm-5-3": ("20.000", "62.857", "20.000", "3.714"),
+    "databricks/databricks-inkling": ("14.286", "57.857", "14.286", "2.429"),
+    "databricks/databricks-grok-4-6": ("35.714", "107.143", "35.714", "8.929"),
+    "databricks/databricks-glm-5-3-flash": ("2.143", "7.143", "2.143", "0.429"),
 }
 PROMOTIONAL_DISCOUNT: Final = 0.80
 PROMOTION_EXPIRES: Final = "2027-01-31"
@@ -208,7 +220,7 @@ def test_every_model_without_published_cache_dbu_bills_cache_at_its_own_input_ra
         and model not in PUBLISHED_DBU_PER_MILLION
     ]
 
-    assert len(without_published_rates) == 14
+    assert len(without_published_rates) == 18
     for model in without_published_rates:
         info = _model_info(model)
         for field in CACHE_FIELDS:
