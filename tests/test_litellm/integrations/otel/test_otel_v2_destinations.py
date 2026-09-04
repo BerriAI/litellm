@@ -129,7 +129,7 @@ class TestRoutingMode:
     moment a team configures its own is what ``additive`` exists to prevent.
     """
 
-    OPERATOR_SINK = ("https://cloud.langfuse.com/api/public/otel/v1/traces", ("Basic op",))
+    OPERATOR_SINK = ("https://cloud.langfuse.com/api/public/otel/v1/traces", (("authorization", "Basic op"),))
     #: What a tenant destination for that same project looks like before normalizing:
     #: no signal path yet, and the header name cased the way the backend writes it.
     SAME_ACCOUNT_ENDPOINT = "https://cloud.langfuse.com/api/public/otel"
@@ -345,6 +345,16 @@ class TestRoutingMode:
 
         assert sink("pk-op", "sk-op") in operator, "a team naming the operator's own project"
         assert sink("pk-team", "sk-team") not in operator, "a different project on the same server"
+
+    def test_two_accounts_holding_the_same_strings_in_different_roles_are_not_one(self):
+        """The values alone are not the identity. Two accounts can hold the same pair
+        of strings with the space id and the api key the other way round, and folding
+        them together would leave the second one's team with no trace at all."""
+        endpoint = "https://otlp.arize.com/v1"
+
+        assert _sink_key(endpoint, {"space_id": "a", "api_key": "b"}) != _sink_key(
+            endpoint, {"space_id": "b", "api_key": "a"}
+        )
 
     def test_the_operators_own_arize_space_and_a_team_naming_it_are_one_account(self, monkeypatch):
         """One account answers to two header names here: the operator's exporter sends

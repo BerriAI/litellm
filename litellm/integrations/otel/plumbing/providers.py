@@ -4,6 +4,7 @@ import queue
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from opentelemetry import _logs, baggage, metrics
@@ -219,7 +220,11 @@ _DRAIN_WORKERS: Final = 2
 _SHUTDOWN_DRAIN_SECONDS: Final = 5.0
 
 #: An exporter's account: its normalized endpoint and the credentials it presents.
-_SinkKey = tuple[str, tuple[str, ...]]
+_SinkKey = tuple[str, tuple[tuple[str, str], ...]]
+
+#: Header names that spell one credential two ways. Arize's operator exporter sends
+#: ``space_id`` where a tenant destination sends ``arize-space-id``.
+_CREDENTIAL_ALIASES: Final = MappingProxyType({"arize_space_id": "space_id"})
 
 
 class _DrainPool:
@@ -851,16 +856,21 @@ def operator_sink_keys(config: OpenTelemetryV2Config | None) -> frozenset[_SinkK
 def _sink_key(endpoint: str | None, headers: Mapping[str, str]) -> "_SinkKey | None":
     """The account an exporter writes to, or ``None`` when it has no fixed one.
 
-    The credentials are the identity; the header names are only how each backend
-    spells them, and one account answers to more than one spelling (Arize takes the
-    operator's ``space_id`` and a tenant's ``arize-space-id``). The endpoint needs
-    normalizing too: the operator's spec carries the signal path that a tenant
-    destination leaves for the exporter to append.
+    Normalized on the three counts that make one account look like two: the operator's
+    spec carries the signal path a tenant destination leaves for the exporter to
+    append, header names survive one round trip lowercased and the other not, and one
+    credential answers to more than one name (see :data:`_CREDENTIAL_ALIASES`).
     """
     normalized: Final = _otlp_traces_endpoint(endpoint)
     if normalized is None:
         return None
-    return (normalized, tuple(sorted(headers.values())))
+    return (normalized, tuple(sorted((_credential_name(name), value) for name, value in headers.items())))
+
+
+def _credential_name(header: str) -> str:
+    """The credential a header carries, under whichever name the backend spells it."""
+    normalized: Final = header.strip().lower().replace("-", "_")
+    return _CREDENTIAL_ALIASES.get(normalized, normalized)
 
 
 def _attached_processors(provider: TracerProvider) -> "tuple[SpanProcessor, ...]":
