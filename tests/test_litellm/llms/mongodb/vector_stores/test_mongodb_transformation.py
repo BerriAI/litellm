@@ -788,8 +788,8 @@ class TestErrorTranslation:
         assert "refused or dropped" not in str(translated)
 
     def test_an_unescaped_password_character_is_a_400_not_a_500(self):
-        """pymongo's URI parser raises a plain ValueError, not a PyMongoError, when a password
-        holds an unescaped '/'. That is a routine mistake and it must not be a 500."""
+        """pymongo's URI parser raises a plain ValueError, not a PyMongoError, for an unusable port,
+        which is also what an unescaped ':' in a password produces. It must not be a 500."""
         translated = self._translate(ValueError("Port contains non-digit characters"))
 
         assert isinstance(translated, BadRequestError)
@@ -895,7 +895,7 @@ class TestEmptyResultsAreDisambiguated:
     def test_a_missing_index_becomes_an_error_rather_than_an_empty_page(self):
         config, _, collection = _config(documents=[], search_indexes=[])
 
-        with pytest.raises(BadRequestError, match="No queryable Atlas Vector Search index"):
+        with pytest.raises(BadRequestError, match="No queryable MongoDB Vector Search index"):
             _search(config)
 
         assert collection.listed_indexes == [INDEX]
@@ -934,7 +934,7 @@ class TestEmptyResultsAreDisambiguated:
     async def test_async_missing_index_becomes_an_error_rather_than_an_empty_page(self):
         config, _, collection = _async_config(documents=[], search_indexes=[])
 
-        with pytest.raises(BadRequestError, match="No queryable Atlas Vector Search index"):
+        with pytest.raises(BadRequestError, match="No queryable MongoDB Vector Search index"):
             await _asearch(config)
 
         assert collection.listed_indexes == [INDEX]
@@ -1202,3 +1202,163 @@ class TestClientConstructionFailures:
 
         with pytest.raises(BadRequestError, match="not a usable MongoDB connection string"):
             await _asearch(config)
+
+
+class TestSelfManagedDeploymentsAreFirstClass:
+    """mongod serves $vectorSearch identically whether mongot runs under Atlas or beside a
+    self-managed deployment, so an operator without an Atlas account has to be able to act on
+    every message. Guidance that only names Atlas remedies sends them looking for an IP access
+    list and a paused cluster that do not exist in their deployment."""
+
+    def _config_that_fails_to_connect(self, error):
+        def factory(_key):
+            raise error
+
+        return MongoDBVectorStoreConfig(
+            embedding_fn=FakeEmbeddingFn([0.1, 0.2, 0.3]), sync_client_factory=factory
+        )
+
+    def test_a_plain_mongodb_uri_without_srv_or_credentials_is_accepted(self):
+        params = _MongoDBSearchParams.model_validate(
+            {**BASE_PARAMS, "mongodb_connection_string": "mongodb://mongod.internal:27017"}
+        )
+
+        assert params.require_connection_string() == "mongodb://mongod.internal:27017"
+
+    def test_an_unreachable_deployment_names_a_self_managed_remedy(self):
+        from pymongo.errors import ServerSelectionTimeoutError
+
+        config = self._config_that_fails_to_connect(ServerSelectionTimeoutError("connection refused"))
+
+        with pytest.raises(Timeout) as excinfo:
+            _search(config)
+
+        assert "self-managed" in str(excinfo.value)
+        assert "host or port" in str(excinfo.value)
+
+    def test_a_refused_connection_names_a_self_managed_remedy(self):
+        from pymongo.errors import ConnectionFailure
+
+        config = self._config_that_fails_to_connect(ConnectionFailure("connection closed"))
+
+        with pytest.raises(BadRequestError) as excinfo:
+            _search(config)
+
+        assert "self-managed" in str(excinfo.value)
+        assert "mongod is listening" in str(excinfo.value)
+
+    def test_an_unresolvable_hostname_names_a_self_managed_remedy(self):
+        from pymongo.errors import ConfigurationError
+
+        config = self._config_that_fails_to_connect(ConfigurationError("The DNS query name does not exist"))
+
+        with pytest.raises(BadRequestError) as excinfo:
+            _search(config)
+
+        assert "self-managed" in str(excinfo.value)
+
+    def test_the_missing_index_message_does_not_claim_atlas(self):
+        message = str(missing_index_error(INDEX, "sample_mflix", "embedded_movies"))
+
+        assert "MongoDB Vector Search index" in message
+        assert "Atlas" not in message
+
+    def test_the_not_ready_message_does_not_claim_atlas(self):
+        message = str(index_not_ready_error(INDEX, "sample_mflix", "embedded_movies", "PENDING"))
+
+        assert "MongoDB Vector Search index" in message
+        assert "Atlas" not in message
+
+    def test_the_search_only_refusal_does_not_claim_atlas(self):
+        config = MongoDBVectorStoreConfig()
+
+        with pytest.raises(BadRequestError) as excinfo:
+            config.transform_create_vector_store_request({}, api_base="")
+
+        assert "Atlas" not in str(excinfo.value)
+
+    def test_a_dimension_mismatch_does_not_claim_atlas(self):
+        from pymongo.errors import OperationFailure
+
+        error = OperationFailure("vector field is indexed with 128 dimensions but queried with 256")
+        translated = translate_mongo_error(error, index_name=INDEX, database="db", collection="c")
+
+        assert "Atlas" not in str(translated)
+        assert "dimensions the index was built for" in str(translated)
+
+    def test_an_uncovered_embedding_field_does_not_claim_atlas(self):
+        from pymongo.errors import OperationFailure
+
+        error = OperationFailure("embedding is not indexed as vector")
+        translated = translate_mongo_error(error, index_name=INDEX, database="db", collection="c")
+
+        assert "MongoDB Vector Search index does not cover" in str(translated)
+        assert "Atlas" not in str(translated)
+
+    def test_a_self_managed_auth_failure_is_still_recognised_by_code_18(self):
+        from pymongo.errors import OperationFailure
+
+        error = OperationFailure("Authentication failed.", code=18, details={"code": 18})
+        translated = translate_mongo_error(error, index_name=INDEX, database="db", collection="c")
+
+        assert isinstance(translated, BadRequestError)
+        assert "rejected the credentials" in str(translated)
+
+
+class TestUnescapedCredentialsAreDiagnosed:
+    """Self-managed deployments usually carry a generated password, so '@', '/', ':' and '%' in one
+    are routine. pymongo reports those as a port, a database name or an RFC 3986 complaint, none of
+    which points the operator at their password, so each has to be named for what it is. The errors
+    here come from pymongo's real parser rather than a synthetic stand-in."""
+
+    @staticmethod
+    def _real_parse_error(uri):
+        from pymongo import MongoClient
+
+        try:
+            MongoClient(uri, serverSelectionTimeoutMS=1)
+        except Exception as e:
+            return e
+        raise AssertionError(f"expected {uri!r} to fail parsing")
+
+    def _translated(self, uri):
+        return translate_mongo_error(
+            self._real_parse_error(uri), index_name=INDEX, database="db", collection="c"
+        )
+
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            "mongodb://user:pa@ss@host:27017/",
+            "mongodb://user:pa:ss@host:27017/",
+            "mongodb://user:pa%ss@host:27017/",
+            "mongodb://user@x:pw@host:27017/",
+        ],
+    )
+    def test_rfc_3986_complaints_tell_the_operator_to_encode_the_password(self, uri):
+        translated = self._translated(uri)
+
+        assert isinstance(translated, BadRequestError)
+        assert "percent-encoded per RFC 3986" in str(translated)
+
+    @pytest.mark.parametrize(
+        "uri",
+        ["mongodb://user:pa/ss@host:27017/", "mongodb://user/x:pw@host:27017/"],
+    )
+    def test_a_slash_in_the_credentials_is_not_reported_as_a_database_name(self, uri):
+        translated = self._translated(uri)
+
+        assert isinstance(translated, BadRequestError)
+        assert "percent-encoded per RFC 3986" in str(translated)
+
+    def test_an_unusable_port_names_the_host_and_port_not_the_database(self):
+        translated = self._translated("mongodb://host:99999/")
+
+        assert isinstance(translated, BadRequestError)
+        assert "host and port" in str(translated)
+
+    def test_a_genuinely_bad_database_name_still_mentions_the_uri_path(self):
+        translated = self._translated("mongodb://host:27017/has space")
+
+        assert isinstance(translated, BadRequestError)
+        assert "database name in the URI path" in str(translated)

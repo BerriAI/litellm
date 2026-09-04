@@ -1,11 +1,12 @@
-"""MongoDB Atlas vector store provider.
+"""MongoDB vector store provider, for Atlas and self-managed deployments alike.
 
-Atlas Vector Search has no HTTP query API (the Data API and HTTPS Endpoints are
+MongoDB Vector Search has no HTTP query API (the Data API and HTTPS Endpoints are
 end-of-life), so this config extends BaseDirectVectorStoreConfig and runs the
 ``$vectorSearch`` aggregation itself through pymongo instead of shaping an httpx
-request.
+request. mongod serves that stage identically whether mongot runs under Atlas or
+beside a self-managed deployment, so one code path covers both.
 
-``vector_store_id`` is the Atlas Search index name, matching the Valkey provider
+``vector_store_id`` is the search index name, matching the Valkey provider
 where the id names the index; the database and collection it covers come from
 litellm_params.
 """
@@ -60,7 +61,7 @@ MAX_QUERY_CHARACTERS: Final = 32_000
 _EMPTY_EMBEDDING_CONFIG: Final = MappingProxyType({})
 
 _SEARCH_ONLY_MESSAGE: Final = (
-    "MongoDB vector store is search-only. Create the collection and its Atlas Vector Search "
+    "MongoDB vector store is search-only. Create the collection and its MongoDB Vector Search "
     "index in MongoDB directly, then register it here by index name."
 )
 
@@ -101,7 +102,8 @@ class _MongoDBSearchParams(BaseModel):
         if not self.mongodb_connection_string:
             raise config_error(
                 "mongodb_connection_string is required in litellm_params for the MongoDB vector store. "
-                "Example: mongodb+srv://<user>:<password>@<cluster>.mongodb.net"
+                "Example: mongodb+srv://<user>:<password>@<cluster>.mongodb.net for Atlas, or "
+                "mongodb://<user>:<password>@<host>:27017 for a self-managed deployment"
             )
         scheme: Final = self.mongodb_connection_string.split("://", 1)[0].lower()
         if scheme not in ("mongodb", "mongodb+srv"):
@@ -234,12 +236,12 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         if vector_store_search_optional_params.get("filters") is not None:
             raise config_error(
                 "MongoDB vector store does not support the filters parameter yet. "
-                "Restrict the collection or the Atlas Vector Search index definition instead."
+                "Restrict the collection or the MongoDB Vector Search index definition instead."
             )
         if vector_store_search_optional_params.get("ranking_options") is not None:
             raise config_error(
                 "MongoDB vector store does not support the ranking_options parameter yet. "
-                "Every result already carries the Atlas vectorSearchScore, so filter or re-rank "
+                "Every result already carries the vectorSearchScore, so filter or re-rank "
                 "on that rather than having the threshold silently ignored."
             )
         if vector_store_search_optional_params.get("rewrite_query") is not None:
@@ -296,7 +298,7 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
     def _raise_for_missing_text_field(
         cls, documents: Sequence[Mapping[str, object]], text_field: str, database: str, collection: str
     ) -> None:
-        """Atlas happily matches vectors in documents that carry no text at all, so a mistyped
+        """$vectorSearch happily matches documents that carry no text at all, so a mistyped
         mongodb_text_field returns well-scored results whose content is empty and feeds an empty
         context to the model. Every matched document lacking the field is the misconfiguration."""
         if documents and all(cls._field_value(document, text_field) is None for document in documents):
@@ -322,7 +324,7 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
     def _raise_for_unusable_index(
         catalogue: Sequence[Mapping[str, object]], index_name: str, database: str, collection: str
     ) -> None:
-        """An empty result set is ambiguous: Atlas returns zero documents both for a query that
+        """An empty result set is ambiguous: mongod returns zero documents both for a query that
         genuinely matched nothing and for a missing database, collection or index. Only the second
         is a misconfiguration, so the index catalogue decides which one happened."""
         if not catalogue:
