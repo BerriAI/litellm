@@ -6,6 +6,7 @@ import pytest
 from litellm.router_strategy.capability_router.config import CapabilityRouterConfig
 from litellm.router_strategy.capability_router.training import (
     CapabilityTrainingRecord,
+    fit_probability_calibration,
     main,
     train_capability_artifact,
 )
@@ -77,6 +78,27 @@ def test_training_learns_rule_boundaries_and_improves_held_out_routing() -> None
     assert result.report.test_always_candidates["strong"].success_rate == 1.0
     assert result.report.test_oracle.quality_cost_utility >= result.report.test.quality_cost_utility
     assert result.report.test_threshold_sweep
+
+
+def test_probability_calibration_pools_new_adjacent_violations() -> None:
+    calibration_records = tuple(
+        CapabilityTrainingRecord(
+            benchmark="agent-bench",
+            task_id=f"task-{index}",
+            split="train",
+            model="small",
+            raw_p_solve=probability,
+            success=success,
+            estimated_cost=1.0,
+        )
+        for index, (probability, success) in enumerate(((0.1, 1.0),) * 3 + ((0.2, 0.0),) * 3 + ((0.3, 0.0),) * 3)
+    )
+
+    calibration = fit_probability_calibration(calibration_records, max_bins=3)
+
+    assert len(calibration) == 1
+    assert calibration[0].upper_bound == 1.0
+    assert calibration[0].probability == pytest.approx(4.0 / 11.0)
 
 
 def test_training_requires_explicit_splits_and_exact_candidate_models() -> None:

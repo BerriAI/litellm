@@ -6,6 +6,7 @@ import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import reduce
 from itertools import groupby
 from pathlib import Path
 from types import MappingProxyType
@@ -140,7 +141,7 @@ class _TaskCandidate:
     boundary: CapabilityBoundary
 
 
-def _pool_adjacent_violators(blocks: tuple[_CalibrationBlock, ...]) -> tuple[_CalibrationBlock, ...]:
+def _merge_first_calibration_violation(blocks: tuple[_CalibrationBlock, ...]) -> tuple[_CalibrationBlock, ...]:
     violation: Final = next(
         (index for index in range(len(blocks) - 1) if blocks[index].probability > blocks[index + 1].probability),
         None,
@@ -154,7 +155,15 @@ def _pool_adjacent_violators(blocks: tuple[_CalibrationBlock, ...]) -> tuple[_Ca
         successes=left.successes + right.successes,
         observations=left.observations + right.observations,
     )
-    return _pool_adjacent_violators((*blocks[:violation], merged, *blocks[violation + 2 :]))
+    return (*blocks[:violation], merged, *blocks[violation + 2 :])
+
+
+def _pool_adjacent_violators(blocks: tuple[_CalibrationBlock, ...]) -> tuple[_CalibrationBlock, ...]:
+    return reduce(
+        lambda pooled, _: _merge_first_calibration_violation(pooled),
+        range(len(blocks)),
+        blocks,
+    )
 
 
 def fit_probability_calibration(
