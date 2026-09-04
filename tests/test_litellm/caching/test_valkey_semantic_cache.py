@@ -543,12 +543,18 @@ def test_valkey_cache_supports_redis_py_4_index_module():
         import sys
         import types
 
-        from redis.commands.search.index_definition import IndexDefinition, IndexType
+        class IndexDefinition:
+            def __init__(self, *args, **kwargs):
+                pass
+
+        class IndexType:
+            pass
 
         legacy = types.ModuleType("redis.commands.search.indexDefinition")
         legacy.IndexDefinition = IndexDefinition
         legacy.IndexType = IndexType
         sys.modules[legacy.__name__] = legacy
+
         original_import = builtins.__import__
 
         def compatibility_import(name, *args, **kwargs):
