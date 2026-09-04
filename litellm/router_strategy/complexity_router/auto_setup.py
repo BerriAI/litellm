@@ -226,10 +226,7 @@ def _resolve_groups(
             {model.benchmark_model_id: model for model in _matching_snapshot_models(snapshot, deployment.model_refs)}
             for deployment in deployments
         ]
-        if any(
-            len({model.identity.family_id for model in matches.values()}) > 1
-            for matches in match_sets
-        ):
+        if any(len({model.identity.family_id for model in matches.values()}) > 1 for matches in match_sets):
             excluded.append(AutoSetupInventoryExclusion(model_name, "mixed_model_group"))
             continue
         if any(not matches for matches in match_sets):
@@ -354,9 +351,7 @@ def _cost_rank(profiles: Sequence[_AvailableProfile]) -> tuple[_AvailableProfile
             profiles,
             key=lambda profile: (
                 profile.cost_per_completed_task_usd is None,
-                profile.cost_per_completed_task_usd
-                if profile.cost_per_completed_task_usd is not None
-                else math.inf,
+                profile.cost_per_completed_task_usd if profile.cost_per_completed_task_usd is not None else math.inf,
                 -profile.quality.quality_lower_bound,
                 profile.model_name,
             ),

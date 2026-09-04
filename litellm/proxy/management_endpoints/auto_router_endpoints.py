@@ -389,7 +389,9 @@ def _deployment_pricing(raw_deployment: object) -> AutoSetupDeploymentPricing | 
     litellm_params: Final = _MODEL_REFERENCE_MAPPING.validate_python(
         deployment.get("litellm_params", _EMPTY_MODEL_REFERENCE)
     )
-    if any(litellm_params.get(field) not in (None, False, 0, 0.0, {}) for field in _AUTO_SETUP_UNSUPPORTED_PRICING_FIELDS):
+    if any(
+        litellm_params.get(field) not in (None, False, 0, 0.0, {}) for field in _AUTO_SETUP_UNSUPPORTED_PRICING_FIELDS
+    ):
         return None
     published: Mapping[str, object] | None = None
     published_raw: Mapping[str, object] | None = None
@@ -407,8 +409,7 @@ def _deployment_pricing(raw_deployment: object) -> AutoSetupDeploymentPricing | 
             published_raw = _MODEL_REFERENCE_MAPPING.validate_python(raw)
             break
     if published_raw is not None and any(
-        published_raw.get(field) not in (None, False, 0, 0.0, {})
-        for field in _AUTO_SETUP_UNSUPPORTED_PRICING_FIELDS
+        published_raw.get(field) not in (None, False, 0, 0.0, {}) for field in _AUTO_SETUP_UNSUPPORTED_PRICING_FIELDS
     ):
         return None
     values: dict[str, object] = {}
