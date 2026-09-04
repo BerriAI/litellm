@@ -11797,6 +11797,9 @@ class Router:
             counted_messages: Final = (system_message, *messages) if system_message is not None else messages
             return litellm.token_counter(messages=counted_messages, tools=tools)
         if input is not None:
+            if isinstance(input, list) and all(isinstance(item, str) for item in input):
+                return litellm.token_counter(text=input)
+
             from openai.types.responses.response_create_params import ResponseInputParam
 
             from litellm.responses.litellm_completion_transformation.transformation import (
