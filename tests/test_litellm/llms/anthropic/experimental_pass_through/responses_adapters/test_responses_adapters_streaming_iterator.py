@@ -308,3 +308,124 @@ class TestResponseCompletedUsage:
             "cache_creation_input_tokens": 10,
             "cache_read_input_tokens": 4004,
         }
+
+
+class TestResponseFailedSurfacesUpstreamFailure:
+    """Regression for https://github.com/BerriAI/litellm/issues/39703.
+
+    A provider-side failure that arrives inside an already-200 stream
+    (``response.failed``, e.g. an exhausted quota) must reach the client as a
+    failure. It used to share the ``response.completed`` branch and was
+    relabelled as a successful empty turn (``stop_reason: "end_turn"``,
+    usage 0/0), so agent clients (e.g. Claude Code) just stopped mid-session
+    with no error anywhere.
+    """
+
+    @staticmethod
+    def _failed_response() -> SimpleNamespace:
+        return SimpleNamespace(
+            status="failed",
+            usage=None,
+            output=[],
+            error=SimpleNamespace(
+                code="insufficient_quota",
+                type="insufficient_quota",
+                message="You have no credits remaining. Add credits to continue using the API.",
+            ),
+        )
+
+    def test_response_failed_emits_terminal_error_event_not_end_turn(self):
+        chunks = _drain_async(
+            [
+                {"type": "response.created"},
+                {"type": "response.failed", "response": self._failed_response()},
+            ]
+        )
+
+        assert [c["type"] for c in chunks] == ["message_start", "error"]
+        assert chunks[1] == {
+            "type": "error",
+            "error": {
+                "type": "insufficient_quota",
+                "message": "You have no credits remaining. Add credits to continue using the API.",
+            },
+        }
+        assert not [c for c in chunks if c["type"] == "message_delta"]
+        assert not [c for c in chunks if c["type"] == "message_stop"]
+
+    def test_response_failed_with_dict_error_object(self):
+        chunks = _process_all(
+            [
+                {
+                    "type": "response.failed",
+                    "response": {
+                        "status": "failed",
+                        "error": {"code": "insufficient_quota", "message": "no credits"},
+                    },
+                }
+            ]
+        )
+
+        assert chunks == [{"type": "error", "error": {"type": "insufficient_quota", "message": "no credits"}}]
+
+    def test_response_failed_without_error_object_still_fails(self):
+        response = SimpleNamespace(status="failed", usage=None, output=[], error=None)
+        chunks = _process_all([{"type": "response.failed", "response": response}])
+
+        assert chunks == [{"type": "error", "error": {"type": "api_error", "message": "Upstream response failed"}}]
+
+    def test_response_completed_still_emits_successful_turn(self):
+        response = SimpleNamespace(status="completed", usage=None, output=[])
+        chunks = _process_all([{"type": "response.completed", "response": response}])
+
+        assert [c["type"] for c in chunks] == ["message_delta", "message_stop"]
+        assert chunks[0]["delta"]["stop_reason"] == "end_turn"
+
+
+class TestMidStreamFallbackErrorNotSwallowed:
+    """Regression for https://github.com/BerriAI/litellm/issues/39703 (1.97+).
+
+    The Responses stream iterator raises ``MidStreamFallbackError`` on a failed
+    event. ``__anext__`` used to catch it in a blanket ``except Exception``,
+    log, and fall through to ``StopAsyncIteration``, leaving the client with a
+    lone ``message_start`` and an unterminated stream. It must be surfaced as
+    the Anthropic streaming spec's terminal error event instead.
+    """
+
+    @staticmethod
+    def _stream_raising_mid_stream_fallback() -> list:
+        from litellm.exceptions import MidStreamFallbackError
+
+        async def _gen():
+            yield {"type": "response.created"}
+            raise MidStreamFallbackError(
+                message="litellm.APIError: API Error: Status Code 429",
+                model="gpt-4o-mini",
+                llm_provider="openai",
+                original_exception=SimpleNamespace(status_code=429, message="Rate limit exceeded"),
+            )
+
+        async def _run() -> list:
+            wrapper = AnthropicResponsesStreamWrapper(responses_stream=_gen(), model="gpt-4o-mini")
+            return [chunk async for chunk in wrapper]
+
+        return asyncio.run(_run())
+
+    def test_mid_stream_fallback_error_becomes_terminal_error_event(self):
+        chunks = self._stream_raising_mid_stream_fallback()
+
+        assert [c["type"] for c in chunks] == ["message_start", "error"]
+        assert chunks[1]["type"] == "error"
+        assert chunks[1]["error"]["type"] == "rate_limit_error"
+        assert chunks[1]["error"]["message"] == "Rate limit exceeded"
+
+    def test_stream_terminates_after_the_error_event(self):
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=None, model="gpt-4o-mini")
+        wrapper._sent_message_start = True  # real path: message_start precedes the failure
+        wrapper._chunk_queue.append({"type": "error", "error": {"type": "api_error", "message": "boom"}})
+
+        async def _drain():
+            return [chunk async for chunk in wrapper]
+
+        chunks = asyncio.run(_drain())
+        assert [c["type"] for c in chunks] == ["error"]
