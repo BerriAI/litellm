@@ -77,12 +77,33 @@ _Slot: TypeAlias = tuple[str, Callable[[str], None]]  # mutable-ok: Callable's p
 # _locate_request_texts, which freezes it into a tuple before returning.
 _SlotSink: TypeAlias = list[_Slot]  # mutable-ok: accumulator passed between collectors.
 
+# A caller-owned list whose entries are rewritten in place, such as a Completions
+# `prompt` sent as an array of strings.
+MutableSeq: TypeAlias = list  # mutable-ok: the request payload's own list.
+
 
 def _collect(container: MutableRequest, key: str, slots: _SlotSink) -> None:
     """Records the string at `key`, along with the write that replaces it."""
     value: Final = container.get(key)
     if isinstance(value, str) and value:
         slots.append((value, lambda new, c=container, k=key: c.__setitem__(k, new)))
+
+
+def _collect_entry(entries: MutableSeq, index: int, slots: _SlotSink) -> None:
+    """Records a string held directly in a list, rather than under a key."""
+    value: Final = entries[index]
+    if isinstance(value, str) and value:
+        slots.append((value, lambda new, e=entries, i=index: e.__setitem__(i, new)))
+
+
+def _collect_prompt(data: MutableRequest, slots: _SlotSink) -> None:
+    """The Completions API sends its text in a top-level `prompt`."""
+    prompt: Final = data.get("prompt")
+    if isinstance(prompt, str):
+        _collect(data, "prompt", slots)
+        return
+    for index in range(len(prompt)) if isinstance(prompt, list) else ():
+        _collect_entry(prompt, index, slots)
 
 
 def _collect_content(container: MutableRequest, slots: _SlotSink) -> None:
@@ -115,8 +136,12 @@ def _collect_responses_fields(data: MutableRequest, slots: _SlotSink) -> None:
         _collect(data, "input", slots)
         return
     for item in request_input if isinstance(request_input, list) else ():
-        if isinstance(item, dict):
-            _collect_content(item, slots)
+        if not isinstance(item, dict):
+            continue
+        _collect_content(item, slots)
+        # A function_call item holds `arguments`; a function_call_output holds `output`.
+        _collect(item, "arguments", slots)
+        _collect(item, "output", slots)
 
 
 class LLMShieldGuardrail(CustomGuardrail):
@@ -259,6 +284,7 @@ class LLMShieldGuardrail(CustomGuardrail):
                 _collect_content(message, slots)
                 _collect_tool_arguments(message, slots)
         _collect_responses_fields(data, slots)
+        _collect_prompt(data, slots)
         return tuple(slots)
 
     # --- hooks --------------------------------------------------------------------

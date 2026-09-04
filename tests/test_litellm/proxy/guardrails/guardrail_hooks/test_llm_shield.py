@@ -253,6 +253,46 @@ class TestRequestCoverage:
         assert data["messages"][0]["function_call"]["arguments"] == '{"email": "[EMAIL_1]"}'
 
     @pytest.mark.asyncio
+    async def test_completions_prompt_is_redacted(self):
+        """/v1/completions puts its text in a top-level `prompt`, not in messages."""
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail, {"texts": ["Email [EMAIL_1]"]})
+
+        data = {"prompt": "Email jane.doe@example.com"}
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="atext_completion")
+
+        assert mock.call_args_list[0].kwargs["json"]["texts"] == ["Email jane.doe@example.com"]
+        assert data["prompt"] == "Email [EMAIL_1]"
+
+    @pytest.mark.asyncio
+    async def test_completions_prompt_array_is_redacted(self):
+        """`prompt` also accepts an array, and each entry is provider-bound."""
+        guardrail = _guardrail()
+        _mock_post(guardrail, {"texts": ["[EMAIL_1]", "[PHONE_1]"]})
+
+        data = {"prompt": ["jane.doe@example.com", "555-0100"]}
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="atext_completion")
+
+        assert data["prompt"] == ["[EMAIL_1]", "[PHONE_1]"]
+
+    @pytest.mark.asyncio
+    async def test_responses_function_call_items_are_redacted(self):
+        """Responses input items hold tool data in `arguments` and `output`."""
+        guardrail = _guardrail()
+        _mock_post(guardrail, {"texts": ['{"email": "[EMAIL_1]"}', "sent to [EMAIL_1]"]})
+
+        data = {
+            "input": [
+                {"type": "function_call", "name": "send", "arguments": '{"email": "jane.doe@example.com"}'},
+                {"type": "function_call_output", "call_id": "c1", "output": "sent to jane.doe@example.com"},
+            ]
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="aresponses")
+
+        assert data["input"][0]["arguments"] == '{"email": "[EMAIL_1]"}'
+        assert data["input"][1]["output"] == "sent to [EMAIL_1]"
+
+    @pytest.mark.asyncio
     async def test_every_shape_in_one_request_is_redacted(self):
         guardrail = _guardrail()
         mock = _mock_post(guardrail, {"texts": ["a", "b", "c", "d"]})
