@@ -115,6 +115,9 @@ export interface StoredComplexityRouterConfig {
   return_raw_model_name?: boolean;
   enable_context_window_escalation?: unknown;
   context_window_escalation_buffer?: unknown;
+  stall_escalation_enabled?: unknown;
+  stall_escalation_window?: unknown;
+  stall_escalation_repeat_threshold?: unknown;
 }
 
 /**
@@ -208,6 +211,13 @@ export const hydrateComplexityRouterConfig = (
       typeof parsedConfig.context_window_escalation_buffer === "number"
         ? parsedConfig.context_window_escalation_buffer
         : undefined,
+    stall_escalation_enabled: parsedConfig.stall_escalation_enabled === true || undefined,
+    stall_escalation_window:
+      typeof parsedConfig.stall_escalation_window === "number" ? parsedConfig.stall_escalation_window : undefined,
+    stall_escalation_repeat_threshold:
+      typeof parsedConfig.stall_escalation_repeat_threshold === "number"
+        ? parsedConfig.stall_escalation_repeat_threshold
+        : undefined,
   };
 };
 
@@ -245,6 +255,9 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "reasoning_override_min_score",
   "enable_context_window_escalation",
   "context_window_escalation_buffer",
+  "stall_escalation_enabled",
+  "stall_escalation_window",
+  "stall_escalation_repeat_threshold",
 ]);
 
 // Managed only when the caller passes the corresponding state. A caller that does not render
@@ -351,6 +364,9 @@ export const buildUpdatedComplexityRouterConfig = (
     tierModelParams: value.tier_model_params,
     enableContextWindowEscalation: value.enable_context_window_escalation,
     contextWindowEscalationBuffer: value.context_window_escalation_buffer,
+    stallEscalationEnabled: value.stall_escalation_enabled,
+    stallEscalationWindow: value.stall_escalation_window,
+    stallEscalationRepeatThreshold: value.stall_escalation_repeat_threshold,
   };
   const built = buildComplexityRouterConfig(builderParams);
 

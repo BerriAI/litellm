@@ -593,14 +593,52 @@ describe("managed keys survive an untouched open-and-save", () => {
     "hybrid_boundary_margin",
   ]);
 
+  // The stall keys are rejected beside the session pinning and user-turn classification this
+  // fixture sets, so they get their own round trip below rather than widening this one.
+  const KEYS_ANOTHER_CLASSIFICATION_FREQUENCY_OWNS = new Set([
+    "stall_escalation_enabled",
+    "stall_escalation_window",
+    "stall_escalation_repeat_threshold",
+  ]);
+
   it("carries every managed key a built-in router can hold through hydrate then save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
     const saved = buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, hydrated);
 
     const dropped = [...MANAGED_COMPLEXITY_ROUTER_KEYS]
       .filter((key) => !KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS.has(key))
+      .filter((key) => !KEYS_ANOTHER_CLASSIFICATION_FREQUENCY_OWNS.has(key))
       .filter((key) => saved[key] === undefined);
     expect(dropped).toEqual([]);
+  });
+
+  it("carries the stall-escalation keys through their own round trip", () => {
+    const stored: Record<string, unknown> = {
+      ...STORED_ALL_MANAGED,
+      session_affinity: false,
+      classification_mode: "every_request",
+      stall_escalation_enabled: true,
+      stall_escalation_window: 8,
+      stall_escalation_repeat_threshold: 4,
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
+
+    expect(saved.stall_escalation_enabled).toBe(true);
+    expect(saved.stall_escalation_window).toBe(8);
+    expect(saved.stall_escalation_repeat_threshold).toBe(4);
+  });
+
+  it("leaves the stall keys out of a saved config that never had them on", () => {
+    const stored: Record<string, unknown> = {
+      ...STORED_ALL_MANAGED,
+      session_affinity: false,
+      classification_mode: "every_request",
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
+
+    expect(saved).not.toHaveProperty("stall_escalation_enabled");
   });
 
   it("drops a stored local-scorer threshold when the operator converts the router to custom tiers", () => {
