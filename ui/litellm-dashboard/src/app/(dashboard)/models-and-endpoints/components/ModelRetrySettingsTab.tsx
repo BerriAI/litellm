@@ -35,6 +35,7 @@ const retryPolicyMap: Record<string, string> = {
   "ContentPolicyViolationError (400)": "ContentPolicyViolationErrorRetries",
   "InternalServerError (500)": "InternalServerErrorRetries",
   "ServiceUnavailableError (503)": "ServiceUnavailableErrorRetries",
+  "All other errors": "DefaultRetries",
 };
 
 const isValidRetryCount = (value: number) => Number.isFinite(value) && Number.isInteger(value) && value >= 0;
