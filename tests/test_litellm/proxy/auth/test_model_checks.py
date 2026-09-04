@@ -881,3 +881,38 @@ def test_get_complete_model_list_sentinel_only_grants_nothing():
         infer_model_from_keys=False,
     )
     assert result == []
+
+
+def test_get_provider_models_admits_providers_without_a_static_catalog():
+    """litellm_proxy and hosted_vllm have no entry in litellm.models_by_provider
+    (their model list only exists behind the provider's own endpoint), so the
+    static-dict gate must not reject them before endpoint discovery runs.
+
+    Regression check only, not a discovery test: with check_provider_endpoint
+    left at its default (off), get_valid_models never reaches the network and
+    falls back to models_by_provider.get(provider, []) -- an empty list, not
+    None. Before the fix, the gate itself returned None for these providers.
+    """
+    import litellm
+    from litellm.proxy.auth.model_checks import get_provider_models
+    from litellm.types.router import LiteLLM_Params
+
+    assert "litellm_proxy" not in litellm.models_by_provider
+    assert "hosted_vllm" not in litellm.models_by_provider
+
+    result = get_provider_models(
+        "litellm_proxy",
+        litellm_params=LiteLLM_Params(
+            model="litellm_proxy/*",
+            api_base="http://upstream:4000",
+            api_key="sk-upstream",
+        ),
+    )
+
+    assert result == []
+
+
+def test_get_provider_models_returns_none_for_an_unknown_provider():
+    from litellm.proxy.auth.model_checks import get_provider_models
+
+    assert get_provider_models("not-a-real-provider") is None
