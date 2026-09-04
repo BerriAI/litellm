@@ -94,6 +94,8 @@ mod tests {
             let module = pyo3::wrap_pymodule!(_native)(py).into_bound(py);
 
             let expected = [
+                "RustPreparationError",
+                "RustExecutionError",
                 "RustBridgeDeclined",
                 "RustUpstreamError",
                 "ocr",

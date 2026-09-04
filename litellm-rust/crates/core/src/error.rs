@@ -1,5 +1,49 @@
 use thiserror::Error as ThisError;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ErrorCode {
+    Unsupported,
+    InvalidRequest,
+    Authentication,
+    Routing,
+    Transport,
+    Upstream,
+    InvalidResponse,
+    Internal,
+}
+
+impl ErrorCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unsupported => "unsupported",
+            Self::InvalidRequest => "invalid_request",
+            Self::Authentication => "authentication",
+            Self::Routing => "routing",
+            Self::Transport => "transport",
+            Self::Upstream => "upstream",
+            Self::InvalidResponse => "invalid_response",
+            Self::Internal => "internal",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderState {
+    NotStarted,
+    MayHaveStarted,
+    ResponseReceived,
+}
+
+impl ProviderState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotStarted => "not_started",
+            Self::MayHaveStarted => "may_have_started",
+            Self::ResponseReceived => "response_received",
+        }
+    }
+}
+
 #[derive(Debug, ThisError, PartialEq, Eq)]
 pub enum Error {
     #[error("expected {expected}, got {actual}")]
@@ -34,6 +78,20 @@ pub enum Error {
     /// keep a reference implementation treat this as "fall back", not "fail".
     #[error("unsupported by the rust path: {0}")]
     Unsupported(&'static str),
+}
+
+impl Error {
+    pub fn unsupported(message: &'static str) -> Self {
+        Self::Unsupported(message)
+    }
+
+    pub fn invalid_response(message: String) -> Self {
+        Self::InvalidResponse(message)
+    }
+
+    pub fn authentication(message: String) -> Self {
+        Self::Auth(message)
+    }
 }
 
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {

@@ -112,9 +112,9 @@ impl AuthError {
 impl From<AuthError> for Error {
     fn from(error: AuthError) -> Self {
         match error.kind {
-            AuthErrorKind::UnsupportedMode => Error::Unsupported(error.code),
-            AuthErrorKind::CrossOriginReplay => Error::InvalidResponse(error.to_string()),
-            _ => Error::Auth(error.to_string()),
+            AuthErrorKind::UnsupportedMode => Error::unsupported(error.code),
+            AuthErrorKind::CrossOriginReplay => Error::invalid_response(error.to_string()),
+            _ => Error::authentication(error.to_string()),
         }
     }
 }
