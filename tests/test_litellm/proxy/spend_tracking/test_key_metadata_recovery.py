@@ -170,3 +170,51 @@ async def test_fill_missing_api_key_aliases_leaves_rows_untouched_when_nothing_i
 
     assert filled == rows
     mock_prisma.db.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fill_missing_api_key_aliases_keeps_spend_user_email_when_alias_is_missing():
+    double_hashed = hash_token("f" * 64)
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = _query_raw_by_table(
+        active_rows=[_digest_row(double_hashed, "team-key", "team-9", "key-owner")],
+        deleted_rows=[],
+    )
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="key-owner", user_email="owner@example.com")]
+    )
+
+    rows = (
+        {
+            "api_key": double_hashed,
+            "api_key_alias": None,
+            "team_id": None,
+            "user_email": "spender@example.com",
+            "spend": 4.0,
+        },
+    )
+
+    filled = await fill_missing_api_key_aliases(mock_prisma, rows)
+
+    assert filled[0]["api_key_alias"] == "team-key"
+    assert filled[0]["team_id"] == "team-9"
+    assert filled[0]["user_email"] == "spender@example.com"
+
+
+@pytest.mark.asyncio
+async def test_fill_missing_api_key_aliases_skips_named_keys_that_have_no_email():
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    rows = (
+        {
+            "api_key": hash_token("g" * 64),
+            "api_key_alias": "service-key",
+            "team_id": "team-svc",
+            "user_email": None,
+        },
+    )
+
+    filled = await fill_missing_api_key_aliases(mock_prisma, rows)
+
+    assert filled == rows
+    mock_prisma.db.query_raw.assert_not_called()
