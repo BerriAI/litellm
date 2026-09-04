@@ -880,7 +880,9 @@ class _ClassifierCircuitBreaker:
 
 
 def _is_classifier_timeout(exc: BaseException) -> bool:
-    if isinstance(exc, TimeoutError):
+    # asyncio.TimeoutError became an alias of the built-in TimeoutError in Python 3.11.
+    # LiteLLM still supports 3.10, where they are distinct exception classes.
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
         return True
     from litellm.exceptions import Timeout as LiteLLMTimeout
 

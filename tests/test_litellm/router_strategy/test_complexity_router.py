@@ -26,6 +26,7 @@ from litellm.router_strategy.complexity_router.complexity_router import (
     KeywordOverride,
     _built_in_prompt,
     _ClassifierCircuitBreaker,
+    _is_classifier_timeout,
     _matched_plan_mode_sentinel,
     classification_system_prompt,
 )
@@ -2195,6 +2196,9 @@ class TestLLMClassifier:
         assert permit is not None
         breaker.record_failure(permit, is_timeout=False)
         assert breaker.acquire_permit() is not None
+
+    def test_asyncio_timeout_is_a_classifier_timeout_on_python_310(self):
+        assert _is_classifier_timeout(asyncio.TimeoutError()) is True
 
     @pytest.mark.asyncio
     async def test_aclassify_classifier_cost_is_none_when_call_is_unpriced(
