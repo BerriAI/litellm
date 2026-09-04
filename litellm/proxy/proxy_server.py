@@ -335,6 +335,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
+from litellm.proxy.common_utils.credential_hydration import decrypted_or_stored
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -7933,7 +7934,7 @@ class ProxyConfig:
 
         decrypted_credential_values: Final = {}
         for k, v in credential_object.credential_values.items():
-            decrypted_credential_values[k] = decrypt_value_helper(value=v, key=k) or v
+            decrypted_credential_values[k] = decrypted_or_stored(k, v)
 
         credential_object.credential_values = decrypted_credential_values
         return credential_object

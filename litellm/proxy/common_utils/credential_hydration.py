@@ -23,13 +23,16 @@ from litellm.types.router import (
 from litellm.types.utils import CredentialItem
 
 
+def decrypted_or_stored(key: str, value: str) -> str:
+    """The stored value decrypted, or as stored when it was never encrypted (a config.yaml value)."""
+    decrypted: Final = decrypt_value_helper(value=value, key=key)
+    return value if decrypted is None else decrypted
+
+
 def _decrypted(db_credential: CredentialItem) -> CredentialItem:
     """The stored credential with every value decrypted, leaving already-plaintext values alone."""
     decrypted_values: Final = MappingProxyType(
-        {
-            key: decrypt_value_helper(value=value, key=key) or value
-            for key, value in db_credential.credential_values.items()
-        }
+        {key: decrypted_or_stored(key, value) for key, value in db_credential.credential_values.items()}
     )
     return CredentialItem(
         credential_name=db_credential.credential_name,

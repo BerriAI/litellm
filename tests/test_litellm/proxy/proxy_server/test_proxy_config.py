@@ -2345,6 +2345,23 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_on_arbitrary_field(monkey
 # ---------------------------------------------------------------------------
 
 
+def test_ProxyConfig_decrypt_credentials_returns_an_encrypted_empty_value_as_empty(monkeypatch):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-decrypt-credentials-test-salt")
+    decrypted = ProxyConfig().decrypt_credentials(
+        {
+            "credential_name": "openai-wif",
+            "credential_values": {
+                "api_base": encrypt_value_helper(""),
+                "openai_service_account_id": encrypt_value_helper("user-1"),
+            },
+            "credential_info": {"custom_llm_provider": "openai"},
+        }
+    )
+    assert decrypted.credential_values == {"api_base": "", "openai_service_account_id": "user-1"}
+
+
 def test_ProxyConfig_decrypt_model_list_from_db_returns_decrypted(monkeypatch):
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
