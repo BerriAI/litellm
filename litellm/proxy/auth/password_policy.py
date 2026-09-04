@@ -18,11 +18,11 @@ from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version
+from litellm.constants import HIBP_RANGE_API_BASE
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
-HIBP_RANGE_API_BASE: Final = "https://api.pwnedpasswords.com/range"
 HIBP_TIMEOUT_SECONDS: Final = 5.0
 
 DEFAULT_MIN_LENGTH: Final = 12
