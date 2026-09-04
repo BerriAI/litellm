@@ -28,7 +28,6 @@ from litellm.proxy.health_endpoints._health_endpoints import (
 from litellm.proxy.health_endpoints._health_endpoints import (
     test_model_connection as health_test_model_connection,
 )
-from litellm.utils import load_credentials_from_list
 
 # Import shared proxy test helpers from conftest
 from tests.test_litellm.proxy.conftest import create_proxy_test_client
@@ -2700,10 +2699,19 @@ class TestConfigBaseForHealthCheck:
 class TestTestConnectionUsesTheNamedCredential:
     CREDENTIAL_KEY = "sk-credential-key"
     OTHER_DEPLOYMENT_KEY = "sk-other-deployment-key"
+    OTHER_DEPLOYMENT_BASE = "https://other-deployment.example/v1"
     REQUEST = {
         "model": "xai/grok-4",
         "custom_llm_provider": "xai",
         "litellm_credential_name": "my-xai-cred",
+    }
+    COMPLETION = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "grok-4",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
 
     @staticmethod
@@ -2718,108 +2726,106 @@ class TestTestConnectionUsesTheNamedCredential:
             "model_info": {"id": "unrelated-wildcard-deployment"},
         }
 
-    @staticmethod
-    async def _probe_params(
+    def _probe(
+        self,
+        monkeypatch,
         deployment: dict,
         request_litellm_params: dict,
         deployment_by_id: object | None = None,
         request_model_info: dict | None = None,
-    ) -> dict:
-        """Run /health/test_connection and return the params it probed with,
-        resolved the same way the completion path resolves them."""
+    ) -> httpx.Request:
+        """Run /health/test_connection and hand back the upstream request it made."""
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        app = FastAPI()
+        app.include_router(_health_endpoints_module.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
         router = MagicMock()
         router.get_model_list.return_value = [deployment]
         router.get_deployment.return_value = deployment_by_id
-        ahealth_check = AsyncMock(return_value={"status": "healthy"})
 
         with (
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-            patch("litellm.proxy.proxy_server.llm_router", router),
-            patch("litellm.proxy.proxy_server.premium_user", False),
-            patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints."
-                "ModelManagementAuthChecks.can_user_make_model_call",
-                AsyncMock(),
+            patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+                "litellm.proxy.proxy_server.prisma_client", MagicMock()
             ),
-            patch("litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check", ahealth_check),
+            patch(  # test-quality-ok: the deployment the probe is matched against is a proxy global; it has no injection seam
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            respx.mock(assert_all_called=True) as respx_mock,
         ):
-            await health_test_model_connection(
-                request=MagicMock(),
-                mode="chat",
-                litellm_params=request_litellm_params,
-                model_info=request_model_info or {"mode": "chat"},
-                user_api_key_dict=MagicMock(),
+            respx_mock.post(path__regex=r".*/chat/completions").respond(json=self.COMPLETION)
+            response = TestClient(app).post(
+                "/health/test_connection",
+                json={
+                    "mode": "chat",
+                    "litellm_params": request_litellm_params,
+                    "model_info": request_model_info or {"mode": "chat"},
+                },
             )
+            probe = respx_mock.calls.last.request
 
-        probed = dict(ahealth_check.call_args.kwargs["model_params"])
-        load_credentials_from_list(probed)
-        return probed
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "success", response.text
+        return probe
 
-    @pytest.mark.asyncio
-    async def test_named_credentials_key_is_sent_not_the_matched_deployments_key(self, monkeypatch):
+    def test_named_credentials_key_is_sent_not_the_matched_deployments_key(self, monkeypatch):
         monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
 
-        probed = await self._probe_params(
+        probe = self._probe(
+            monkeypatch,
             self._wildcard_deployment(api_key=self.OTHER_DEPLOYMENT_KEY),
             self.REQUEST,
         )
 
-        assert probed["api_key"] == self.CREDENTIAL_KEY
-        assert self.OTHER_DEPLOYMENT_KEY not in str(probed)
+        assert probe.headers["authorization"] == f"Bearer {self.CREDENTIAL_KEY}"
 
-    @pytest.mark.asyncio
-    async def test_named_credentials_api_base_is_used_not_the_matched_deployments(self, monkeypatch):
+    def test_named_credentials_api_base_is_used_not_the_matched_deployments(self, monkeypatch):
         monkeypatch.setattr(
             litellm,
             "credential_list",
             [self._credential(api_key=self.CREDENTIAL_KEY, api_base="https://credential.example/v1")],
         )
 
-        probed = await self._probe_params(
-            self._wildcard_deployment(api_base="https://other-deployment.example/v1"),
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_base=self.OTHER_DEPLOYMENT_BASE),
             self.REQUEST,
         )
 
-        assert probed["api_base"] == "https://credential.example/v1"
+        assert probe.url.host == "credential.example"
 
-    @pytest.mark.asyncio
-    async def test_named_credential_without_an_api_base_leaves_the_provider_default(self, monkeypatch):
+    def test_named_credential_without_an_api_base_leaves_the_provider_default(self, monkeypatch):
         monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
 
-        probed = await self._probe_params(
-            self._wildcard_deployment(api_base="https://other-deployment.example/v1"),
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_base=self.OTHER_DEPLOYMENT_BASE),
             self.REQUEST,
         )
 
-        assert probed.get("api_base") is None
+        assert probe.url.host == "api.x.ai"
 
-    @pytest.mark.asyncio
-    async def test_configured_model_named_without_a_credential_still_inherits_its_config(self):
-        probed = await self._probe_params(
-            {
-                "model_name": "grok-4",
-                "litellm_params": {
-                    "model": "xai/grok-4",
-                    "api_key": self.OTHER_DEPLOYMENT_KEY,
-                    "api_base": "https://configured.example/v1",
-                },
-                "model_info": {"id": "configured-deployment"},
-            },
-            {"model": "grok-4"},
+    def test_configured_model_named_without_a_credential_still_inherits_its_config(self, monkeypatch):
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_key=self.OTHER_DEPLOYMENT_KEY, api_base=self.OTHER_DEPLOYMENT_BASE),
+            {"model": "xai/grok-4", "custom_llm_provider": "xai"},
         )
 
-        assert probed["api_key"] == self.OTHER_DEPLOYMENT_KEY
-        assert probed["api_base"] == "https://configured.example/v1"
+        assert probe.headers["authorization"] == f"Bearer {self.OTHER_DEPLOYMENT_KEY}"
+        assert probe.url.host == "other-deployment.example"
 
-    @pytest.mark.asyncio
-    async def test_deployment_probed_by_id_keeps_the_endpoint_it_is_configured_with(self, monkeypatch):
+    def test_deployment_probed_by_id_keeps_the_endpoint_it_is_configured_with(self, monkeypatch):
         """The model detail page always echoes back the credential the deployment already uses."""
         from litellm.types.router import Deployment, LiteLLM_Params
 
         monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
 
-        probed = await self._probe_params(
-            self._wildcard_deployment(api_key=self.OTHER_DEPLOYMENT_KEY),
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_key=self.OTHER_DEPLOYMENT_KEY, api_base=self.OTHER_DEPLOYMENT_BASE),
             self.REQUEST,
             deployment_by_id=Deployment(
                 model_name="grok-4",
@@ -2833,8 +2839,8 @@ class TestTestConnectionUsesTheNamedCredential:
             request_model_info={"id": "configured-deployment", "mode": "chat"},
         )
 
-        assert probed["api_base"] == "https://configured.example/v1"
-        assert probed["api_key"] == self.CREDENTIAL_KEY
+        assert probe.url.host == "configured.example"
+        assert probe.headers["authorization"] == f"Bearer {self.CREDENTIAL_KEY}"
 
 
 class TestNoRedisWarning:
