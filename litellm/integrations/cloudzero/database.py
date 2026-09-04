@@ -105,8 +105,6 @@ class LiteLLMDatabase:
                 if isinstance(db_response, list)
                 else []
             )
-            # v1.99 double-hashed DailyUserSpend.api_key values miss the
-            # VerificationToken join above; recover alias/team for those rows.
             recovered_rows: Final = await fill_missing_api_key_aliases(client, usage_rows)
             return pl.DataFrame(tuple(recovered_rows), infer_schema_length=None)
         except Exception as e:

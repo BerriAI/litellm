@@ -74,7 +74,7 @@ class TestCloudZeroHourlyExport:
             fake_db = MagicMock()
 
             async def query_raw_mock(query: str, *params):
-                if "LiteLLM_SpendLogs" in query:
+                if "sha256(" in query:
                     return []
                 start_time_utc = params[0] if len(params) > 0 else None
                 end_time_utc = params[1] if len(params) > 1 else None
