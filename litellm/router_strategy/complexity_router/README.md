@@ -68,6 +68,35 @@ still resolve to a deployment in `model_list`; this configuration does not creat
             - abc
 ```
 
+### Zero-setup Auto configuration
+
+The dashboard's Add Router flow can generate the four tiers from the model groups the
+current admin or team can actually use. Auto setup asks for one product choice: Quality
+level (Economy, Balanced, High, or Max).
+
+The quality level is a gate, not an optimization weight. For every complexity tier,
+LiteLLM finds the best available model's conservative LiveBench quality score and admits
+only models within the selected maximum regret: 15 percentage points for Economy, 7 for
+Balanced, 3 for High, and 1 for Max. Auto then chooses the lowest estimated cost per
+completed task among the admitted models. If none of those models has comparable token
+pricing, Auto chooses the highest conservative quality score instead of failing setup.
+This means Max still sends trivial work to a smaller model when that model is within one
+point of the best available quality for trivial work.
+
+Cost is estimated dollars per completed task, not input or output token price. LiteLLM
+combines the benchmark request's token mix and completion probability with the configured
+deployment's input, cache-read, and output rates. When a model group has multiple
+deployments, Auto uses the most conservative estimate.
+
+Auto selects one model group for each tier and returns a normal, editable `heuristic_v2`
+configuration. It does not add a request-time policy, collect live latency observations,
+or change how the complexity router runs after creation. Existing routers, manual
+configurations, and LiteLLM's deployment-level routing are therefore unchanged.
+
+The bundled benchmark data is a versioned snapshot. Creating or regenerating a router uses
+the snapshot shipped with that LiteLLM version; the saved router contains only the four
+selected tiers and ordinary complexity-router settings.
+
 ### Heuristic v2
 
 Set `classifier_type: heuristic_v2` to classify with the bundled calibrated

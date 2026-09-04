@@ -11,6 +11,7 @@ import { testAutoRouterRouting } from "../networking";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import { AutoRouterPreset, getRequiredModelsInPreset } from "@/lib/autorouter_presets";
 import { BUNDLED_PRESETS, LOADED_PRESETS_QUERY, useAutoRouterPresets } from "../../../tests/mocks/autoRouterPresets";
+import { EMPTY_RECOMMENDATION_QUERY, useAutoRouterRecommendation } from "../../../tests/mocks/autoRouterRecommendation";
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
@@ -18,6 +19,10 @@ vi.mock(
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useAutoRouterPresets",
   async () => await import("../../../tests/mocks/autoRouterPresets"),
+);
+vi.mock(
+  "@/app/(dashboard)/hooks/autoRouter/useAutoRouterRecommendation",
+  async () => await import("../../../tests/mocks/autoRouterRecommendation"),
 );
 
 const getAllPresets = (): AutoRouterPreset[] => BUNDLED_PRESETS;
@@ -37,7 +42,16 @@ const ALL_FAMILY_MODELS: ModelGroup[] = [
 const ANTHROPIC_ONLY_MODEL = ANTHROPIC_TIERS.COMPLEX[0];
 
 const openTemplateDropdown = (): void => {
+  if (!screen.queryByTestId("template-selector")) {
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  }
   fireEvent.click(screen.getByTestId("template-selector"));
+};
+
+const openAutoSetup = (): void => {
+  if (!screen.queryByTestId("auto-quality-selector")) {
+    fireEvent.click(screen.getByTestId("configure-automatically-button"));
+  }
 };
 
 // Detailed Configuration is collapsed by default, so any test reaching into it (a tier select, an
@@ -141,10 +155,102 @@ describe("AddAutoRouterTab", () => {
     testQueryClient.clear();
     mockFetchAvailableModels.mockResolvedValue([]);
     mockFetchAllModelDeployments.mockResolvedValue([]);
+    vi.mocked(useAutoRouterRecommendation).mockReturnValue(EMPTY_RECOMMENDATION_QUERY);
   });
 
-  // Detailed Configuration starts collapsed so the modal opens onto just Name + Template; a caller
-  // opts into the full tier/classifier form rather than always seeing it up front.
+  it("keeps the manual form and adds Configure automatically above it", () => {
+    renderWithProviders(<Harness />);
+
+    expect(screen.getByTestId("configure-automatically-button")).toBeInTheDocument();
+    expect(screen.getByTestId("template-selector")).toBeInTheDocument();
+    expect(screen.getByTestId("detailed-configuration-toggle")).toBeInTheDocument();
+    expect(screen.queryByTestId("auto-quality-selector")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
+    expect(useAutoRouterRecommendation).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
+  });
+
+  it("shows the quality choice after Configure automatically is selected", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Harness />);
+
+    await user.click(screen.getByTestId("configure-automatically-button"));
+
+    expect(screen.getByTestId("auto-quality-selector")).toBeInTheDocument();
+    expect(screen.queryByTestId("auto-objective-selector")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("template-selector")).not.toBeInTheDocument();
+    expect(useAutoRouterRecommendation).toHaveBeenCalledWith(
+      expect.objectContaining({ qualityLevel: "balanced", enabled: true }),
+    );
+  });
+
+  it("returns to the original manual form from automatic setup", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Harness />);
+
+    await user.click(screen.getByTestId("configure-automatically-button"));
+    await user.click(screen.getByRole("button", { name: "Back" }));
+
+    expect(screen.getByTestId("template-selector")).toBeInTheDocument();
+    expect(screen.getByTestId("configure-automatically-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("auto-quality-selector")).not.toBeInTheDocument();
+  });
+
+  it("submits the editable static config generated for the caller's available model groups", async () => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels.mockResolvedValue([{ model_group: "smart-group", mode: "chat" }]);
+    const recommendationQuery = {
+      data: {
+        quality_level: "max",
+        snapshot_id: "snapshot-test",
+        snapshot_generated_at: "2026-09-03T00:00:00Z",
+        available_model_group_count: 2,
+        matched_model_groups: ["smart-group"],
+        excluded_model_groups: [{ model_group: "unknown-group", reason: "no_benchmark_match" }],
+        complexity_router_config: {
+          tiers: {
+            SIMPLE: ["smart-group"],
+            MEDIUM: ["smart-group"],
+            COMPLEX: ["smart-group"],
+            REASONING: ["smart-group"],
+          },
+          classifier_type: "heuristic_v2",
+          classification_mode: "per_request",
+          session_affinity: false,
+          deployment_affinity: false,
+          modality_routing: false,
+          modality_pin_override: false,
+        },
+      },
+      isPending: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    };
+    vi.mocked(useAutoRouterRecommendation).mockReturnValue(recommendationQuery);
+
+    renderWithProviders(<Harness />);
+    await user.click(screen.getByTestId("configure-automatically-button"));
+    await screen.findByText(/Uses 1 of 2 available models/);
+    expect(screen.getByText(/1 model was left out because Auto setup could not compare it safely/)).toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "max-speed-router");
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    const submitted = vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config;
+    expect(submitted).toMatchObject({
+      tiers: {
+        SIMPLE: ["smart-group"],
+        MEDIUM: ["smart-group"],
+        COMPLEX: ["smart-group"],
+        REASONING: ["smart-group"],
+      },
+      classifier_type: "heuristic_v2",
+    });
+    expect(submitted).not.toHaveProperty("auto_setup");
+  });
+
+  // Detailed Configuration starts collapsed after manual setup is selected; a caller opts into the
+  // full tier/classifier form rather than always seeing it up front.
   it("keeps Detailed Configuration collapsed until a caller opens it", () => {
     renderWithProviders(<Harness />);
 
@@ -155,12 +261,28 @@ describe("AddAutoRouterTab", () => {
     expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
   });
 
-  // Nothing is filled in, so there is nothing to submit. The button reports that itself instead of
-  // accepting a click and answering with a toast.
-  it("offers no submit at all until every tier has a model", async () => {
+  it("offers no submit until every tier has a model", async () => {
     renderWithProviders(<Harness />);
 
     expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
+  });
+
+  it("blocks an implicit form submit while Auto setup is still building", async () => {
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+    vi.mocked(useAutoRouterRecommendation).mockReturnValue({
+      ...EMPTY_RECOMMENDATION_QUERY,
+      isPending: true,
+    });
+    renderWithProviders(<Harness />);
+
+    openAutoSetup();
+    fireEvent.change(screen.getByPlaceholderText(/smart_router/i), { target: { value: "early-router" } });
+    fireEvent.submit(screen.getByRole("form", { name: "Add auto router" }));
+
+    await waitFor(() =>
+      expect(toast.fromError).toHaveBeenCalledWith("Building the best setup for your available models"),
+    );
+    expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
   });
 
   it("still flags the router name once the config no longer blocks the submit", async () => {
@@ -354,22 +476,20 @@ describe("AddAutoRouterTab", () => {
   });
 
   it("blocks the submit when a team admin has not picked a team", async () => {
-    const user = userEvent.setup();
     vi.mocked(getMissingTiersError).mockReturnValue(null);
 
     renderWithProviders(
       <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" userRole="Internal User" createScope="team-required" />,
     );
 
-    await user.type(screen.getByPlaceholderText(/smart_router/i), "team-scoped-router");
-    await user.click(screen.getByRole("button", { name: /add auto router/i }));
-
-    expect(await screen.findByText("Please select a team to continue")).toBeInTheDocument();
+    openAutoSetup();
+    expect(screen.getByText("Select a team to build its Auto setup")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
     expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
   });
 
   // The shared dropdown emits null on clear while this form's schema wants a string, so the
-  // form maps null back to "": the user sees the pick-a-team message, not a zod type error.
+  // form maps null back to "": Auto setup returns to its explicit pick-a-team state.
   it("treats a team picked and then cleared like no team at all", async () => {
     const user = userEvent.setup();
     vi.mocked(getMissingTiersError).mockReturnValue(null);
@@ -378,12 +498,12 @@ describe("AddAutoRouterTab", () => {
       <AddAutoRouterTab handleOk={vi.fn()} accessToken="token" userRole="Internal User" createScope="team-required" />,
     );
 
+    openAutoSetup();
     await user.type(screen.getByPlaceholderText(/smart_router/i), "team-scoped-router");
     await user.selectOptions(screen.getByTestId("team-dropdown"), "team-1");
     await user.click(screen.getByTestId("team-dropdown-clear"));
-    await user.click(screen.getByRole("button", { name: /add auto router/i }));
-
-    expect(await screen.findByText("Please select a team to continue")).toBeInTheDocument();
+    expect(screen.getByText("Select a team to build its Auto setup")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
     expect(handleAddAutoRouterSubmit).not.toHaveBeenCalled();
   });
 
@@ -755,8 +875,8 @@ describe("AddAutoRouterTab", () => {
 
       renderWithProviders(<Harness />);
 
-      expect(await screen.findByText("Could not load available models.")).toBeInTheDocument();
       openTemplateDropdown();
+      expect(await screen.findByText("Could not load available models.")).toBeInTheDocument();
       const anthropicOption = optionByLabel("Anthropic Family")!;
       expect(isOptionDisabled(anthropicOption)).toBe(true);
       expect(anthropicOption).toHaveTextContent(/Cannot verify these models are available/);
@@ -1232,6 +1352,7 @@ describe("preset catalog fetch states", () => {
     } as never);
     renderWithProviders(<Harness />);
 
+    openTemplateDropdown();
     expect(screen.getByText("Loading templates...")).toBeInTheDocument();
   });
 
@@ -1245,9 +1366,8 @@ describe("preset catalog fetch states", () => {
     } as never);
     renderWithProviders(<Harness />);
 
-    expect(await screen.findByText(/Could not load templates/)).toBeInTheDocument();
-
     openTemplateDropdown();
+    expect(await screen.findByText(/Could not load templates/)).toBeInTheDocument();
     const options = screen.queryAllByRole("option");
     expect(options).toHaveLength(1);
     expect(options[0]).toHaveTextContent("Custom Configuration");

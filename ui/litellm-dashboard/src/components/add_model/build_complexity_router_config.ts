@@ -200,6 +200,8 @@ export interface ComplexityRouterConfigPayload {
   tier_model_configs?: Record<string, { model_name: string; litellm_params: TierModelParams }[]>;
 }
 
+export type AutoSetupQualityLevel = "economy" | "balanced" | "high" | "max";
+
 export const serializeTierLabels = (tierLabels: ComplexityTierLabels | undefined): ComplexityTierLabels | undefined => {
   const renamed = TIER_KEYS.map((tier) => [tier, tierLabels?.[tier]?.trim() ?? ""] as const).filter(
     ([tier, label]) => label !== "" && label !== TIER_DESCRIPTIONS[tier].label,

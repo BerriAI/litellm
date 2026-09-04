@@ -1,0 +1,4578 @@
+{
+  "activation_scope": {
+    "setup_mode": "auto"
+  },
+  "artifact_sha256": "e191b5f7225e4da7a178eb5fe8780bcea24fb0166be23e2069338c6fe5522cd5",
+  "complexity_policy": {
+    "cumulative_shares": {
+      "complex": 1.0,
+      "simple": 0.5,
+      "standard": 0.75,
+      "trivial": 0.25
+    },
+    "method": "relative_quantiles"
+  },
+  "definitions": {
+    "cost": "Provider-adjustable estimate of dollars per completed task using the benchmark trajectory's observed token mix and completion rate.",
+    "quality": "Mean LiveBench subtask score within the inferred complexity bucket.",
+    "quality_lower_bound": "Mean subtask score minus 1.96 standard errors, floored at zero."
+  },
+  "generated_at": "2026-09-03T20:00:00Z",
+  "limitations": [
+    "The snapshot is an offline setup prior; it does not change runtime routing, endpoint health checks, or deployment selection.",
+    "LiveBench cost per completion treats partial benchmark credit as a fractional completion.",
+    "LiveBench input-token means are model-level, not complexity-bucket-specific; output-token means are weighted inside each bucket.",
+    "Provider-adjusted completion cost scales the observed request cost by the benchmark token mix and source prices; cache discounts and non-token charges can make it approximate.",
+    "LiteLLM recomputes every quality gate after intersecting the snapshot with the user's configured, routable models.",
+    "Benchmark variants include their measured reasoning effort; setup preserves required effort parameters when the provider supports them."
+  ],
+  "models": {
+    "claude-fable-5-1-max-effort": {
+      "benchmark_model_id": "claude-fable-5-1-max-effort",
+      "identity": {
+        "benchmark_model_id": "claude-fable-5-1-max-effort",
+        "family_id": "claude-fable-5-1",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "anthropic.claude-fable-5-1",
+          "azure_ai/claude-fable-5-1",
+          "claude-fable-5-1",
+          "eu.anthropic.claude-fable-5-1",
+          "global.anthropic.claude-fable-5-1",
+          "us.anthropic.claude-fable-5-1",
+          "vertex_ai/claude-fable-5-1"
+        ],
+        "reasoning_effort": "max",
+        "required_parameters": {
+          "reasoning_effort": "max"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "claude-fable-5-1-max-effort",
+          "completion_probability": 0.6645920535714286,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 4.002891945931923,
+          "mean_input_tokens": 1263.0,
+          "mean_output_tokens": 33199.25892857143,
+          "mean_request_cost_usd": 2.6602901785714286,
+          "quality_lower_bound": 0.6092130921684613,
+          "quality_score": 0.6661216666666666,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1e-05,
+          "source_output_cost_per_token": 5e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "claude-fable-5-1-max-effort",
+          "completion_probability": 0.9034262716763007,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.38505754057873887,
+          "mean_input_tokens": 1263.0,
+          "mean_output_tokens": 6685.56936416185,
+          "mean_request_cost_usd": 0.34787109826589596,
+          "quality_lower_bound": 0.8425995986019852,
+          "quality_score": 0.9008116666666667,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1e-05,
+          "source_output_cost_per_token": 5e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "claude-fable-5-1-max-effort",
+          "completion_probability": 0.8514491354466859,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 1.7827805688792642,
+          "mean_input_tokens": 1263.0,
+          "mean_output_tokens": 29926.971181556197,
+          "mean_request_cost_usd": 1.5179469740634004,
+          "quality_lower_bound": 0.7415937065851377,
+          "quality_score": 0.8288983333333334,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1e-05,
+          "source_output_cost_per_token": 5e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "claude-fable-5-1-max-effort",
+          "completion_probability": 0.9792262322946175,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.11767196890092387,
+          "mean_input_tokens": 1263.0,
+          "mean_output_tokens": 2217.8895184135977,
+          "mean_request_cost_usd": 0.11522747875354107,
+          "quality_lower_bound": 0.9581461039814795,
+          "quality_score": 0.9790199999999999,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1e-05,
+          "source_output_cost_per_token": 5e-05,
+          "subtask_count": 5
+        }
+      }
+    },
+    "claude-fable-5-max-effort": {
+      "benchmark_model_id": "claude-fable-5-max-effort",
+      "identity": {
+        "benchmark_model_id": "claude-fable-5-max-effort",
+        "family_id": "claude-fable-5",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "anthropic.claude-fable-5",
+          "azure_ai/claude-fable-5",
+          "claude-fable-5",
+          "deepinfra/anthropic/claude-fable-5",
+          "eu.anthropic.claude-fable-5",
+          "global.anthropic.claude-fable-5",
+          "us.anthropic.claude-fable-5",
+          "vertex_ai/claude-fable-5"
+        ],
+        "reasoning_effort": "max",
+        "required_parameters": {
+          "reasoning_effort": "max"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "claude-fable-5-max-effort",
+          "completion_probability": 0.6632416964285713,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 5.214221760086114,
+          "mean_input_tokens": 1264.0,
+          "mean_output_tokens": 28035.73214285714,
+          "mean_request_cost_usd": 3.4582892857142857,
+          "quality_lower_bound": 0.5788725616068174,
+          "quality_score": 0.65567,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1e-05,
+          "source_output_cost_per_token": 5e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "claude-fable-5-max-effort",
+          "completion_probability": 0.9089316184971098,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.43912636553478873,
+          "mean_input_tokens": 1264.0,
+          "mean_output_tokens": 7711.205202312139,
+          "mean_request_cost_usd": 0.399135838150289,
+          "quality_lower_bound": 0.8497278750259674,
+          "quality_score": 0.9057400000000001,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1e-05,
+          "source_output_cost_per_token": 5e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "claude-fable-5-max-effort",
+          "completion_probability": 0.8486,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 1.8625221673806187,
+          "mean_input_tokens": 1264.0,
+          "mean_output_tokens": 31176.20172910663,
+          "mean_request_cost_usd": 1.580536311239193,
+          "quality_lower_bound": 0.7532045960680842,
+          "quality_score": 0.8290166666666666,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1e-05,
+          "source_output_cost_per_token": 5e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "claude-fable-5-max-effort",
+          "completion_probability": 0.9678941643059489,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.1611368906253183,
+          "mean_input_tokens": 1264.0,
+          "mean_output_tokens": 3032.813031161473,
+          "mean_request_cost_usd": 0.15596345609065154,
+          "quality_lower_bound": 0.946566900924344,
+          "quality_score": 0.967098,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1e-05,
+          "source_output_cost_per_token": 5e-05,
+          "subtask_count": 5
+        }
+      }
+    },
+    "claude-opus-4-5-20251101-thinking-64k-high-effort": {
+      "benchmark_model_id": "claude-opus-4-5-20251101-thinking-64k-high-effort",
+      "identity": {
+        "benchmark_model_id": "claude-opus-4-5-20251101-thinking-64k-high-effort",
+        "family_id": "claude-opus-4-5-20251101",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "claude-opus-4-5-20251101"
+        ],
+        "reasoning_effort": "high",
+        "required_parameters": {
+          "reasoning_effort": "high"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "claude-opus-4-5-20251101-thinking-64k-high-effort",
+          "completion_probability": 0.4981249107142857,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 1.2955334819023985,
+          "mean_input_tokens": 79045.0,
+          "mean_output_tokens": 12867.42857142857,
+          "mean_request_cost_usd": 0.6453375,
+          "quality_lower_bound": 0.34521477211231855,
+          "quality_score": 0.47735666666666665,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "claude-opus-4-5-20251101-thinking-64k-high-effort",
+          "completion_probability": 0.8110766184971099,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.3623535990181607,
+          "mean_input_tokens": 79045.0,
+          "mean_output_tokens": 11546.271676300577,
+          "mean_request_cost_usd": 0.2938965317919075,
+          "quality_lower_bound": 0.769244886726077,
+          "quality_score": 0.8051866666666667,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "claude-opus-4-5-20251101-thinking-64k-high-effort",
+          "completion_probability": 0.7115781268011527,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.9657541234098289,
+          "mean_input_tokens": 79045.0,
+          "mean_output_tokens": 26907.109510086455,
+          "mean_request_cost_usd": 0.6872095100864554,
+          "quality_lower_bound": 0.646597808452617,
+          "quality_score": 0.7009949999999999,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "claude-opus-4-5-20251101-thinking-64k-high-effort",
+          "completion_probability": 0.9735590651558073,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.22691398212248595,
+          "mean_input_tokens": 79045.0,
+          "mean_output_tokens": 8763.036827195467,
+          "mean_request_cost_usd": 0.22091416430594898,
+          "quality_lower_bound": 0.9585884810652954,
+          "quality_score": 0.9749399999999999,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 5
+        }
+      }
+    },
+    "claude-opus-4-6-thinking-auto-high-effort": {
+      "benchmark_model_id": "claude-opus-4-6-thinking-auto-high-effort",
+      "identity": {
+        "benchmark_model_id": "claude-opus-4-6-thinking-auto-high-effort",
+        "family_id": "claude-opus-4-6",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "azure_ai/claude-opus-4-6",
+          "claude-opus-4-6",
+          "perplexity/anthropic/claude-opus-4-6",
+          "vertex_ai/claude-opus-4-6"
+        ],
+        "reasoning_effort": "high",
+        "required_parameters": {
+          "reasoning_effort": "high"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "claude-opus-4-6-thinking-auto-high-effort",
+          "completion_probability": 0.5440302678571428,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.9723904214231778,
+          "mean_input_tokens": 1935.0,
+          "mean_output_tokens": 9021.285714285714,
+          "mean_request_cost_usd": 0.5290098214285714,
+          "quality_lower_bound": 0.4365895928124619,
+          "quality_score": 0.5346133333333333,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "claude-opus-4-6-thinking-auto-high-effort",
+          "completion_probability": 0.8525172832369942,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.2008007702995054,
+          "mean_input_tokens": 1935.0,
+          "mean_output_tokens": 6637.777456647399,
+          "mean_request_cost_usd": 0.17118612716763007,
+          "quality_lower_bound": 0.7932421041561762,
+          "quality_score": 0.8487183333333332,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "claude-opus-4-6-thinking-auto-high-effort",
+          "completion_probability": 0.6912953602305476,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.7138626149321894,
+          "mean_input_tokens": 1935.0,
+          "mean_output_tokens": 19158.79538904899,
+          "mean_request_cost_usd": 0.49348991354466853,
+          "quality_lower_bound": 0.6303728077430275,
+          "quality_score": 0.6842783333333333,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "claude-opus-4-6-thinking-auto-high-effort",
+          "completion_probability": 0.9707262039660056,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.09611682034141958,
+          "mean_input_tokens": 1935.0,
+          "mean_output_tokens": 3658.555240793201,
+          "mean_request_cost_usd": 0.09330311614730878,
+          "quality_lower_bound": 0.9611363710759814,
+          "quality_score": 0.9749399999999999,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 5
+        }
+      }
+    },
+    "claude-opus-4-7-xhigh-effort": {
+      "benchmark_model_id": "claude-opus-4-7-xhigh-effort",
+      "identity": {
+        "benchmark_model_id": "claude-opus-4-7-xhigh-effort",
+        "family_id": "claude-opus-4-7",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "anthropic.claude-opus-4-7",
+          "au.anthropic.claude-opus-4-7",
+          "azure_ai/claude-opus-4-7",
+          "claude-opus-4-7",
+          "deepinfra/anthropic/claude-opus-4-7",
+          "eu.anthropic.claude-opus-4-7",
+          "global.anthropic.claude-opus-4-7",
+          "jp.anthropic.claude-opus-4-7",
+          "perplexity/anthropic/claude-opus-4-7",
+          "us.anthropic.claude-opus-4-7",
+          "vertex_ai/claude-opus-4-7"
+        ],
+        "reasoning_effort": "xhigh",
+        "required_parameters": {
+          "reasoning_effort": "xhigh"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "claude-opus-4-7-xhigh-effort",
+          "completion_probability": 0.5536358928571429,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 1.765312974843897,
+          "mean_input_tokens": 1285.0,
+          "mean_output_tokens": 13627.535714285714,
+          "mean_request_cost_usd": 0.977340625,
+          "quality_lower_bound": 0.46192477930777903,
+          "quality_score": 0.5435150000000001,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "claude-opus-4-7-xhigh-effort",
+          "completion_probability": 0.8623095664739884,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.21927367996237826,
+          "mean_input_tokens": 1285.0,
+          "mean_output_tokens": 7290.829479768786,
+          "mean_request_cost_usd": 0.18908179190751448,
+          "quality_lower_bound": 0.7956674213700154,
+          "quality_score": 0.8572016666666666,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "claude-opus-4-7-xhigh-effort",
+          "completion_probability": 0.754466484149856,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.8121505178745887,
+          "mean_input_tokens": 1285.0,
+          "mean_output_tokens": 24074.011527377523,
+          "mean_request_cost_usd": 0.6127403458213256,
+          "quality_lower_bound": 0.6611835790578724,
+          "quality_score": 0.7416183333333333,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "claude-opus-4-7-xhigh-effort",
+          "completion_probability": 0.9749749858356941,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.047679003430232555,
+          "mean_input_tokens": 1285.0,
+          "mean_output_tokens": 1772.3966005665723,
+          "mean_request_cost_usd": 0.04648583569405099,
+          "quality_lower_bound": 0.947439528242222,
+          "quality_score": 0.9728220000000001,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 5
+        }
+      }
+    },
+    "claude-opus-4-8-max-effort": {
+      "benchmark_model_id": "claude-opus-4-8-max-effort",
+      "identity": {
+        "benchmark_model_id": "claude-opus-4-8-max-effort",
+        "family_id": "claude-opus-4-8",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "anthropic.claude-opus-4-8",
+          "au.anthropic.claude-opus-4-8",
+          "azure_ai/claude-opus-4-8",
+          "bedrock/us-gov-east-1/anthropic.claude-opus-4-8",
+          "bedrock/us-gov-west-1/anthropic.claude-opus-4-8",
+          "claude-opus-4-8",
+          "deepinfra/anthropic/claude-opus-4-8",
+          "eu.anthropic.claude-opus-4-8",
+          "global.anthropic.claude-opus-4-8",
+          "jp.anthropic.claude-opus-4-8",
+          "us-gov.anthropic.claude-opus-4-8",
+          "us.anthropic.claude-opus-4-8",
+          "vertex_ai/claude-opus-4-8"
+        ],
+        "reasoning_effort": "max",
+        "required_parameters": {
+          "reasoning_effort": "max"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "claude-opus-4-8-max-effort",
+          "completion_probability": 0.5508146428571429,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 3.7899521877012035,
+          "mean_input_tokens": 1089.0,
+          "mean_output_tokens": 52024.40178571428,
+          "mean_request_cost_usd": 2.087561160714286,
+          "quality_lower_bound": 0.4441463198800639,
+          "quality_score": 0.5437283333333333,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "claude-opus-4-8-max-effort",
+          "completion_probability": 0.8584239306358381,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.42221953473814827,
+          "mean_input_tokens": 1089.0,
+          "mean_output_tokens": 14227.748554913294,
+          "mean_request_cost_usd": 0.36244335260115607,
+          "quality_lower_bound": 0.7881699970577629,
+          "quality_score": 0.8577533333333333,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "claude-opus-4-8-max-effort",
+          "completion_probability": 0.7663756484149855,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 1.1457071695113437,
+          "mean_input_tokens": 1089.0,
+          "mean_output_tokens": 34808.821325648416,
+          "mean_request_cost_usd": 0.8780420749279538,
+          "quality_lower_bound": 0.6434622480125556,
+          "quality_score": 0.7433983333333334,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "claude-opus-4-8-max-effort",
+          "completion_probability": 0.9763922379603399,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.15555792693028503,
+          "mean_input_tokens": 1089.0,
+          "mean_output_tokens": 5988.869688385269,
+          "mean_request_cost_usd": 0.151885552407932,
+          "quality_lower_bound": 0.9576762334934847,
+          "quality_score": 0.9749800000000001,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 5
+        }
+      }
+    },
+    "claude-opus-5-max-effort": {
+      "benchmark_model_id": "claude-opus-5-max-effort",
+      "identity": {
+        "benchmark_model_id": "claude-opus-5-max-effort",
+        "family_id": "claude-opus-5",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "anthropic.claude-opus-5",
+          "au.anthropic.claude-opus-5",
+          "azure_ai/claude-opus-5",
+          "claude-opus-5",
+          "deepinfra/anthropic/claude-opus-5",
+          "eu.anthropic.claude-opus-5",
+          "global.anthropic.claude-opus-5",
+          "jp.anthropic.claude-opus-5",
+          "openrouter/anthropic/claude-opus-5",
+          "us.anthropic.claude-opus-5",
+          "vertex_ai/claude-opus-5"
+        ],
+        "reasoning_effort": "max",
+        "required_parameters": {
+          "reasoning_effort": "max"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "claude-opus-5-max-effort",
+          "completion_probability": 0.6257910714285714,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 3.0495230322762903,
+          "mean_input_tokens": 1263.0,
+          "mean_output_tokens": 25342.026785714286,
+          "mean_request_cost_usd": 1.9083642857142855,
+          "quality_lower_bound": 0.5271982605289206,
+          "quality_score": 0.6398033333333334,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "claude-opus-5-max-effort",
+          "completion_probability": 0.8770323699421967,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.11491162393410251,
+          "mean_input_tokens": 1263.0,
+          "mean_output_tokens": 3759.791907514451,
+          "mean_request_cost_usd": 0.10078121387283237,
+          "quality_lower_bound": 0.8101252023432568,
+          "quality_score": 0.8775550000000001,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "claude-opus-5-max-effort",
+          "completion_probability": 0.7873195100864554,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.8529217089305349,
+          "mean_input_tokens": 1263.0,
+          "mean_output_tokens": 26427.57925072046,
+          "mean_request_cost_usd": 0.6715219020172911,
+          "quality_lower_bound": 0.6461502379455998,
+          "quality_score": 0.7567566666666666,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "claude-opus-5-max-effort",
+          "completion_probability": 0.9708111299435027,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.04746918777279668,
+          "mean_input_tokens": 1263.0,
+          "mean_output_tokens": 1760.8502824858756,
+          "mean_request_cost_usd": 0.04608361581920904,
+          "quality_lower_bound": 0.947379644845522,
+          "quality_score": 0.973158,
+          "question_count": 354,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 2.5e-05,
+          "subtask_count": 5
+        }
+      }
+    },
+    "claude-sonnet-4-6-thinking-auto-medium-effort": {
+      "benchmark_model_id": "claude-sonnet-4-6-thinking-auto-medium-effort",
+      "identity": {
+        "benchmark_model_id": "claude-sonnet-4-6-thinking-auto-medium-effort",
+        "family_id": "claude-sonnet-4-6",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "anthropic.claude-sonnet-4-6",
+          "au.anthropic.claude-sonnet-4-6",
+          "azure_ai/claude-sonnet-4-6",
+          "claude-sonnet-4-6",
+          "deepinfra/anthropic/claude-sonnet-4-6",
+          "eu.anthropic.claude-sonnet-4-6",
+          "global.anthropic.claude-sonnet-4-6",
+          "jp.anthropic.claude-sonnet-4-6",
+          "snowflake/claude-sonnet-4-6",
+          "us.anthropic.claude-sonnet-4-6",
+          "vertex_ai/claude-sonnet-4-6"
+        ],
+        "reasoning_effort": "medium",
+        "required_parameters": {
+          "reasoning_effort": "medium"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "claude-sonnet-4-6-thinking-auto-medium-effort",
+          "completion_probability": 0.5017582142857143,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.568415493233437,
+          "mean_input_tokens": 1328.0,
+          "mean_output_tokens": 10821.42857142857,
+          "mean_request_cost_usd": 0.2852071428571429,
+          "quality_lower_bound": 0.37703186770250874,
+          "quality_score": 0.488105,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "claude-sonnet-4-6-thinking-auto-medium-effort",
+          "completion_probability": 0.8169103468208092,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.163557543653307,
+          "mean_input_tokens": 1328.0,
+          "mean_output_tokens": 8698.040462427745,
+          "mean_request_cost_usd": 0.13361184971098267,
+          "quality_lower_bound": 0.738825421457911,
+          "quality_score": 0.8124633333333332,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "claude-sonnet-4-6-thinking-auto-medium-effort",
+          "completion_probability": 0.7594697694524495,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.5803005820722565,
+          "mean_input_tokens": 1328.0,
+          "mean_output_tokens": 28800.21902017291,
+          "mean_request_cost_usd": 0.4407207492795389,
+          "quality_lower_bound": 0.6238595808835384,
+          "quality_score": 0.7377216666666667,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "claude-sonnet-4-6-thinking-auto-medium-effort",
+          "completion_probability": 0.9084040793201132,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.06498087858468846,
+          "mean_input_tokens": 1328.0,
+          "mean_output_tokens": 3861.886685552408,
+          "mean_request_cost_usd": 0.059028895184135975,
+          "quality_lower_bound": 0.8446427881887083,
+          "quality_score": 0.9310579999999999,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 5
+        }
+      }
+    },
+    "claude-sonnet-5-xhigh-effort": {
+      "benchmark_model_id": "claude-sonnet-5-xhigh-effort",
+      "identity": {
+        "benchmark_model_id": "claude-sonnet-5-xhigh-effort",
+        "family_id": "claude-sonnet-5",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "anthropic.claude-sonnet-5",
+          "au.anthropic.claude-sonnet-5",
+          "azure_ai/claude-sonnet-5",
+          "bedrock/us-gov-east-1/anthropic.claude-sonnet-5",
+          "bedrock/us-gov-west-1/anthropic.claude-sonnet-5",
+          "claude-sonnet-5",
+          "deepinfra/anthropic/claude-sonnet-5",
+          "eu.anthropic.claude-sonnet-5",
+          "global.anthropic.claude-sonnet-5",
+          "jp.anthropic.claude-sonnet-5",
+          "us-gov.anthropic.claude-sonnet-5",
+          "us.anthropic.claude-sonnet-5",
+          "vertex_ai/claude-sonnet-5"
+        ],
+        "reasoning_effort": "xhigh",
+        "required_parameters": {
+          "reasoning_effort": "xhigh"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "claude-sonnet-5-xhigh-effort",
+          "completion_probability": 0.5406266964285714,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 1.535564958590551,
+          "mean_input_tokens": 1214.0,
+          "mean_output_tokens": 20245.16964285714,
+          "mean_request_cost_usd": 0.8301674107142858,
+          "quality_lower_bound": 0.4851509363965742,
+          "quality_score": 0.5578083333333334,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "claude-sonnet-5-xhigh-effort",
+          "completion_probability": 0.8347309248554914,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.2661630950266414,
+          "mean_input_tokens": 1214.0,
+          "mean_output_tokens": 14554.774566473989,
+          "mean_request_cost_usd": 0.22217456647398845,
+          "quality_lower_bound": 0.7827287342273122,
+          "quality_score": 0.828,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "claude-sonnet-5-xhigh-effort",
+          "completion_probability": 0.759424409221902,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.7553995751446368,
+          "mean_input_tokens": 1214.0,
+          "mean_output_tokens": 37832.74351585015,
+          "mean_request_cost_usd": 0.5736688760806916,
+          "quality_lower_bound": 0.6481641669625048,
+          "quality_score": 0.7392083333333334,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "claude-sonnet-5-xhigh-effort",
+          "completion_probability": 0.9709627478753541,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.07604438047164719,
+          "mean_input_tokens": 1214.0,
+          "mean_output_tokens": 4835.838526912181,
+          "mean_request_cost_usd": 0.07383626062322945,
+          "quality_lower_bound": 0.955519401260248,
+          "quality_score": 0.973274,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 5
+        }
+      }
+    },
+    "deepseek-v4-flash": {
+      "benchmark_model_id": "deepseek-v4-flash",
+      "identity": {
+        "benchmark_model_id": "deepseek-v4-flash",
+        "family_id": "deepseek-v4-flash",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "azure_ai/deepseek-v4-flash",
+          "dashscope/deepseek-v4-flash",
+          "deepinfra/deepseek-ai/DeepSeek-V4-Flash",
+          "deepseek-v4-flash",
+          "deepseek/deepseek-v4-flash",
+          "fireworks_ai/accounts/fireworks/models/deepseek-v4-flash",
+          "fireworks_ai/deepseek-v4-flash",
+          "libertai/deepseek-v4-flash",
+          "novita/deepseek/deepseek-v4-flash",
+          "pinstripes/ps/deepseek-v4-flash",
+          "qwen_ai_platform/deepseek-v4-flash",
+          "qwencloud/deepseek-v4-flash",
+          "tencent/deepseek-v4-flash",
+          "tensormesh/deepseek-ai/DeepSeek-V4-Flash",
+          "wandb/deepseek-ai/DeepSeek-V4-Flash"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "deepseek-v4-flash",
+          "completion_probability": 0.44839553571428575,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.03171128009987993,
+          "mean_input_tokens": 148772.0,
+          "mean_output_tokens": 35092.94642857143,
+          "mean_request_cost_usd": 0.01421919642857143,
+          "quality_lower_bound": 0.3364896272529753,
+          "quality_score": 0.43319166666666664,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.4e-07,
+          "source_output_cost_per_token": 2.8e-07,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "deepseek-v4-flash",
+          "completion_probability": 0.7174954335260115,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.013094683650279621,
+          "mean_input_tokens": 148772.0,
+          "mean_output_tokens": 33093.257225433525,
+          "mean_request_cost_usd": 0.009395375722543352,
+          "quality_lower_bound": 0.603384170578614,
+          "quality_score": 0.70219,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.4e-07,
+          "source_output_cost_per_token": 2.8e-07,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "deepseek-v4-flash",
+          "completion_probability": 0.5660231988472622,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.02837889405353749,
+          "mean_input_tokens": 148772.0,
+          "mean_output_tokens": 56471.58501440922,
+          "mean_request_cost_usd": 0.016063112391930836,
+          "quality_lower_bound": 0.5055896074804485,
+          "quality_score": 0.599025,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.4e-07,
+          "source_output_cost_per_token": 2.8e-07,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "deepseek-v4-flash",
+          "completion_probability": 0.9624647875354108,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.004025900568615041,
+          "mean_input_tokens": 148772.0,
+          "mean_output_tokens": 13668.025495750708,
+          "mean_request_cost_usd": 0.0038747875354107645,
+          "quality_lower_bound": 0.9258556425341127,
+          "quality_score": 0.957196,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.4e-07,
+          "source_output_cost_per_token": 2.8e-07,
+          "subtask_count": 5
+        }
+      }
+    },
+    "deepseek-v4-flash-0731": {
+      "benchmark_model_id": "deepseek-v4-flash-0731",
+      "identity": {
+        "benchmark_model_id": "deepseek-v4-flash-0731",
+        "family_id": "deepseek-v4-flash-0731",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "azure_ai/DeepSeek-V4-Flash-0731",
+          "dashscope/deepseek-v4-flash-0731",
+          "deepinfra/deepseek-ai/DeepSeek-V4-Flash-0731",
+          "fireworks_ai/accounts/fireworks/models/deepseek-v4-flash-0731",
+          "fireworks_ai/deepseek-v4-flash-0731",
+          "novita/deepseek/deepseek-v4-flash-0731",
+          "perplexity/perplexity/deepseek-v4-flash-0731",
+          "qwen_ai_platform/deepseek-v4-flash-0731",
+          "qwencloud/deepseek-v4-flash-0731",
+          "scaleway/deepseek-v4-flash-0731",
+          "together_ai/deepseek-ai/DeepSeek-V4-Flash-0731",
+          "wandb/deepseek-ai/DeepSeek-V4-Flash-0731"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "deepseek-v4-flash-0731",
+          "completion_probability": 0.5157110714285714,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.4394054395075869,
+          "mean_input_tokens": 475485.0,
+          "mean_output_tokens": 35149.83928571428,
+          "mean_request_cost_usd": 0.22660624999999998,
+          "quality_lower_bound": 0.40376896581503474,
+          "quality_score": 0.509,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.4e-07,
+          "source_output_cost_per_token": 2.8e-07,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "deepseek-v4-flash-0731",
+          "completion_probability": 0.8456412427745664,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.0060579263531826775,
+          "mean_input_tokens": 475485.0,
+          "mean_output_tokens": 17953.242774566475,
+          "mean_request_cost_usd": 0.005122832369942197,
+          "quality_lower_bound": 0.7696517274404475,
+          "quality_score": 0.84598,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.4e-07,
+          "source_output_cost_per_token": 2.8e-07,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "deepseek-v4-flash-0731",
+          "completion_probability": 0.7028492219020173,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.012699646412453419,
+          "mean_input_tokens": 475485.0,
+          "mean_output_tokens": 31513.616714697408,
+          "mean_request_cost_usd": 0.008925936599423631,
+          "quality_lower_bound": 0.6365405113412037,
+          "quality_score": 0.7135733333333333,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.4e-07,
+          "source_output_cost_per_token": 2.8e-07,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "deepseek-v4-flash-0731",
+          "completion_probability": 0.9622267988668556,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.001468206744000269,
+          "mean_input_tokens": 475485.0,
+          "mean_output_tokens": 4956.988668555241,
+          "mean_request_cost_usd": 0.0014127478753541078,
+          "quality_lower_bound": 0.9283932717105589,
+          "quality_score": 0.960822,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.4e-07,
+          "source_output_cost_per_token": 2.8e-07,
+          "subtask_count": 5
+        }
+      }
+    },
+    "deepseek-v4-flash-vision-exp": {
+      "benchmark_model_id": "deepseek-v4-flash-vision-exp",
+      "identity": {
+        "benchmark_model_id": "deepseek-v4-flash-vision-exp",
+        "family_id": "deepseek-v4-flash-vision-exp",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "deepseek-v4-flash-vision-exp",
+          "deepseek/deepseek-v4-flash-vision-exp",
+          "novita/deepseek/deepseek-v4-flash-vision-exp"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "deepseek-v4-flash-vision-exp",
+          "completion_probability": 0.5963680357142858,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.1042448619785062,
+          "mean_input_tokens": 469904.0,
+          "mean_output_tokens": 59667.0625,
+          "mean_request_cost_usd": 0.06216830357142857,
+          "quality_lower_bound": 0.5460797677435435,
+          "quality_score": 0.6141033333333333,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.2e-07,
+          "source_output_cost_per_token": 6.6e-07,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "deepseek-v4-flash-vision-exp",
+          "completion_probability": 0.8144626589595376,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.04363811907904243,
+          "mean_input_tokens": 469904.0,
+          "mean_output_tokens": 53819.75433526011,
+          "mean_request_cost_usd": 0.03554161849710982,
+          "quality_lower_bound": 0.7162153297521393,
+          "quality_score": 0.813615,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.2e-07,
+          "source_output_cost_per_token": 6.6e-07,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "deepseek-v4-flash-vision-exp",
+          "completion_probability": 0.7541906340057636,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.06818042434558261,
+          "mean_input_tokens": 469904.0,
+          "mean_output_tokens": 77868.80115273775,
+          "mean_request_cost_usd": 0.05142103746397694,
+          "quality_lower_bound": 0.6937983800511365,
+          "quality_score": 0.7546849999999999,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.2e-07,
+          "source_output_cost_per_token": 6.6e-07,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "deepseek-v4-flash-vision-exp",
+          "completion_probability": 0.9480639376770538,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.015498709656001796,
+          "mean_input_tokens": 469904.0,
+          "mean_output_tokens": 22238.339943342777,
+          "mean_request_cost_usd": 0.014693767705382438,
+          "quality_lower_bound": 0.9176876013540679,
+          "quality_score": 0.9568619999999999,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.2e-07,
+          "source_output_cost_per_token": 6.6e-07,
+          "subtask_count": 5
+        }
+      }
+    },
+    "deepseek-v4-pro": {
+      "benchmark_model_id": "deepseek-v4-pro",
+      "identity": {
+        "benchmark_model_id": "deepseek-v4-pro",
+        "family_id": "deepseek-v4-pro",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "azure_ai/deepseek-v4-pro",
+          "dashscope/deepseek-v4-pro",
+          "deepinfra/deepseek-ai/DeepSeek-V4-Pro",
+          "deepseek-v4-pro",
+          "deepseek/deepseek-v4-pro",
+          "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro",
+          "fireworks_ai/deepseek-v4-pro",
+          "novita/deepseek/deepseek-v4-pro",
+          "openrouter/deepseek/deepseek-v4-pro",
+          "qwen_ai_platform/deepseek-v4-pro",
+          "qwencloud/deepseek-v4-pro",
+          "tencent/deepseek-v4-pro",
+          "together_ai/deepseek-ai/DeepSeek-V4-Pro",
+          "wandb/deepseek-ai/DeepSeek-V4-Pro"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "deepseek-v4-pro",
+          "completion_probability": 0.4920608928571429,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.12317544903160577,
+          "mean_input_tokens": 96617.0,
+          "mean_output_tokens": 38234.75892857143,
+          "mean_request_cost_usd": 0.06060982142857143,
+          "quality_lower_bound": 0.38016323574171296,
+          "quality_score": 0.4806566666666667,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 4.35e-07,
+          "source_output_cost_per_token": 8.7e-07,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "deepseek-v4-pro",
+          "completion_probability": 0.808614421965318,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.037665943874090765,
+          "mean_input_tokens": 96617.0,
+          "mean_output_tokens": 34550.06647398844,
+          "mean_request_cost_usd": 0.03045722543352601,
+          "quality_lower_bound": 0.7292064176433101,
+          "quality_score": 0.805635,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 4.35e-07,
+          "source_output_cost_per_token": 8.7e-07,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "deepseek-v4-pro",
+          "completion_probability": 0.6979290201729106,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.06925305608767511,
+          "mean_input_tokens": 96617.0,
+          "mean_output_tokens": 55181.81844380403,
+          "mean_request_cost_usd": 0.048333717579250715,
+          "quality_lower_bound": 0.6217235810903863,
+          "quality_score": 0.6848133333333334,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 4.35e-07,
+          "source_output_cost_per_token": 8.7e-07,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "deepseek-v4-pro",
+          "completion_probability": 0.9716701416430594,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.012856284713601382,
+          "mean_input_tokens": 96617.0,
+          "mean_output_tokens": 14192.331444759207,
+          "mean_request_cost_usd": 0.012492067988668556,
+          "quality_lower_bound": 0.9522556444359002,
+          "quality_score": 0.972156,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 4.35e-07,
+          "source_output_cost_per_token": 8.7e-07,
+          "subtask_count": 5
+        }
+      }
+    },
+    "deepseek-v4-pro-0813": {
+      "benchmark_model_id": "deepseek-v4-pro-0813",
+      "identity": {
+        "benchmark_model_id": "deepseek-v4-pro-0813",
+        "family_id": "deepseek-v4-pro-0813",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "deepinfra/deepseek-ai/DeepSeek-V4-Pro-0813",
+          "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro-0813",
+          "novita/deepseek/deepseek-v4-pro-0813",
+          "openrouter/deepseek/deepseek-v4-pro-0813",
+          "together_ai/deepseek-ai/DeepSeek-V4-Pro-0813"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "deepseek-v4-pro-0813",
+          "completion_probability": 0.5697092857142857,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.08776797815427166,
+          "mean_input_tokens": 254323.0,
+          "mean_output_tokens": 42679.21428571428,
+          "mean_request_cost_usd": 0.05000223214285714,
+          "quality_lower_bound": 0.4943714005386736,
+          "quality_score": 0.5668333333333333,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 4.35e-07,
+          "source_output_cost_per_token": 8.7e-07,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "deepseek-v4-pro-0813",
+          "completion_probability": 0.8487423121387284,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.03819422168482955,
+          "mean_input_tokens": 254323.0,
+          "mean_output_tokens": 36823.35260115607,
+          "mean_request_cost_usd": 0.03241705202312139,
+          "quality_lower_bound": 0.7850763286351601,
+          "quality_score": 0.8482799999999999,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 4.35e-07,
+          "source_output_cost_per_token": 8.7e-07,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "deepseek-v4-pro-0813",
+          "completion_probability": 0.7896948991354468,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.06167011642368867,
+          "mean_input_tokens": 254323.0,
+          "mean_output_tokens": 55109.19020172911,
+          "mean_request_cost_usd": 0.048700576368876085,
+          "quality_lower_bound": 0.6654041601132071,
+          "quality_score": 0.76577,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 4.35e-07,
+          "source_output_cost_per_token": 8.7e-07,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "deepseek-v4-pro-0813",
+          "completion_probability": 0.9773373087818696,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.012087533779340973,
+          "mean_input_tokens": 254323.0,
+          "mean_output_tokens": 13390.767705382435,
+          "mean_request_cost_usd": 0.011813597733711049,
+          "quality_lower_bound": 0.9652508853504652,
+          "quality_score": 0.978196,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 4.35e-07,
+          "source_output_cost_per_token": 8.7e-07,
+          "subtask_count": 5
+        }
+      }
+    },
+    "gemini-3.1-pro-preview-high": {
+      "benchmark_model_id": "gemini-3.1-pro-preview-high",
+      "identity": {
+        "benchmark_model_id": "gemini-3.1-pro-preview-high",
+        "family_id": "gemini-3.1-pro-preview",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "gemini-3.1-pro-preview",
+          "gemini/gemini-3.1-pro-preview",
+          "openrouter/google/gemini-3.1-pro-preview",
+          "vertex_ai/gemini-3.1-pro-preview"
+        ],
+        "reasoning_effort": "high",
+        "required_parameters": {
+          "reasoning_effort": "high"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "gemini-3.1-pro-preview-high",
+          "completion_probability": 0.57950375,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.9058612649184755,
+          "mean_input_tokens": 99082.0,
+          "mean_output_tokens": 16052.05357142857,
+          "mean_request_cost_usd": 0.52495,
+          "quality_lower_bound": 0.40345610903956064,
+          "quality_score": 0.5499133333333334,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2e-06,
+          "source_output_cost_per_token": 1.2e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "gemini-3.1-pro-preview-high",
+          "completion_probability": 0.8252704046242775,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.11967070803487916,
+          "mean_input_tokens": 99082.0,
+          "mean_output_tokens": 8070.121387283237,
+          "mean_request_cost_usd": 0.09876069364161849,
+          "quality_lower_bound": 0.7734428742199247,
+          "quality_score": 0.8217166666666667,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2e-06,
+          "source_output_cost_per_token": 1.2e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "gemini-3.1-pro-preview-high",
+          "completion_probability": 0.7975139193083574,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.3724329493241841,
+          "mean_input_tokens": 99082.0,
+          "mean_output_tokens": 24624.538904899135,
+          "mean_request_cost_usd": 0.2970204610951009,
+          "quality_lower_bound": 0.7542212833788828,
+          "quality_score": 0.8009816666666666,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2e-06,
+          "source_output_cost_per_token": 1.2e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "gemini-3.1-pro-preview-high",
+          "completion_probability": 0.9773355524079321,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.0712105483066712,
+          "mean_input_tokens": 99082.0,
+          "mean_output_tokens": 5727.711048158641,
+          "mean_request_cost_usd": 0.06959660056657223,
+          "quality_lower_bound": 0.9680781539505636,
+          "quality_score": 0.980234,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2e-06,
+          "source_output_cost_per_token": 1.2e-05,
+          "subtask_count": 5
+        }
+      }
+    },
+    "gemini-3.5-flash-high": {
+      "benchmark_model_id": "gemini-3.5-flash-high",
+      "identity": {
+        "benchmark_model_id": "gemini-3.5-flash-high",
+        "family_id": "gemini-3.5-flash",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "deepinfra/google/gemini-3.5-flash",
+          "gemini-3.5-flash",
+          "gemini/gemini-3.5-flash",
+          "vertex_ai/gemini-3.5-flash"
+        ],
+        "reasoning_effort": "high",
+        "required_parameters": {
+          "reasoning_effort": "high"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "gemini-3.5-flash-high",
+          "completion_probability": 0.5744925,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.716755285254874,
+          "mean_input_tokens": 108280.0,
+          "mean_output_tokens": 17270.8125,
+          "mean_request_cost_usd": 0.4117705357142857,
+          "quality_lower_bound": 0.44704592118475794,
+          "quality_score": 0.5572033333333334,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.5e-06,
+          "source_output_cost_per_token": 9e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "gemini-3.5-flash-high",
+          "completion_probability": 0.8276601445086705,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.1168008244985926,
+          "mean_input_tokens": 108280.0,
+          "mean_output_tokens": 10581.202312138728,
+          "mean_request_cost_usd": 0.096671387283237,
+          "quality_lower_bound": 0.773030678034419,
+          "quality_score": 0.8204416666666666,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.5e-06,
+          "source_output_cost_per_token": 9e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "gemini-3.5-flash-high",
+          "completion_probability": 0.7037670893371758,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.3734288238372025,
+          "mean_input_tokens": 108280.0,
+          "mean_output_tokens": 29073.49855907781,
+          "mean_request_cost_usd": 0.262806916426513,
+          "quality_lower_bound": 0.6095857754421493,
+          "quality_score": 0.7054900000000001,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.5e-06,
+          "source_output_cost_per_token": 9e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "gemini-3.5-flash-high",
+          "completion_probability": 0.9688377903682719,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.055806475174513294,
+          "mean_input_tokens": 108280.0,
+          "mean_output_tokens": 5935.501416430595,
+          "mean_request_cost_usd": 0.05406742209631728,
+          "quality_lower_bound": 0.9531187660114996,
+          "quality_score": 0.9703519999999999,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.5e-06,
+          "source_output_cost_per_token": 9e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "gemini-3.5-flash-lite-high": {
+      "benchmark_model_id": "gemini-3.5-flash-lite-high",
+      "identity": {
+        "benchmark_model_id": "gemini-3.5-flash-lite-high",
+        "family_id": "gemini-3.5-flash-lite",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "gemini-3.5-flash-lite",
+          "gemini/gemini-3.5-flash-lite",
+          "vertex_ai/gemini-3.5-flash-lite"
+        ],
+        "reasoning_effort": "high",
+        "required_parameters": {
+          "reasoning_effort": "high"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "gemini-3.5-flash-lite-high",
+          "completion_probability": 0.49490589285714287,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.24637079271564255,
+          "mean_input_tokens": 112072.0,
+          "mean_output_tokens": 15345.464285714286,
+          "mean_request_cost_usd": 0.12193035714285715,
+          "quality_lower_bound": 0.3746970230436221,
+          "quality_score": 0.48975166666666664,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-07,
+          "source_output_cost_per_token": 2.5e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "gemini-3.5-flash-lite-high",
+          "completion_probability": 0.668675,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.031234662803737268,
+          "mean_input_tokens": 112072.0,
+          "mean_output_tokens": 8239.135838150289,
+          "mean_request_cost_usd": 0.020885838150289018,
+          "quality_lower_bound": 0.4962706700104881,
+          "quality_score": 0.6511566666666667,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-07,
+          "source_output_cost_per_token": 2.5e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "gemini-3.5-flash-lite-high",
+          "completion_probability": 0.4910134005763689,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.09241253386148097,
+          "mean_input_tokens": 112072.0,
+          "mean_output_tokens": 17868.78386167147,
+          "mean_request_cost_usd": 0.04537579250720461,
+          "quality_lower_bound": 0.34552349534955934,
+          "quality_score": 0.526715,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-07,
+          "source_output_cost_per_token": 2.5e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "gemini-3.5-flash-lite-high",
+          "completion_probability": 0.9348442776203966,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.016427271233884436,
+          "mean_input_tokens": 112072.0,
+          "mean_output_tokens": 6090.844192634561,
+          "mean_request_cost_usd": 0.015356940509915014,
+          "quality_lower_bound": 0.9069738182941612,
+          "quality_score": 0.9343920000000001,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-07,
+          "source_output_cost_per_token": 2.5e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "gemini-3.6-flash-high": {
+      "benchmark_model_id": "gemini-3.6-flash-high",
+      "identity": {
+        "benchmark_model_id": "gemini-3.6-flash-high",
+        "family_id": "gemini-3.6-flash",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "gemini-3.6-flash",
+          "gemini/gemini-3.6-flash",
+          "vertex_ai/gemini-3.6-flash"
+        ],
+        "reasoning_effort": "high",
+        "required_parameters": {
+          "reasoning_effort": "high"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "gemini-3.6-flash-high",
+          "completion_probability": 0.5544942857142857,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.8991196289540533,
+          "mean_input_tokens": 188079.0,
+          "mean_output_tokens": 20419.866071428572,
+          "mean_request_cost_usd": 0.4985566964285714,
+          "quality_lower_bound": 0.3831639512582842,
+          "quality_score": 0.5280516666666667,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.5e-06,
+          "source_output_cost_per_token": 7.5e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "gemini-3.6-flash-high",
+          "completion_probability": 0.8339710115606936,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.09242984943163318,
+          "mean_input_tokens": 188079.0,
+          "mean_output_tokens": 10086.052023121387,
+          "mean_request_cost_usd": 0.07708381502890173,
+          "quality_lower_bound": 0.7862437005368376,
+          "quality_score": 0.8313566666666667,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.5e-06,
+          "source_output_cost_per_token": 7.5e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "gemini-3.6-flash-high",
+          "completion_probability": 0.6757371181556195,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.2864337111126976,
+          "mean_input_tokens": 188079.0,
+          "mean_output_tokens": 25336.28242074928,
+          "mean_request_cost_usd": 0.19355389048991356,
+          "quality_lower_bound": 0.5777227110111925,
+          "quality_score": 0.6809850000000001,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.5e-06,
+          "source_output_cost_per_token": 7.5e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "gemini-3.6-flash-high",
+          "completion_probability": 0.9745049575070821,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.04192351604395637,
+          "mean_input_tokens": 188079.0,
+          "mean_output_tokens": 5360.696883852691,
+          "mean_request_cost_usd": 0.04085467422096318,
+          "quality_lower_bound": 0.9592649709496708,
+          "quality_score": 0.9803139999999999,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.5e-06,
+          "source_output_cost_per_token": 7.5e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "gemini-3.7-flash-high": {
+      "benchmark_model_id": "gemini-3.7-flash-high",
+      "identity": {
+        "benchmark_model_id": "gemini-3.7-flash-high",
+        "family_id": "gemini-3.7-flash",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "deepinfra/google/gemini-3.7-flash",
+          "gemini-3.7-flash",
+          "gemini/gemini-3.7-flash",
+          "vertex_ai/gemini-3.7-flash"
+        ],
+        "reasoning_effort": "high",
+        "required_parameters": {
+          "reasoning_effort": "high"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "gemini-3.7-flash-high",
+          "completion_probability": 0.6033091964285714,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.5173201729804798,
+          "mean_input_tokens": 285829.0,
+          "mean_output_tokens": 25333.008928571428,
+          "mean_request_cost_usd": 0.31210401785714287,
+          "quality_lower_bound": 0.5068762110807983,
+          "quality_score": 0.6021866666666666,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 7.5e-07,
+          "source_output_cost_per_token": 3.75e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "gemini-3.7-flash-high",
+          "completion_probability": 0.8639628323699421,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.05808227272675574,
+          "mean_input_tokens": 285829.0,
+          "mean_output_tokens": 13189.598265895953,
+          "mean_request_cost_usd": 0.05018092485549133,
+          "quality_lower_bound": 0.8047468229043783,
+          "quality_score": 0.8612716666666667,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 7.5e-07,
+          "source_output_cost_per_token": 3.75e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "gemini-3.7-flash-high",
+          "completion_probability": 0.7951507492795389,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.22283850186854895,
+          "mean_input_tokens": 285829.0,
+          "mean_output_tokens": 46784.64841498559,
+          "mean_request_cost_usd": 0.17719020172910663,
+          "quality_lower_bound": 0.6998404208779329,
+          "quality_score": 0.779095,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 7.5e-07,
+          "source_output_cost_per_token": 3.75e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "gemini-3.7-flash-high",
+          "completion_probability": 0.9801684135977338,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.024636455346966592,
+          "mean_input_tokens": 285829.0,
+          "mean_output_tokens": 6352.821529745042,
+          "mean_request_cost_usd": 0.02414787535410765,
+          "quality_lower_bound": 0.9698314889558245,
+          "quality_score": 0.984234,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 7.5e-07,
+          "source_output_cost_per_token": 3.75e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "gemini-3.8-flash-high": {
+      "benchmark_model_id": "gemini-3.8-flash-high",
+      "identity": {
+        "benchmark_model_id": "gemini-3.8-flash-high",
+        "family_id": "gemini-3.8-flash",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "gemini-3.8-flash",
+          "gemini/gemini-3.8-flash",
+          "vertex_ai/gemini-3.8-flash"
+        ],
+        "reasoning_effort": "high",
+        "required_parameters": {
+          "reasoning_effort": "high"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "gemini-3.8-flash-high",
+          "completion_probability": 0.6069597321428571,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 1.0221141700239293,
+          "mean_input_tokens": 607424.0,
+          "mean_output_tokens": 56890.017857142855,
+          "mean_request_cost_usd": 0.6203821428571429,
+          "quality_lower_bound": 0.46610797022905415,
+          "quality_score": 0.59472,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 7.5e-07,
+          "source_output_cost_per_token": 3.75e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "gemini-3.8-flash-high",
+          "completion_probability": 0.8384017919075144,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.1581553011230906,
+          "mean_input_tokens": 607424.0,
+          "mean_output_tokens": 35167.41329479769,
+          "mean_request_cost_usd": 0.13259768786127168,
+          "quality_lower_bound": 0.7479820892243612,
+          "quality_score": 0.8371833333333334,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 7.5e-07,
+          "source_output_cost_per_token": 3.75e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "gemini-3.8-flash-high",
+          "completion_probability": 0.7372122190201729,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.35172343321268257,
+          "mean_input_tokens": 607424.0,
+          "mean_output_tokens": 68687.04034582133,
+          "mean_request_cost_usd": 0.2592948126801153,
+          "quality_lower_bound": 0.518237967153724,
+          "quality_score": 0.7214366666666666,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 7.5e-07,
+          "source_output_cost_per_token": 3.75e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "gemini-3.8-flash-high",
+          "completion_probability": 0.977336373937677,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.06112004606148399,
+          "mean_input_tokens": 607424.0,
+          "mean_output_tokens": 15842.821529745042,
+          "mean_request_cost_usd": 0.059734844192634556,
+          "quality_lower_bound": 0.9602156860944612,
+          "quality_score": 0.9803520000000001,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 7.5e-07,
+          "source_output_cost_per_token": 3.75e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "glm-5.2": {
+      "benchmark_model_id": "glm-5.2",
+      "identity": {
+        "benchmark_model_id": "glm-5.2",
+        "family_id": "glm-5.2",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "cloudflare/@cf/zai-org/glm-5.2",
+          "dashscope/glm-5.2",
+          "deepinfra/zai-org/GLM-5.2",
+          "novita/zai-org/glm-5.2",
+          "perplexity/perplexity/glm-5.2",
+          "qwen_ai_platform/glm-5.2",
+          "qwencloud/glm-5.2",
+          "scaleway/glm-5.2",
+          "scx-ai/GLM-5.2",
+          "together_ai/zai-org/GLM-5.2",
+          "wandb/zai-org/GLM-5.2",
+          "zai/glm-5.2"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "glm-5.2",
+          "completion_probability": 0.5269902678571429,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.9582778958204534,
+          "mean_input_tokens": 229433.0,
+          "mean_output_tokens": 26255.053571428572,
+          "mean_request_cost_usd": 0.505003125,
+          "quality_lower_bound": 0.4491256039182908,
+          "quality_score": 0.5292666666666667,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.4e-06,
+          "source_output_cost_per_token": 4.4e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "glm-5.2",
+          "completion_probability": 0.7812604624277457,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.09705821465623285,
+          "mean_input_tokens": 229433.0,
+          "mean_output_tokens": 16941.52023121387,
+          "mean_request_cost_usd": 0.07582774566473989,
+          "quality_lower_bound": 0.7088720546635146,
+          "quality_score": 0.7714249999999999,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.4e-06,
+          "source_output_cost_per_token": 4.4e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "glm-5.2",
+          "completion_probability": 0.7204891066282422,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.21812351935756738,
+          "mean_input_tokens": 229433.0,
+          "mean_output_tokens": 35125.20172910663,
+          "mean_request_cost_usd": 0.15715561959654178,
+          "quality_lower_bound": 0.6503549332056257,
+          "quality_score": 0.7146266666666667,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.4e-06,
+          "source_output_cost_per_token": 4.4e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "glm-5.2",
+          "completion_probability": 0.960338073654391,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.044066457474518976,
+          "mean_input_tokens": 229433.0,
+          "mean_output_tokens": 9503.614730878187,
+          "mean_request_cost_usd": 0.042318696883852695,
+          "quality_lower_bound": 0.9415584583178681,
+          "quality_score": 0.9563119999999999,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.4e-06,
+          "source_output_cost_per_token": 4.4e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "glm-5.3": {
+      "benchmark_model_id": "glm-5.3",
+      "identity": {
+        "benchmark_model_id": "glm-5.3",
+        "family_id": "glm-5.3",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "friendliai/zai-org/GLM-5.3",
+          "novita/zai-org/glm-5.3",
+          "together_ai/zai-org/GLM-5.3",
+          "zai/glm-5.3"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "glm-5.3",
+          "completion_probability": 0.5717091964285714,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 1.3760382986917519,
+          "mean_input_tokens": 243253.0,
+          "mean_output_tokens": 90499.80357142857,
+          "mean_request_cost_usd": 0.7866937500000001,
+          "quality_lower_bound": 0.49798510274288055,
+          "quality_score": 0.585265,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.4e-06,
+          "source_output_cost_per_token": 4.4e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "glm-5.3",
+          "completion_probability": 0.8432406647398845,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.2735818911125524,
+          "mean_input_tokens": 243253.0,
+          "mean_output_tokens": 52143.132947976876,
+          "mean_request_cost_usd": 0.23069537572254334,
+          "quality_lower_bound": 0.8070017266219552,
+          "quality_score": 0.8443766666666667,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.4e-06,
+          "source_output_cost_per_token": 4.4e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "glm-5.3",
+          "completion_probability": 0.7022139193083573,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.6404002688409565,
+          "mean_input_tokens": 243253.0,
+          "mean_output_tokens": 101607.55043227665,
+          "mean_request_cost_usd": 0.4496979827089338,
+          "quality_lower_bound": 0.6770506562429186,
+          "quality_score": 0.7044583333333333,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.4e-06,
+          "source_output_cost_per_token": 4.4e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "glm-5.3",
+          "completion_probability": 0.9678918980169972,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.0685497268325098,
+          "mean_input_tokens": 243253.0,
+          "mean_output_tokens": 14965.790368271955,
+          "mean_request_cost_usd": 0.06634872521246458,
+          "quality_lower_bound": 0.9524140844470205,
+          "quality_score": 0.964978,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.4e-06,
+          "source_output_cost_per_token": 4.4e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "glm-5.3-flash": {
+      "benchmark_model_id": "glm-5.3-flash",
+      "identity": {
+        "benchmark_model_id": "glm-5.3-flash",
+        "family_id": "glm-5.3-flash",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "friendliai/zai-org/GLM-5.3-Flash",
+          "together_ai/zai-org/GLM-5.3-Flash",
+          "zai/glm-5.3-flash"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "glm-5.3-flash",
+          "completion_probability": 0.5312167857142857,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.08444897731421191,
+          "mean_input_tokens": 128845.0,
+          "mean_output_tokens": 40219.96428571428,
+          "mean_request_cost_usd": 0.04486071428571429,
+          "quality_lower_bound": 0.4821901387445875,
+          "quality_score": 0.5438916666666667,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.5e-07,
+          "source_output_cost_per_token": 5e-07,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "glm-5.3-flash",
+          "completion_probability": 0.803259710982659,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.012833186280785237,
+          "mean_input_tokens": 128845.0,
+          "mean_output_tokens": 20343.670520231215,
+          "mean_request_cost_usd": 0.010308381502890174,
+          "quality_lower_bound": 0.7526212593040512,
+          "quality_score": 0.7971966666666667,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.5e-07,
+          "source_output_cost_per_token": 5e-07,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "glm-5.3-flash",
+          "completion_probability": 0.5699900864553314,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.06498773223013737,
+          "mean_input_tokens": 128845.0,
+          "mean_output_tokens": 73521.76657060519,
+          "mean_request_cost_usd": 0.03704236311239193,
+          "quality_lower_bound": 0.48108917724919115,
+          "quality_score": 0.5927183333333333,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.5e-07,
+          "source_output_cost_per_token": 5e-07,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "glm-5.3-flash",
+          "completion_probability": 0.9513683286118981,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.0038063559086596067,
+          "mean_input_tokens": 128845.0,
+          "mean_output_tokens": 7133.589235127479,
+          "mean_request_cost_usd": 0.0036212464589235127,
+          "quality_lower_bound": 0.937061284213534,
+          "quality_score": 0.951764,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.5e-07,
+          "source_output_cost_per_token": 5e-07,
+          "subtask_count": 5
+        }
+      }
+    },
+    "gpt-5.2-2025-12-11-high": {
+      "benchmark_model_id": "gpt-5.2-2025-12-11-high",
+      "identity": {
+        "benchmark_model_id": "gpt-5.2-2025-12-11-high",
+        "family_id": "gpt-5.2-2025-12-11",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "azure/gpt-5.2-2025-12-11",
+          "gpt-5.2-2025-12-11"
+        ],
+        "reasoning_effort": "high",
+        "required_parameters": {
+          "reasoning_effort": "high"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "gpt-5.2-2025-12-11-high",
+          "completion_probability": 0.5131926785714286,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.9776107483996368,
+          "mean_input_tokens": 50836.0,
+          "mean_output_tokens": 32058.866071428572,
+          "mean_request_cost_usd": 0.5017026785714286,
+          "quality_lower_bound": 0.4450192465475368,
+          "quality_score": 0.5147416666666667,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.75e-06,
+          "source_output_cost_per_token": 1.4e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "gpt-5.2-2025-12-11-high",
+          "completion_probability": 0.8127038150289017,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.10011894926348755,
+          "mean_input_tokens": 50836.0,
+          "mean_output_tokens": 6148.106936416185,
+          "mean_request_cost_usd": 0.08136705202312139,
+          "quality_lower_bound": 0.7699878737605818,
+          "quality_score": 0.8092583333333333,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.75e-06,
+          "source_output_cost_per_token": 1.4e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "gpt-5.2-2025-12-11-high",
+          "completion_probability": 0.7702856195965417,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.26096573855927013,
+          "mean_input_tokens": 50836.0,
+          "mean_output_tokens": 14263.556195965419,
+          "mean_request_cost_usd": 0.20101815561959652,
+          "quality_lower_bound": 0.6435898983631713,
+          "quality_score": 0.7465216666666666,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.75e-06,
+          "source_output_cost_per_token": 1.4e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "gpt-5.2-2025-12-11-high",
+          "completion_probability": 0.9702548441926345,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.032578981907034385,
+          "mean_input_tokens": 50836.0,
+          "mean_output_tokens": 2224.844192634561,
+          "mean_request_cost_usd": 0.03160991501416431,
+          "quality_lower_bound": 0.9562658651509364,
+          "quality_score": 0.9741959999999998,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.75e-06,
+          "source_output_cost_per_token": 1.4e-05,
+          "subtask_count": 5
+        }
+      }
+    },
+    "gpt-5.2-codex": {
+      "benchmark_model_id": "gpt-5.2-codex",
+      "identity": {
+        "benchmark_model_id": "gpt-5.2-codex",
+        "family_id": "gpt-5.2-codex",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "azure/gpt-5.2-codex",
+          "chatgpt/gpt-5.2-codex",
+          "gpt-5.2-codex",
+          "openrouter/openai/gpt-5.2-codex"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "gpt-5.2-codex",
+          "completion_probability": 0.5134417857142858,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.5030990089987945,
+          "mean_input_tokens": 37004.0,
+          "mean_output_tokens": 14726.267857142857,
+          "mean_request_cost_usd": 0.25831205357142856,
+          "quality_lower_bound": 0.3796292105491461,
+          "quality_score": 0.5173,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.75e-06,
+          "source_output_cost_per_token": 1.4e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "gpt-5.2-codex",
+          "completion_probability": 0.7947631502890173,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.1359313613809764,
+          "mean_input_tokens": 37004.0,
+          "mean_output_tokens": 7626.621387283237,
+          "mean_request_cost_usd": 0.10803323699421966,
+          "quality_lower_bound": 0.7274478995993964,
+          "quality_score": 0.7884699999999999,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.75e-06,
+          "source_output_cost_per_token": 1.4e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "gpt-5.2-codex",
+          "completion_probability": 0.7303905475504323,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.2566082051874501,
+          "mean_input_tokens": 37004.0,
+          "mean_output_tokens": 13292.466858789625,
+          "mean_request_cost_usd": 0.18742420749279537,
+          "quality_lower_bound": 0.6556912811110588,
+          "quality_score": 0.72872,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.75e-06,
+          "source_output_cost_per_token": 1.4e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "gpt-5.2-codex",
+          "completion_probability": 0.9645891218130311,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.046269902645509856,
+          "mean_input_tokens": 37004.0,
+          "mean_output_tokens": 3145.0311614730876,
+          "mean_request_cost_usd": 0.044631444759206794,
+          "quality_lower_bound": 0.9423117932813272,
+          "quality_score": 0.9641959999999999,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.75e-06,
+          "source_output_cost_per_token": 1.4e-05,
+          "subtask_count": 5
+        }
+      }
+    },
+    "gpt-5.4-mini-xhigh": {
+      "benchmark_model_id": "gpt-5.4-mini-xhigh",
+      "identity": {
+        "benchmark_model_id": "gpt-5.4-mini-xhigh",
+        "family_id": "gpt-5.4-mini",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "azure/gpt-5.4-mini",
+          "azure_ai/gpt-5.4-mini",
+          "gpt-5.4-mini"
+        ],
+        "reasoning_effort": "xhigh",
+        "required_parameters": {
+          "reasoning_effort": "xhigh"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "gpt-5.4-mini-xhigh",
+          "completion_probability": 0.45826428571428574,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 1.1086728650030395,
+          "mean_input_tokens": 70674.0,
+          "mean_output_tokens": 104505.23214285714,
+          "mean_request_cost_usd": 0.5080651785714286,
+          "quality_lower_bound": 0.34943884542827364,
+          "quality_score": 0.45387833333333333,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 7.5e-07,
+          "source_output_cost_per_token": 4.5e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "gpt-5.4-mini-xhigh",
+          "completion_probability": 0.7355458083832336,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.23784162886902593,
+          "mean_input_tokens": 70674.0,
+          "mean_output_tokens": 38723.94610778443,
+          "mean_request_cost_usd": 0.1749434131736527,
+          "quality_lower_bound": 0.6573537305842576,
+          "quality_score": 0.7271216666666667,
+          "question_count": 334,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 7.5e-07,
+          "source_output_cost_per_token": 4.5e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "gpt-5.4-mini-xhigh",
+          "completion_probability": 0.545162363112392,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.47478333663016814,
+          "mean_input_tokens": 70674.0,
+          "mean_output_tokens": 57220.109510086455,
+          "mean_request_cost_usd": 0.25883400576368876,
+          "quality_lower_bound": 0.4915611374028915,
+          "quality_score": 0.5752016666666667,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 7.5e-07,
+          "source_output_cost_per_token": 4.5e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "gpt-5.4-mini-xhigh",
+          "completion_probability": 0.9559675,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.05001269537263177,
+          "mean_input_tokens": 70674.0,
+          "mean_output_tokens": 10567.4375,
+          "mean_request_cost_usd": 0.047810511363636364,
+          "quality_lower_bound": 0.913999334114345,
+          "quality_score": 0.9561959999999999,
+          "question_count": 352,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 7.5e-07,
+          "source_output_cost_per_token": 4.5e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "gpt-5.4-nano-xhigh": {
+      "benchmark_model_id": "gpt-5.4-nano-xhigh",
+      "identity": {
+        "benchmark_model_id": "gpt-5.4-nano-xhigh",
+        "family_id": "gpt-5.4-nano",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "azure/gpt-5.4-nano",
+          "azure_ai/gpt-5.4-nano",
+          "gpt-5.4-nano"
+        ],
+        "reasoning_effort": "xhigh",
+        "required_parameters": {
+          "reasoning_effort": "xhigh"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "gpt-5.4-nano-xhigh",
+          "completion_probability": 0.48983830275229356,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.4235539250688885,
+          "mean_input_tokens": 180305.0,
+          "mean_output_tokens": 140958.14220183485,
+          "mean_request_cost_usd": 0.2074729357798165,
+          "quality_lower_bound": 0.3746452256531407,
+          "quality_score": 0.48795666666666665,
+          "question_count": 218,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.0000000000000002e-07,
+          "source_output_cost_per_token": 1.25e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "gpt-5.4-nano-xhigh",
+          "completion_probability": 0.7734114285714286,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.03996286705037176,
+          "mean_input_tokens": 180305.0,
+          "mean_output_tokens": 24587.35119047619,
+          "mean_request_cost_usd": 0.030907738095238096,
+          "quality_lower_bound": 0.646704615489165,
+          "quality_score": 0.7700783333333333,
+          "question_count": 336,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.0000000000000002e-07,
+          "source_output_cost_per_token": 1.25e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "gpt-5.4-nano-xhigh",
+          "completion_probability": 0.7026975,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.07862014091495734,
+          "mean_input_tokens": 180305.0,
+          "mean_output_tokens": 43917.84411764706,
+          "mean_request_cost_usd": 0.055246176470588236,
+          "quality_lower_bound": 0.6036385132310647,
+          "quality_score": 0.6786633333333333,
+          "question_count": 340,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.0000000000000002e-07,
+          "source_output_cost_per_token": 1.25e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "gpt-5.4-nano-xhigh",
+          "completion_probability": 0.9438919602272726,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.013677653605205743,
+          "mean_input_tokens": 180305.0,
+          "mean_output_tokens": 10273.84090909091,
+          "mean_request_cost_usd": 0.012910227272727271,
+          "quality_lower_bound": 0.8768336208515851,
+          "quality_score": 0.93505,
+          "question_count": 352,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.0000000000000002e-07,
+          "source_output_cost_per_token": 1.25e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "gpt-5.4-xhigh": {
+      "benchmark_model_id": "gpt-5.4-xhigh",
+      "identity": {
+        "benchmark_model_id": "gpt-5.4-xhigh",
+        "family_id": "gpt-5.4",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "azure/eu/gpt-5.4",
+          "azure/gpt-5.4",
+          "azure/us/gpt-5.4",
+          "azure_ai/gpt-5.4",
+          "bedrock_mantle/openai.gpt-5.4",
+          "bedrock_mantle/us-gov-east-1/openai.gpt-5.4",
+          "bedrock_mantle/us-gov-west-1/openai.gpt-5.4",
+          "chatgpt/gpt-5.4",
+          "gpt-5.4"
+        ],
+        "reasoning_effort": "xhigh",
+        "required_parameters": {
+          "reasoning_effort": "xhigh"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "gpt-5.4-xhigh",
+          "completion_probability": 0.5931269642857142,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 1.2505701471408646,
+          "mean_input_tokens": 76993.0,
+          "mean_output_tokens": 40433.607142857145,
+          "mean_request_cost_usd": 0.7417468749999999,
+          "quality_lower_bound": 0.49226355376413256,
+          "quality_score": 0.5819433333333334,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.5e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "gpt-5.4-xhigh",
+          "completion_probability": 0.856749710982659,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.2511781656306905,
+          "mean_input_tokens": 76993.0,
+          "mean_output_tokens": 14192.835260115608,
+          "mean_request_cost_usd": 0.21519682080924857,
+          "quality_lower_bound": 0.7908750479160342,
+          "quality_score": 0.858365,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.5e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "gpt-5.4-xhigh",
+          "completion_probability": 0.7865786743515849,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.4406923355369697,
+          "mean_input_tokens": 76993.0,
+          "mean_output_tokens": 22982.64265129683,
+          "mean_request_cost_usd": 0.3466391930835735,
+          "quality_lower_bound": 0.6700680818124257,
+          "quality_score": 0.7634283333333333,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.5e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "gpt-5.4-xhigh",
+          "completion_probability": 0.974505269121813,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.06593190774567793,
+          "mean_input_tokens": 76993.0,
+          "mean_output_tokens": 4226.402266288952,
+          "mean_request_cost_usd": 0.06425099150141643,
+          "quality_lower_bound": 0.9591866862403164,
+          "quality_score": 0.980236,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.5e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 5
+        }
+      }
+    },
+    "gpt-5.5-xhigh": {
+      "benchmark_model_id": "gpt-5.5-xhigh",
+      "identity": {
+        "benchmark_model_id": "gpt-5.5-xhigh",
+        "family_id": "gpt-5.5",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "azure/eu/gpt-5.5",
+          "azure/gpt-5.5",
+          "azure/us/gpt-5.5",
+          "azure_ai/gpt-5.5",
+          "bedrock_mantle/openai.gpt-5.5",
+          "gpt-5.5"
+        ],
+        "reasoning_effort": "xhigh",
+        "required_parameters": {
+          "reasoning_effort": "xhigh"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "gpt-5.5-xhigh",
+          "completion_probability": 0.6128254464285714,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 1.4552500894204172,
+          "mean_input_tokens": 95929.0,
+          "mean_output_tokens": 13643.669642857143,
+          "mean_request_cost_usd": 0.8918142857142856,
+          "quality_lower_bound": 0.5116450006539032,
+          "quality_score": 0.5971316666666667,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 3e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "gpt-5.5-xhigh",
+          "completion_probability": 0.8795956936416185,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.23943935618607748,
+          "mean_input_tokens": 95929.0,
+          "mean_output_tokens": 6866.916184971098,
+          "mean_request_cost_usd": 0.21060982658959537,
+          "quality_lower_bound": 0.8255203002596379,
+          "quality_score": 0.8804416666666667,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 3e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "gpt-5.5-xhigh",
+          "completion_probability": 0.8272242363112392,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.5132128101336504,
+          "mean_input_tokens": 95929.0,
+          "mean_output_tokens": 14024.801152737753,
+          "mean_request_cost_usd": 0.4245420749279539,
+          "quality_lower_bound": 0.7103400163692298,
+          "quality_score": 0.8007049999999999,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 3e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "gpt-5.5-xhigh",
+          "completion_probability": 0.9773358640226628,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.0654670400159351,
+          "mean_input_tokens": 95929.0,
+          "mean_output_tokens": 2075.6175637393767,
+          "mean_request_cost_usd": 0.06398328611898017,
+          "quality_lower_bound": 0.9666846166236629,
+          "quality_score": 0.982156,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 3e-05,
+          "subtask_count": 5
+        }
+      }
+    },
+    "gpt-5.6-luna-max": {
+      "benchmark_model_id": "gpt-5.6-luna-max",
+      "identity": {
+        "benchmark_model_id": "gpt-5.6-luna-max",
+        "family_id": "gpt-5.6-luna",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "azure/eu/gpt-5.6-luna",
+          "azure/gpt-5.6-luna",
+          "azure/us/gpt-5.6-luna",
+          "bedrock_mantle/openai.gpt-5.6-luna",
+          "bedrock_mantle/us-gov-west-1/openai.gpt-5.6-luna",
+          "global.openai.gpt-5.6-luna",
+          "gpt-5.6-luna",
+          "us.openai.gpt-5.6-luna"
+        ],
+        "reasoning_effort": "max",
+        "required_parameters": {
+          "reasoning_effort": "max"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "gpt-5.6-luna-max",
+          "completion_probability": 0.5075175892857142,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.5125596456280457,
+          "mean_input_tokens": 126025.0,
+          "mean_output_tokens": 26003.875,
+          "mean_request_cost_usd": 0.26013303571428575,
+          "quality_lower_bound": 0.4270514639974168,
+          "quality_score": 0.5046116666666667,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1e-06,
+          "source_output_cost_per_token": 6e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "gpt-5.6-luna-max",
+          "completion_probability": 0.8208309537572255,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.11211393670540613,
+          "mean_input_tokens": 126025.0,
+          "mean_output_tokens": 15104.64161849711,
+          "mean_request_cost_usd": 0.09202658959537573,
+          "quality_lower_bound": 0.7438523378026773,
+          "quality_score": 0.8184216666666666,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1e-06,
+          "source_output_cost_per_token": 6e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "gpt-5.6-luna-max",
+          "completion_probability": 0.6961538328530259,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.2442125605912569,
+          "mean_input_tokens": 126025.0,
+          "mean_output_tokens": 28042.953890489913,
+          "mean_request_cost_usd": 0.17000951008645532,
+          "quality_lower_bound": 0.5904135803038684,
+          "quality_score": 0.6972016666666666,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1e-06,
+          "source_output_cost_per_token": 6e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "gpt-5.6-luna-max",
+          "completion_probability": 0.9610485552407931,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.026980681570241947,
+          "mean_input_tokens": 126025.0,
+          "mean_output_tokens": 4264.776203966006,
+          "mean_request_cost_usd": 0.02592974504249292,
+          "quality_lower_bound": 0.9399069564413016,
+          "quality_score": 0.965314,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1e-06,
+          "source_output_cost_per_token": 6e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "gpt-5.6-sol-max": {
+      "benchmark_model_id": "gpt-5.6-sol-max",
+      "identity": {
+        "benchmark_model_id": "gpt-5.6-sol-max",
+        "family_id": "gpt-5.6-sol",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "azure/eu/gpt-5.6-sol",
+          "azure/gpt-5.6-sol",
+          "azure/us/gpt-5.6-sol",
+          "bedrock_mantle/openai.gpt-5.6-sol",
+          "global.openai.gpt-5.6-sol",
+          "gpt-5.6-sol",
+          "us.openai.gpt-5.6-sol"
+        ],
+        "reasoning_effort": "max",
+        "required_parameters": {
+          "reasoning_effort": "max"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "gpt-5.6-sol-max",
+          "completion_probability": 0.6268932142857143,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 2.1494226631215954,
+          "mean_input_tokens": 181163.0,
+          "mean_output_tokens": 19990.16964285714,
+          "mean_request_cost_usd": 1.347458482142857,
+          "quality_lower_bound": 0.5167214885397204,
+          "quality_score": 0.6125200000000001,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 3e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "gpt-5.6-sol-max",
+          "completion_probability": 0.880358034682081,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.18762597508606915,
+          "mean_input_tokens": 181163.0,
+          "mean_output_tokens": 5341.254335260116,
+          "mean_request_cost_usd": 0.16517803468208092,
+          "quality_lower_bound": 0.8273048746226402,
+          "quality_score": 0.8803166666666667,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 3e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "gpt-5.6-sol-max",
+          "completion_probability": 0.8410204034582132,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.5463669630359826,
+          "mean_input_tokens": 181163.0,
+          "mean_output_tokens": 14979.57925072046,
+          "mean_request_cost_usd": 0.4595057636887608,
+          "quality_lower_bound": 0.7208052023135284,
+          "quality_score": 0.815135,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 3e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "gpt-5.6-sol-max",
+          "completion_probability": 0.9801698583569405,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.03514393469872078,
+          "mean_input_tokens": 181163.0,
+          "mean_output_tokens": 1091.4589235127478,
+          "mean_request_cost_usd": 0.03444702549575071,
+          "quality_lower_bound": 0.9673442623054106,
+          "quality_score": 0.986196,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-06,
+          "source_output_cost_per_token": 3e-05,
+          "subtask_count": 5
+        }
+      }
+    },
+    "gpt-5.6-terra-max": {
+      "benchmark_model_id": "gpt-5.6-terra-max",
+      "identity": {
+        "benchmark_model_id": "gpt-5.6-terra-max",
+        "family_id": "gpt-5.6-terra",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "azure/eu/gpt-5.6-terra",
+          "azure/gpt-5.6-terra",
+          "azure/us/gpt-5.6-terra",
+          "bedrock_mantle/openai.gpt-5.6-terra",
+          "bedrock_mantle/us-gov-west-1/openai.gpt-5.6-terra",
+          "global.openai.gpt-5.6-terra",
+          "gpt-5.6-terra",
+          "us.openai.gpt-5.6-terra"
+        ],
+        "reasoning_effort": "max",
+        "required_parameters": {
+          "reasoning_effort": "max"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "gpt-5.6-terra-max",
+          "completion_probability": 0.5834180357142857,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 1.1240867780117232,
+          "mean_input_tokens": 179096.0,
+          "mean_output_tokens": 23456.026785714286,
+          "mean_request_cost_usd": 0.6558124999999999,
+          "quality_lower_bound": 0.49669654030324234,
+          "quality_score": 0.5770166666666666,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.5e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "gpt-5.6-terra-max",
+          "completion_probability": 0.8655536705202311,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.1936266061380672,
+          "mean_input_tokens": 179096.0,
+          "mean_output_tokens": 10917.664739884392,
+          "mean_request_cost_usd": 0.1675942196531792,
+          "quality_lower_bound": 0.8003444518177206,
+          "quality_score": 0.8676066666666666,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.5e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "gpt-5.6-terra-max",
+          "completion_probability": 0.7859406340057637,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.4724568735713442,
+          "mean_input_tokens": 179096.0,
+          "mean_output_tokens": 24230.195965417868,
+          "mean_request_cost_usd": 0.3713230547550432,
+          "quality_lower_bound": 0.6492688041714549,
+          "quality_score": 0.759505,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.5e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "gpt-5.6-terra-max",
+          "completion_probability": 0.9702548441926345,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.04259387358760568,
+          "mean_input_tokens": 179096.0,
+          "mean_output_tokens": 2698.9943342776205,
+          "mean_request_cost_usd": 0.04132691218130312,
+          "quality_lower_bound": 0.9450457607873226,
+          "quality_score": 0.972196,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.5e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 5
+        }
+      }
+    },
+    "grok-4.3": {
+      "benchmark_model_id": "grok-4.3",
+      "identity": {
+        "benchmark_model_id": "grok-4.3",
+        "family_id": "grok-4.3",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "azure_ai/grok-4.3",
+          "bedrock_mantle/us-gov-west-1/xai.grok-4.3",
+          "bedrock_mantle/xai.grok-4.3",
+          "xai/grok-4.3"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "grok-4.3",
+          "completion_probability": 0.3911605357142857,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.1859165423038312,
+          "mean_input_tokens": 28676.0,
+          "mean_output_tokens": 8196.919642857143,
+          "mean_request_cost_usd": 0.07272321428571428,
+          "quality_lower_bound": 0.1928600724905164,
+          "quality_score": 0.33866,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.25e-06,
+          "source_output_cost_per_token": 2.5e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "grok-4.3",
+          "completion_probability": 0.7115991907514451,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.04420760014121088,
+          "mean_input_tokens": 28676.0,
+          "mean_output_tokens": 12122.017341040462,
+          "mean_request_cost_usd": 0.03145809248554913,
+          "quality_lower_bound": 0.6205897812643891,
+          "quality_score": 0.6990183333333334,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.25e-06,
+          "source_output_cost_per_token": 2.5e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "grok-4.3",
+          "completion_probability": 0.5932957636887608,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.07347079856706272,
+          "mean_input_tokens": 28676.0,
+          "mean_output_tokens": 16539.824207492795,
+          "mean_request_cost_usd": 0.04358991354466859,
+          "quality_lower_bound": 0.4608146638371801,
+          "quality_score": 0.5840483333333333,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.25e-06,
+          "source_output_cost_per_token": 2.5e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "grok-4.3",
+          "completion_probability": 0.9631723796033994,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.018345890446716372,
+          "mean_input_tokens": 28676.0,
+          "mean_output_tokens": 6897.121813031162,
+          "mean_request_cost_usd": 0.01767025495750708,
+          "quality_lower_bound": 0.9484369021216132,
+          "quality_score": 0.964274,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.25e-06,
+          "source_output_cost_per_token": 2.5e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "grok-4.5": {
+      "benchmark_model_id": "grok-4.5",
+      "identity": {
+        "benchmark_model_id": "grok-4.5",
+        "family_id": "grok-4.5",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "xai/grok-4.5"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "grok-4.5",
+          "completion_probability": 0.5800740178571429,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.44104901021713827,
+          "mean_input_tokens": 61244.0,
+          "mean_output_tokens": 11605.785714285714,
+          "mean_request_cost_usd": 0.25584107142857143,
+          "quality_lower_bound": 0.46374943910594013,
+          "quality_score": 0.58254,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2e-06,
+          "source_output_cost_per_token": 6e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "grok-4.5",
+          "completion_probability": 0.811312225433526,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.07142037040328908,
+          "mean_input_tokens": 61244.0,
+          "mean_output_tokens": 9533.430635838151,
+          "mean_request_cost_usd": 0.05794421965317919,
+          "quality_lower_bound": 0.7272533331201472,
+          "quality_score": 0.8118366666666667,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2e-06,
+          "source_output_cost_per_token": 6e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "grok-4.5",
+          "completion_probability": 0.7420084149855908,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.14598706555911886,
+          "mean_input_tokens": 61244.0,
+          "mean_output_tokens": 17874.28530259366,
+          "mean_request_cost_usd": 0.10832363112391932,
+          "quality_lower_bound": 0.7117838299783479,
+          "quality_score": 0.73581,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2e-06,
+          "source_output_cost_per_token": 6e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "grok-4.5",
+          "completion_probability": 0.9858362039660057,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.03284308646047252,
+          "mean_input_tokens": 61244.0,
+          "mean_output_tokens": 5315.070821529745,
+          "mean_request_cost_usd": 0.03237790368271955,
+          "quality_lower_bound": 0.9768668617803176,
+          "quality_score": 0.988118,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2e-06,
+          "source_output_cost_per_token": 6e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "grok-4.6": {
+      "benchmark_model_id": "grok-4.6",
+      "identity": {
+        "benchmark_model_id": "grok-4.6",
+        "family_id": "grok-4.6",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "bedrock_mantle/xai.grok-4.6",
+          "global.xai.grok-4.6",
+          "us.xai.grok-4.6",
+          "xai/grok-4.6"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "grok-4.6",
+          "completion_probability": 0.5838919642857142,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 1.042706805778344,
+          "mean_input_tokens": 103562.0,
+          "mean_output_tokens": 42293.61607142857,
+          "mean_request_cost_usd": 0.6088281249999999,
+          "quality_lower_bound": 0.47971095349363424,
+          "quality_score": 0.584845,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2e-06,
+          "source_output_cost_per_token": 6e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "grok-4.6",
+          "completion_probability": 0.8525547398843931,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.06858237773893723,
+          "mean_input_tokens": 103562.0,
+          "mean_output_tokens": 9404.699421965317,
+          "mean_request_cost_usd": 0.05847023121387283,
+          "quality_lower_bound": 0.7905754736095916,
+          "quality_score": 0.8513383333333332,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2e-06,
+          "source_output_cost_per_token": 6e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "grok-4.6",
+          "completion_probability": 0.7832739481268012,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.14293474305698176,
+          "mean_input_tokens": 103562.0,
+          "mean_output_tokens": 18029.959654178674,
+          "mean_request_cost_usd": 0.11195706051873199,
+          "quality_lower_bound": 0.7217334335863789,
+          "quality_score": 0.772135,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2e-06,
+          "source_output_cost_per_token": 6e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "grok-4.6",
+          "completion_probability": 0.9801704815864023,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.027443049307084175,
+          "mean_input_tokens": 103562.0,
+          "mean_output_tokens": 4337.402266288952,
+          "mean_request_cost_usd": 0.02689886685552408,
+          "quality_lower_bound": 0.9709424951201708,
+          "quality_score": 0.9841179999999999,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2e-06,
+          "source_output_cost_per_token": 6e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "grok-build-0.1": {
+      "benchmark_model_id": "grok-build-0.1",
+      "identity": {
+        "benchmark_model_id": "grok-build-0.1",
+        "family_id": "grok-build-0.1",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "xai/grok-build-0.1"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "grok-build-0.1",
+          "completion_probability": 0.5007589285714286,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.16789248462155656,
+          "mean_input_tokens": 58770.0,
+          "mean_output_tokens": 3706.3125,
+          "mean_request_cost_usd": 0.08407366071428571,
+          "quality_lower_bound": 0.40526678365842894,
+          "quality_score": 0.49343000000000004,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1e-06,
+          "source_output_cost_per_token": 2e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "grok-build-0.1",
+          "completion_probability": 0.7306932658959537,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.0021711109969323223,
+          "mean_input_tokens": 58770.0,
+          "mean_output_tokens": 346.33815028901734,
+          "mean_request_cost_usd": 0.0015864161849710983,
+          "quality_lower_bound": 0.6537908769552934,
+          "quality_score": 0.7247816666666668,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1e-06,
+          "source_output_cost_per_token": 2e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "grok-build-0.1",
+          "completion_probability": 0.6712209221902017,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.0034918518733508376,
+          "mean_input_tokens": 58770.0,
+          "mean_output_tokens": 392.149855907781,
+          "mean_request_cost_usd": 0.002343804034582133,
+          "quality_lower_bound": 0.6338637172183715,
+          "quality_score": 0.6733516666666667,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1e-06,
+          "source_output_cost_per_token": 2e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "grok-build-0.1",
+          "completion_probability": 0.8640225495750707,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.001605573981058883,
+          "mean_input_tokens": 58770.0,
+          "mean_output_tokens": 504.35977337110484,
+          "mean_request_cost_usd": 0.0013872521246458924,
+          "quality_lower_bound": 0.762820104079826,
+          "quality_score": 0.886196,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1e-06,
+          "source_output_cost_per_token": 2e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "inkling-xhigh": {
+      "benchmark_model_id": "inkling-xhigh",
+      "identity": {
+        "benchmark_model_id": "inkling-xhigh",
+        "family_id": "inkling",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "deepinfra/thinkingmachines/Inkling",
+          "fireworks_ai/accounts/fireworks/models/inkling",
+          "together_ai/thinkingmachines/Inkling"
+        ],
+        "reasoning_effort": "xhigh",
+        "required_parameters": {
+          "reasoning_effort": "xhigh"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "inkling-xhigh",
+          "completion_probability": 0.5181458035714286,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 1.4951820821256014,
+          "mean_input_tokens": 355617.0,
+          "mean_output_tokens": 21542.08035714286,
+          "mean_request_cost_usd": 0.7747223214285714,
+          "quality_lower_bound": 0.4138507462718552,
+          "quality_score": 0.5172866666666667,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.87e-06,
+          "source_output_cost_per_token": 4.68e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "inkling-xhigh",
+          "completion_probability": 0.7680871098265897,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.11300124240785248,
+          "mean_input_tokens": 355617.0,
+          "mean_output_tokens": 18236.104046242774,
+          "mean_request_cost_usd": 0.08679479768786127,
+          "quality_lower_bound": 0.6879611199462832,
+          "quality_score": 0.7613733333333333,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.87e-06,
+          "source_output_cost_per_token": 4.68e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "inkling-xhigh",
+          "completion_probability": 0.7140415273775216,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.2479303486614995,
+          "mean_input_tokens": 355617.0,
+          "mean_output_tokens": 37184.04610951008,
+          "mean_request_cost_usd": 0.17703256484149854,
+          "quality_lower_bound": 0.687140938325973,
+          "quality_score": 0.7128933333333333,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.87e-06,
+          "source_output_cost_per_token": 4.68e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "inkling-xhigh",
+          "completion_probability": 0.967659150141643,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.053020097447278515,
+          "mean_input_tokens": 355617.0,
+          "mean_output_tokens": 10843.40509915014,
+          "mean_request_cost_usd": 0.05130538243626063,
+          "quality_lower_bound": 0.9304917509052512,
+          "quality_score": 0.9624520000000001,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.87e-06,
+          "source_output_cost_per_token": 4.68e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "kimi-k2.6-thinking": {
+      "benchmark_model_id": "kimi-k2.6-thinking",
+      "identity": {
+        "benchmark_model_id": "kimi-k2.6-thinking",
+        "family_id": "kimi-k2.6-thinking",
+        "is_routable": false,
+        "litellm_model_keys": [],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "kimi-k2.6-thinking",
+          "completion_probability": 0.5166251785714285,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.5609214818286675,
+          "mean_input_tokens": 77968.0,
+          "mean_output_tokens": 57596.44642857143,
+          "mean_request_cost_usd": 0.2897861607142857,
+          "quality_lower_bound": 0.4058833919145738,
+          "quality_score": 0.5106033333333334,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 9.499999999999999e-07,
+          "source_output_cost_per_token": 4e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "kimi-k2.6-thinking",
+          "completion_probability": 0.8051175722543352,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.08119734639697186,
+          "mean_input_tokens": 77968.0,
+          "mean_output_tokens": 16125.323699421966,
+          "mean_request_cost_usd": 0.06537341040462427,
+          "quality_lower_bound": 0.7560695680528867,
+          "quality_score": 0.7977683333333333,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 9.499999999999999e-07,
+          "source_output_cost_per_token": 4e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "kimi-k2.6-thinking",
+          "completion_probability": 0.6083687608069164,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.22809804231052794,
+          "mean_input_tokens": 77968.0,
+          "mean_output_tokens": 34513.3083573487,
+          "mean_request_cost_usd": 0.1387677233429395,
+          "quality_lower_bound": 0.5571036212027963,
+          "quality_score": 0.6188066666666666,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 9.499999999999999e-07,
+          "source_output_cost_per_token": 4e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "kimi-k2.6-thinking",
+          "completion_probability": 0.9537279036827195,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.04589029570706512,
+          "mean_input_tokens": 77968.0,
+          "mean_output_tokens": 10861.0,
+          "mean_request_cost_usd": 0.04376685552407932,
+          "quality_lower_bound": 0.9187096389430004,
+          "quality_score": 0.9489000000000001,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 9.499999999999999e-07,
+          "source_output_cost_per_token": 4e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "kimi-k2.7-code": {
+      "benchmark_model_id": "kimi-k2.7-code",
+      "identity": {
+        "benchmark_model_id": "kimi-k2.7-code",
+        "family_id": "kimi-k2.7-code",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "azure_ai/kimi-k2.7-code",
+          "cloudflare/@cf/moonshotai/kimi-k2.7-code",
+          "dashscope/kimi-k2.7-code",
+          "deepinfra/moonshotai/Kimi-K2.7-Code",
+          "moonshot/kimi-k2.7-code",
+          "novita/moonshotai/kimi-k2.7-code",
+          "perplexity/perplexity/kimi-k2.7-code",
+          "qwen_ai_platform/kimi-k2.7-code",
+          "qwencloud/kimi-k2.7-code",
+          "together_ai/moonshotai/Kimi-K2.7-Code",
+          "wandb/moonshotai/Kimi-K2.7-Code"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "kimi-k2.7-code",
+          "completion_probability": 0.4841655357142857,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.34182431702262395,
+          "mean_input_tokens": 138127.0,
+          "mean_output_tokens": 18838.375,
+          "mean_request_cost_usd": 0.16549955357142856,
+          "quality_lower_bound": 0.37480180324054907,
+          "quality_score": 0.48329,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 9.499999999999999e-07,
+          "source_output_cost_per_token": 4e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "kimi-k2.7-code",
+          "completion_probability": 0.8078912716763005,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.04676665198251439,
+          "mean_input_tokens": 138127.0,
+          "mean_output_tokens": 9274.193641618496,
+          "mean_request_cost_usd": 0.03778236994219653,
+          "quality_lower_bound": 0.7212085060481994,
+          "quality_score": 0.8057466666666667,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 9.499999999999999e-07,
+          "source_output_cost_per_token": 4e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "kimi-k2.7-code",
+          "completion_probability": 0.5314083285302593,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.16695183680534825,
+          "mean_input_tokens": 138127.0,
+          "mean_output_tokens": 21883.36311239193,
+          "mean_request_cost_usd": 0.08871959654178674,
+          "quality_lower_bound": 0.44675198640057223,
+          "quality_score": 0.5578233333333333,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 9.499999999999999e-07,
+          "source_output_cost_per_token": 4e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "kimi-k2.7-code",
+          "completion_probability": 0.949009716713881,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.018192812468927278,
+          "mean_input_tokens": 138127.0,
+          "mean_output_tokens": 4238.611898016997,
+          "mean_request_cost_usd": 0.01726515580736544,
+          "quality_lower_bound": 0.9224390330931338,
+          "quality_score": 0.94655,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 9.499999999999999e-07,
+          "source_output_cost_per_token": 4e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "kimi-k3": {
+      "benchmark_model_id": "kimi-k3",
+      "identity": {
+        "benchmark_model_id": "kimi-k3",
+        "family_id": "kimi-k3",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "deepinfra/moonshotai/Kimi-K3",
+          "fireworks_ai/accounts/fireworks/models/kimi-k3",
+          "fireworks_ai/kimi-k3",
+          "moonshot/kimi-k3",
+          "novita/moonshotai/kimi-k3",
+          "perplexity/perplexity/kimi-k3",
+          "together_ai/moonshotai/Kimi-K3"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "kimi-k3",
+          "completion_probability": 0.6189532142857143,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 1.124973962375416,
+          "mean_input_tokens": 261769.0,
+          "mean_output_tokens": 21180.14285714286,
+          "mean_request_cost_usd": 0.69630625,
+          "quality_lower_bound": 0.5482513236653435,
+          "quality_score": 0.6231166666666667,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "kimi-k3",
+          "completion_probability": 0.8686992196531792,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.1579575841136204,
+          "mean_input_tokens": 261769.0,
+          "mean_output_tokens": 8959.508670520232,
+          "mean_request_cost_usd": 0.13721763005780346,
+          "quality_lower_bound": 0.8085757607273537,
+          "quality_score": 0.86872,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "kimi-k3",
+          "completion_probability": 0.7081506051873199,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.5183363932174508,
+          "mean_input_tokens": 261769.0,
+          "mean_output_tokens": 24097.619596541786,
+          "mean_request_cost_usd": 0.36706023054755044,
+          "quality_lower_bound": 0.6428725660808584,
+          "quality_score": 0.73807,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "kimi-k3",
+          "completion_probability": 0.9745038243626062,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.05638490830737281,
+          "mean_input_tokens": 261769.0,
+          "mean_output_tokens": 3586.1784702549576,
+          "mean_request_cost_usd": 0.05494730878186969,
+          "quality_lower_bound": 0.9619821635145729,
+          "quality_score": 0.980274,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 5
+        }
+      }
+    },
+    "minimax-m3": {
+      "benchmark_model_id": "minimax-m3",
+      "identity": {
+        "benchmark_model_id": "minimax-m3",
+        "family_id": "minimax-m3",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "deepinfra/MiniMaxAI/MiniMax-M3",
+          "fireworks_ai/accounts/fireworks/models/minimax-m3",
+          "fireworks_ai/minimax-m3",
+          "minimax/MiniMax-M3",
+          "novita/minimax/minimax-m3",
+          "tencent/minimax-m3",
+          "together_ai/MiniMaxAI/MiniMax-M3",
+          "wandb/MiniMaxAI/MiniMax-M3"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "minimax-m3",
+          "completion_probability": 0.4698001785714286,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.3130633806698212,
+          "mean_input_tokens": 331869.0,
+          "mean_output_tokens": 21959.29464285714,
+          "mean_request_cost_usd": 0.14707723214285712,
+          "quality_lower_bound": 0.34031296465295013,
+          "quality_score": 0.4576766666666667,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-07,
+          "source_output_cost_per_token": 1.2e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "minimax-m3",
+          "completion_probability": 0.7468859537572256,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.018624923352274145,
+          "mean_input_tokens": 331869.0,
+          "mean_output_tokens": 11361.606936416185,
+          "mean_request_cost_usd": 0.013910693641618498,
+          "quality_lower_bound": 0.6614243653944405,
+          "quality_score": 0.7399033333333334,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-07,
+          "source_output_cost_per_token": 1.2e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "minimax-m3",
+          "completion_probability": 0.6209699711815563,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.04868696171064159,
+          "mean_input_tokens": 331869.0,
+          "mean_output_tokens": 24863.097982708932,
+          "mean_request_cost_usd": 0.03023314121037464,
+          "quality_lower_bound": 0.5416649902386224,
+          "quality_score": 0.6333833333333333,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-07,
+          "source_output_cost_per_token": 1.2e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "minimax-m3",
+          "completion_probability": 0.887155552407932,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.00874328882093201,
+          "mean_input_tokens": 331869.0,
+          "mean_output_tokens": 6359.99716713881,
+          "mean_request_cost_usd": 0.007756657223796033,
+          "quality_lower_bound": 0.8279299263482481,
+          "quality_score": 0.9090959999999999,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-07,
+          "source_output_cost_per_token": 1.2e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "muse-spark-1.1-xhigh": {
+      "benchmark_model_id": "muse-spark-1.1-xhigh",
+      "identity": {
+        "benchmark_model_id": "muse-spark-1.1-xhigh",
+        "family_id": "muse-spark-1.1",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "meta/muse-spark-1.1"
+        ],
+        "reasoning_effort": "xhigh",
+        "required_parameters": {
+          "reasoning_effort": "xhigh"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "muse-spark-1.1-xhigh",
+          "completion_probability": 0.5784514285714285,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 1.0169169346234774,
+          "mean_input_tokens": 200083.0,
+          "mean_output_tokens": 16822.95535714286,
+          "mean_request_cost_usd": 0.5882370535714285,
+          "quality_lower_bound": 0.48299424590997,
+          "quality_score": 0.5848166666666667,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.25e-06,
+          "source_output_cost_per_token": 4.25e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "muse-spark-1.1-xhigh",
+          "completion_probability": 0.7987732658959537,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.06071665890850331,
+          "mean_input_tokens": 200083.0,
+          "mean_output_tokens": 11166.248554913294,
+          "mean_request_cost_usd": 0.04849884393063584,
+          "quality_lower_bound": 0.7024593150732495,
+          "quality_score": 0.7945683333333333,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.25e-06,
+          "source_output_cost_per_token": 4.25e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "muse-spark-1.1-xhigh",
+          "completion_probability": 0.7545689337175793,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.11754979521105281,
+          "mean_input_tokens": 200083.0,
+          "mean_output_tokens": 20359.317002881846,
+          "mean_request_cost_usd": 0.08869942363112392,
+          "quality_lower_bound": 0.6977158499604186,
+          "quality_score": 0.7415600000000001,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.25e-06,
+          "source_output_cost_per_token": 4.25e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "muse-spark-1.1-xhigh",
+          "completion_probability": 0.9348429461756373,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.02963064556813349,
+          "mean_input_tokens": 200083.0,
+          "mean_output_tokens": 6420.943342776204,
+          "mean_request_cost_usd": 0.027700000000000002,
+          "quality_lower_bound": 0.8858440022350587,
+          "quality_score": 0.9521560000000001,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.25e-06,
+          "source_output_cost_per_token": 4.25e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "muse-spark-1.2-xhigh": {
+      "benchmark_model_id": "muse-spark-1.2-xhigh",
+      "identity": {
+        "benchmark_model_id": "muse-spark-1.2-xhigh",
+        "family_id": "muse-spark-1.2",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "meta/muse-spark-1.2"
+        ],
+        "reasoning_effort": "xhigh",
+        "required_parameters": {
+          "reasoning_effort": "xhigh"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "muse-spark-1.2-xhigh",
+          "completion_probability": 0.582939642857143,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 2.2446638986761065,
+          "mean_input_tokens": 290641.0,
+          "mean_output_tokens": 23626.616071428572,
+          "mean_request_cost_usd": 1.3085035714285715,
+          "quality_lower_bound": 0.49583582646379193,
+          "quality_score": 0.5833516666666667,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.25e-06,
+          "source_output_cost_per_token": 4.25e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "muse-spark-1.2-xhigh",
+          "completion_probability": 0.8213769075144509,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.08752468055455027,
+          "mean_input_tokens": 290641.0,
+          "mean_output_tokens": 16915.2225433526,
+          "mean_request_cost_usd": 0.0718907514450867,
+          "quality_lower_bound": 0.7563657200849929,
+          "quality_score": 0.8214283333333333,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.25e-06,
+          "source_output_cost_per_token": 4.25e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "muse-spark-1.2-xhigh",
+          "completion_probability": 0.8302047838616714,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.14910282543392475,
+          "mean_input_tokens": 290641.0,
+          "mean_output_tokens": 29126.155619596542,
+          "mean_request_cost_usd": 0.12378587896253601,
+          "quality_lower_bound": 0.7605464624006388,
+          "quality_score": 0.8168583333333334,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.25e-06,
+          "source_output_cost_per_token": 4.25e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "muse-spark-1.2-xhigh",
+          "completion_probability": 0.954674730878187,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.03149434519589871,
+          "mean_input_tokens": 290641.0,
+          "mean_output_tokens": 7074.43909348442,
+          "mean_request_cost_usd": 0.03006685552407932,
+          "quality_lower_bound": 0.9246072037939199,
+          "quality_score": 0.964118,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.25e-06,
+          "source_output_cost_per_token": 4.25e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "muse-spark-1.3-xhigh": {
+      "benchmark_model_id": "muse-spark-1.3-xhigh",
+      "identity": {
+        "benchmark_model_id": "muse-spark-1.3-xhigh",
+        "family_id": "muse-spark-1.3",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "meta/muse-spark-1.3"
+        ],
+        "reasoning_effort": "xhigh",
+        "required_parameters": {
+          "reasoning_effort": "xhigh"
+        }
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "muse-spark-1.3-xhigh",
+          "completion_probability": 0.6317361607142856,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.7427179491890616,
+          "mean_input_tokens": 246887.0,
+          "mean_output_tokens": 33075.49107142857,
+          "mean_request_cost_usd": 0.46920178571428567,
+          "quality_lower_bound": 0.5469604828322624,
+          "quality_score": 0.635605,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.25e-06,
+          "source_output_cost_per_token": 4.25e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "muse-spark-1.3-xhigh",
+          "completion_probability": 0.8717929768786128,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.11119831208269634,
+          "mean_input_tokens": 246887.0,
+          "mean_output_tokens": 22561.56936416185,
+          "mean_request_cost_usd": 0.09694190751445086,
+          "quality_lower_bound": 0.8175533481544565,
+          "quality_score": 0.8708016666666666,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.25e-06,
+          "source_output_cost_per_token": 4.25e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "muse-spark-1.3-xhigh",
+          "completion_probability": 0.8538526801152737,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.236816088515293,
+          "mean_input_tokens": 246887.0,
+          "mean_output_tokens": 47238.42074927954,
+          "mean_request_cost_usd": 0.20220605187319884,
+          "quality_lower_bound": 0.7725155351503601,
+          "quality_score": 0.8366733333333333,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.25e-06,
+          "source_output_cost_per_token": 4.25e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "muse-spark-1.3-xhigh",
+          "completion_probability": 0.9801704815864023,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.05304216893759997,
+          "mean_input_tokens": 246887.0,
+          "mean_output_tokens": 12139.243626062324,
+          "mean_request_cost_usd": 0.05199036827195467,
+          "quality_lower_bound": 0.9578201313476288,
+          "quality_score": 0.980118,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.25e-06,
+          "source_output_cost_per_token": 4.25e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "nemotron-3-ultra-550b-a55b": {
+      "benchmark_model_id": "nemotron-3-ultra-550b-a55b",
+      "identity": {
+        "benchmark_model_id": "nemotron-3-ultra-550b-a55b",
+        "family_id": "nemotron-3-ultra-550b-a55b",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "together_ai/nvidia/nemotron-3-ultra-550b-a55b"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "nemotron-3-ultra-550b-a55b",
+          "completion_probability": 0.49212125,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 1.9619067092568285,
+          "mean_input_tokens": 527415.0,
+          "mean_output_tokens": 50084.11607142857,
+          "mean_request_cost_usd": 0.9654959821428571,
+          "quality_lower_bound": 0.3272957964397429,
+          "quality_score": 0.47136666666666666,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 6e-07,
+          "source_output_cost_per_token": 2.4e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "nemotron-3-ultra-550b-a55b",
+          "completion_probability": 0.731813352601156,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.11781526781482156,
+          "mean_input_tokens": 527415.0,
+          "mean_output_tokens": 35688.52023121387,
+          "mean_request_cost_usd": 0.08621878612716763,
+          "quality_lower_bound": 0.6666168118964786,
+          "quality_score": 0.7245983333333333,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 6e-07,
+          "source_output_cost_per_token": 2.4e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "nemotron-3-ultra-550b-a55b",
+          "completion_probability": 0.6731204899135447,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.23389751572539627,
+          "mean_input_tokens": 527415.0,
+          "mean_output_tokens": 65048.64841498559,
+          "mean_request_cost_usd": 0.15744121037463976,
+          "quality_lower_bound": 0.46327769300356714,
+          "quality_score": 0.64712,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 6e-07,
+          "source_output_cost_per_token": 2.4e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "nemotron-3-ultra-550b-a55b",
+          "completion_probability": 0.9527845609065155,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.048535238667516814,
+          "mean_input_tokens": 527415.0,
+          "mean_output_tokens": 19155.81586402266,
+          "mean_request_cost_usd": 0.04624362606232294,
+          "quality_lower_bound": 0.9080300638083402,
+          "quality_score": 0.949568,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 6e-07,
+          "source_output_cost_per_token": 2.4e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "ox-alpha-max": {
+      "benchmark_model_id": "ox-alpha-max",
+      "identity": {
+        "benchmark_model_id": "ox-alpha-max",
+        "family_id": "ox-alpha-max",
+        "is_routable": false,
+        "litellm_model_keys": [],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "ox-alpha-max",
+          "completion_probability": 0.5142372321428571,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.0,
+          "mean_input_tokens": 157093.0,
+          "mean_output_tokens": 28606.26785714286,
+          "mean_request_cost_usd": 0.0,
+          "quality_lower_bound": 0.4728252881130144,
+          "quality_score": 0.5206316666666667,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 0.0,
+          "source_output_cost_per_token": 0.0,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "ox-alpha-max",
+          "completion_probability": 0.7770376300578036,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.0,
+          "mean_input_tokens": 157093.0,
+          "mean_output_tokens": 12741.991329479768,
+          "mean_request_cost_usd": 0.0,
+          "quality_lower_bound": 0.7494282022616836,
+          "quality_score": 0.776335,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 0.0,
+          "source_output_cost_per_token": 0.0,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "ox-alpha-max",
+          "completion_probability": 0.5649118443804034,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.0,
+          "mean_input_tokens": 157093.0,
+          "mean_output_tokens": 46579.43804034582,
+          "mean_request_cost_usd": 0.0,
+          "quality_lower_bound": 0.4806994442892879,
+          "quality_score": 0.59645,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 0.0,
+          "source_output_cost_per_token": 0.0,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "ox-alpha-max",
+          "completion_probability": 0.9225666288951841,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.0,
+          "mean_input_tokens": 157093.0,
+          "mean_output_tokens": 9465.28895184136,
+          "mean_request_cost_usd": 0.0,
+          "quality_lower_bound": 0.8110446370636408,
+          "quality_score": 0.9130179999999999,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 0.0,
+          "source_output_cost_per_token": 0.0,
+          "subtask_count": 5
+        }
+      }
+    },
+    "qwen3.6-27b": {
+      "benchmark_model_id": "qwen3.6-27b",
+      "identity": {
+        "benchmark_model_id": "qwen3.6-27b",
+        "family_id": "qwen3.6-27b",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "deepinfra/Qwen/Qwen3.6-27B",
+          "groq/qwen/qwen3.6-27b",
+          "libertai/qwen3.6-27b",
+          "novita/qwen/qwen3.6-27b",
+          "wandb/Qwen/Qwen3.6-27B"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "qwen3.6-27b",
+          "completion_probability": 0.4286572321428571,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.669680507715018,
+          "mean_input_tokens": 69253.0,
+          "mean_output_tokens": 15090.24107142857,
+          "mean_request_cost_usd": 0.28706339285714283,
+          "quality_lower_bound": 0.33700489570364733,
+          "quality_score": 0.42367166666666667,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 6e-07,
+          "source_output_cost_per_token": 3.6000000000000003e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "qwen3.6-27b",
+          "completion_probability": 0.703061387283237,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.10038919796016793,
+          "mean_input_tokens": 69253.0,
+          "mean_output_tokens": 19451.719653179192,
+          "mean_request_cost_usd": 0.07057976878612716,
+          "quality_lower_bound": 0.6166994304085625,
+          "quality_score": 0.6917033333333333,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 6e-07,
+          "source_output_cost_per_token": 3.6000000000000003e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "qwen3.6-27b",
+          "completion_probability": 0.5682338616714697,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.2490187123609404,
+          "mean_input_tokens": 69253.0,
+          "mean_output_tokens": 39007.14409221902,
+          "mean_request_cost_usd": 0.14150086455331412,
+          "quality_lower_bound": 0.5143997318861502,
+          "quality_score": 0.57763,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 6e-07,
+          "source_output_cost_per_token": 3.6000000000000003e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "qwen3.6-27b",
+          "completion_probability": 0.9223329461756374,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.08040824423766153,
+          "mean_input_tokens": 69253.0,
+          "mean_output_tokens": 20543.645892351276,
+          "mean_request_cost_usd": 0.07416317280453258,
+          "quality_lower_bound": 0.8421442118714418,
+          "quality_score": 0.9207259999999999,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 6e-07,
+          "source_output_cost_per_token": 3.6000000000000003e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "qwen3.6-plus": {
+      "benchmark_model_id": "qwen3.6-plus",
+      "identity": {
+        "benchmark_model_id": "qwen3.6-plus",
+        "family_id": "qwen3.6-plus",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "openrouter/qwen/qwen3.6-plus",
+          "together_ai/Qwen/Qwen3.6-Plus"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "qwen3.6-plus",
+          "completion_probability": 0.46088214285714285,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 1.129401497128953,
+          "mean_input_tokens": 143850.0,
+          "mean_output_tokens": 38367.169642857145,
+          "mean_request_cost_usd": 0.5205209821428571,
+          "quality_lower_bound": 0.34601770650322305,
+          "quality_score": 0.4546333333333334,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-07,
+          "source_output_cost_per_token": 3e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "qwen3.6-plus",
+          "completion_probability": 0.7679975144508671,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.08555354940409925,
+          "mean_input_tokens": 143850.0,
+          "mean_output_tokens": 21747.976878612717,
+          "mean_request_cost_usd": 0.06570491329479769,
+          "quality_lower_bound": 0.7053422746386699,
+          "quality_score": 0.7607316666666667,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-07,
+          "source_output_cost_per_token": 3e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "qwen3.6-plus",
+          "completion_probability": 0.6323061671469741,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.1911054834997674,
+          "mean_input_tokens": 143850.0,
+          "mean_output_tokens": 39980.47550432276,
+          "mean_request_cost_usd": 0.1208371757925072,
+          "quality_lower_bound": 0.5972042015012469,
+          "quality_score": 0.6347383333333333,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-07,
+          "source_output_cost_per_token": 3e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "qwen3.6-plus",
+          "completion_probability": 0.9525485269121814,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.05245686069602515,
+          "mean_input_tokens": 143850.0,
+          "mean_output_tokens": 16598.81586402266,
+          "mean_request_cost_usd": 0.049967705382436264,
+          "quality_lower_bound": 0.9238234129000658,
+          "quality_score": 0.953352,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 5e-07,
+          "source_output_cost_per_token": 3e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "qwen3.7-max": {
+      "benchmark_model_id": "qwen3.7-max",
+      "identity": {
+        "benchmark_model_id": "qwen3.7-max",
+        "family_id": "qwen3.7-max",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "dashscope/qwen3.7-max",
+          "deepinfra/Qwen/Qwen3.7-Max",
+          "novita/qwen/qwen3.7-max",
+          "qwen_ai_platform/qwen3.7-max",
+          "qwencloud/qwen3.7-max",
+          "together_ai/Qwen/Qwen3.7-Max"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "qwen3.7-max",
+          "completion_probability": 0.5137053571428571,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.5703545667854351,
+          "mean_input_tokens": 60711.0,
+          "mean_output_tokens": 13038.776785714286,
+          "mean_request_cost_usd": 0.29299419642857144,
+          "quality_lower_bound": 0.38837958384914156,
+          "quality_score": 0.49846166666666664,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.5e-06,
+          "source_output_cost_per_token": 7.5e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "qwen3.7-max",
+          "completion_probability": 0.7953434393063584,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.06788574957784442,
+          "mean_input_tokens": 60711.0,
+          "mean_output_tokens": 6887.526011560693,
+          "mean_request_cost_usd": 0.05399248554913295,
+          "quality_lower_bound": 0.7376394401453119,
+          "quality_score": 0.7878633333333332,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.5e-06,
+          "source_output_cost_per_token": 7.5e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "qwen3.7-max",
+          "completion_probability": 0.7227305475504323,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.2668490255694562,
+          "mean_input_tokens": 60711.0,
+          "mean_output_tokens": 25459.671469740635,
+          "mean_request_cost_usd": 0.19285994236311238,
+          "quality_lower_bound": 0.6702814450728942,
+          "quality_score": 0.7448049999999999,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.5e-06,
+          "source_output_cost_per_token": 7.5e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "qwen3.7-max",
+          "completion_probability": 0.9723798016997167,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.05084514622240281,
+          "mean_input_tokens": 60711.0,
+          "mean_output_tokens": 6446.4617563739375,
+          "mean_request_cost_usd": 0.04944079320113315,
+          "quality_lower_bound": 0.9632810438479041,
+          "quality_score": 0.971196,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.5e-06,
+          "source_output_cost_per_token": 7.5e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "qwen3.8-27b": {
+      "benchmark_model_id": "qwen3.8-27b",
+      "identity": {
+        "benchmark_model_id": "qwen3.8-27b",
+        "family_id": "qwen3.8-27b",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "deepinfra/Qwen/Qwen3.8-27B",
+          "groq/qwen/qwen3.8-27b",
+          "wandb/Qwen/Qwen3.8-27B"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "qwen3.8-27b",
+          "completion_probability": 0.5802166071428572,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.5496661807028348,
+          "mean_input_tokens": 196281.0,
+          "mean_output_tokens": 38947.21428571428,
+          "mean_request_cost_usd": 0.31892544642857146,
+          "quality_lower_bound": 0.5129117470838801,
+          "quality_score": 0.5934633333333333,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.65e-07,
+          "source_output_cost_per_token": 6.5e-07,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "qwen3.8-27b",
+          "completion_probability": 0.7913420231213874,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.019906916011630783,
+          "mean_input_tokens": 196281.0,
+          "mean_output_tokens": 23844.335260115608,
+          "mean_request_cost_usd": 0.015753179190751445,
+          "quality_lower_bound": 0.6845274259530726,
+          "quality_score": 0.7853766666666667,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.65e-07,
+          "source_output_cost_per_token": 6.5e-07,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "qwen3.8-27b",
+          "completion_probability": 0.7230061383285302,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.035701882386432286,
+          "mean_input_tokens": 196281.0,
+          "mean_output_tokens": 38962.04322766571,
+          "mean_request_cost_usd": 0.025812680115273778,
+          "quality_lower_bound": 0.6808797772846128,
+          "quality_score": 0.7364366666666667,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.65e-07,
+          "source_output_cost_per_token": 6.5e-07,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "qwen3.8-27b",
+          "completion_probability": 0.9525499716713881,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.011706166129774697,
+          "mean_input_tokens": 196281.0,
+          "mean_output_tokens": 17012.773371104817,
+          "mean_request_cost_usd": 0.01115070821529745,
+          "quality_lower_bound": 0.9245333868375888,
+          "quality_score": 0.9493919999999999,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2.65e-07,
+          "source_output_cost_per_token": 6.5e-07,
+          "subtask_count": 5
+        }
+      }
+    },
+    "qwen3.8-flash-next": {
+      "benchmark_model_id": "qwen3.8-flash-next",
+      "identity": {
+        "benchmark_model_id": "qwen3.8-flash-next",
+        "family_id": "qwen3.8-flash-next",
+        "is_routable": false,
+        "litellm_model_keys": [],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "qwen3.8-flash-next",
+          "completion_probability": 0.5916786607142858,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 0.10951362505075977,
+          "mean_input_tokens": 332407.0,
+          "mean_output_tokens": 60165.330357142855,
+          "mean_request_cost_usd": 0.064796875,
+          "quality_lower_bound": 0.5193786665291859,
+          "quality_score": 0.6031333333333334,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.6e-07,
+          "source_output_cost_per_token": 4.6999999999999995e-07,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "qwen3.8-flash-next",
+          "completion_probability": 0.8224643352601155,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.02584506888328626,
+          "mean_input_tokens": 332407.0,
+          "mean_output_tokens": 44882.65895953757,
+          "mean_request_cost_usd": 0.02125664739884393,
+          "quality_lower_bound": 0.7364134603197254,
+          "quality_score": 0.8229766666666666,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.6e-07,
+          "source_output_cost_per_token": 4.6999999999999995e-07,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "qwen3.8-flash-next",
+          "completion_probability": 0.7165268299711816,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.05980819821649269,
+          "mean_input_tokens": 332407.0,
+          "mean_output_tokens": 90352.99423631123,
+          "mean_request_cost_usd": 0.04285417867435159,
+          "quality_lower_bound": 0.6721467035011582,
+          "quality_score": 0.7380116666666666,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.6e-07,
+          "source_output_cost_per_token": 4.6999999999999995e-07,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "qwen3.8-flash-next",
+          "completion_probability": 0.9605768838526912,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.012248010549845461,
+          "mean_input_tokens": 332407.0,
+          "mean_output_tokens": 24863.96883852691,
+          "mean_request_cost_usd": 0.01176515580736544,
+          "quality_lower_bound": 0.9240803336709251,
+          "quality_score": 0.9587260000000001,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 1.6e-07,
+          "source_output_cost_per_token": 4.6999999999999995e-07,
+          "subtask_count": 5
+        }
+      }
+    },
+    "qwen3.8-max": {
+      "benchmark_model_id": "qwen3.8-max",
+      "identity": {
+        "benchmark_model_id": "qwen3.8-max",
+        "family_id": "qwen3.8-max",
+        "is_routable": true,
+        "litellm_model_keys": [
+          "dashscope/qwen3.8-max",
+          "deepinfra/Qwen/Qwen3.8-Max",
+          "novita/qwen/qwen3.8-max",
+          "qwen_ai_platform/qwen3.8-max",
+          "qwencloud/qwen3.8-max",
+          "scx-ai/Qwen3.8-Max"
+        ],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "qwen3.8-max",
+          "completion_probability": 0.6026175,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 1.0621928207243518,
+          "mean_input_tokens": 220544.0,
+          "mean_output_tokens": 27467.803571428572,
+          "mean_request_cost_usd": 0.6400959821428571,
+          "quality_lower_bound": 0.5407724411526618,
+          "quality_score": 0.6165166666666667,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2e-06,
+          "source_output_cost_per_token": 6e-06,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "qwen3.8-max",
+          "completion_probability": 0.8357982080924855,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.12897158501834355,
+          "mean_input_tokens": 220544.0,
+          "mean_output_tokens": 17630.895953757226,
+          "mean_request_cost_usd": 0.10779421965317919,
+          "quality_lower_bound": 0.7495593962802758,
+          "quality_score": 0.836235,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2e-06,
+          "source_output_cost_per_token": 6e-06,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "qwen3.8-max",
+          "completion_probability": 0.7880367146974063,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.2582985023079646,
+          "mean_input_tokens": 220544.0,
+          "mean_output_tokens": 33121.06628242075,
+          "mean_request_cost_usd": 0.20354870317002882,
+          "quality_lower_bound": 0.7440344791041409,
+          "quality_score": 0.7852100000000001,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2e-06,
+          "source_output_cost_per_token": 6e-06,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "qwen3.8-max",
+          "completion_probability": 0.9695463172804532,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.06643655212704988,
+          "mean_input_tokens": 220544.0,
+          "mean_output_tokens": 10575.076487252125,
+          "mean_request_cost_usd": 0.06441331444759207,
+          "quality_lower_bound": 0.9512541704600264,
+          "quality_score": 0.971274,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 2e-06,
+          "source_output_cost_per_token": 6e-06,
+          "subtask_count": 5
+        }
+      }
+    },
+    "smaug-agentic": {
+      "benchmark_model_id": "smaug-agentic",
+      "identity": {
+        "benchmark_model_id": "smaug-agentic",
+        "family_id": "smaug-agentic",
+        "is_routable": false,
+        "litellm_model_keys": [],
+        "reasoning_effort": null,
+        "required_parameters": {}
+      },
+      "quality_by_complexity": {
+        "complex": {
+          "benchmark_model_id": "smaug-agentic",
+          "completion_probability": 0.6316240178571428,
+          "complexity": "complex",
+          "cost_per_completed_task_usd": 1.1112291458427248,
+          "mean_input_tokens": 180602.0,
+          "mean_output_tokens": 20301.1875,
+          "mean_request_cost_usd": 0.7018790178571429,
+          "quality_lower_bound": 0.5608808746166866,
+          "quality_score": 0.6380966666666666,
+          "question_count": 224,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "simple": {
+          "benchmark_model_id": "smaug-agentic",
+          "completion_probability": 0.8630814739884394,
+          "complexity": "simple",
+          "cost_per_completed_task_usd": 0.15925327915813411,
+          "mean_input_tokens": 180602.0,
+          "mean_output_tokens": 8966.745664739885,
+          "mean_request_cost_usd": 0.1374485549132948,
+          "quality_lower_bound": 0.7993092701785569,
+          "quality_score": 0.85933,
+          "question_count": 346,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "standard": {
+          "benchmark_model_id": "smaug-agentic",
+          "completion_probability": 0.7065554755043227,
+          "complexity": "standard",
+          "cost_per_completed_task_usd": 0.4412840229265045,
+          "mean_input_tokens": 180602.0,
+          "mean_output_tokens": 20441.167146974065,
+          "mean_request_cost_usd": 0.31179164265129683,
+          "quality_lower_bound": 0.6326602100432919,
+          "quality_score": 0.7396249999999999,
+          "question_count": 347,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 6
+        },
+        "trivial": {
+          "benchmark_model_id": "smaug-agentic",
+          "completion_probability": 0.9745049575070821,
+          "complexity": "trivial",
+          "cost_per_completed_task_usd": 0.05537554115149625,
+          "mean_input_tokens": 180602.0,
+          "mean_output_tokens": 3513.3739376770536,
+          "mean_request_cost_usd": 0.053963739376770535,
+          "quality_lower_bound": 0.9592649709496708,
+          "quality_score": 0.9803139999999999,
+          "question_count": 353,
+          "source_id": "livebench-2026-06-25",
+          "source_input_cost_per_token": 3e-06,
+          "source_output_cost_per_token": 1.5e-05,
+          "subtask_count": 5
+        }
+      }
+    }
+  },
+  "provenance": {
+    "inputs": [
+      {
+        "bytes": 2133018,
+        "path": "litellm/model_prices_and_context_window.json",
+        "sha256": "a5ad23f7a2d98249588a2f21a305f8e3741bba450fd6216bde505cb9c4bee98a",
+        "source_id": "litellm-model-registry-2026-09-03"
+      },
+      {
+        "bytes": 725,
+        "path": "livebench/categories_2026_06_25.json",
+        "sha256": "dad300ad18655b69db720e1b88fc5a5eac06c5b2f0e52c2bf50f10ff057674f3",
+        "source_id": "livebench-2026-06-25"
+      },
+      {
+        "bytes": 23394,
+        "path": "livebench/cost_2026_06_25.csv",
+        "sha256": "6ae57254eaefe9c84008e909d118f37e53271009cf97569d43506b2ae8c9b29e",
+        "source_id": "livebench-2026-06-25"
+      },
+      {
+        "bytes": 8939,
+        "path": "livebench/table_2026_06_25.csv",
+        "sha256": "b8e6339f7fafe6df8f6ecc8b0abe3dc529b5737a6c7edd3e24ffcb36e02fd118",
+        "source_id": "livebench-2026-06-25"
+      }
+    ],
+    "manifest_sha256": "32def689d0fcb59afc8ca06fbc0d2f015c1268cb34dd4aaba991e1150ca437e8",
+    "source_revisions": {
+      "litellm-model-registry-2026-09-03": "828d561fcc2704eaf90617be8cdc058fccbd8508",
+      "livebench-2026-06-25": "62240f848c977d4202c1029191ac663498745f2f"
+    }
+  },
+  "quality_tiers": {
+    "balanced": {
+      "label": "Balanced",
+      "maximum_quality_regret": 0.07
+    },
+    "economy": {
+      "label": "Economy",
+      "maximum_quality_regret": 0.15
+    },
+    "high": {
+      "label": "High",
+      "maximum_quality_regret": 0.03
+    },
+    "max": {
+      "label": "Max",
+      "maximum_quality_regret": 0.01
+    }
+  },
+  "schema_version": "3.0",
+  "snapshot_id": "2026-09-03-v0",
+  "task_complexities": {
+    "livebench-2026-06-25": {
+      "AMPS_Hard": "trivial",
+      "code_completion": "simple",
+      "code_generation": "simple",
+      "connections": "trivial",
+      "consecutive_events": "standard",
+      "integrals_with_game": "standard",
+      "javascript": "complex",
+      "logic_with_navigation": "standard",
+      "math_comp": "trivial",
+      "olympiad": "simple",
+      "paraphrase": "standard",
+      "plot_unscrambling": "complex",
+      "python": "complex",
+      "simplify": "complex",
+      "spatial": "trivial",
+      "story_generation": "standard",
+      "summarize": "standard",
+      "tablejoin": "complex",
+      "tablereformat": "trivial",
+      "theory_of_mind": "simple",
+      "typescript": "complex",
+      "typos": "simple",
+      "zebra_puzzle": "simple"
+    }
+  }
+}

@@ -1225,6 +1225,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/recommendation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Auto Router Recommendation
+         * @description Build an editable four-tier router from only the model groups this caller can use.
+         */
+        get: operations["get_auto_router_recommendation_auto_router_recommendation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/shadow_eval": {
         parameters: {
             query?: never;
@@ -23419,6 +23439,19 @@ export interface components {
             tier_definitions: components["schemas"]["TierDefinition"][];
         };
         /**
+         * AutoRouterExcludedModelGroup
+         * @description A caller-visible reason Auto setup did not use an available model group.
+         */
+        AutoRouterExcludedModelGroup: {
+            /** Model Group */
+            model_group: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "no_benchmark_match" | "mixed_model_group";
+        };
+        /**
          * AutoRouterPresetConfig
          * @description The complexity_router_config a preset prefills.
          *
@@ -23460,6 +23493,31 @@ export interface components {
             REASONING: string[];
             /** Simple */
             SIMPLE: string[];
+        };
+        /**
+         * AutoRouterRecommendationResponse
+         * @description An editable complexity-router config generated from the caller's usable model groups.
+         */
+        AutoRouterRecommendationResponse: {
+            /** Available Model Group Count */
+            available_model_group_count: number;
+            complexity_router_config: components["schemas"]["RequestComplexityRouterConfig"];
+            /**
+             * Excluded Model Groups
+             * @default []
+             */
+            excluded_model_groups: components["schemas"]["AutoRouterExcludedModelGroup"][];
+            /** Matched Model Groups */
+            matched_model_groups: string[];
+            /**
+             * Quality Level
+             * @enum {string}
+             */
+            quality_level: "economy" | "balanced" | "high" | "max";
+            /** Snapshot Generated At */
+            snapshot_generated_at: string;
+            /** Snapshot Id */
+            snapshot_id: string;
         };
         /**
          * AutoRouterRoutingTestRequest
@@ -41141,6 +41199,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutoRouterClassifierDefaultPromptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_auto_router_recommendation_auto_router_recommendation_get: {
+        parameters: {
+            query?: {
+                /** @description How close every admitted model must be to the best available quality score */
+                quality_level?: "economy" | "balanced" | "high" | "max";
+                /** @description Team whose model access the recommendation must use */
+                team_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRouterRecommendationResponse"];
                 };
             };
             /** @description Validation Error */

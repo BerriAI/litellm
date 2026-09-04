@@ -3,6 +3,7 @@ AUTO ROUTER MANAGEMENT ENDPOINTS
 
 POST /auto_router/test_routing - Route one request through an unsaved complexity-router config
 POST /auto_router/validate_complexity_router_config - Dry-run the complexity-router write gate without saving
+GET /auto_router/recommendation - Build an editable config from the caller's available model groups
 """
 
 from collections.abc import Mapping, Sequence
@@ -10,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby
 from operator import attrgetter
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, Protocol
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
@@ -40,6 +41,10 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
+from litellm.router_strategy.complexity_router.auto_setup import (
+    AutoSetupDeployment,
+    AutoSetupDeploymentPricing,
+)
 from litellm.router_utils.auto_router_model_naming import (
     StrategyRouterDependencyRole,
     classify_strategy_router_model,
@@ -52,6 +57,8 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterBenchmarkTotals,
     AutoRouterCacheBucket,
     AutoRouterCacheStats,
+    AutoRouterExcludedModelGroup,
+    AutoRouterRecommendationResponse,
     AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
     ComplexityRouterConfigValidationRequest,
@@ -332,6 +339,197 @@ async def validate_complexity_router_config(
 
     error: Final = validate_complexity_router_config_write(data.complexity_router_config)
     return ComplexityRouterConfigValidationResponse(valid=error is None, error=error)
+
+
+_MODEL_REFERENCE_MAPPING: Final = TypeAdapter(dict[str, object])
+_EMPTY_MODEL_REFERENCE: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _deployment_model_refs(raw_deployment: object) -> tuple[str, ...]:
+    deployment: Final = _MODEL_REFERENCE_MAPPING.validate_python(raw_deployment)
+    litellm_params: Final = _MODEL_REFERENCE_MAPPING.validate_python(
+        deployment.get("litellm_params", _EMPTY_MODEL_REFERENCE)
+    )
+    model_info: Final = _MODEL_REFERENCE_MAPPING.validate_python(deployment.get("model_info", _EMPTY_MODEL_REFERENCE))
+    return tuple(
+        value
+        for value in (
+            litellm_params.get("model"),
+            litellm_params.get("base_model"),
+            model_info.get("base_model"),
+        )
+        if isinstance(value, str) and value
+    )
+
+
+_AUTO_SETUP_PRICING_FIELDS: Final = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "cache_read_input_token_cost",
+    "input_cost_per_token_above_128k_tokens",
+    "output_cost_per_token_above_128k_tokens",
+    "cache_read_input_token_cost_above_128k_tokens",
+    "input_cost_per_token_above_200k_tokens",
+    "output_cost_per_token_above_200k_tokens",
+    "cache_read_input_token_cost_above_200k_tokens",
+)
+_AUTO_SETUP_UNSUPPORTED_PRICING_FIELDS: Final = (
+    "tiered_pricing",
+    "off_peak_pricing",
+    "input_cost_per_query",
+    "input_cost_per_second",
+    "output_cost_per_second",
+    "input_cost_per_character",
+    "output_cost_per_character",
+)
+
+
+def _deployment_pricing(raw_deployment: object) -> AutoSetupDeploymentPricing | None:
+    deployment: Final = _MODEL_REFERENCE_MAPPING.validate_python(raw_deployment)
+    litellm_params: Final = _MODEL_REFERENCE_MAPPING.validate_python(
+        deployment.get("litellm_params", _EMPTY_MODEL_REFERENCE)
+    )
+    if any(
+        litellm_params.get(field) not in (None, False, 0, 0.0, {}) for field in _AUTO_SETUP_UNSUPPORTED_PRICING_FIELDS
+    ):
+        return None
+    published: Mapping[str, object] | None = None
+    published_raw: Mapping[str, object] | None = None
+    model_cost: Final = _MODEL_REFERENCE_MAPPING.validate_python(litellm.model_cost)
+    refs = _deployment_model_refs(raw_deployment)
+    for ref in (*refs[1:], *refs[:1]):
+        try:
+            candidate = litellm.get_model_info(model=ref)
+        except Exception:  # noqa: BLE001 -- unrecognized deployment aliases are expected; base_model may still resolve
+            continue
+        key = candidate.get("key")
+        raw = model_cost.get(key)
+        if isinstance(raw, Mapping) and ("input_cost_per_token" in raw or "output_cost_per_token" in raw):
+            published = candidate
+            published_raw = _MODEL_REFERENCE_MAPPING.validate_python(raw)
+            break
+    if published_raw is not None and any(
+        published_raw.get(field) not in (None, False, 0, 0.0, {}) for field in _AUTO_SETUP_UNSUPPORTED_PRICING_FIELDS
+    ):
+        return None
+    values: dict[str, object] = {}
+    for field in _AUTO_SETUP_PRICING_FIELDS:
+        custom = litellm_params.get(field)
+        value = custom if custom is not None else published_raw.get(field) if published_raw is not None else None
+        if value is None and field in {"input_cost_per_token", "output_cost_per_token"} and published is not None:
+            value = published.get(field)
+        if value is not None:
+            values[field] = value
+    if "input_cost_per_token" not in values or "output_cost_per_token" not in values:
+        return None
+    try:
+        return AutoSetupDeploymentPricing.model_validate(values)
+    except (TypeError, ValueError):
+        return None
+
+
+def _available_model_deployments(
+    llm_router: "Router", model_names: Sequence[str], team_id: str | None
+) -> Mapping[str, tuple[AutoSetupDeployment, ...]]:
+    return MappingProxyType(
+        {
+            model_name: tuple(
+                AutoSetupDeployment(
+                    model_refs=_deployment_model_refs(deployment),
+                    pricing=_deployment_pricing(deployment),
+                )
+                for deployment in (llm_router.get_model_list(model_name=model_name, team_id=team_id) or ())
+                if _deployment_model_refs(deployment)
+            )
+            for model_name in model_names
+        }
+    )
+
+
+@router.get(
+    "/auto_router/recommendation",
+    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+    response_model=AutoRouterRecommendationResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_auto_router_recommendation(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    quality_level: Annotated[
+        Literal["economy", "balanced", "high", "max"],
+        Query(description="How close every admitted model must be to the best available quality score"),
+    ] = "balanced",
+    team_id: Annotated[str | None, Query(description="Team whose model access the recommendation must use")] = None,
+) -> AutoRouterRecommendationResponse:
+    """Build an editable four-tier router from only the model groups this caller can use."""
+
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+        user_model,
+    )
+    from litellm.proxy.utils import get_available_models_for_user
+    from litellm.router_strategy.complexity_router.auto_setup import (
+        analyze_auto_setup_inventory,
+        build_auto_setup_config,
+        load_auto_router_snapshot,
+    )
+
+    await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=team_id)
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.no_llm_router.value},  # mutable-ok: HTTPException detail is JSON-shaped
+        )
+    available_models: Final = await get_available_models_for_user(
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+        general_settings=general_settings,
+        user_model=user_model,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        team_id=team_id,
+        user_api_key_cache=user_api_key_cache,
+    )
+    snapshot: Final = load_auto_router_snapshot()
+    available_deployments: Final = _available_model_deployments(llm_router, available_models, team_id)
+    _, exclusions = analyze_auto_setup_inventory(snapshot, available_deployments)
+    try:
+        config: Final = build_auto_setup_config(
+            snapshot=snapshot,
+            available_model_deployments=available_deployments,
+            quality_level=quality_level,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: HTTPException detail is a JSON-shaped error payload
+                "error": f"Could not build an Auto setup: {exc}"
+            },
+        ) from exc
+    matched: Final = tuple(
+        dict.fromkeys(
+            model
+            for tier_models in config.tiers.values()
+            for model in ((tier_models,) if isinstance(tier_models, str) else tier_models)
+        )
+    )
+    return AutoRouterRecommendationResponse(
+        quality_level=quality_level,
+        snapshot_id=snapshot.snapshot_id,
+        snapshot_generated_at=snapshot.generated_at,
+        available_model_group_count=len(available_deployments),
+        matched_model_groups=matched,
+        excluded_model_groups=tuple(
+            AutoRouterExcludedModelGroup(model_group=item.model_group, reason=item.reason) for item in exclusions
+        ),
+        complexity_router_config=RequestComplexityRouterConfig.model_validate(
+            config.model_dump(mode="json", exclude_none=True)
+        ),
+    )
 
 
 @router.post(
